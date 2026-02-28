@@ -1,0 +1,13 @@
+[package]
+name = "thairag-provider-reranker"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

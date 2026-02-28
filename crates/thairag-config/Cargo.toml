@@ -1,0 +1,9 @@
+[package]
+name = "thairag-config"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+serde = { workspace = true }
+config = { workspace = true }

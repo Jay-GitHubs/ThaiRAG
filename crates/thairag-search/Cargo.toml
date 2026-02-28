@@ -1,0 +1,11 @@
+[package]
+name = "thairag-search"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

@@ -1,0 +1,24 @@
+# Premium tier: Claude + large OpenAI embeddings + Qdrant + Cohere reranker v3.5
+[providers.llm]
+kind = "claude"
+model = "claude-sonnet-4-20250514"
+api_key = ""
+
+[providers.embedding]
+kind = "openai"
+model = "text-embedding-3-large"
+dimension = 3072
+api_key = ""
+
+[providers.vector_store]
+kind = "qdrant"
+url = "http://localhost:6334"
+collection = "thairag_chunks"
+
+[providers.text_search]
+kind = "tantivy"
+
+[providers.reranker]
+kind = "cohere"
+model = "rerank-v3.5"
+api_key = ""

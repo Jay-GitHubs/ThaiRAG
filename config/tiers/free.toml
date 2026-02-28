@@ -1,0 +1,19 @@
+# Free tier: local-only providers
+[providers.llm]
+kind = "ollama"
+model = "llama3.2"
+base_url = "http://localhost:11434"
+
+[providers.embedding]
+kind = "fastembed"
+model = "BAAI/bge-small-en-v1.5"
+dimension = 384
+
+[providers.vector_store]
+kind = "in_memory"
+
+[providers.text_search]
+kind = "tantivy"
+
+[providers.reranker]
+kind = "passthrough"

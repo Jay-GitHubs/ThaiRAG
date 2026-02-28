@@ -1,0 +1,9 @@
+[package]
+name = "thairag-document"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+uuid = { workspace = true }

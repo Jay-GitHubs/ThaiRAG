@@ -1,0 +1,48 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+url = "postgres://localhost:5432/thairag"
+max_connections = 5
+
+[auth]
+enabled = false
+jwt_secret = "dev-secret-change-me"
+token_expiry_hours = 24
+
+[providers.llm]
+kind = "ollama"
+model = "llama3.2"
+base_url = "http://localhost:11434"
+api_key = ""
+
+[providers.embedding]
+kind = "fastembed"
+model = "BAAI/bge-small-en-v1.5"
+dimension = 384
+
+[providers.vector_store]
+kind = "in_memory"
+url = ""
+collection = "thairag_chunks"
+
+[providers.text_search]
+kind = "tantivy"
+index_path = "./data/tantivy_index"
+
+[providers.reranker]
+kind = "passthrough"
+model = ""
+api_key = ""
+
+[search]
+top_k = 10
+rerank_top_k = 5
+rrf_k = 60
+vector_weight = 0.6
+text_weight = 0.4
+
+[document]
+max_chunk_size = 512
+chunk_overlap = 64

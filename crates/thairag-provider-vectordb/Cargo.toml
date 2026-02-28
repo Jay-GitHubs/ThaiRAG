@@ -1,0 +1,14 @@
+[package]
+name = "thairag-provider-vectordb"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+async-trait = { workspace = true }
+qdrant-client = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

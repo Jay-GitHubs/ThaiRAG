@@ -1,0 +1,16 @@
+[package]
+name = "thairag-auth"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonwebtoken = { workspace = true }
+chrono = { workspace = true }
+tower = { workspace = true }
+tracing = { workspace = true }

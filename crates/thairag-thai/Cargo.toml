@@ -1,0 +1,7 @@
+[package]
+name = "thairag-thai"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
