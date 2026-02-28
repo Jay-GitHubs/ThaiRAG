@@ -3730,6 +3730,7 @@ dependencies = [
  "serde_json",
  "thairag-config",
  "thairag-core",
+ "tokio",
  "tracing",
 ]
 
@@ -3768,6 +3769,7 @@ dependencies = [
  "thairag-config",
  "thairag-core",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ pub struct AppState {
     pub jwt: Option<Arc<JwtService>>,
     pub orchestrator: Arc<QueryOrchestrator>,
     pub document_pipeline: Arc<DocumentPipeline>,
+    pub search_engine: Arc<HybridSearchEngine>,
 }
 
 impl AppState {
@@ -35,7 +36,7 @@ impl AppState {
             Arc::from(create_reranker(&config.providers.reranker));
 
         // Build hybrid search
-        let hybrid_search = Arc::new(HybridSearchEngine::new(
+        let search_engine = Arc::new(HybridSearchEngine::new(
             embedding,
             vector_store,
             text_search,
@@ -44,7 +45,7 @@ impl AppState {
         ));
 
         // Build agents
-        let rag_engine = Arc::new(RagEngine::new(Arc::clone(&llm), hybrid_search));
+        let rag_engine = Arc::new(RagEngine::new(Arc::clone(&llm), Arc::clone(&search_engine)));
         let orchestrator = Arc::new(QueryOrchestrator::new(Arc::clone(&llm), rag_engine));
 
         // Build document pipeline
@@ -68,6 +69,7 @@ impl AppState {
             jwt,
             orchestrator,
             document_pipeline,
+            search_engine,
         }
     }
 }

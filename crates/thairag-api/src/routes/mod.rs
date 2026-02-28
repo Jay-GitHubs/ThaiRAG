@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod documents;
 pub mod health;
 pub mod km;
 pub mod models;
@@ -18,6 +19,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health::health))
         // KM management (stubs)
         .route("/api/km/orgs", get(km::list_orgs).post(km::create_org))
+        // Document ingestion
+        .route(
+            "/api/km/workspaces/{workspace_id}/documents",
+            post(documents::ingest_document),
+        )
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

@@ -9,3 +9,4 @@ thairag-config = { workspace = true }
 async-trait = { workspace = true }
 tantivy = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
