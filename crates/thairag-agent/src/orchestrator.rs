@@ -32,7 +32,7 @@ impl QueryOrchestrator {
             .map(|m| m.content.as_str())
             .unwrap_or("");
 
-        let intent = self.classify_intent(user_query).await;
+        let intent = self.classify_intent(user_query);
 
         match intent {
             QueryIntent::DirectAnswer => {
@@ -59,7 +59,7 @@ impl QueryOrchestrator {
             .map(|m| m.content.as_str())
             .unwrap_or("");
 
-        let intent = self.classify_intent(user_query).await;
+        let intent = self.classify_intent(user_query);
 
         match intent {
             QueryIntent::DirectAnswer => {
@@ -76,8 +76,56 @@ impl QueryOrchestrator {
         }
     }
 
-    async fn classify_intent(&self, _query: &str) -> QueryIntent {
-        // Stub: always route to retrieval for now
+    fn classify_intent(&self, query: &str) -> QueryIntent {
+        let trimmed = query.trim();
+
+        // Empty or very short queries → ask for clarification
+        if trimmed.len() <= 2 {
+            return QueryIntent::Clarification;
+        }
+
+        let lower = trimmed.to_lowercase();
+
+        // Greeting patterns (English + Thai)
+        const GREETINGS: &[&str] = &[
+            "hi", "hello", "hey", "howdy", "good morning", "good afternoon",
+            "good evening", "yo", "sup", "what's up", "whats up",
+            "สวัสดี", "หวัดดี", "ดีครับ", "ดีค่ะ", "สวัสดีครับ", "สวัสดีค่ะ",
+        ];
+
+        // Thanks patterns
+        const THANKS: &[&str] = &[
+            "thank", "thanks", "thx", "ty",
+            "ขอบคุณ", "ขอบใจ",
+        ];
+
+        // Meta questions about the bot itself
+        const META: &[&str] = &[
+            "who are you", "what are you", "what can you do",
+            "คุณเป็นใคร", "คุณทำอะไรได้",
+        ];
+
+        for pat in GREETINGS {
+            if lower == *pat || lower.starts_with(&format!("{pat} "))
+                || lower.starts_with(&format!("{pat},"))
+                || lower.starts_with(&format!("{pat}!"))
+            {
+                return QueryIntent::DirectAnswer;
+            }
+        }
+
+        for pat in THANKS {
+            if lower.contains(pat) {
+                return QueryIntent::DirectAnswer;
+            }
+        }
+
+        for pat in META {
+            if lower.contains(pat) {
+                return QueryIntent::DirectAnswer;
+            }
+        }
+
         QueryIntent::Retrieval
     }
 
