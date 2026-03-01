@@ -41,6 +41,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid"
 # Search
 tantivy = "0.25"
 
+# Thai NLP
+nlpo3 = "1.4"
+
 # Vector DB
 qdrant-client = "1.13"
 

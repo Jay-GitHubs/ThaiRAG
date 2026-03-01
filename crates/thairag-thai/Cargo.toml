@@ -5,3 +5,5 @@ version.workspace = true
 
 [dependencies]
 thairag-core = { workspace = true }
+nlpo3 = { workspace = true }
+tantivy = { workspace = true }

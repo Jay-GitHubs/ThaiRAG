@@ -6,7 +6,11 @@ version.workspace = true
 [dependencies]
 thairag-core = { workspace = true }
 thairag-config = { workspace = true }
+thairag-thai = { workspace = true }
 async-trait = { workspace = true }
 tantivy = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -11,6 +11,7 @@ use thairag_core::error::Result;
 use thairag_core::traits::TextSearch;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
 use thairag_core::ThaiRagError;
+use thairag_thai::{DictionarySegmenter, ThaiTantivyTokenizer};
 use tracing::info;
 use uuid::Uuid;
 
@@ -43,7 +44,7 @@ impl TantivySearch {
         let text_options = TextOptions::default()
             .set_indexing_options(
                 TextFieldIndexing::default()
-                    .set_tokenizer("default")
+                    .set_tokenizer("thai")
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             )
             .set_stored();
@@ -53,6 +54,11 @@ impl TantivySearch {
 
         let schema = schema_builder.build();
         let index = Index::create_in_ram(schema);
+
+        // Register Thai tokenizer (nlpo3 dictionary-based segmentation).
+        let segmenter = DictionarySegmenter::new();
+        let thai_tokenizer = ThaiTantivyTokenizer::new(segmenter.shared());
+        index.tokenizers().register("thai", thai_tokenizer);
 
         let writer = index
             .writer(50_000_000) // 50 MB heap
@@ -101,6 +107,11 @@ impl TextSearch for TantivySearch {
 
         writer.commit().map_err(|e| {
             ThaiRagError::Internal(format!("Tantivy commit error: {e}"))
+        })?;
+
+        // Reload reader so newly committed docs are immediately searchable.
+        self.reader.reload().map_err(|e| {
+            ThaiRagError::Internal(format!("Tantivy reader reload error: {e}"))
         })?;
 
         info!(count = chunks.len(), "Indexed chunks in Tantivy");
@@ -190,5 +201,62 @@ impl TextSearch for TantivySearch {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::traits::TextSearch;
+
+    fn make_chunk(content: &str) -> DocumentChunk {
+        DocumentChunk {
+            chunk_id: ChunkId(Uuid::new_v4()),
+            doc_id: DocId(Uuid::new_v4()),
+            workspace_id: WorkspaceId(Uuid::nil()),
+            content: content.to_string(),
+            chunk_index: 0,
+            embedding: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn thai_search_finds_segmented_word() {
+        let search = TantivySearch::new("test");
+
+        // Index a Thai document.
+        let chunk = make_chunk("ห้องสมุดเปิดให้บริการทุกวัน");
+        search.index(&[chunk]).await.unwrap();
+
+        // Search for a Thai word that appears in the segmented tokens.
+        let query = SearchQuery {
+            text: "ห้องสมุด".to_string(),
+            workspace_ids: vec![],
+            top_k: 10,
+        };
+        let results = search.search(&query).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "Thai search for 'ห้องสมุด' should find the indexed document"
+        );
+    }
+
+    #[tokio::test]
+    async fn english_search_still_works() {
+        let search = TantivySearch::new("test");
+
+        let chunk = make_chunk("hello world from Rust");
+        search.index(&[chunk]).await.unwrap();
+
+        let query = SearchQuery {
+            text: "hello".to_string(),
+            workspace_ids: vec![],
+            top_k: 10,
+        };
+        let results = search.search(&query).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "English search should still work with Thai tokenizer"
+        );
     }
 }
