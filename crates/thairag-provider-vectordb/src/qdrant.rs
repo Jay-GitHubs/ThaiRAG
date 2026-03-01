@@ -1,33 +1,192 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use async_trait::async_trait;
+use qdrant_client::qdrant::{
+    point_id::PointIdOptions, Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance,
+    Filter, PointStruct, QueryPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+};
+use qdrant_client::{Payload, Qdrant};
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
+use thairag_core::ThaiRagError;
+use tracing::{info, instrument};
 
 pub struct QdrantVectorStore {
-    _url: String,
-    _collection: String,
+    client: Qdrant,
+    collection: String,
+    collection_ready: AtomicBool,
 }
 
 impl QdrantVectorStore {
     pub fn new(url: &str, collection: &str) -> Self {
+        let client = Qdrant::from_url(url)
+            .build()
+            .expect("Failed to build Qdrant client");
+
+        info!(url, collection, "Initialized Qdrant vector store");
+
         Self {
-            _url: url.to_string(),
-            _collection: collection.to_string(),
+            client,
+            collection: collection.to_string(),
+            collection_ready: AtomicBool::new(false),
         }
+    }
+
+    async fn ensure_collection(&self, dimension: usize) -> Result<()> {
+        if self.collection_ready.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        let exists = self
+            .client
+            .collection_exists(&self.collection)
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Failed to check collection: {e}")))?;
+
+        if !exists {
+            self.client
+                .create_collection(
+                    CreateCollectionBuilder::new(&self.collection)
+                        .vectors_config(VectorParamsBuilder::new(dimension as u64, Distance::Cosine)),
+                )
+                .await
+                .map_err(|e| ThaiRagError::VectorStore(format!("Failed to create collection: {e}")))?;
+
+            info!(collection = %self.collection, dimension, "Created Qdrant collection");
+        }
+
+        self.collection_ready.store(true, Ordering::Relaxed);
+        Ok(())
     }
 }
 
 #[async_trait]
 impl VectorStore for QdrantVectorStore {
-    async fn upsert(&self, _chunks: &[DocumentChunk]) -> Result<()> {
-        todo!("Qdrant upsert not yet implemented")
+    #[instrument(skip(self, chunks), fields(collection = %self.collection, chunk_count = chunks.len()))]
+    async fn upsert(&self, chunks: &[DocumentChunk]) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        // Determine dimension from the first chunk that has an embedding
+        if let Some(dim) = chunks.iter().find_map(|c| c.embedding.as_ref().map(|e| e.len())) {
+            self.ensure_collection(dim).await?;
+        }
+
+        let points: Vec<PointStruct> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                let embedding = chunk.embedding.as_ref()?;
+                let payload = Payload::try_from(serde_json::json!({
+                    "doc_id": chunk.doc_id.to_string(),
+                    "workspace_id": chunk.workspace_id.to_string(),
+                    "content": chunk.content,
+                    "chunk_index": chunk.chunk_index as i64,
+                }))
+                .ok()?;
+
+                Some(PointStruct::new(
+                    chunk.chunk_id.to_string(),
+                    embedding.clone(),
+                    payload,
+                ))
+            })
+            .collect();
+
+        if points.is_empty() {
+            return Ok(());
+        }
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(&self.collection, points).wait(true))
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Qdrant upsert failed: {e}")))?;
+
+        Ok(())
     }
 
-    async fn search(&self, _embedding: &[f32], _query: &SearchQuery) -> Result<Vec<SearchResult>> {
-        todo!("Qdrant search not yet implemented")
+    #[instrument(skip(self, embedding), fields(collection = %self.collection, top_k = query.top_k))]
+    async fn search(&self, embedding: &[f32], query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        let mut request = QueryPointsBuilder::new(&self.collection)
+            .query(embedding.to_vec())
+            .limit(query.top_k as u64)
+            .with_payload(true);
+
+        // Apply workspace filter if workspace_ids are specified
+        if !query.workspace_ids.is_empty() {
+            let workspace_strings: Vec<String> = query
+                .workspace_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect();
+            request = request.filter(Filter::must([Condition::matches(
+                "workspace_id",
+                workspace_strings,
+            )]));
+        }
+
+        let response = self
+            .client
+            .query(request)
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Qdrant search failed: {e}")))?;
+
+        let results = response
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                let score = point.score;
+
+                let payload = &point.payload;
+                let doc_id_str = payload.get("doc_id")?.to_string();
+                let workspace_id_str = payload.get("workspace_id")?.to_string();
+                let content = payload.get("content")?.to_string();
+                let chunk_index = payload
+                    .get("chunk_index")
+                    .and_then(|v| v.to_string().parse::<usize>().ok())
+                    .unwrap_or(0);
+
+                // Parse UUIDs from the string representation (qdrant payload values are quoted)
+                let doc_id_str = doc_id_str.trim_matches('"');
+                let workspace_id_str = workspace_id_str.trim_matches('"');
+                let content = content.trim_matches('"');
+
+                let chunk_id_str = match point.id.as_ref()?.point_id_options.as_ref()? {
+                    PointIdOptions::Uuid(uuid) => uuid.clone(),
+                    PointIdOptions::Num(n) => n.to_string(),
+                };
+
+                let chunk = DocumentChunk {
+                    chunk_id: thairag_core::types::ChunkId(chunk_id_str.parse().ok()?),
+                    doc_id: DocId(doc_id_str.parse().ok()?),
+                    workspace_id: thairag_core::types::WorkspaceId(workspace_id_str.parse().ok()?),
+                    content: content.to_string(),
+                    chunk_index,
+                    embedding: None,
+                };
+
+                Some(SearchResult { chunk, score })
+            })
+            .collect();
+
+        Ok(results)
     }
 
-    async fn delete_by_doc(&self, _doc_id: DocId) -> Result<()> {
-        todo!("Qdrant delete_by_doc not yet implemented")
+    #[instrument(skip(self), fields(collection = %self.collection, doc_id = %doc_id))]
+    async fn delete_by_doc(&self, doc_id: DocId) -> Result<()> {
+        self.client
+            .delete_points(
+                DeletePointsBuilder::new(&self.collection)
+                    .points(Filter::must([Condition::matches(
+                        "doc_id",
+                        doc_id.to_string(),
+                    )]))
+                    .wait(true),
+            )
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Qdrant delete failed: {e}")))?;
+
+        Ok(())
     }
 }
