@@ -10,6 +10,8 @@ thairag-search = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tokio-stream = { workspace = true }
+futures-core = { workspace = true }
 
 [dependencies.thairag-provider-llm]
 path = "../thairag-provider-llm"

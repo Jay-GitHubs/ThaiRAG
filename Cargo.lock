@@ -3687,11 +3687,13 @@ name = "thairag-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-core",
  "thairag-config",
  "thairag-core",
  "thairag-provider-llm",
  "thairag-search",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -3699,8 +3701,10 @@ dependencies = [
 name = "thairag-api"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "axum 0.8.8",
  "chrono",
+ "futures-core",
  "serde",
  "serde_json",
  "thairag-agent",
@@ -3715,6 +3719,7 @@ dependencies = [
  "thairag-provider-vectordb",
  "thairag-search",
  "tokio",
+ "tokio-stream",
  "tower 0.5.3",
  "tower-http",
  "tracing",
@@ -3753,9 +3758,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures-core",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio-stream",
  "uuid",
 ]
 
@@ -3787,12 +3794,15 @@ dependencies = [
 name = "thairag-provider-llm"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
+ "futures-core",
  "reqwest",
  "serde",
  "serde_json",
  "thairag-config",
  "thairag-core",
+ "tokio-stream",
  "tracing",
 ]
 

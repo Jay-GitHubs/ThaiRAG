@@ -1,5 +1,7 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
@@ -58,5 +60,43 @@ impl RagEngine {
         augmented_messages.extend_from_slice(messages);
 
         self.llm.generate(&augmented_messages, None).await
+    }
+
+    pub async fn answer_stream(
+        &self,
+        query: &str,
+        messages: &[ChatMessage],
+        scope: &AccessScope,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+        // Same search + augmentation as answer(), then stream the LLM generation
+        let search_query = SearchQuery {
+            text: query.to_string(),
+            top_k: 5,
+            workspace_ids: scope.workspace_ids.clone(),
+        };
+
+        let results = self.search.search(&search_query).await?;
+
+        let context = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| format!("[{}] {}", i + 1, r.chunk.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let system_prompt = format!(
+            "You are ThaiRAG, an AI assistant specialized in Thai language documents.\n\
+             Use the following context to answer the user's question.\n\
+             If the context doesn't contain relevant information, say so.\n\n\
+             Context:\n{context}"
+        );
+
+        let mut augmented_messages = vec![ChatMessage {
+            role: "system".to_string(),
+            content: system_prompt,
+        }];
+        augmented_messages.extend_from_slice(messages);
+
+        self.llm.generate_stream(&augmented_messages, None).await
     }
 }

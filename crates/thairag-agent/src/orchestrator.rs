@@ -1,5 +1,7 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
@@ -42,6 +44,34 @@ impl QueryOrchestrator {
             }
             QueryIntent::Clarification => {
                 Ok("Could you please provide more details about your question?".to_string())
+            }
+        }
+    }
+
+    /// Process a user query and return a token stream.
+    pub async fn process_stream(
+        &self,
+        messages: &[ChatMessage],
+        scope: &AccessScope,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+        let user_query = messages
+            .last()
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+
+        let intent = self.classify_intent(user_query).await;
+
+        match intent {
+            QueryIntent::DirectAnswer => {
+                self.llm.generate_stream(messages, None).await
+            }
+            QueryIntent::Retrieval => {
+                let rewritten = self.rewrite_query(user_query).await;
+                self.rag_engine.answer_stream(&rewritten, messages, scope).await
+            }
+            QueryIntent::Clarification => {
+                let msg = "Could you please provide more details about your question?".to_string();
+                Ok(Box::pin(tokio_stream::once(Ok(msg))))
             }
         }
     }

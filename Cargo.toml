@@ -60,11 +60,16 @@ fastembed = "4.4"
 jsonwebtoken = "9.3"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Logging/tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Streaming
+tokio-stream = "0.1"
+async-stream = "0.3"
+futures-core = "0.3"
 
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }
