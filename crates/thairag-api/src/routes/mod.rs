@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod chat;
 pub mod documents;
 pub mod health;
@@ -19,7 +20,8 @@ pub fn build_router(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(health::health))
         .route("/v1/models", get(models::list_models))
-        .route("/v1/chat/completions", post(chat::chat_completions));
+        .route("/api/auth/register", post(auth::register))
+        .route("/api/auth/login", post(auth::login));
 
     // ── Protected KM routes ─────────────────────────────────────────
     let km_routes = Router::new()
@@ -62,10 +64,11 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
         );
 
-    // Apply auth middleware to KM routes
+    // Apply auth middleware to KM routes + chat
     let jwt = state.jwt.clone();
     let protected = Router::new()
         .nest("/api/km", km_routes)
+        .route("/v1/chat/completions", post(chat::chat_completions))
         .layer(middleware::from_fn(move |req, next| {
             auth_layer(jwt.clone(), req, next)
         }));

@@ -2,17 +2,29 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use chrono::Utc;
-use thairag_core::models::{Department, Document, Organization, Workspace};
-use thairag_core::types::{DeptId, DocId, OrgId, WorkspaceId};
+use thairag_core::models::{
+    Department, Document, Organization, PermissionScope, User, UserPermission, Workspace,
+};
+use thairag_core::permission::Role;
+use thairag_core::types::{DeptId, DocId, OrgId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
+
+#[derive(Debug, Clone)]
+pub struct UserRecord {
+    pub user: User,
+    pub password_hash: String,
+}
 
 pub struct KmStore {
     orgs: RwLock<HashMap<OrgId, Organization>>,
     depts: RwLock<HashMap<DeptId, Department>>,
     workspaces: RwLock<HashMap<WorkspaceId, Workspace>>,
     documents: RwLock<HashMap<DocId, Document>>,
+    users: RwLock<HashMap<UserId, UserRecord>>,
+    user_by_email: RwLock<HashMap<String, UserId>>,
+    permissions: RwLock<Vec<UserPermission>>,
 }
 
 impl KmStore {
@@ -22,6 +34,9 @@ impl KmStore {
             depts: RwLock::new(HashMap::new()),
             workspaces: RwLock::new(HashMap::new()),
             documents: RwLock::new(HashMap::new()),
+            users: RwLock::new(HashMap::new()),
+            user_by_email: RwLock::new(HashMap::new()),
+            permissions: RwLock::new(Vec::new()),
         }
     }
 
@@ -180,6 +195,120 @@ impl KmStore {
         Ok(())
     }
 
+    // ── User ──────────────────────────────────────────────────────────
+
+    pub fn insert_user(
+        &self,
+        email: String,
+        name: String,
+        password_hash: String,
+    ) -> Result<User> {
+        let email_lower = email.to_lowercase();
+        if self.user_by_email.read().unwrap().contains_key(&email_lower) {
+            return Err(ThaiRagError::Validation(format!(
+                "Email {email} is already registered"
+            )));
+        }
+        let user = User {
+            id: UserId::new(),
+            email: email_lower.clone(),
+            name,
+            created_at: Utc::now(),
+        };
+        self.users.write().unwrap().insert(
+            user.id,
+            UserRecord {
+                user: user.clone(),
+                password_hash,
+            },
+        );
+        self.user_by_email
+            .write()
+            .unwrap()
+            .insert(email_lower, user.id);
+        Ok(user)
+    }
+
+    pub fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
+        let email_lower = email.to_lowercase();
+        let id = self
+            .user_by_email
+            .read()
+            .unwrap()
+            .get(&email_lower)
+            .copied()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("User with email {email} not found")))?;
+        self.users
+            .read()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))
+    }
+
+    pub fn get_user(&self, id: UserId) -> Result<User> {
+        self.users
+            .read()
+            .unwrap()
+            .get(&id)
+            .map(|r| r.user.clone())
+            .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))
+    }
+
+    // ── Permissions ──────────────────────────────────────────────────
+
+    pub fn add_permission(&self, perm: UserPermission) {
+        self.permissions.write().unwrap().push(perm);
+    }
+
+    /// Get the highest role a user has for a given org, considering
+    /// Org, Dept, and Workspace scopes.
+    pub fn get_user_role_for_org(&self, user_id: UserId, org_id: OrgId) -> Option<Role> {
+        let perms = self.permissions.read().unwrap();
+        perms
+            .iter()
+            .filter(|p| p.user_id == user_id)
+            .filter(|p| match &p.scope {
+                PermissionScope::Org { org_id: oid } => *oid == org_id,
+                PermissionScope::Dept { org_id: oid, .. } => *oid == org_id,
+                PermissionScope::Workspace { org_id: oid, .. } => *oid == org_id,
+            })
+            .map(|p| p.role)
+            .max()
+    }
+
+    /// Expand all user permissions to concrete workspace IDs.
+    pub fn get_user_workspace_ids(&self, user_id: UserId) -> Vec<WorkspaceId> {
+        let perms = self.permissions.read().unwrap();
+        let mut ws_ids = Vec::new();
+        for perm in perms.iter().filter(|p| p.user_id == user_id) {
+            match &perm.scope {
+                PermissionScope::Org { org_id } => {
+                    let dept_ids = self.dept_ids_in_org(*org_id);
+                    for dept_id in dept_ids {
+                        ws_ids.extend(self.workspace_ids_in_dept(dept_id));
+                    }
+                }
+                PermissionScope::Dept { dept_id, .. } => {
+                    ws_ids.extend(self.workspace_ids_in_dept(*dept_id));
+                }
+                PermissionScope::Workspace { workspace_id, .. } => {
+                    ws_ids.push(*workspace_id);
+                }
+            }
+        }
+        ws_ids.sort();
+        ws_ids.dedup();
+        ws_ids
+    }
+
+    /// Resolve the org that owns a workspace by traversing ws → dept → org.
+    pub fn org_id_for_workspace(&self, workspace_id: WorkspaceId) -> Result<OrgId> {
+        let ws = self.get_workspace(workspace_id)?;
+        let dept = self.get_dept(ws.dept_id)?;
+        Ok(dept.org_id)
+    }
+
     // ── Cascade helpers ─────────────────────────────────────────────
 
     /// Collect all workspace IDs belonging to a department.
@@ -264,6 +393,98 @@ impl KmStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thairag_core::models::PermissionScope;
+    use thairag_core::permission::Role;
+
+    #[test]
+    fn user_crud_roundtrip() {
+        let store = KmStore::new();
+        let user = store
+            .insert_user("Alice@Example.com".into(), "Alice".into(), "hash123".into())
+            .unwrap();
+        assert_eq!(user.email, "alice@example.com"); // lowercased
+
+        let record = store.get_user_by_email("alice@example.com").unwrap();
+        assert_eq!(record.user.id, user.id);
+        assert_eq!(record.password_hash, "hash123");
+
+        let fetched = store.get_user(user.id).unwrap();
+        assert_eq!(fetched.name, "Alice");
+    }
+
+    #[test]
+    fn user_email_uniqueness() {
+        let store = KmStore::new();
+        store
+            .insert_user("bob@test.com".into(), "Bob".into(), "h".into())
+            .unwrap();
+        let result = store.insert_user("BOB@test.com".into(), "Bob2".into(), "h2".into());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn permission_resolution() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+
+        let user = store
+            .insert_user("u@test.com".into(), "U".into(), "h".into())
+            .unwrap();
+
+        // Grant Viewer at Org level
+        store.add_permission(UserPermission {
+            user_id: user.id,
+            scope: PermissionScope::Org { org_id: org.id },
+            role: Role::Viewer,
+        });
+
+        assert_eq!(
+            store.get_user_role_for_org(user.id, org.id),
+            Some(Role::Viewer)
+        );
+
+        // Grant Editor at Workspace level — highest should now be Editor
+        store.add_permission(UserPermission {
+            user_id: user.id,
+            scope: PermissionScope::Workspace {
+                org_id: org.id,
+                dept_id: dept.id,
+                workspace_id: ws.id,
+            },
+            role: Role::Editor,
+        });
+
+        assert_eq!(
+            store.get_user_role_for_org(user.id, org.id),
+            Some(Role::Editor)
+        );
+
+        // Workspace IDs should include ws
+        let ws_ids = store.get_user_workspace_ids(user.id);
+        assert!(ws_ids.contains(&ws.id));
+    }
+
+    #[test]
+    fn org_id_for_workspace_traversal() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+
+        assert_eq!(store.org_id_for_workspace(ws.id).unwrap(), org.id);
+    }
+
+    #[test]
+    fn no_permission_returns_none() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+        assert_eq!(store.get_user_role_for_org(user.id, org.id), None);
+    }
 
     #[test]
     fn org_crud_roundtrip() {

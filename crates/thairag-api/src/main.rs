@@ -1,12 +1,7 @@
-mod app_state;
-mod error;
-mod routes;
-mod store;
-
 use tracing_subscriber::EnvFilter;
 
-use app_state::AppState;
-use routes::build_router;
+use thairag_api::app_state::AppState;
+use thairag_api::routes::build_router;
 
 #[tokio::main]
 async fn main() {

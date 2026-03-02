@@ -1,10 +1,12 @@
 use axum::extract::{Multipart, Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use thairag_auth::AuthClaims;
 use thairag_core::models::Document;
-use thairag_core::types::{DocId, WorkspaceId};
+use thairag_core::permission::Role;
+use thairag_core::types::{DocId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 use tracing::info;
 use uuid::Uuid;
@@ -31,12 +33,60 @@ pub struct IngestResponse {
     pub chunks: usize,
 }
 
+// ── Permission helper ───────────────────────────────────────────────
+
+fn resolve_doc_perm(
+    claims: &AuthClaims,
+    state: &AppState,
+    workspace_id: WorkspaceId,
+) -> Result<DocPermCheck, ApiError> {
+    if claims.sub == "anonymous" {
+        return Ok(DocPermCheck::AuthDisabled);
+    }
+    let org_id = state.km_store.org_id_for_workspace(workspace_id)?;
+    let user_id = claims
+        .sub
+        .parse::<Uuid>()
+        .map(UserId)
+        .map_err(|_| ApiError(ThaiRagError::Auth("Invalid user ID in token".into())))?;
+    match state.km_store.get_user_role_for_org(user_id, org_id) {
+        Some(role) => Ok(DocPermCheck::Role(role)),
+        None => Ok(DocPermCheck::NoPermission),
+    }
+}
+
+enum DocPermCheck {
+    AuthDisabled,
+    Role(Role),
+    NoPermission,
+}
+
+fn require_doc(
+    perm: &DocPermCheck,
+    check: fn(&Role) -> bool,
+    action: &str,
+) -> Result<(), ApiError> {
+    match perm {
+        DocPermCheck::AuthDisabled => Ok(()),
+        DocPermCheck::Role(role) if check(role) => Ok(()),
+        DocPermCheck::Role(_) | DocPermCheck::NoPermission => Err(ApiError(
+            ThaiRagError::Authorization(format!("Insufficient permission: {action}")),
+        )),
+    }
+}
+
+// ── Handlers ────────────────────────────────────────────────────────
+
 pub async fn ingest_document(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<IngestRequest>,
 ) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
     let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "ingest document")?;
+
     let doc_id = DocId::new();
 
     info!(
@@ -88,9 +138,14 @@ pub async fn ingest_document(
 
 pub async fn upload_document(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
+    let workspace_id_typed = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id_typed)?;
+    require_doc(&perm, Role::can_write, "upload document")?;
+
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name: Option<String> = None;
     let mut file_content_type: Option<String> = None;
@@ -156,7 +211,7 @@ pub async fn upload_document(
         })
         .unwrap_or_else(|| "text/plain".to_string());
 
-    let workspace_id = WorkspaceId(workspace_id);
+    let workspace_id = workspace_id_typed;
     let doc_id = DocId::new();
     let size_bytes = bytes.len() as i64;
 
@@ -210,29 +265,37 @@ pub async fn upload_document(
 
 pub async fn list_documents(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
-) -> Json<ListResponse<Document>> {
-    let docs = state
-        .km_store
-        .list_documents_in_workspace(WorkspaceId(workspace_id));
+) -> Result<Json<ListResponse<Document>>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_read, "list documents")?;
+    let docs = state.km_store.list_documents_in_workspace(workspace_id);
     let total = docs.len();
-    Json(ListResponse { data: docs, total })
+    Ok(Json(ListResponse { data: docs, total }))
 }
 
 pub async fn get_document(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Document>, ApiError> {
-    let _ = workspace_id; // validated by route structure
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_read, "read document")?;
     let doc = state.km_store.get_document(DocId(doc_id))?;
     Ok(Json(doc))
 }
 
 pub async fn delete_document(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    let _ = workspace_id;
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_delete, "delete document")?;
     let doc_id = DocId(doc_id);
     state.km_store.delete_document(doc_id)?;
     let _ = state.search_engine.delete_doc(doc_id).await;

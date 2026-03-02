@@ -29,3 +29,10 @@ futures-core = { workspace = true }
 async-stream = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+argon2 = { workspace = true }
+password-hash = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = { workspace = true }
+async-trait = { workspace = true }

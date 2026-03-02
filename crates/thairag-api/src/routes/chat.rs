@@ -1,15 +1,16 @@
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use chrono::Utc;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
+use thairag_auth::AuthClaims;
 use thairag_core::permission::AccessScope;
 use thairag_core::types::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatUsage,
+    ChatCompletionResponse, ChatMessage, ChatUsage, UserId,
 };
 
 use crate::app_state::AppState;
@@ -17,9 +18,24 @@ use crate::error::ApiError;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
-    let scope = AccessScope::unrestricted();
+    let scope = if claims.sub == "anonymous" {
+        AccessScope::unrestricted()
+    } else {
+        let user_id = claims
+            .sub
+            .parse::<Uuid>()
+            .map(UserId)
+            .map_err(|_| ApiError(thairag_core::ThaiRagError::Auth("Invalid user ID".into())))?;
+        let ws_ids = state.km_store.get_user_workspace_ids(user_id);
+        if ws_ids.is_empty() {
+            AccessScope::unrestricted()
+        } else {
+            AccessScope::new(ws_ids)
+        }
+    };
 
     if req.stream {
         handle_stream(state, req, scope).await
