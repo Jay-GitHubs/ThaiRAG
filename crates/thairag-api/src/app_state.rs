@@ -13,6 +13,8 @@ use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
 use thairag_provider_vectordb::create_vector_store;
 
+use crate::store::KmStore;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
@@ -20,6 +22,7 @@ pub struct AppState {
     pub orchestrator: Arc<QueryOrchestrator>,
     pub document_pipeline: Arc<DocumentPipeline>,
     pub search_engine: Arc<HybridSearchEngine>,
+    pub km_store: Arc<KmStore>,
 }
 
 impl AppState {
@@ -64,12 +67,15 @@ impl AppState {
             None
         };
 
+        let km_store = Arc::new(KmStore::new());
+
         Self {
             config: Arc::new(config),
             jwt,
             orchestrator,
             document_pipeline,
             search_engine,
+            km_store,
         }
     }
 }

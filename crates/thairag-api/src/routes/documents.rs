@@ -1,13 +1,17 @@
 use axum::extract::{Multipart, Path, State};
+use axum::http::StatusCode;
 use axum::Json;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use thairag_core::models::Document;
+use thairag_core::types::{DocId, WorkspaceId};
 use thairag_core::ThaiRagError;
-use thairag_core::types::DocId;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
 use crate::error::ApiError;
+use crate::routes::km::ListResponse;
 
 #[derive(Deserialize)]
 pub struct IngestRequest {
@@ -31,8 +35,8 @@ pub async fn ingest_document(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     Json(body): Json<IngestRequest>,
-) -> Result<Json<IngestResponse>, ApiError> {
-    let workspace_id = thairag_core::types::WorkspaceId(workspace_id);
+) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
     let doc_id = DocId::new();
 
     info!(
@@ -58,19 +62,35 @@ pub async fn ingest_document(
         .await
         .map_err(|e| ApiError(ThaiRagError::Internal(e.to_string())))?;
 
+    // Store document metadata in KM store
+    let now = Utc::now();
+    let doc = Document {
+        id: doc_id,
+        workspace_id,
+        title: body.title,
+        mime_type: body.mime_type,
+        size_bytes: body.content.len() as i64,
+        created_at: now,
+        updated_at: now,
+    };
+    state.km_store.insert_document(doc)?;
+
     info!(%doc_id, chunk_count, "Document ingested successfully");
 
-    Ok(Json(IngestResponse {
-        doc_id: doc_id.0,
-        chunks: chunk_count,
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(IngestResponse {
+            doc_id: doc_id.0,
+            chunks: chunk_count,
+        }),
+    ))
 }
 
 pub async fn upload_document(
     State(state): State<AppState>,
     Path(workspace_id): Path<Uuid>,
     mut multipart: Multipart,
-) -> Result<Json<IngestResponse>, ApiError> {
+) -> Result<(StatusCode, Json<IngestResponse>), ApiError> {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name: Option<String> = None;
     let mut file_content_type: Option<String> = None;
@@ -136,8 +156,9 @@ pub async fn upload_document(
         })
         .unwrap_or_else(|| "text/plain".to_string());
 
-    let workspace_id = thairag_core::types::WorkspaceId(workspace_id);
+    let workspace_id = WorkspaceId(workspace_id);
     let doc_id = DocId::new();
+    let size_bytes = bytes.len() as i64;
 
     info!(
         %doc_id,
@@ -163,12 +184,59 @@ pub async fn upload_document(
         .await
         .map_err(|e| ApiError(ThaiRagError::Internal(e.to_string())))?;
 
+    // Store document metadata in KM store
+    let now = Utc::now();
+    let doc = Document {
+        id: doc_id,
+        workspace_id,
+        title,
+        mime_type,
+        size_bytes,
+        created_at: now,
+        updated_at: now,
+    };
+    state.km_store.insert_document(doc)?;
+
     info!(%doc_id, chunk_count, "Document uploaded successfully");
 
-    Ok(Json(IngestResponse {
-        doc_id: doc_id.0,
-        chunks: chunk_count,
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(IngestResponse {
+            doc_id: doc_id.0,
+            chunks: chunk_count,
+        }),
+    ))
+}
+
+pub async fn list_documents(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<Uuid>,
+) -> Json<ListResponse<Document>> {
+    let docs = state
+        .km_store
+        .list_documents_in_workspace(WorkspaceId(workspace_id));
+    let total = docs.len();
+    Json(ListResponse { data: docs, total })
+}
+
+pub async fn get_document(
+    State(state): State<AppState>,
+    Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Document>, ApiError> {
+    let _ = workspace_id; // validated by route structure
+    let doc = state.km_store.get_document(DocId(doc_id))?;
+    Ok(Json(doc))
+}
+
+pub async fn delete_document(
+    State(state): State<AppState>,
+    Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let _ = workspace_id;
+    let doc_id = DocId(doc_id);
+    state.km_store.delete_document(doc_id)?;
+    let _ = state.search_engine.delete_doc(doc_id).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn mime_from_extension(ext: &str) -> Option<&'static str> {

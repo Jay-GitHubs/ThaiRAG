@@ -514,6 +514,9 @@ mod tests {
         async fn search(&self, _query: &SearchQuery) -> Result<Vec<SearchResult>> {
             Ok(vec![])
         }
+        async fn delete_by_doc(&self, _doc_id: DocId) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockReranker;

@@ -118,6 +118,26 @@ impl TextSearch for TantivySearch {
         Ok(())
     }
 
+    async fn delete_by_doc(&self, doc_id: thairag_core::types::DocId) -> Result<()> {
+        let mut writer = self.writer.lock().map_err(|e| {
+            ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}"))
+        })?;
+
+        let term = tantivy::Term::from_field_text(self.fields.doc_id, &doc_id.to_string());
+        writer.delete_term(term);
+
+        writer.commit().map_err(|e| {
+            ThaiRagError::Internal(format!("Tantivy commit error: {e}"))
+        })?;
+
+        self.reader.reload().map_err(|e| {
+            ThaiRagError::Internal(format!("Tantivy reader reload error: {e}"))
+        })?;
+
+        info!(%doc_id, "Deleted documents from Tantivy index");
+        Ok(())
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         let searcher = self.reader.searcher();
 

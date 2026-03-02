@@ -1,6 +1,7 @@
 mod app_state;
 mod error;
 mod routes;
+mod store;
 
 use tracing_subscriber::EnvFilter;
 

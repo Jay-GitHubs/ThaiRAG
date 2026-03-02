@@ -4,7 +4,7 @@ use std::sync::Arc;
 use thairag_config::schema::SearchConfig;
 use thairag_core::error::Result;
 use thairag_core::traits::{EmbeddingModel, Reranker, TextSearch, VectorStore};
-use thairag_core::types::{DocumentChunk, SearchQuery, SearchResult};
+use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
 
 /// Hybrid search engine combining vector similarity and BM25 text search.
 /// Uses Reciprocal Rank Fusion (RRF) for merging, then reranking.
@@ -84,6 +84,17 @@ impl HybridSearchEngine {
         self.reranker.rerank(&query.text, top).await
     }
 
+    /// Delete a document from both vector store and text search.
+    pub async fn delete_doc(&self, doc_id: DocId) -> Result<()> {
+        let (v_res, t_res) = tokio::join!(
+            self.vector_store.delete_by_doc(doc_id),
+            self.text_search.delete_by_doc(doc_id),
+        );
+        v_res?;
+        t_res?;
+        Ok(())
+    }
+
     pub(crate) fn rrf_merge(
         &self,
         vector_results: &[SearchResult],
@@ -154,6 +165,7 @@ mod tests {
     impl TextSearch for MockTextSearch {
         async fn index(&self, _chunks: &[DocumentChunk]) -> Result<()> { Ok(()) }
         async fn search(&self, _query: &SearchQuery) -> Result<Vec<SearchResult>> { Ok(vec![]) }
+        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> { Ok(()) }
     }
 
     struct MockReranker;
