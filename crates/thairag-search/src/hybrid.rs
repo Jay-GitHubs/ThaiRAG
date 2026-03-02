@@ -84,7 +84,7 @@ impl HybridSearchEngine {
         self.reranker.rerank(&query.text, top).await
     }
 
-    fn rrf_merge(
+    pub(crate) fn rrf_merge(
         &self,
         vector_results: &[SearchResult],
         text_results: &[SearchResult],
@@ -120,5 +120,150 @@ impl HybridSearchEngine {
 
         merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         merged
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use thairag_core::types::{ChunkId, DocId, WorkspaceId};
+    use uuid::Uuid;
+
+    // ── Mocks ────────────────────────────────────────────────────────
+
+    struct MockEmbedding;
+    #[async_trait]
+    impl EmbeddingModel for MockEmbedding {
+        async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(vec![vec![0.0; 3]])
+        }
+        fn dimension(&self) -> usize { 3 }
+    }
+
+    struct MockVectorStore;
+    #[async_trait]
+    impl VectorStore for MockVectorStore {
+        async fn upsert(&self, _chunks: &[DocumentChunk]) -> Result<()> { Ok(()) }
+        async fn search(&self, _embedding: &[f32], _query: &SearchQuery) -> Result<Vec<SearchResult>> { Ok(vec![]) }
+        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> { Ok(()) }
+    }
+
+    struct MockTextSearch;
+    #[async_trait]
+    impl TextSearch for MockTextSearch {
+        async fn index(&self, _chunks: &[DocumentChunk]) -> Result<()> { Ok(()) }
+        async fn search(&self, _query: &SearchQuery) -> Result<Vec<SearchResult>> { Ok(vec![]) }
+    }
+
+    struct MockReranker;
+    #[async_trait]
+    impl Reranker for MockReranker {
+        async fn rerank(&self, _query: &str, results: Vec<SearchResult>) -> Result<Vec<SearchResult>> { Ok(results) }
+    }
+
+    fn make_result(id: &str, score: f32) -> SearchResult {
+        SearchResult {
+            chunk: DocumentChunk {
+                chunk_id: ChunkId(Uuid::parse_str(id).unwrap()),
+                doc_id: DocId::new(),
+                workspace_id: WorkspaceId::new(),
+                content: format!("chunk-{id}"),
+                chunk_index: 0,
+                embedding: None,
+            },
+            score,
+        }
+    }
+
+    fn build_engine(rrf_k: usize, vw: f32, tw: f32) -> HybridSearchEngine {
+        HybridSearchEngine::new(
+            Arc::new(MockEmbedding),
+            Arc::new(MockVectorStore),
+            Arc::new(MockTextSearch),
+            Arc::new(MockReranker),
+            SearchConfig {
+                top_k: 10,
+                rerank_top_k: 5,
+                rrf_k,
+                vector_weight: vw,
+                text_weight: tw,
+            },
+        )
+    }
+
+    // ── RRF Merge Tests ──────────────────────────────────────────────
+
+    #[test]
+    fn rrf_both_empty() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let merged = engine.rrf_merge(&[], &[]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn rrf_vector_only() {
+        let engine = build_engine(60, 1.0, 0.0);
+        let id = "00000000-0000-0000-0000-000000000001";
+        let vec_results = vec![make_result(id, 0.9)];
+        let merged = engine.rrf_merge(&vec_results, &[]);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].score > 0.0);
+    }
+
+    #[test]
+    fn rrf_text_only() {
+        let engine = build_engine(60, 0.0, 1.0);
+        let id = "00000000-0000-0000-0000-000000000002";
+        let text_results = vec![make_result(id, 0.8)];
+        let merged = engine.rrf_merge(&[], &text_results);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].score > 0.0);
+    }
+
+    #[test]
+    fn rrf_shared_doc_gets_higher_score() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let shared_id = "00000000-0000-0000-0000-000000000003";
+        let unique_id = "00000000-0000-0000-0000-000000000004";
+
+        let vec_results = vec![make_result(shared_id, 0.9), make_result(unique_id, 0.7)];
+        let text_results = vec![make_result(shared_id, 0.8)];
+
+        let merged = engine.rrf_merge(&vec_results, &text_results);
+        assert_eq!(merged.len(), 2);
+        // The shared doc should be ranked first (higher combined RRF score)
+        assert_eq!(merged[0].chunk.chunk_id.0.to_string(), shared_id);
+    }
+
+    #[test]
+    fn rrf_descending_order() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let id_a = "00000000-0000-0000-0000-00000000000a";
+        let id_b = "00000000-0000-0000-0000-00000000000b";
+
+        // a at rank 0 in both, b at rank 1 in both → a should score higher
+        let vec_results = vec![make_result(id_a, 0.9), make_result(id_b, 0.7)];
+        let text_results = vec![make_result(id_a, 0.9), make_result(id_b, 0.7)];
+
+        let merged = engine.rrf_merge(&vec_results, &text_results);
+        assert!(merged[0].score >= merged[1].score);
+    }
+
+    #[test]
+    fn rrf_score_uses_weights() {
+        // Equal weight engine
+        let engine_eq = build_engine(60, 0.5, 0.5);
+        // Vector-heavy engine
+        let engine_vec = build_engine(60, 1.0, 0.0);
+
+        let id = "00000000-0000-0000-0000-000000000005";
+        let results = vec![make_result(id, 0.9)];
+
+        let eq_merged = engine_eq.rrf_merge(&results, &[]);
+        let vec_merged = engine_vec.rrf_merge(&results, &[]);
+
+        // With vector_weight=1.0 the score should be higher than 0.5
+        assert!(vec_merged[0].score > eq_merged[0].score);
     }
 }

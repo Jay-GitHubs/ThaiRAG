@@ -18,3 +18,50 @@ impl Default for ThaiNormalizer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapse_multiple_spaces() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("hello   world"), "hello world");
+    }
+
+    #[test]
+    fn trim_leading_trailing() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("  hello  "), "hello");
+    }
+
+    #[test]
+    fn mixed_whitespace() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("hello\t\nworld"), "hello world");
+    }
+
+    #[test]
+    fn empty_string() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize(""), "");
+    }
+
+    #[test]
+    fn whitespace_only() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("   \t  \n  "), "");
+    }
+
+    #[test]
+    fn thai_text_preserved() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("สวัสดี  ครับ"), "สวัสดี ครับ");
+    }
+
+    #[test]
+    fn single_word_unchanged() {
+        let n = ThaiNormalizer::new();
+        assert_eq!(n.normalize("hello"), "hello");
+    }
+}

@@ -7,6 +7,7 @@ version.workspace = true
 thairag-core = { workspace = true }
 thairag-config = { workspace = true }
 thairag-search = { workspace = true }
+thairag-thai = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

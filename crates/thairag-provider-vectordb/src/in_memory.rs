@@ -79,3 +79,196 @@ impl VectorStore for InMemoryVectorStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::types::{ChunkId, WorkspaceId};
+    use uuid::Uuid;
+
+    fn make_chunk(id: &str, doc_id: DocId, ws_id: WorkspaceId, emb: Vec<f32>) -> DocumentChunk {
+        DocumentChunk {
+            chunk_id: ChunkId(Uuid::parse_str(id).unwrap()),
+            doc_id,
+            workspace_id: ws_id,
+            content: format!("content-{id}"),
+            chunk_index: 0,
+            embedding: Some(emb),
+        }
+    }
+
+    #[tokio::test]
+    async fn upsert_and_search() {
+        let store = InMemoryVectorStore::new();
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let chunk = make_chunk(
+            "00000000-0000-0000-0000-000000000001",
+            doc_id,
+            ws_id,
+            vec![1.0, 0.0, 0.0],
+        );
+        store.upsert(&[chunk]).await.unwrap();
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!((results[0].score - 1.0).abs() < 1e-6); // perfect cosine match
+    }
+
+    #[tokio::test]
+    async fn cosine_ordering() {
+        let store = InMemoryVectorStore::new();
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let close = make_chunk(
+            "00000000-0000-0000-0000-000000000001",
+            doc_id,
+            ws_id,
+            vec![0.9, 0.1, 0.0],
+        );
+        let far = make_chunk(
+            "00000000-0000-0000-0000-000000000002",
+            doc_id,
+            ws_id,
+            vec![0.0, 0.0, 1.0],
+        );
+        store.upsert(&[close, far]).await.unwrap();
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[tokio::test]
+    async fn workspace_filter() {
+        let store = InMemoryVectorStore::new();
+        let doc_id = DocId::new();
+        let ws_a = WorkspaceId::new();
+        let ws_b = WorkspaceId::new();
+
+        let chunk_a = make_chunk(
+            "00000000-0000-0000-0000-000000000001",
+            doc_id,
+            ws_a,
+            vec![1.0, 0.0, 0.0],
+        );
+        let chunk_b = make_chunk(
+            "00000000-0000-0000-0000-000000000002",
+            doc_id,
+            ws_b,
+            vec![1.0, 0.0, 0.0],
+        );
+        store.upsert(&[chunk_a, chunk_b]).await.unwrap();
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![ws_a],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk.workspace_id, ws_a);
+    }
+
+    #[tokio::test]
+    async fn top_k_limit() {
+        let store = InMemoryVectorStore::new();
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        for i in 0..5u8 {
+            let id = format!("00000000-0000-0000-0000-0000000000{:02x}", i + 1);
+            let chunk = make_chunk(&id, doc_id, ws_id, vec![1.0, 0.0, 0.0]);
+            store.upsert(&[chunk]).await.unwrap();
+        }
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 2,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_by_doc_removes_chunks() {
+        let store = InMemoryVectorStore::new();
+        let doc_a = DocId::new();
+        let doc_b = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let chunk_a = make_chunk(
+            "00000000-0000-0000-0000-000000000001",
+            doc_a,
+            ws_id,
+            vec![1.0, 0.0, 0.0],
+        );
+        let chunk_b = make_chunk(
+            "00000000-0000-0000-0000-000000000002",
+            doc_b,
+            ws_id,
+            vec![1.0, 0.0, 0.0],
+        );
+        store.upsert(&[chunk_a, chunk_b]).await.unwrap();
+
+        store.delete_by_doc(doc_a).await.unwrap();
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chunk.doc_id, doc_b);
+    }
+
+    #[tokio::test]
+    async fn search_empty_store() {
+        let store = InMemoryVectorStore::new();
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_overwrites() {
+        let store = InMemoryVectorStore::new();
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+        let id = "00000000-0000-0000-0000-000000000001";
+
+        let chunk_v1 = make_chunk(id, doc_id, ws_id, vec![1.0, 0.0, 0.0]);
+        store.upsert(&[chunk_v1]).await.unwrap();
+
+        // Upsert same chunk_id with different embedding
+        let chunk_v2 = make_chunk(id, doc_id, ws_id, vec![0.0, 1.0, 0.0]);
+        store.upsert(&[chunk_v2]).await.unwrap();
+
+        let query = SearchQuery {
+            text: "test".to_string(),
+            top_k: 10,
+            workspace_ids: vec![],
+        };
+        let results = store.search(&[0.0, 1.0, 0.0], &query).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!((results[0].score - 1.0).abs() < 1e-6); // matches new embedding
+    }
+}

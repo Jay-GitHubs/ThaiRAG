@@ -3692,6 +3692,7 @@ dependencies = [
  "thairag-core",
  "thairag-provider-llm",
  "thairag-search",
+ "thairag-thai",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3845,6 +3846,7 @@ dependencies = [
  "thairag-core",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3856,6 +3858,7 @@ dependencies = [
  "thairag-core",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
