@@ -4,6 +4,7 @@ pub mod health;
 pub mod km;
 pub mod models;
 
+use axum::extract::DefaultBodyLimit;
 use axum::{Router, routing::get, routing::post};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -23,6 +24,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/km/workspaces/{workspace_id}/documents",
             post(documents::ingest_document),
+        )
+        .route(
+            "/api/km/workspaces/{workspace_id}/documents/upload",
+            post(documents::upload_document)
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
         )
         // Middleware
         .layer(TraceLayer::new_for_http())
