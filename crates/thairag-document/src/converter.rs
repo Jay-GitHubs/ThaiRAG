@@ -125,3 +125,130 @@ fn extract_docx_text(document: &docx_rs::Document, output: &mut String) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::traits::DocumentProcessor;
+
+    fn converter() -> MarkdownConverter {
+        MarkdownConverter::new()
+    }
+
+    // ── Plaintext / Markdown ────────────────────────────────────────
+
+    #[test]
+    fn converts_plain_text() {
+        let text = b"Hello, world!";
+        let result = converter().convert(text, "text/plain").unwrap();
+        assert_eq!(result, "Hello, world!");
+    }
+
+    #[test]
+    fn converts_markdown() {
+        let md = b"# Title\n\nSome **bold** text.";
+        let result = converter().convert(md, "text/markdown").unwrap();
+        assert_eq!(result, "# Title\n\nSome **bold** text.");
+    }
+
+    #[test]
+    fn rejects_invalid_utf8() {
+        let bad = &[0xFF, 0xFE, 0xFD];
+        let result = converter().convert(bad, "text/plain");
+        assert!(result.is_err());
+    }
+
+    // ── CSV ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn converts_csv_basic() {
+        let csv = b"name,age,city\nAlice,30,Bangkok\nBob,25,Chiang Mai\n";
+        let result = converter().convert(csv, "text/csv").unwrap();
+        assert!(result.contains("name: Alice"));
+        assert!(result.contains("age: 30"));
+        assert!(result.contains("city: Bangkok"));
+        assert!(result.contains("name: Bob"));
+        assert!(result.contains("city: Chiang Mai"));
+    }
+
+    #[test]
+    fn converts_csv_single_row() {
+        let csv = b"key,value\nfoo,bar\n";
+        let result = converter().convert(csv, "text/csv").unwrap();
+        assert!(result.contains("key: foo"));
+        assert!(result.contains("value: bar"));
+    }
+
+    #[test]
+    fn converts_csv_empty_body() {
+        let csv = b"col1,col2\n";
+        let result = converter().convert(csv, "text/csv").unwrap();
+        // Only headers, no data rows → empty output
+        assert!(result.is_empty());
+    }
+
+    // ── DOCX ────────────────────────────────────────────────────────
+
+    #[test]
+    fn converts_docx_programmatic() {
+        // Build a minimal DOCX in memory using docx-rs
+        let docx = docx_rs::Docx::new()
+            .add_paragraph(
+                docx_rs::Paragraph::new()
+                    .add_run(docx_rs::Run::new().add_text("Hello from DOCX")),
+            )
+            .add_paragraph(
+                docx_rs::Paragraph::new()
+                    .add_run(docx_rs::Run::new().add_text("Second paragraph")),
+            );
+        let mut buf = Vec::new();
+        docx.build().pack(&mut std::io::Cursor::new(&mut buf)).unwrap();
+
+        let result = converter()
+            .convert(
+                &buf,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            .unwrap();
+        assert!(result.contains("Hello from DOCX"));
+        assert!(result.contains("Second paragraph"));
+    }
+
+    #[test]
+    fn rejects_invalid_docx() {
+        let bad = b"not a real docx file";
+        let result = converter().convert(
+            bad,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Unsupported types ───────────────────────────────────────────
+
+    #[test]
+    fn rejects_unsupported_mime_type() {
+        let result = converter().convert(b"data", "application/pdf");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unsupported MIME type"));
+        assert!(err_msg.contains("application/pdf"));
+    }
+
+    #[test]
+    fn rejects_unknown_mime_type() {
+        let result = converter().convert(b"data", "application/x-custom");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn supported_mime_types_list_is_correct() {
+        assert!(SUPPORTED_MIME_TYPES.contains(&"text/plain"));
+        assert!(SUPPORTED_MIME_TYPES.contains(&"text/markdown"));
+        assert!(SUPPORTED_MIME_TYPES.contains(&"text/csv"));
+        assert!(SUPPORTED_MIME_TYPES.contains(
+            &"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ));
+        assert!(!SUPPORTED_MIME_TYPES.contains(&"application/pdf"));
+    }
+}

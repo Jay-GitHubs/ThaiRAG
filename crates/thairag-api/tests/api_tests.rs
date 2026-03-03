@@ -881,3 +881,411 @@ async fn viewer_cannot_manage_permissions() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// ── Pagination Tests ────────────────────────────────────────────────
+
+/// Helper: create an org with a custom name and return the org_id.
+async fn create_named_org(app: &Router, token: &str, name: &str) -> String {
+    let req = json_request_auth(
+        "POST",
+        "/api/km/orgs",
+        serde_json::json!({ "name": name }),
+        token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp.into_body()).await;
+    body["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn pagination_limit_offset() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "admin@test.com", "Admin", "pass").await;
+
+    // Create 5 orgs
+    for i in 0..5 {
+        create_named_org(&app, &token, &format!("Org-{i}")).await;
+    }
+
+    // Default: all 5
+    let req = get_request_auth("/api/km/orgs", &token);
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 5);
+    assert_eq!(body["data"].as_array().unwrap().len(), 5);
+
+    // limit=2, offset=1 → data.len()=2, total=5
+    let req = get_request_auth("/api/km/orgs?limit=2&offset=1", &token);
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 5);
+    assert_eq!(body["data"].as_array().unwrap().len(), 2);
+
+    // limit=3, offset=0
+    let req = get_request_auth("/api/km/orgs?limit=3", &token);
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 5);
+    assert_eq!(body["data"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn pagination_beyond_end() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "admin@test.com", "Admin", "pass").await;
+
+    // Create 2 orgs
+    create_named_org(&app, &token, "A").await;
+    create_named_org(&app, &token, "B").await;
+
+    // offset=10 → data is empty, total=2
+    let req = get_request_auth("/api/km/orgs?offset=10", &token);
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 2);
+    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn pagination_on_documents() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "doc@test.com", "Doc", "pass").await;
+
+    // Setup hierarchy
+    let org_id = create_named_org(&app, &token, "DocOrg").await;
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts"),
+        serde_json::json!({ "name": "Eng" }),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let dept_id = body["id"].as_str().unwrap().to_string();
+
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+        serde_json::json!({ "name": "Main" }),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let ws_id = body["id"].as_str().unwrap().to_string();
+
+    // Ingest 3 documents
+    for i in 0..3 {
+        let req = json_request_auth(
+            "POST",
+            &format!("/api/km/workspaces/{ws_id}/documents"),
+            serde_json::json!({
+                "title": format!("Doc {i}"),
+                "content": "Hello world test content.",
+                "mime_type": "text/plain"
+            }),
+            &token,
+        );
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    // Paginate: limit=2
+    let req = get_request_auth(
+        &format!("/api/km/workspaces/{ws_id}/documents?limit=2"),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 3);
+    assert_eq!(body["data"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn pagination_on_permissions() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    // Grant permissions to 3 additional users
+    for i in 0..3 {
+        let email = format!("user{i}@test.com");
+        let _tok = register_and_get_token(&app, &email, &format!("User{i}"), "pass").await;
+        let req = json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/permissions"),
+            serde_json::json!({
+                "email": email,
+                "role": "viewer",
+                "scope": { "level": "Org" }
+            }),
+            &token_a,
+        );
+        app.clone().oneshot(req).await.unwrap();
+    }
+
+    // Total = 4 (owner auto-grant + 3 viewers), limit=2
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions?limit=2"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 4);
+    assert_eq!(body["data"].as_array().unwrap().len(), 2);
+}
+
+// ── Scoped Permission Tests ─────────────────────────────────────────
+
+/// Helper: create org + dept + workspace, return (org_id, dept_id, ws_id).
+async fn create_hierarchy(app: &Router, token: &str) -> (String, String, String) {
+    let org_id = create_org(app, token).await;
+
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts"),
+        serde_json::json!({ "name": "Eng" }),
+        token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let dept_id = body["id"].as_str().unwrap().to_string();
+
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+        serde_json::json!({ "name": "Main" }),
+        token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let ws_id = body["id"].as_str().unwrap().to_string();
+
+    (org_id, dept_id, ws_id)
+}
+
+#[tokio::test]
+async fn grant_and_list_dept_permissions() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let (org_id, dept_id, _ws_id) = create_hierarchy(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant dept-scoped permission
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/permissions"),
+        serde_json::json!({ "email": "user@test.com", "role": "editor" }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List dept permissions — should show 1 (dept-scoped only)
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["data"][0]["email"], "user@test.com");
+    assert_eq!(body["data"][0]["role"], "editor");
+}
+
+#[tokio::test]
+async fn grant_and_list_workspace_permissions() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let (org_id, dept_id, ws_id) = create_hierarchy(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant workspace-scoped permission
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        serde_json::json!({ "email": "user@test.com", "role": "viewer" }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List workspace permissions — 1 entry
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["data"][0]["role"], "viewer");
+}
+
+#[tokio::test]
+async fn dept_permission_isolation() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let (org_id, dept_id, ws_id) = create_hierarchy(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant at dept level
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/permissions"),
+        serde_json::json!({ "email": "user@test.com", "role": "editor" }),
+        &token_a,
+    );
+    app.clone().oneshot(req).await.unwrap();
+
+    // Dept-level list shows 1
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 1);
+
+    // Workspace-level list shows 0 (isolated)
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 0);
+
+    // Org-level list shows 2 (owner auto-grant + dept grant)
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 2);
+}
+
+#[tokio::test]
+async fn scoped_permission_revoke() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let (org_id, dept_id, ws_id) = create_hierarchy(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant at workspace level
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        serde_json::json!({ "email": "user@test.com", "role": "viewer" }),
+        &token_a,
+    );
+    app.clone().oneshot(req).await.unwrap();
+
+    // Verify it exists
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 1);
+
+    // Revoke it
+    let req = delete_json_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        serde_json::json!({ "email": "user@test.com" }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Verify gone
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 0);
+}
+
+// ── MIME Validation Tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn ingest_unsupported_mime_type_returns_400() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "doc@test.com", "Doc", "pass").await;
+
+    // Setup hierarchy
+    let (org_id, dept_id, _) = create_hierarchy(&app, &token).await;
+    // Need a workspace id for the documents endpoint
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let ws_id = body["data"][0]["id"].as_str().unwrap().to_string();
+
+    // Ingest with unsupported MIME type
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/workspaces/{ws_id}/documents"),
+        serde_json::json!({
+            "title": "Bad Doc",
+            "content": "some content",
+            "mime_type": "application/pdf"
+        }),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp.into_body()).await;
+    assert!(body["error"]["message"].as_str().unwrap().contains("Unsupported MIME type"));
+}
+
+#[tokio::test]
+async fn ingest_response_includes_enriched_fields() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "doc@test.com", "Doc", "pass").await;
+
+    let (org_id, dept_id, _) = create_hierarchy(&app, &token).await;
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    let ws_id = body["data"][0]["id"].as_str().unwrap().to_string();
+
+    let content = "Hello world test document content.";
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/workspaces/{ws_id}/documents"),
+        serde_json::json!({
+            "title": "Test Doc",
+            "content": content,
+            "mime_type": "text/plain"
+        }),
+        &token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp.into_body()).await;
+
+    // Enriched fields present
+    assert_eq!(body["mime_type"], "text/plain");
+    assert_eq!(body["size_bytes"], content.len() as i64);
+    assert!(body["doc_id"].as_str().is_some());
+    assert!(body["chunks"].as_u64().unwrap() >= 1);
+    // filename is null for JSON ingest
+    assert!(body["filename"].is_null());
+}
