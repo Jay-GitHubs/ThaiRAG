@@ -49,6 +49,13 @@ pub fn build_router(state: AppState) -> Router {
             "/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}",
             get(km::get_workspace).delete(km::delete_workspace),
         )
+        // Permissions
+        .route(
+            "/orgs/{org_id}/permissions",
+            get(km::list_permissions)
+                .post(km::grant_permission)
+                .delete(km::revoke_permission),
+        )
         // Documents
         .route(
             "/workspaces/{workspace_id}/documents",

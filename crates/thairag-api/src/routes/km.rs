@@ -12,6 +12,7 @@ use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::error::ApiError;
+use crate::store::scopes_match;
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -36,7 +37,54 @@ pub struct ListResponse<T: Serialize> {
     pub total: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "level")]
+pub enum ScopeRequest {
+    Org,
+    Dept { dept_id: Uuid },
+    Workspace { dept_id: Uuid, workspace_id: Uuid },
+}
+
+#[derive(Deserialize)]
+pub struct GrantPermissionRequest {
+    pub email: String,
+    pub role: Role,
+    pub scope: ScopeRequest,
+}
+
+#[derive(Deserialize)]
+pub struct RevokePermissionRequest {
+    pub email: String,
+    pub scope: ScopeRequest,
+}
+
+#[derive(Serialize)]
+pub struct PermissionResponse {
+    pub user_id: String,
+    pub email: String,
+    pub role: Role,
+    pub scope: PermissionScope,
+}
+
 // ── Permission helpers ──────────────────────────────────────────────
+
+fn resolve_scope(org_id: OrgId, scope: ScopeRequest) -> PermissionScope {
+    match scope {
+        ScopeRequest::Org => PermissionScope::Org { org_id },
+        ScopeRequest::Dept { dept_id } => PermissionScope::Dept {
+            org_id,
+            dept_id: DeptId(dept_id),
+        },
+        ScopeRequest::Workspace {
+            dept_id,
+            workspace_id,
+        } => PermissionScope::Workspace {
+            org_id,
+            dept_id: DeptId(dept_id),
+            workspace_id: WorkspaceId(workspace_id),
+        },
+    }
+}
 
 enum PermCheck {
     AuthDisabled,
@@ -241,5 +289,103 @@ pub async fn delete_workspace(
     for doc_id in doc_ids {
         let _ = state.search_engine.delete_doc(doc_id).await;
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Permission management handlers ─────────────────────────────────
+
+pub async fn grant_permission(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(org_id): Path<Uuid>,
+    Json(body): Json<GrantPermissionRequest>,
+) -> Result<StatusCode, ApiError> {
+    let org_id = OrgId(org_id);
+    let perm = resolve_perm(&claims, &state, org_id);
+    require(&perm, Role::can_manage, "manage permissions")?;
+
+    // Role ceiling: non-Owners can only grant roles strictly below their own
+    if let PermCheck::Role(caller_role) = &perm {
+        if *caller_role != Role::Owner && body.role >= *caller_role {
+            return Err(ApiError(ThaiRagError::Authorization(
+                "Cannot grant a role equal to or above your own".into(),
+            )));
+        }
+    }
+
+    let target = state.km_store.get_user_by_email(&body.email)?;
+    let scope = resolve_scope(org_id, body.scope);
+
+    state.km_store.upsert_permission(UserPermission {
+        user_id: target.user.id,
+        scope,
+        role: body.role,
+    });
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn list_permissions(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(org_id): Path<Uuid>,
+) -> Result<Json<ListResponse<PermissionResponse>>, ApiError> {
+    let org_id = OrgId(org_id);
+    let perm = resolve_perm(&claims, &state, org_id);
+    require(&perm, Role::can_manage, "manage permissions")?;
+
+    let perms = state.km_store.list_permissions_for_org(org_id);
+    let data: Vec<PermissionResponse> = perms
+        .into_iter()
+        .map(|p| {
+            let email = state
+                .km_store
+                .get_user(p.user_id)
+                .map(|u| u.email)
+                .unwrap_or_default();
+            PermissionResponse {
+                user_id: p.user_id.0.to_string(),
+                email,
+                role: p.role,
+                scope: p.scope,
+            }
+        })
+        .collect();
+    let total = data.len();
+    Ok(Json(ListResponse { data, total }))
+}
+
+pub async fn revoke_permission(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(org_id): Path<Uuid>,
+    Json(body): Json<RevokePermissionRequest>,
+) -> Result<StatusCode, ApiError> {
+    let org_id = OrgId(org_id);
+    let perm = resolve_perm(&claims, &state, org_id);
+    require(&perm, Role::can_manage, "manage permissions")?;
+
+    let target = state.km_store.get_user_by_email(&body.email)?;
+    let scope = resolve_scope(org_id, body.scope);
+
+    // Last-owner safety: if revoking an Owner at Org scope, ensure at least one remains
+    if matches!(&scope, PermissionScope::Org { .. }) {
+        let is_owner = state
+            .km_store
+            .list_permissions_for_org(org_id)
+            .iter()
+            .any(|p| {
+                p.user_id == target.user.id
+                    && p.role == Role::Owner
+                    && scopes_match(&p.scope, &scope)
+            });
+        if is_owner && state.km_store.count_org_owners(org_id) <= 1 {
+            return Err(ApiError(ThaiRagError::Validation(
+                "Cannot revoke the last org-level Owner".into(),
+            )));
+        }
+    }
+
+    state.km_store.remove_permission(target.user.id, &scope)?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -243,6 +243,20 @@ fn get_request_auth(uri: &str, token: &str) -> Request<Body> {
         .unwrap()
 }
 
+fn delete_json_request_auth(
+    uri: &str,
+    body: serde_json::Value,
+    token: &str,
+) -> Request<Body> {
+    Request::builder()
+        .method("DELETE")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
 fn delete_request_auth(uri: &str, token: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
@@ -633,4 +647,236 @@ async fn document_crud() {
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 0);
+}
+
+// ── Permission Management Tests ─────────────────────────────────────
+
+/// Helper: create an org as the given user and return the org_id.
+async fn create_org(app: &Router, token: &str) -> String {
+    let req = json_request_auth(
+        "POST",
+        "/api/km/orgs",
+        serde_json::json!({ "name": "TestOrg" }),
+        token,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp.into_body()).await;
+    body["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn grant_and_list_permissions() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    // Register user B
+    let _token_b = register_and_get_token(&app, "viewer@test.com", "Viewer", "pass").await;
+
+    // Owner grants Viewer to user B
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "viewer@test.com",
+            "role": "viewer",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List permissions — should show Owner + Viewer = 2
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 2);
+}
+
+#[tokio::test]
+async fn grant_upserts_existing() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant Viewer
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "user@test.com",
+            "role": "viewer",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Grant Editor to same user at same scope (upsert)
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "user@test.com",
+            "role": "editor",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List — should still be 2 (owner + user), not 3
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 2);
+
+    // The user's role should be editor now
+    let data = body["data"].as_array().unwrap();
+    let user_perm = data
+        .iter()
+        .find(|p| p["email"] == "user@test.com")
+        .unwrap();
+    assert_eq!(user_perm["role"], "editor");
+}
+
+#[tokio::test]
+async fn revoke_permission() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    let _token_b = register_and_get_token(&app, "user@test.com", "User", "pass").await;
+
+    // Grant then revoke
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "user@test.com",
+            "role": "viewer",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    app.clone().oneshot(req).await.unwrap();
+
+    let req = delete_json_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "user@test.com",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List — only the owner remains
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["total"], 1);
+}
+
+#[tokio::test]
+async fn cannot_remove_last_owner() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    // Try to revoke the sole owner
+    let req = delete_json_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "owner@test.com",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cannot_grant_role_above_own() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    // Register admin user, grant Admin
+    let token_b = register_and_get_token(&app, "admin@test.com", "Admin", "pass").await;
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "admin@test.com",
+            "role": "admin",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    app.clone().oneshot(req).await.unwrap();
+
+    // Register target user
+    let _token_c = register_and_get_token(&app, "target@test.com", "Target", "pass").await;
+
+    // Admin tries to grant Owner → 403
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "target@test.com",
+            "role": "owner",
+            "scope": { "level": "Org" }
+        }),
+        &token_b,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn viewer_cannot_manage_permissions() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner@test.com", "Owner", "pass").await;
+    let org_id = create_org(&app, &token_a).await;
+
+    // Grant Viewer to user B
+    let token_b = register_and_get_token(&app, "viewer@test.com", "Viewer", "pass").await;
+    let req = json_request_auth(
+        "POST",
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        serde_json::json!({
+            "email": "viewer@test.com",
+            "role": "viewer",
+            "scope": { "level": "Org" }
+        }),
+        &token_a,
+    );
+    app.clone().oneshot(req).await.unwrap();
+
+    // Viewer tries to list permissions → 403
+    let req = get_request_auth(
+        &format!("/api/km/orgs/{org_id}/permissions"),
+        &token_b,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

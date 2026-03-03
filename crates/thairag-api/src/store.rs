@@ -11,6 +11,44 @@ use thairag_core::ThaiRagError;
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
+/// Check whether two `PermissionScope` values target the same entity.
+pub(crate) fn scopes_match(a: &PermissionScope, b: &PermissionScope) -> bool {
+    match (a, b) {
+        (PermissionScope::Org { org_id: a }, PermissionScope::Org { org_id: b }) => a == b,
+        (
+            PermissionScope::Dept {
+                org_id: ao,
+                dept_id: ad,
+            },
+            PermissionScope::Dept {
+                org_id: bo,
+                dept_id: bd,
+            },
+        ) => ao == bo && ad == bd,
+        (
+            PermissionScope::Workspace {
+                org_id: ao,
+                dept_id: ad,
+                workspace_id: aw,
+            },
+            PermissionScope::Workspace {
+                org_id: bo,
+                dept_id: bd,
+                workspace_id: bw,
+            },
+        ) => ao == bo && ad == bd && aw == bw,
+        _ => false,
+    }
+}
+
+fn scope_org_id(scope: &PermissionScope) -> OrgId {
+    match scope {
+        PermissionScope::Org { org_id } => *org_id,
+        PermissionScope::Dept { org_id, .. } => *org_id,
+        PermissionScope::Workspace { org_id, .. } => *org_id,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub user: User,
@@ -259,6 +297,58 @@ impl KmStore {
 
     pub fn add_permission(&self, perm: UserPermission) {
         self.permissions.write().unwrap().push(perm);
+    }
+
+    /// Insert or update a permission. Returns `true` if an existing entry was updated.
+    pub fn upsert_permission(&self, perm: UserPermission) -> bool {
+        let mut perms = self.permissions.write().unwrap();
+        if let Some(existing) = perms
+            .iter_mut()
+            .find(|p| p.user_id == perm.user_id && scopes_match(&p.scope, &perm.scope))
+        {
+            existing.role = perm.role;
+            true
+        } else {
+            perms.push(perm);
+            false
+        }
+    }
+
+    /// List all permissions whose scope belongs to the given org.
+    pub fn list_permissions_for_org(&self, org_id: OrgId) -> Vec<UserPermission> {
+        self.permissions
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|p| scope_org_id(&p.scope) == org_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Remove the permission matching (user_id, scope). Errors if nothing was removed.
+    pub fn remove_permission(&self, user_id: UserId, scope: &PermissionScope) -> Result<()> {
+        let mut perms = self.permissions.write().unwrap();
+        let before = perms.len();
+        perms.retain(|p| !(p.user_id == user_id && scopes_match(&p.scope, scope)));
+        if perms.len() == before {
+            return Err(ThaiRagError::NotFound(
+                "Permission not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Count how many Owner-role entries exist at the Org scope for a given org.
+    pub fn count_org_owners(&self, org_id: OrgId) -> usize {
+        self.permissions
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|p| {
+                p.role == Role::Owner
+                    && matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id)
+            })
+            .count()
     }
 
     /// Get the highest role a user has for a given org, considering
@@ -636,6 +726,118 @@ mod tests {
         assert!(store.get_org(org.id).is_ok());
         assert!(store.get_dept(dept.id).is_err());
         assert!(store.get_workspace(ws.id).is_err());
+    }
+
+    #[test]
+    fn upsert_permission_dedup() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+        let scope = PermissionScope::Org { org_id: org.id };
+
+        // First insert
+        let updated = store.upsert_permission(UserPermission {
+            user_id: user.id,
+            scope: scope.clone(),
+            role: Role::Viewer,
+        });
+        assert!(!updated);
+        assert_eq!(store.list_permissions_for_org(org.id).len(), 1);
+
+        // Upsert same (user, scope) → updates role, no new row
+        let updated = store.upsert_permission(UserPermission {
+            user_id: user.id,
+            scope: scope.clone(),
+            role: Role::Editor,
+        });
+        assert!(updated);
+        let perms = store.list_permissions_for_org(org.id);
+        assert_eq!(perms.len(), 1);
+        assert_eq!(perms[0].role, Role::Editor);
+    }
+
+    #[test]
+    fn list_permissions_filters_by_org() {
+        let store = KmStore::new();
+        let org_a = store.insert_org("A".into()).unwrap();
+        let org_b = store.insert_org("B".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+
+        store.add_permission(UserPermission {
+            user_id: user.id,
+            scope: PermissionScope::Org { org_id: org_a.id },
+            role: Role::Owner,
+        });
+        store.add_permission(UserPermission {
+            user_id: user.id,
+            scope: PermissionScope::Org { org_id: org_b.id },
+            role: Role::Viewer,
+        });
+
+        assert_eq!(store.list_permissions_for_org(org_a.id).len(), 1);
+        assert_eq!(store.list_permissions_for_org(org_b.id).len(), 1);
+    }
+
+    #[test]
+    fn remove_permission_success_and_not_found() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+        let scope = PermissionScope::Org { org_id: org.id };
+
+        store.add_permission(UserPermission {
+            user_id: user.id,
+            scope: scope.clone(),
+            role: Role::Viewer,
+        });
+
+        store.remove_permission(user.id, &scope).unwrap();
+        assert_eq!(store.list_permissions_for_org(org.id).len(), 0);
+
+        // Removing again should error
+        assert!(store.remove_permission(user.id, &scope).is_err());
+    }
+
+    #[test]
+    fn count_org_owners_counts_correctly() {
+        let store = KmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let u1 = store
+            .insert_user("a@t.com".into(), "A".into(), "h".into())
+            .unwrap();
+        let u2 = store
+            .insert_user("b@t.com".into(), "B".into(), "h".into())
+            .unwrap();
+
+        store.add_permission(UserPermission {
+            user_id: u1.id,
+            scope: PermissionScope::Org { org_id: org.id },
+            role: Role::Owner,
+        });
+        // Admin at Org level — should NOT count
+        store.add_permission(UserPermission {
+            user_id: u2.id,
+            scope: PermissionScope::Org { org_id: org.id },
+            role: Role::Admin,
+        });
+        // Owner at Dept level — should NOT count (not Org scope)
+        store.add_permission(UserPermission {
+            user_id: u2.id,
+            scope: PermissionScope::Dept {
+                org_id: org.id,
+                dept_id: dept.id,
+            },
+            role: Role::Owner,
+        });
+
+        assert_eq!(store.count_org_owners(org.id), 1);
     }
 
     #[test]
