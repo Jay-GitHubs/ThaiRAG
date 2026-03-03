@@ -21,7 +21,8 @@ use thairag_search::HybridSearchEngine;
 
 use thairag_api::app_state::AppState;
 use thairag_api::routes::build_router;
-use thairag_api::store::KmStore;
+use thairag_api::store::memory::MemoryKmStore;
+use thairag_api::store::KmStoreTrait;
 
 // ── Mock Providers ──────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         orchestrator,
         document_pipeline,
         search_engine,
-        km_store: Arc::new(KmStore::new()),
+        km_store: Arc::new(MemoryKmStore::new()) as Arc<dyn KmStoreTrait>,
     }
 }
 

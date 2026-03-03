@@ -6,9 +6,19 @@ use thairag_api::routes::build_router;
 #[tokio::main]
 async fn main() {
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let log_format = std::env::var("THAIRAG_LOG_FORMAT").unwrap_or_default();
+
+    if log_format == "json" {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
 
     // Load config
     let config = thairag_config::load_config().expect("Failed to load configuration");

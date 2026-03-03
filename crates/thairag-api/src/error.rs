@@ -21,6 +21,13 @@ impl IntoResponse for ApiError {
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         };
 
+        tracing::warn!(
+            status = %status,
+            error_type = %error_type,
+            message = %self.0,
+            "API error"
+        );
+
         let body = serde_json::json!({
             "error": {
                 "message": self.0.to_string(),

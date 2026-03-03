@@ -7,3 +7,5 @@ version.workspace = true
 thairag-core = { workspace = true }
 thairag-config = { workspace = true }
 uuid = { workspace = true }
+csv = { workspace = true }
+docx-rs = { workspace = true }

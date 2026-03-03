@@ -9,53 +9,11 @@ use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, DocId, OrgId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 
+use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
+
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
-/// Check whether two `PermissionScope` values target the same entity.
-pub(crate) fn scopes_match(a: &PermissionScope, b: &PermissionScope) -> bool {
-    match (a, b) {
-        (PermissionScope::Org { org_id: a }, PermissionScope::Org { org_id: b }) => a == b,
-        (
-            PermissionScope::Dept {
-                org_id: ao,
-                dept_id: ad,
-            },
-            PermissionScope::Dept {
-                org_id: bo,
-                dept_id: bd,
-            },
-        ) => ao == bo && ad == bd,
-        (
-            PermissionScope::Workspace {
-                org_id: ao,
-                dept_id: ad,
-                workspace_id: aw,
-            },
-            PermissionScope::Workspace {
-                org_id: bo,
-                dept_id: bd,
-                workspace_id: bw,
-            },
-        ) => ao == bo && ad == bd && aw == bw,
-        _ => false,
-    }
-}
-
-fn scope_org_id(scope: &PermissionScope) -> OrgId {
-    match scope {
-        PermissionScope::Org { org_id } => *org_id,
-        PermissionScope::Dept { org_id, .. } => *org_id,
-        PermissionScope::Workspace { org_id, .. } => *org_id,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UserRecord {
-    pub user: User,
-    pub password_hash: String,
-}
-
-pub struct KmStore {
+pub struct MemoryKmStore {
     orgs: RwLock<HashMap<OrgId, Organization>>,
     depts: RwLock<HashMap<DeptId, Department>>,
     workspaces: RwLock<HashMap<WorkspaceId, Workspace>>,
@@ -65,7 +23,7 @@ pub struct KmStore {
     permissions: RwLock<Vec<UserPermission>>,
 }
 
-impl KmStore {
+impl MemoryKmStore {
     pub fn new() -> Self {
         Self {
             orgs: RwLock::new(HashMap::new()),
@@ -77,10 +35,12 @@ impl KmStore {
             permissions: RwLock::new(Vec::new()),
         }
     }
+}
 
+impl KmStoreTrait for MemoryKmStore {
     // ── Organization ────────────────────────────────────────────────
 
-    pub fn insert_org(&self, name: String) -> Result<Organization> {
+    fn insert_org(&self, name: String) -> Result<Organization> {
         let now = Utc::now();
         let org = Organization {
             id: OrgId::new(),
@@ -92,7 +52,7 @@ impl KmStore {
         Ok(org)
     }
 
-    pub fn get_org(&self, id: OrgId) -> Result<Organization> {
+    fn get_org(&self, id: OrgId) -> Result<Organization> {
         self.orgs
             .read()
             .unwrap()
@@ -101,11 +61,11 @@ impl KmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("Organization {id} not found")))
     }
 
-    pub fn list_orgs(&self) -> Vec<Organization> {
+    fn list_orgs(&self) -> Vec<Organization> {
         self.orgs.read().unwrap().values().cloned().collect()
     }
 
-    pub fn delete_org(&self, id: OrgId) -> Result<()> {
+    fn delete_org(&self, id: OrgId) -> Result<()> {
         if self.orgs.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Organization {id} not found")));
         }
@@ -114,8 +74,7 @@ impl KmStore {
 
     // ── Department ──────────────────────────────────────────────────
 
-    pub fn insert_dept(&self, org_id: OrgId, name: String) -> Result<Department> {
-        // Validate parent exists
+    fn insert_dept(&self, org_id: OrgId, name: String) -> Result<Department> {
         self.get_org(org_id)?;
         let now = Utc::now();
         let dept = Department {
@@ -129,7 +88,7 @@ impl KmStore {
         Ok(dept)
     }
 
-    pub fn get_dept(&self, id: DeptId) -> Result<Department> {
+    fn get_dept(&self, id: DeptId) -> Result<Department> {
         self.depts
             .read()
             .unwrap()
@@ -138,7 +97,7 @@ impl KmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("Department {id} not found")))
     }
 
-    pub fn list_depts_in_org(&self, org_id: OrgId) -> Vec<Department> {
+    fn list_depts_in_org(&self, org_id: OrgId) -> Vec<Department> {
         self.depts
             .read()
             .unwrap()
@@ -148,7 +107,7 @@ impl KmStore {
             .collect()
     }
 
-    pub fn delete_dept(&self, id: DeptId) -> Result<()> {
+    fn delete_dept(&self, id: DeptId) -> Result<()> {
         if self.depts.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Department {id} not found")));
         }
@@ -157,8 +116,7 @@ impl KmStore {
 
     // ── Workspace ───────────────────────────────────────────────────
 
-    pub fn insert_workspace(&self, dept_id: DeptId, name: String) -> Result<Workspace> {
-        // Validate parent exists
+    fn insert_workspace(&self, dept_id: DeptId, name: String) -> Result<Workspace> {
         self.get_dept(dept_id)?;
         let now = Utc::now();
         let ws = Workspace {
@@ -172,7 +130,7 @@ impl KmStore {
         Ok(ws)
     }
 
-    pub fn get_workspace(&self, id: WorkspaceId) -> Result<Workspace> {
+    fn get_workspace(&self, id: WorkspaceId) -> Result<Workspace> {
         self.workspaces
             .read()
             .unwrap()
@@ -181,7 +139,7 @@ impl KmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("Workspace {id} not found")))
     }
 
-    pub fn list_workspaces_in_dept(&self, dept_id: DeptId) -> Vec<Workspace> {
+    fn list_workspaces_in_dept(&self, dept_id: DeptId) -> Vec<Workspace> {
         self.workspaces
             .read()
             .unwrap()
@@ -191,7 +149,7 @@ impl KmStore {
             .collect()
     }
 
-    pub fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
+    fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
         if self.workspaces.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Workspace {id} not found")));
         }
@@ -200,14 +158,13 @@ impl KmStore {
 
     // ── Document ────────────────────────────────────────────────────
 
-    pub fn insert_document(&self, doc: Document) -> Result<Document> {
-        // Validate parent exists
+    fn insert_document(&self, doc: Document) -> Result<Document> {
         self.get_workspace(doc.workspace_id)?;
         self.documents.write().unwrap().insert(doc.id, doc.clone());
         Ok(doc)
     }
 
-    pub fn get_document(&self, id: DocId) -> Result<Document> {
+    fn get_document(&self, id: DocId) -> Result<Document> {
         self.documents
             .read()
             .unwrap()
@@ -216,7 +173,7 @@ impl KmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))
     }
 
-    pub fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
+    fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         self.documents
             .read()
             .unwrap()
@@ -226,7 +183,7 @@ impl KmStore {
             .collect()
     }
 
-    pub fn delete_document(&self, id: DocId) -> Result<()> {
+    fn delete_document(&self, id: DocId) -> Result<()> {
         if self.documents.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
@@ -235,7 +192,7 @@ impl KmStore {
 
     // ── User ──────────────────────────────────────────────────────────
 
-    pub fn insert_user(
+    fn insert_user(
         &self,
         email: String,
         name: String,
@@ -267,7 +224,7 @@ impl KmStore {
         Ok(user)
     }
 
-    pub fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
+    fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
         let email_lower = email.to_lowercase();
         let id = self
             .user_by_email
@@ -284,7 +241,7 @@ impl KmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))
     }
 
-    pub fn get_user(&self, id: UserId) -> Result<User> {
+    fn get_user(&self, id: UserId) -> Result<User> {
         self.users
             .read()
             .unwrap()
@@ -295,12 +252,11 @@ impl KmStore {
 
     // ── Permissions ──────────────────────────────────────────────────
 
-    pub fn add_permission(&self, perm: UserPermission) {
+    fn add_permission(&self, perm: UserPermission) {
         self.permissions.write().unwrap().push(perm);
     }
 
-    /// Insert or update a permission. Returns `true` if an existing entry was updated.
-    pub fn upsert_permission(&self, perm: UserPermission) -> bool {
+    fn upsert_permission(&self, perm: UserPermission) -> bool {
         let mut perms = self.permissions.write().unwrap();
         if let Some(existing) = perms
             .iter_mut()
@@ -314,8 +270,7 @@ impl KmStore {
         }
     }
 
-    /// List all permissions whose scope belongs to the given org.
-    pub fn list_permissions_for_org(&self, org_id: OrgId) -> Vec<UserPermission> {
+    fn list_permissions_for_org(&self, org_id: OrgId) -> Vec<UserPermission> {
         self.permissions
             .read()
             .unwrap()
@@ -325,8 +280,7 @@ impl KmStore {
             .collect()
     }
 
-    /// Remove the permission matching (user_id, scope). Errors if nothing was removed.
-    pub fn remove_permission(&self, user_id: UserId, scope: &PermissionScope) -> Result<()> {
+    fn remove_permission(&self, user_id: UserId, scope: &PermissionScope) -> Result<()> {
         let mut perms = self.permissions.write().unwrap();
         let before = perms.len();
         perms.retain(|p| !(p.user_id == user_id && scopes_match(&p.scope, scope)));
@@ -338,8 +292,7 @@ impl KmStore {
         Ok(())
     }
 
-    /// Count how many Owner-role entries exist at the Org scope for a given org.
-    pub fn count_org_owners(&self, org_id: OrgId) -> usize {
+    fn count_org_owners(&self, org_id: OrgId) -> usize {
         self.permissions
             .read()
             .unwrap()
@@ -351,9 +304,7 @@ impl KmStore {
             .count()
     }
 
-    /// Get the highest role a user has for a given org, considering
-    /// Org, Dept, and Workspace scopes.
-    pub fn get_user_role_for_org(&self, user_id: UserId, org_id: OrgId) -> Option<Role> {
+    fn get_user_role_for_org(&self, user_id: UserId, org_id: OrgId) -> Option<Role> {
         let perms = self.permissions.read().unwrap();
         perms
             .iter()
@@ -367,8 +318,7 @@ impl KmStore {
             .max()
     }
 
-    /// Expand all user permissions to concrete workspace IDs.
-    pub fn get_user_workspace_ids(&self, user_id: UserId) -> Vec<WorkspaceId> {
+    fn get_user_workspace_ids(&self, user_id: UserId) -> Vec<WorkspaceId> {
         let perms = self.permissions.read().unwrap();
         let mut ws_ids = Vec::new();
         for perm in perms.iter().filter(|p| p.user_id == user_id) {
@@ -392,8 +342,9 @@ impl KmStore {
         ws_ids
     }
 
-    /// Resolve the org that owns a workspace by traversing ws → dept → org.
-    pub fn org_id_for_workspace(&self, workspace_id: WorkspaceId) -> Result<OrgId> {
+    // ── Traversal ───────────────────────────────────────────────────
+
+    fn org_id_for_workspace(&self, workspace_id: WorkspaceId) -> Result<OrgId> {
         let ws = self.get_workspace(workspace_id)?;
         let dept = self.get_dept(ws.dept_id)?;
         Ok(dept.org_id)
@@ -401,8 +352,7 @@ impl KmStore {
 
     // ── Cascade helpers ─────────────────────────────────────────────
 
-    /// Collect all workspace IDs belonging to a department.
-    pub fn workspace_ids_in_dept(&self, dept_id: DeptId) -> Vec<WorkspaceId> {
+    fn workspace_ids_in_dept(&self, dept_id: DeptId) -> Vec<WorkspaceId> {
         self.workspaces
             .read()
             .unwrap()
@@ -412,8 +362,7 @@ impl KmStore {
             .collect()
     }
 
-    /// Collect all department IDs belonging to an organization.
-    pub fn dept_ids_in_org(&self, org_id: OrgId) -> Vec<DeptId> {
+    fn dept_ids_in_org(&self, org_id: OrgId) -> Vec<DeptId> {
         self.depts
             .read()
             .unwrap()
@@ -423,8 +372,7 @@ impl KmStore {
             .collect()
     }
 
-    /// Collect all document IDs belonging to a workspace.
-    pub fn doc_ids_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<DocId> {
+    fn doc_ids_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<DocId> {
         self.documents
             .read()
             .unwrap()
@@ -434,8 +382,7 @@ impl KmStore {
             .collect()
     }
 
-    /// Cascade delete: remove all documents in a workspace.
-    pub fn cascade_delete_workspace_docs(&self, workspace_id: WorkspaceId) -> Vec<DocId> {
+    fn cascade_delete_workspace_docs(&self, workspace_id: WorkspaceId) -> Vec<DocId> {
         let doc_ids = self.doc_ids_in_workspace(workspace_id);
         let mut docs = self.documents.write().unwrap();
         for id in &doc_ids {
@@ -444,15 +391,13 @@ impl KmStore {
         doc_ids
     }
 
-    /// Cascade delete: remove a workspace and its documents, returning affected doc IDs.
-    pub fn cascade_delete_workspace(&self, ws_id: WorkspaceId) -> Result<Vec<DocId>> {
+    fn cascade_delete_workspace(&self, ws_id: WorkspaceId) -> Result<Vec<DocId>> {
         let doc_ids = self.cascade_delete_workspace_docs(ws_id);
         self.delete_workspace(ws_id)?;
         Ok(doc_ids)
     }
 
-    /// Cascade delete: remove a department, its workspaces, and all nested documents.
-    pub fn cascade_delete_dept(&self, dept_id: DeptId) -> Result<Vec<DocId>> {
+    fn cascade_delete_dept(&self, dept_id: DeptId) -> Result<Vec<DocId>> {
         let ws_ids = self.workspace_ids_in_dept(dept_id);
         let mut all_doc_ids = Vec::new();
         for ws_id in ws_ids {
@@ -463,8 +408,7 @@ impl KmStore {
         Ok(all_doc_ids)
     }
 
-    /// Cascade delete: remove an org, its departments, workspaces, and all documents.
-    pub fn cascade_delete_org(&self, org_id: OrgId) -> Result<Vec<DocId>> {
+    fn cascade_delete_org(&self, org_id: OrgId) -> Result<Vec<DocId>> {
         let dept_ids = self.dept_ids_in_org(org_id);
         let mut all_doc_ids = Vec::new();
         for dept_id in dept_ids {
@@ -488,11 +432,11 @@ mod tests {
 
     #[test]
     fn user_crud_roundtrip() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let user = store
             .insert_user("Alice@Example.com".into(), "Alice".into(), "hash123".into())
             .unwrap();
-        assert_eq!(user.email, "alice@example.com"); // lowercased
+        assert_eq!(user.email, "alice@example.com");
 
         let record = store.get_user_by_email("alice@example.com").unwrap();
         assert_eq!(record.user.id, user.id);
@@ -504,7 +448,7 @@ mod tests {
 
     #[test]
     fn user_email_uniqueness() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         store
             .insert_user("bob@test.com".into(), "Bob".into(), "h".into())
             .unwrap();
@@ -514,7 +458,7 @@ mod tests {
 
     #[test]
     fn permission_resolution() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -523,7 +467,6 @@ mod tests {
             .insert_user("u@test.com".into(), "U".into(), "h".into())
             .unwrap();
 
-        // Grant Viewer at Org level
         store.add_permission(UserPermission {
             user_id: user.id,
             scope: PermissionScope::Org { org_id: org.id },
@@ -535,7 +478,6 @@ mod tests {
             Some(Role::Viewer)
         );
 
-        // Grant Editor at Workspace level — highest should now be Editor
         store.add_permission(UserPermission {
             user_id: user.id,
             scope: PermissionScope::Workspace {
@@ -551,14 +493,13 @@ mod tests {
             Some(Role::Editor)
         );
 
-        // Workspace IDs should include ws
         let ws_ids = store.get_user_workspace_ids(user.id);
         assert!(ws_ids.contains(&ws.id));
     }
 
     #[test]
     fn org_id_for_workspace_traversal() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -568,7 +509,7 @@ mod tests {
 
     #[test]
     fn no_permission_returns_none() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let user = store
             .insert_user("u@t.com".into(), "U".into(), "h".into())
@@ -578,7 +519,7 @@ mod tests {
 
     #[test]
     fn org_crud_roundtrip() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme Corp".into()).unwrap();
         assert_eq!(store.get_org(org.id).unwrap().name, "Acme Corp");
         assert_eq!(store.list_orgs().len(), 1);
@@ -588,14 +529,14 @@ mod tests {
 
     #[test]
     fn dept_requires_valid_org() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let result = store.insert_dept(OrgId::new(), "Engineering".into());
         assert!(result.is_err());
     }
 
     #[test]
     fn dept_crud_roundtrip() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Engineering".into()).unwrap();
         assert_eq!(store.get_dept(dept.id).unwrap().name, "Engineering");
@@ -606,14 +547,14 @@ mod tests {
 
     #[test]
     fn workspace_requires_valid_dept() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let result = store.insert_workspace(DeptId::new(), "ws".into());
         assert!(result.is_err());
     }
 
     #[test]
     fn workspace_crud_roundtrip() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -625,7 +566,7 @@ mod tests {
 
     #[test]
     fn document_requires_valid_workspace() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let now = Utc::now();
         let doc = Document {
             id: DocId::new(),
@@ -641,7 +582,7 @@ mod tests {
 
     #[test]
     fn document_crud_roundtrip() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -664,7 +605,7 @@ mod tests {
 
     #[test]
     fn not_found_errors() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         assert!(store.get_org(OrgId::new()).is_err());
         assert!(store.delete_org(OrgId::new()).is_err());
         assert!(store.get_dept(DeptId::new()).is_err());
@@ -677,7 +618,7 @@ mod tests {
 
     #[test]
     fn cascade_delete_org() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -704,7 +645,7 @@ mod tests {
 
     #[test]
     fn cascade_delete_dept() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -722,7 +663,6 @@ mod tests {
 
         let deleted = store.cascade_delete_dept(dept.id).unwrap();
         assert_eq!(deleted.len(), 1);
-        // Org should still exist
         assert!(store.get_org(org.id).is_ok());
         assert!(store.get_dept(dept.id).is_err());
         assert!(store.get_workspace(ws.id).is_err());
@@ -730,14 +670,13 @@ mod tests {
 
     #[test]
     fn upsert_permission_dedup() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let user = store
             .insert_user("u@t.com".into(), "U".into(), "h".into())
             .unwrap();
         let scope = PermissionScope::Org { org_id: org.id };
 
-        // First insert
         let updated = store.upsert_permission(UserPermission {
             user_id: user.id,
             scope: scope.clone(),
@@ -746,7 +685,6 @@ mod tests {
         assert!(!updated);
         assert_eq!(store.list_permissions_for_org(org.id).len(), 1);
 
-        // Upsert same (user, scope) → updates role, no new row
         let updated = store.upsert_permission(UserPermission {
             user_id: user.id,
             scope: scope.clone(),
@@ -760,7 +698,7 @@ mod tests {
 
     #[test]
     fn list_permissions_filters_by_org() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org_a = store.insert_org("A".into()).unwrap();
         let org_b = store.insert_org("B".into()).unwrap();
         let user = store
@@ -784,7 +722,7 @@ mod tests {
 
     #[test]
     fn remove_permission_success_and_not_found() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let user = store
             .insert_user("u@t.com".into(), "U".into(), "h".into())
@@ -800,13 +738,12 @@ mod tests {
         store.remove_permission(user.id, &scope).unwrap();
         assert_eq!(store.list_permissions_for_org(org.id).len(), 0);
 
-        // Removing again should error
         assert!(store.remove_permission(user.id, &scope).is_err());
     }
 
     #[test]
     fn count_org_owners_counts_correctly() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let u1 = store
@@ -821,13 +758,11 @@ mod tests {
             scope: PermissionScope::Org { org_id: org.id },
             role: Role::Owner,
         });
-        // Admin at Org level — should NOT count
         store.add_permission(UserPermission {
             user_id: u2.id,
             scope: PermissionScope::Org { org_id: org.id },
             role: Role::Admin,
         });
-        // Owner at Dept level — should NOT count (not Org scope)
         store.add_permission(UserPermission {
             user_id: u2.id,
             scope: PermissionScope::Dept {
@@ -842,7 +777,7 @@ mod tests {
 
     #[test]
     fn cascade_delete_workspace() {
-        let store = KmStore::new();
+        let store = MemoryKmStore::new();
         let org = store.insert_org("Acme".into()).unwrap();
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
@@ -860,7 +795,6 @@ mod tests {
 
         let deleted = store.cascade_delete_workspace(ws.id).unwrap();
         assert_eq!(deleted.len(), 1);
-        // Org and dept should still exist
         assert!(store.get_org(org.id).is_ok());
         assert!(store.get_dept(dept.id).is_ok());
         assert!(store.get_workspace(ws.id).is_err());

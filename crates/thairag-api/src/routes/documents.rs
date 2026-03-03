@@ -1,4 +1,4 @@
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use chrono::Utc;
@@ -11,9 +11,11 @@ use thairag_core::ThaiRagError;
 use tracing::info;
 use uuid::Uuid;
 
+use thairag_document::converter::SUPPORTED_MIME_TYPES;
+
 use crate::app_state::AppState;
 use crate::error::ApiError;
-use crate::routes::km::ListResponse;
+use crate::routes::km::{ListResponse, PaginationParams, paginate};
 
 #[derive(Deserialize)]
 pub struct IngestRequest {
@@ -31,6 +33,10 @@ fn default_mime() -> String {
 pub struct IngestResponse {
     pub doc_id: Uuid,
     pub chunks: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub mime_type: String,
+    pub size_bytes: i64,
 }
 
 // ── Permission helper ───────────────────────────────────────────────
@@ -87,7 +93,11 @@ pub async fn ingest_document(
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_write, "ingest document")?;
 
+    // Validate MIME type
+    validate_mime_type(&body.mime_type)?;
+
     let doc_id = DocId::new();
+    let size_bytes = body.content.len() as i64;
 
     info!(
         %doc_id,
@@ -114,12 +124,13 @@ pub async fn ingest_document(
 
     // Store document metadata in KM store
     let now = Utc::now();
+    let mime_type = body.mime_type;
     let doc = Document {
         id: doc_id,
         workspace_id,
         title: body.title,
-        mime_type: body.mime_type,
-        size_bytes: body.content.len() as i64,
+        mime_type: mime_type.clone(),
+        size_bytes,
         created_at: now,
         updated_at: now,
     };
@@ -132,6 +143,9 @@ pub async fn ingest_document(
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
+            filename: None,
+            mime_type,
+            size_bytes,
         }),
     ))
 }
@@ -211,6 +225,9 @@ pub async fn upload_document(
         })
         .unwrap_or_else(|| "text/plain".to_string());
 
+    // Validate MIME type
+    validate_mime_type(&mime_type)?;
+
     let workspace_id = workspace_id_typed;
     let doc_id = DocId::new();
     let size_bytes = bytes.len() as i64;
@@ -244,8 +261,8 @@ pub async fn upload_document(
     let doc = Document {
         id: doc_id,
         workspace_id,
-        title,
-        mime_type,
+        title: title.clone(),
+        mime_type: mime_type.clone(),
         size_bytes,
         created_at: now,
         updated_at: now,
@@ -259,6 +276,9 @@ pub async fn upload_document(
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
+            filename: file_name,
+            mime_type,
+            size_bytes,
         }),
     ))
 }
@@ -267,13 +287,14 @@ pub async fn list_documents(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
+    Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<Document>>, ApiError> {
     let workspace_id = WorkspaceId(workspace_id);
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_read, "list documents")?;
     let docs = state.km_store.list_documents_in_workspace(workspace_id);
-    let total = docs.len();
-    Ok(Json(ListResponse { data: docs, total }))
+    let (data, total) = paginate(docs, &params);
+    Ok(Json(ListResponse { data, total }))
 }
 
 pub async fn get_document(
@@ -302,6 +323,16 @@ pub async fn delete_document(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn validate_mime_type(mime_type: &str) -> Result<(), ApiError> {
+    if !SUPPORTED_MIME_TYPES.contains(&mime_type) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Unsupported MIME type: {mime_type}. Supported types: {}",
+            SUPPORTED_MIME_TYPES.join(", ")
+        ))));
+    }
+    Ok(())
+}
+
 fn mime_from_extension(ext: &str) -> Option<&'static str> {
     match ext.to_ascii_lowercase().as_str() {
         "md" | "markdown" => Some("text/markdown"),
@@ -309,6 +340,8 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
         "html" | "htm" => Some("text/html"),
         "pdf" => Some("application/pdf"),
         "json" => Some("application/json"),
+        "csv" => Some("text/csv"),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         _ => None,
     }
 }

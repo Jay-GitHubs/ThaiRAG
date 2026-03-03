@@ -29,7 +29,7 @@ tokio = { version = "1.43", features = ["full"] }
 axum = { version = "0.8", features = ["macros", "multipart"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = { version = "0.5" }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id", "propagate-header", "util"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -37,6 +37,7 @@ serde_json = "1.0"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Search
 tantivy = "0.25"
@@ -53,6 +54,10 @@ askama = "0.13"
 # Configuration
 config = "0.14"
 
+# Document formats
+csv = "1.3"
+docx-rs = "0.4"
+
 # Embeddings
 fastembed = "4.4"
 
@@ -66,7 +71,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Logging/tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Streaming
 tokio-stream = "0.1"

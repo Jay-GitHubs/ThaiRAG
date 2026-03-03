@@ -6,10 +6,13 @@ pub mod km;
 pub mod models;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::Request;
 use axum::middleware;
 use axum::{Router, routing::get, routing::post};
 use tower_http::cors::CorsLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
+use tracing::Span;
 
 use thairag_auth::middleware::auth_layer;
 
@@ -49,12 +52,26 @@ pub fn build_router(state: AppState) -> Router {
             "/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}",
             get(km::get_workspace).delete(km::delete_workspace),
         )
-        // Permissions
+        // Permissions (org-level)
         .route(
             "/orgs/{org_id}/permissions",
             get(km::list_permissions)
                 .post(km::grant_permission)
                 .delete(km::revoke_permission),
+        )
+        // Permissions (dept-level)
+        .route(
+            "/orgs/{org_id}/depts/{dept_id}/permissions",
+            get(km::list_dept_permissions)
+                .post(km::grant_dept_permission)
+                .delete(km::revoke_dept_permission),
+        )
+        // Permissions (workspace-level)
+        .route(
+            "/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions",
+            get(km::list_workspace_permissions)
+                .post(km::grant_workspace_permission)
+                .delete(km::revoke_workspace_permission),
         )
         // Documents
         .route(
@@ -83,7 +100,31 @@ pub fn build_router(state: AppState) -> Router {
     // Merge public + protected
     public
         .merge(protected)
-        .layer(TraceLayer::new_for_http())
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    let request_id = request
+                        .headers()
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-");
+                    tracing::info_span!(
+                        "request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        request_id = %request_id,
+                    )
+                })
+                .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
+                    tracing::info!(
+                        status = %response.status(),
+                        latency_ms = latency.as_millis(),
+                        "response"
+                    );
+                }),
+        )
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
