@@ -25,8 +25,9 @@ async fn main() {
             .init();
     }
 
-    // Load config
+    // Load and validate config
     let config = thairag_config::load_config().expect("Failed to load configuration");
+    config.validate().expect("Invalid configuration");
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);

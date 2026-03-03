@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::ChatMessage;
+use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -78,7 +78,7 @@ impl ClaudeProvider {
 #[async_trait]
 impl LlmProvider for ClaudeProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String> {
+    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
         let body = self.build_request_body(messages, max_tokens, false);
 
         let resp = self
@@ -118,7 +118,12 @@ impl LlmProvider for ClaudeProvider {
             return Err(ThaiRagError::LlmProvider("No text content in Claude response".into()));
         }
 
-        Ok(content)
+        let usage = LlmUsage {
+            prompt_tokens: json["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
+            completion_tokens: json["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
+        };
+
+        Ok(LlmResponse { content, usage })
     }
 
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]

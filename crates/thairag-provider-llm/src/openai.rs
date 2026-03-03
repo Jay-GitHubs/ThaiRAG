@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::ChatMessage;
+use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -37,7 +37,7 @@ impl OpenAiLlmProvider {
 #[async_trait]
 impl LlmProvider for OpenAiLlmProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String> {
+    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -69,10 +69,17 @@ impl LlmProvider for OpenAiLlmProvider {
             .await
             .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}")))?;
 
-        json["choices"][0]["message"]["content"]
+        let content = json["choices"][0]["message"]["content"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in OpenAI response".into()))
+            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in OpenAI response".into()))?;
+
+        let usage = LlmUsage {
+            prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+            completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+        };
+
+        Ok(LlmResponse { content, usage })
     }
 
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]

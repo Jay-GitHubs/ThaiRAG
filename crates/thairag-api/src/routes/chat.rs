@@ -49,7 +49,7 @@ async fn handle_non_stream(
     req: ChatCompletionRequest,
     scope: AccessScope,
 ) -> Result<Response, ApiError> {
-    let response_text = state
+    let llm_resp = state
         .orchestrator
         .process(&req.messages, &scope)
         .await
@@ -64,14 +64,14 @@ async fn handle_non_stream(
             index: 0,
             message: ChatMessage {
                 role: "assistant".to_string(),
-                content: response_text,
+                content: llm_resp.content,
             },
             finish_reason: "stop".to_string(),
         }],
         usage: ChatUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
+            prompt_tokens: llm_resp.usage.prompt_tokens,
+            completion_tokens: llm_resp.usage.completion_tokens,
+            total_tokens: llm_resp.usage.prompt_tokens + llm_resp.usage.completion_tokens,
         },
     };
 

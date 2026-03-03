@@ -5,7 +5,7 @@ use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, QueryIntent};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage, QueryIntent};
 use thairag_thai::ThaiNormalizer;
 
 use crate::rag_engine::RagEngine;
@@ -196,7 +196,7 @@ impl QueryOrchestrator {
         &self,
         messages: &[ChatMessage],
         scope: &AccessScope,
-    ) -> Result<String> {
+    ) -> Result<LlmResponse> {
         let user_query = messages
             .last()
             .map(|m| m.content.as_str())
@@ -213,7 +213,10 @@ impl QueryOrchestrator {
                 self.rag_engine.answer(&rewritten, messages, scope).await
             }
             QueryIntent::Clarification => {
-                Ok("Could you please provide more details about your question?".to_string())
+                Ok(LlmResponse {
+                    content: "Could you please provide more details about your question?".to_string(),
+                    usage: LlmUsage::default(),
+                })
             }
         }
     }
@@ -270,8 +273,8 @@ impl QueryOrchestrator {
         };
 
         match self.llm.generate(&[system, user], Some(100)).await {
-            Ok(rewritten) => {
-                let rewritten = rewritten.trim().to_string();
+            Ok(resp) => {
+                let rewritten = resp.content.trim().to_string();
                 if rewritten.is_empty() {
                     normalized
                 } else {
@@ -288,7 +291,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use thairag_core::error::Result;
-    use thairag_core::types::ChatMessage;
+    use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
 
     // ── Mock LLM Provider ────────────────────────────────────────────
 
@@ -310,8 +313,11 @@ mod tests {
             &self,
             _messages: &[ChatMessage],
             _max_tokens: Option<u32>,
-        ) -> Result<String> {
-            Ok(self.response.clone())
+        ) -> Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: self.response.clone(),
+                usage: LlmUsage::default(),
+            })
         }
 
         fn model_name(&self) -> &str {

@@ -15,7 +15,7 @@ use thairag_config::schema::{
     VectorStoreConfig,
 };
 use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore};
-use thairag_core::types::{ChatMessage, DocId, DocumentChunk, SearchQuery, SearchResult};
+use thairag_core::types::{ChatMessage, DocId, DocumentChunk, LlmResponse, LlmUsage, SearchQuery, SearchResult};
 use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
@@ -34,8 +34,11 @@ impl LlmProvider for MockLlm {
         &self,
         _messages: &[ChatMessage],
         _max_tokens: Option<u32>,
-    ) -> thairag_core::Result<String> {
-        Ok("mock response".into())
+    ) -> thairag_core::Result<LlmResponse> {
+        Ok(LlmResponse {
+            content: "mock response".into(),
+            usage: LlmUsage::default(),
+        })
     }
     fn model_name(&self) -> &str {
         "mock-llm"

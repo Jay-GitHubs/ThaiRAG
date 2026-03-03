@@ -5,7 +5,7 @@ use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, SearchQuery};
+use thairag_core::types::{ChatMessage, LlmResponse, SearchQuery};
 use thairag_search::HybridSearchEngine;
 
 /// Agent 2: RAG Engine.
@@ -26,7 +26,7 @@ impl RagEngine {
         query: &str,
         messages: &[ChatMessage],
         scope: &AccessScope,
-    ) -> Result<String> {
+    ) -> Result<LlmResponse> {
         // Build search query with access scope
         let search_query = SearchQuery {
             text: query.to_string(),

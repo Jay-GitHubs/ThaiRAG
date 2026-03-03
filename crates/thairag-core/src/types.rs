@@ -73,6 +73,20 @@ pub enum RerankerKind {
     Cohere,
 }
 
+// ── LLM Response Types ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default)]
+pub struct LlmUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmResponse {
+    pub content: String,
+    pub usage: LlmUsage,
+}
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

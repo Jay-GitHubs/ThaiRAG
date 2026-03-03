@@ -4,19 +4,19 @@ use async_trait::async_trait;
 use futures_core::Stream;
 
 use crate::error::Result;
-use crate::types::{ChatMessage, DocumentChunk, SearchQuery, SearchResult};
+use crate::types::{ChatMessage, DocumentChunk, LlmResponse, SearchQuery, SearchResult};
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<String>;
+    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse>;
 
     async fn generate_stream(
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
-        let full = self.generate(messages, max_tokens).await?;
-        Ok(Box::pin(tokio_stream::once(Ok(full))))
+        let resp = self.generate(messages, max_tokens).await?;
+        Ok(Box::pin(tokio_stream::once(Ok(resp.content))))
     }
 
     fn model_name(&self) -> &str;
