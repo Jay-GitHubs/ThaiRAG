@@ -10,7 +10,7 @@ use thairag_auth::AuthClaims;
 use thairag_core::permission::AccessScope;
 use thairag_core::types::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatUsage, UserId,
+    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, UserId,
 };
 
 use crate::app_state::AppState;
@@ -87,7 +87,7 @@ async fn handle_stream(
     let created = Utc::now().timestamp();
     let model = "ThaiRAG-1.0".to_string();
 
-    let token_stream = state
+    let LlmStreamResponse { stream: token_stream, usage: usage_cell } = state
         .orchestrator
         .process_stream(&req.messages, &scope)
         .await
@@ -111,6 +111,7 @@ async fn handle_stream(
                 },
                 finish_reason: None,
             }],
+            usage: None,
         };
         yield Ok::<_, std::convert::Infallible>(
             Event::default().data(serde_json::to_string(&role_chunk).unwrap())
@@ -134,6 +135,7 @@ async fn handle_stream(
                             },
                             finish_reason: None,
                         }],
+                        usage: None,
                     };
                     yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap()));
                 }
@@ -161,8 +163,25 @@ async fn handle_stream(
                 },
                 finish_reason: Some("stop".to_string()),
             }],
+            usage: None,
         };
         yield Ok(Event::default().data(serde_json::to_string(&finish_chunk).unwrap()));
+
+        // Usage chunk (matches OpenAI stream_options.include_usage wire format)
+        let llm_usage = usage_cell.lock().unwrap().take().unwrap_or_default();
+        let usage_chunk = ChatCompletionChunk {
+            id: id_clone.clone(),
+            object: "chat.completion.chunk".to_string(),
+            created,
+            model: model_clone.clone(),
+            choices: vec![],
+            usage: Some(ChatUsage {
+                prompt_tokens: llm_usage.prompt_tokens,
+                completion_tokens: llm_usage.completion_tokens,
+                total_tokens: llm_usage.prompt_tokens + llm_usage.completion_tokens,
+            }),
+        };
+        yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap()));
 
         // [DONE] sentinel
         yield Ok(Event::default().data("[DONE]".to_string()));

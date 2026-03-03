@@ -1,11 +1,9 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, SearchQuery};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, SearchQuery};
 use thairag_search::HybridSearchEngine;
 
 /// Agent 2: RAG Engine.
@@ -67,7 +65,7 @@ impl RagEngine {
         query: &str,
         messages: &[ChatMessage],
         scope: &AccessScope,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         // Same search + augmentation as answer(), then stream the LLM generation
         let search_query = SearchQuery {
             text: query.to_string(),

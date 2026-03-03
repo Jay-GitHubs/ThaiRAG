@@ -1,5 +1,11 @@
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+
+use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::error::Result;
 
 // ── ID Newtypes ──────────────────────────────────────────────────────
 
@@ -87,6 +93,11 @@ pub struct LlmResponse {
     pub usage: LlmUsage,
 }
 
+pub struct LlmStreamResponse {
+    pub stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>>,
+    pub usage: Arc<Mutex<Option<LlmUsage>>>,
+}
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +151,8 @@ pub struct ChatCompletionChunk {
     pub created: i64,
     pub model: String,
     pub choices: Vec<ChatChunkChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,10 +1,11 @@
-use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use futures_core::Stream;
 
 use crate::error::Result;
-use crate::types::{ChatMessage, DocumentChunk, LlmResponse, SearchQuery, SearchResult};
+use crate::types::{
+    ChatMessage, DocumentChunk, LlmResponse, LlmStreamResponse, SearchQuery, SearchResult,
+};
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -14,9 +15,13 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         let resp = self.generate(messages, max_tokens).await?;
-        Ok(Box::pin(tokio_stream::once(Ok(resp.content))))
+        let usage = Arc::new(Mutex::new(Some(resp.usage)));
+        Ok(LlmStreamResponse {
+            stream: Box::pin(tokio_stream::once(Ok(resp.content))),
+            usage,
+        })
     }
 
     fn model_name(&self) -> &str;

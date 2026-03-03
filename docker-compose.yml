@@ -1,0 +1,43 @@
+services:
+  # ── ThaiRAG API ──────────────────────────────────────────────────────
+  thairag:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - thairag-data:/data
+    environment:
+      THAIRAG_TIER: free
+      THAIRAG__SERVER__HOST: "0.0.0.0"
+      THAIRAG__PROVIDERS__LLM__BASE_URL: http://ollama:11434
+    depends_on:
+      - ollama
+
+  # ── Ollama (local LLM for free tier) ────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+
+  # ── Standard tier (uncomment to use) ────────────────────────────────
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   ports:
+  #     - "6333:6333"
+  #     - "6334:6334"
+  #   volumes:
+  #     - qdrant-data:/qdrant/storage
+  #
+  # To use standard tier, set these on thairag:
+  #   THAIRAG_TIER: standard
+  #   THAIRAG__PROVIDERS__VECTOR_DB__URL: http://qdrant:6334
+  #   THAIRAG__PROVIDERS__LLM__API_KEY: <your-anthropic-key>
+  #   THAIRAG__PROVIDERS__EMBEDDING__API_KEY: <your-openai-key>
+  #   THAIRAG__PROVIDERS__RERANKER__API_KEY: <your-cohere-key>
+
+volumes:
+  thairag-data:
+  ollama-models:
+  # qdrant-data:

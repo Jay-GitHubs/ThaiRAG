@@ -1,12 +1,11 @@
-use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
-use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -88,7 +87,7 @@ impl LlmProvider for OllamaProvider {
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -116,6 +115,9 @@ impl LlmProvider for OllamaProvider {
             )));
         }
 
+        let usage_cell: Arc<Mutex<Option<LlmUsage>>> = Arc::new(Mutex::new(None));
+        let usage_writer = Arc::clone(&usage_cell);
+
         use tokio_stream::StreamExt;
         let mut byte_stream = resp.bytes_stream();
         let stream = try_stream! {
@@ -138,6 +140,10 @@ impl LlmProvider for OllamaProvider {
                         .map_err(|e| ThaiRagError::LlmProvider(format!("Ollama JSON parse error: {e}")))?;
 
                     if json["done"].as_bool() == Some(true) {
+                        *usage_writer.lock().unwrap() = Some(LlmUsage {
+                            prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,
+                            completion_tokens: json["eval_count"].as_u64().unwrap_or(0) as u32,
+                        });
                         return;
                     }
 
@@ -150,7 +156,10 @@ impl LlmProvider for OllamaProvider {
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage: usage_cell,
+        })
     }
 
     fn model_name(&self) -> &str {

@@ -1,12 +1,11 @@
-use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
-use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -87,11 +86,12 @@ impl LlmProvider for OpenAiLlmProvider {
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         if let Some(max) = max_tokens {
@@ -114,6 +114,9 @@ impl LlmProvider for OpenAiLlmProvider {
                 "OpenAI returned HTTP {status}: {error_body}"
             )));
         }
+
+        let usage_cell: Arc<Mutex<Option<LlmUsage>>> = Arc::new(Mutex::new(None));
+        let usage_writer = Arc::clone(&usage_cell);
 
         use tokio_stream::StreamExt;
         let mut byte_stream = resp.bytes_stream();
@@ -140,6 +143,18 @@ impl LlmProvider for OpenAiLlmProvider {
                         Err(_) => continue,
                     };
 
+                    // Usage-only chunk: empty choices + usage present
+                    if let Some(usage) = json.get("usage").filter(|u| !u.is_null()) {
+                        let choices = json["choices"].as_array();
+                        if choices.is_none_or(|c| c.is_empty()) {
+                            *usage_writer.lock().unwrap() = Some(LlmUsage {
+                                prompt_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                                completion_tokens: usage["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                            });
+                            continue;
+                        }
+                    }
+
                     if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                         if !content.is_empty() {
                             yield content.to_string();
@@ -149,7 +164,10 @@ impl LlmProvider for OpenAiLlmProvider {
             }
         };
 
-        Ok(Box::pin(stream))
+        Ok(LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage: usage_cell,
+        })
     }
 
     fn model_name(&self) -> &str {

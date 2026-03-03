@@ -1,12 +1,11 @@
-use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
-use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -131,7 +130,7 @@ impl LlmProvider for ClaudeProvider {
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         let body = self.build_request_body(messages, max_tokens, true);
 
         let resp = self
@@ -153,10 +152,15 @@ impl LlmProvider for ClaudeProvider {
             )));
         }
 
+        let usage_cell: Arc<Mutex<Option<LlmUsage>>> = Arc::new(Mutex::new(None));
+        let usage_writer = Arc::clone(&usage_cell);
+
         use tokio_stream::StreamExt;
         let mut byte_stream = resp.bytes_stream();
         let stream = try_stream! {
             let mut buf = String::new();
+            let mut input_tokens: u32 = 0;
+            let mut output_tokens: u32 = 0;
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = chunk
                     .map_err(|e| ThaiRagError::LlmProvider(format!("Claude stream read error: {e}")))?;
@@ -182,6 +186,11 @@ impl LlmProvider for ClaudeProvider {
 
                     let event_type = json["type"].as_str().unwrap_or("");
                     match event_type {
+                        "message_start" => {
+                            input_tokens = json["message"]["usage"]["input_tokens"]
+                                .as_u64()
+                                .unwrap_or(0) as u32;
+                        }
                         "content_block_delta" => {
                             if let Some(text) = json["delta"]["text"].as_str() {
                                 if !text.is_empty() {
@@ -189,14 +198,33 @@ impl LlmProvider for ClaudeProvider {
                                 }
                             }
                         }
-                        "message_stop" => return,
+                        "message_delta" => {
+                            output_tokens = json["usage"]["output_tokens"]
+                                .as_u64()
+                                .unwrap_or(0) as u32;
+                        }
+                        "message_stop" => {
+                            *usage_writer.lock().unwrap() = Some(LlmUsage {
+                                prompt_tokens: input_tokens,
+                                completion_tokens: output_tokens,
+                            });
+                            return;
+                        }
                         _ => {}
                     }
                 }
             }
+            // Stream ended without message_stop — write what we have
+            *usage_writer.lock().unwrap() = Some(LlmUsage {
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+            });
         };
 
-        Ok(Box::pin(stream))
+        Ok(LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage: usage_cell,
+        })
     }
 
     fn model_name(&self) -> &str {

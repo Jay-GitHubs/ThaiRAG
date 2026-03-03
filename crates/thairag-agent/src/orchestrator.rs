@@ -1,11 +1,9 @@
-use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use futures_core::Stream;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage, QueryIntent};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, QueryIntent};
 use thairag_thai::ThaiNormalizer;
 
 use crate::rag_engine::RagEngine;
@@ -221,12 +219,12 @@ impl QueryOrchestrator {
         }
     }
 
-    /// Process a user query and return a token stream.
+    /// Process a user query and return a token stream with usage stats.
     pub async fn process_stream(
         &self,
         messages: &[ChatMessage],
         scope: &AccessScope,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<LlmStreamResponse> {
         let user_query = messages
             .last()
             .map(|m| m.content.as_str())
@@ -244,7 +242,10 @@ impl QueryOrchestrator {
             }
             QueryIntent::Clarification => {
                 let msg = "Could you please provide more details about your question?".to_string();
-                Ok(Box::pin(tokio_stream::once(Ok(msg))))
+                Ok(LlmStreamResponse {
+                    stream: Box::pin(tokio_stream::once(Ok(msg))),
+                    usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
+                })
             }
         }
     }
