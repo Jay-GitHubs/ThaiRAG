@@ -19,9 +19,7 @@ use thairag_auth::middleware::auth_layer;
 use crate::app_state::AppState;
 use crate::rate_limit::{RateLimitLayer, RateLimiter};
 
-pub fn build_router(state: AppState) -> Router {
-    let rate_limit_cfg = &state.config.server.rate_limit;
-
+pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Router {
     // ── Health route (never rate-limited) ───────────────────────────
     let health_route = Router::new().route("/health", get(health::health));
 
@@ -103,11 +101,7 @@ pub fn build_router(state: AppState) -> Router {
         }));
 
     // Merge public + protected, optionally with rate limiting
-    let rate_limited = if rate_limit_cfg.enabled {
-        let limiter = RateLimiter::new(
-            rate_limit_cfg.requests_per_second,
-            rate_limit_cfg.burst_size,
-        );
+    let rate_limited = if let Some(limiter) = rate_limiter {
         public
             .merge(protected)
             .layer(RateLimitLayer::new(limiter))

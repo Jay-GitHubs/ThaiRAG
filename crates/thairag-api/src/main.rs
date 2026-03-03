@@ -5,6 +5,7 @@ use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
 use thairag_api::app_state::AppState;
+use thairag_api::rate_limit::RateLimiter;
 use thairag_api::routes::build_router;
 
 #[tokio::main]
@@ -31,10 +32,31 @@ async fn main() {
     let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
 
     // Build app state with all providers wired
-    let state = AppState::build(config);
+    let state = AppState::build(config.clone());
+
+    // Create rate limiter (if enabled) and spawn background cleanup
+    let rate_limiter = if config.server.rate_limit.enabled {
+        Some(RateLimiter::new(
+            config.server.rate_limit.requests_per_second,
+            config.server.rate_limit.burst_size,
+        ))
+    } else {
+        None
+    };
+
+    if let Some(ref limiter) = rate_limiter {
+        let limiter = limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                limiter.cleanup_stale(Duration::from_secs(3600));
+            }
+        });
+    }
 
     // Build router
-    let app = build_router(state);
+    let app = build_router(state, rate_limiter);
 
     // Serve
     tracing::info!("ThaiRAG server starting on {addr}");

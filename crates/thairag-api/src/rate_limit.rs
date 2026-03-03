@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::ConnectInfo;
 use axum::http::{Request, Response, StatusCode};
@@ -33,6 +33,12 @@ impl RateLimiter {
             rate: requests_per_second as f64,
             burst: burst_size as f64,
         }
+    }
+
+    /// Evict buckets that haven't been touched for longer than `max_age`.
+    pub fn cleanup_stale(&self, max_age: Duration) {
+        let cutoff = Instant::now() - max_age;
+        self.buckets.retain(|_ip, bucket| bucket.last_refill > cutoff);
     }
 
     /// Try to consume one token for `ip`. Returns `Ok(())` if allowed,
@@ -156,4 +162,40 @@ fn extract_client_ip(req: &Request<Body>) -> IpAddr {
     }
 
     IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_removes_stale_buckets() {
+        let limiter = RateLimiter::new(10, 10);
+        let ip1: IpAddr = "1.2.3.4".parse().unwrap();
+        let ip2: IpAddr = "5.6.7.8".parse().unwrap();
+
+        // Acquire tokens so entries exist
+        limiter.try_acquire(ip1).unwrap();
+        limiter.try_acquire(ip2).unwrap();
+        assert_eq!(limiter.buckets.len(), 2);
+
+        // max_age=0 means everything is stale
+        limiter.cleanup_stale(Duration::ZERO);
+        assert_eq!(limiter.buckets.len(), 0);
+    }
+
+    #[test]
+    fn cleanup_retains_fresh_buckets() {
+        let limiter = RateLimiter::new(10, 10);
+        let ip1: IpAddr = "1.2.3.4".parse().unwrap();
+        let ip2: IpAddr = "5.6.7.8".parse().unwrap();
+
+        limiter.try_acquire(ip1).unwrap();
+        limiter.try_acquire(ip2).unwrap();
+        assert_eq!(limiter.buckets.len(), 2);
+
+        // 1 hour is plenty — entries were just created
+        limiter.cleanup_stale(Duration::from_secs(3600));
+        assert_eq!(limiter.buckets.len(), 2);
+    }
 }

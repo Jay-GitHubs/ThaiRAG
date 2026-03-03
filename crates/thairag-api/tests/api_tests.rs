@@ -209,7 +209,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
 
 fn build_app(auth_enabled: bool) -> Router {
     let state = build_test_state(auth_enabled);
-    build_router(state)
+    build_router(state, None)
 }
 
 async fn body_json(body: Body) -> serde_json::Value {
@@ -1299,16 +1299,9 @@ async fn ingest_response_includes_enriched_fields() {
 // ── Rate Limiting Tests ─────────────────────────────────────────────
 
 fn build_rate_limited_app(burst: u64) -> Router {
-    let mut state = build_test_state(false);
-    {
-        let cfg = Arc::get_mut(&mut state.config).unwrap();
-        cfg.server.rate_limit = RateLimitConfig {
-            enabled: true,
-            requests_per_second: 1,
-            burst_size: burst,
-        };
-    }
-    build_router(state)
+    let state = build_test_state(false);
+    let limiter = thairag_api::rate_limit::RateLimiter::new(1, burst);
+    build_router(state, Some(limiter))
 }
 
 #[tokio::test]
