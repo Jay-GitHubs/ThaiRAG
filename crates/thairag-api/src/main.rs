@@ -1,3 +1,7 @@
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
 use thairag_api::app_state::AppState;
@@ -24,6 +28,7 @@ async fn main() {
     let config = thairag_config::load_config().expect("Failed to load configuration");
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
+    let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
 
     // Build app state with all providers wired
     let state = AppState::build(config);
@@ -37,7 +42,42 @@ async fn main() {
         .await
         .expect("Failed to bind address");
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(shutdown_timeout))
+    .await
+    .expect("Server error");
+
+    tracing::info!("Server shutdown complete");
+}
+
+async fn shutdown_signal(timeout: Duration) {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+
+    tracing::info!(
+        timeout_secs = timeout.as_secs(),
+        "Shutdown signal received, starting graceful shutdown"
+    );
 }

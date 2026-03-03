@@ -17,11 +17,16 @@ use tracing::Span;
 use thairag_auth::middleware::auth_layer;
 
 use crate::app_state::AppState;
+use crate::rate_limit::{RateLimitLayer, RateLimiter};
 
 pub fn build_router(state: AppState) -> Router {
-    // ── Public routes ───────────────────────────────────────────────
+    let rate_limit_cfg = &state.config.server.rate_limit;
+
+    // ── Health route (never rate-limited) ───────────────────────────
+    let health_route = Router::new().route("/health", get(health::health));
+
+    // ── Public routes (rate-limited) ────────────────────────────────
     let public = Router::new()
-        .route("/health", get(health::health))
         .route("/v1/models", get(models::list_models))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login));
@@ -97,9 +102,22 @@ pub fn build_router(state: AppState) -> Router {
             auth_layer(jwt.clone(), req, next)
         }));
 
-    // Merge public + protected
-    public
-        .merge(protected)
+    // Merge public + protected, optionally with rate limiting
+    let rate_limited = if rate_limit_cfg.enabled {
+        let limiter = RateLimiter::new(
+            rate_limit_cfg.requests_per_second,
+            rate_limit_cfg.burst_size,
+        );
+        public
+            .merge(protected)
+            .layer(RateLimitLayer::new(limiter))
+    } else {
+        public.merge(protected)
+    };
+
+    // health (no rate limit) + rate-limited routes + common layers
+    health_route
+        .merge(rate_limited)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(
             TraceLayer::new_for_http()

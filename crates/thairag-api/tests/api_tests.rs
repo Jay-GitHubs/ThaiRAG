@@ -11,7 +11,7 @@ use thairag_agent::{QueryOrchestrator, RagEngine};
 use thairag_auth::JwtService;
 use thairag_config::schema::{
     AppConfig, AuthConfig, DatabaseConfig, DocumentConfig, EmbeddingConfig, LlmConfig,
-    ProvidersConfig, RerankerConfig, SearchConfig, ServerConfig, TextSearchConfig,
+    ProvidersConfig, RateLimitConfig, RerankerConfig, SearchConfig, ServerConfig, TextSearchConfig,
     VectorStoreConfig,
 };
 use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore};
@@ -140,6 +140,12 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         server: ServerConfig {
             host: "127.0.0.1".into(),
             port: 0,
+            shutdown_timeout_secs: 5,
+            rate_limit: RateLimitConfig {
+                enabled: false,
+                requests_per_second: 10,
+                burst_size: 20,
+            },
         },
         database: DatabaseConfig {
             url: "".into(),
@@ -1288,4 +1294,72 @@ async fn ingest_response_includes_enriched_fields() {
     assert!(body["chunks"].as_u64().unwrap() >= 1);
     // filename is null for JSON ingest
     assert!(body["filename"].is_null());
+}
+
+// ── Rate Limiting Tests ─────────────────────────────────────────────
+
+fn build_rate_limited_app(burst: u64) -> Router {
+    let mut state = build_test_state(false);
+    {
+        let cfg = Arc::get_mut(&mut state.config).unwrap();
+        cfg.server.rate_limit = RateLimitConfig {
+            enabled: true,
+            requests_per_second: 1,
+            burst_size: burst,
+        };
+    }
+    build_router(state)
+}
+
+#[tokio::test]
+async fn rate_limit_returns_429() {
+    let app = build_rate_limited_app(2);
+
+    // First 2 requests should succeed (burst=2)
+    for _ in 0..2 {
+        let req = Request::builder()
+            .uri("/v1/models")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // Third request should be rate-limited
+    let req = Request::builder()
+        .uri("/v1/models")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(resp.headers().get("retry-after").is_some());
+}
+
+#[tokio::test]
+async fn health_not_rate_limited() {
+    let app = build_rate_limited_app(1);
+
+    // Exhaust the rate limit on a normal endpoint
+    let req = Request::builder()
+        .uri("/v1/models")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Next normal request is rate-limited
+    let req = Request::builder()
+        .uri("/v1/models")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // But /health always succeeds
+    let req = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }

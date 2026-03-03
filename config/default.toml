@@ -1,6 +1,12 @@
 [server]
 host = "0.0.0.0"
 port = 8080
+shutdown_timeout_secs = 30
+
+[server.rate_limit]
+enabled = true
+requests_per_second = 10
+burst_size = 20
 
 [database]
 url = ""

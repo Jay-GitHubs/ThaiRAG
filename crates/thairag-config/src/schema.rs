@@ -17,6 +17,46 @@ pub struct AppConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout_secs: u64,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+}
+
+fn default_shutdown_timeout() -> u64 {
+    30
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_requests_per_second")]
+    pub requests_per_second: u64,
+    #[serde(default = "default_burst_size")]
+    pub burst_size: u64,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_second: 10,
+            burst_size: 20,
+        }
+    }
+}
+
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+
+fn default_requests_per_second() -> u64 {
+    10
+}
+
+fn default_burst_size() -> u64 {
+    20
 }
 
 #[derive(Debug, Clone, Deserialize)]
