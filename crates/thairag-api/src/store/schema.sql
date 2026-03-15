@@ -27,16 +27,50 @@ CREATE TABLE IF NOT EXISTS documents (
     title         TEXT NOT NULL,
     mime_type     TEXT NOT NULL,
     size_bytes    INTEGER NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'ready',
+    chunk_count   INTEGER NOT NULL DEFAULT 0,
+    error_message    TEXT,
+    processing_step  TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id              TEXT PRIMARY KEY,
+    email           TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    password_hash   TEXT NOT NULL DEFAULT '',
+    auth_provider   TEXT NOT NULL DEFAULT 'local',
+    external_id     TEXT,
+    is_super_admin  INTEGER NOT NULL DEFAULT 0,
+    role            TEXT NOT NULL DEFAULT 'viewer',
+    created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS identity_providers (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    provider_type TEXT NOT NULL,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    config_json   TEXT NOT NULL DEFAULT '{}',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    email         TEXT NOT NULL UNIQUE,
-    name          TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+-- Document content storage (original file + converted markdown)
+CREATE TABLE IF NOT EXISTS document_blobs (
+    doc_id           TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    original_bytes   BLOB,
+    converted_text   TEXT,
+    image_count      INTEGER NOT NULL DEFAULT 0,
+    table_count      INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS permissions (

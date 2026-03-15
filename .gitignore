@@ -5,3 +5,33 @@ config/local.toml
 *.swo
 .DS_Store
 .fastembed_cache/
+
+# Claude Code
+.claude/
+
+# Node
+admin-ui/node_modules/
+admin-ui/dist/
+
+# Playwright
+admin-ui/e2e/.auth/user.json
+admin-ui/test-results/
+admin-ui/playwright-report/
+
+# Data
+data/
+*.db
+*.sqlite
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Test artifacts
+test-results/
+
+# OS
+Thumbs.db
+*.bak
+*.tmp

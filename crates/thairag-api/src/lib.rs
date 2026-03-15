@@ -1,5 +1,11 @@
 pub mod app_state;
+pub mod audit;
+pub mod csrf;
 pub mod error;
+pub mod login_tracker;
+pub mod metrics;
+pub mod oidc;
 pub mod rate_limit;
 pub mod routes;
+pub mod session;
 pub mod store;

@@ -24,6 +24,7 @@ pub struct RateLimiter {
     buckets: Arc<DashMap<IpAddr, Bucket>>,
     rate: f64,      // tokens per second
     burst: f64,     // max tokens (bucket capacity)
+    trust_proxy: bool,
 }
 
 impl RateLimiter {
@@ -32,7 +33,13 @@ impl RateLimiter {
             buckets: Arc::new(DashMap::new()),
             rate: requests_per_second as f64,
             burst: burst_size as f64,
+            trust_proxy: false,
         }
+    }
+
+    pub fn with_trust_proxy(mut self, trust: bool) -> Self {
+        self.trust_proxy = trust;
+        self
     }
 
     /// Evict buckets that haven't been touched for longer than `max_age`.
@@ -62,6 +69,61 @@ impl RateLimiter {
             let wait = (1.0 - bucket.tokens) / self.rate;
             Err(wait)
         }
+    }
+}
+
+// ── Per-user token-bucket rate limiter ──────────────────────────
+
+struct UserBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+/// Token-bucket rate limiter keyed by user ID (string).
+/// Applied after authentication to limit per-user request rates.
+#[derive(Clone)]
+pub struct UserRateLimiter {
+    buckets: Arc<DashMap<String, UserBucket>>,
+    rate: f64,
+    burst: f64,
+}
+
+impl UserRateLimiter {
+    pub fn new(requests_per_second: u64, burst_size: u64) -> Self {
+        Self {
+            buckets: Arc::new(DashMap::new()),
+            rate: requests_per_second as f64,
+            burst: burst_size as f64,
+        }
+    }
+
+    /// Try to consume one token for `user_id`. Returns `Ok(())` if allowed,
+    /// or `Err(retry_after_secs)` if rate-limited.
+    pub fn try_acquire(&self, user_id: &str) -> Result<(), f64> {
+        let now = Instant::now();
+        let mut entry = self.buckets.entry(user_id.to_string()).or_insert_with(|| UserBucket {
+            tokens: self.burst,
+            last_refill: now,
+        });
+
+        let bucket = entry.value_mut();
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.rate).min(self.burst);
+        bucket.last_refill = now;
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            Ok(())
+        } else {
+            let wait = (1.0 - bucket.tokens) / self.rate;
+            Err(wait)
+        }
+    }
+
+    /// Evict buckets that haven't been touched for longer than `max_age`.
+    pub fn cleanup_stale(&self, max_age: Duration) {
+        let cutoff = Instant::now() - max_age;
+        self.buckets.retain(|_, bucket| bucket.last_refill > cutoff);
     }
 }
 
@@ -111,7 +173,7 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let ip = extract_client_ip(&req);
+        let ip = extract_client_ip(&req, self.limiter.trust_proxy);
         let mut inner = self.inner.clone();
 
         match self.limiter.try_acquire(ip) {
@@ -143,20 +205,27 @@ where
 // ── IP Extraction ───────────────────────────────────────────────────
 
 /// Extract client IP from the request.
-/// Priority: X-Forwarded-For header → ConnectInfo → fallback 0.0.0.0
-fn extract_client_ip(req: &Request<Body>) -> IpAddr {
-    // Check X-Forwarded-For first (first IP in the list)
-    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
-        if let Ok(val) = forwarded.to_str() {
-            if let Some(first) = val.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                    return ip;
-                }
-            }
+///
+/// When `trust_proxy` is false (default): use ConnectInfo (real TCP peer) only.
+/// This prevents attackers from spoofing X-Forwarded-For to bypass rate limiting.
+///
+/// When `trust_proxy` is true: use X-Forwarded-For (last entry before proxy)
+/// then fall back to ConnectInfo. Only enable when running behind a trusted
+/// reverse proxy that sets this header.
+fn extract_client_ip(req: &Request<Body>, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        // When behind a trusted proxy, use X-Forwarded-For.
+        // Use the *first* IP (original client) — the proxy appends its own.
+        if let Some(forwarded) = req.headers().get("x-forwarded-for")
+            && let Ok(val) = forwarded.to_str()
+            && let Some(first) = val.split(',').next()
+            && let Ok(ip) = first.trim().parse::<IpAddr>()
+        {
+            return ip;
         }
     }
 
-    // Check ConnectInfo extension
+    // Use the actual TCP peer address
     if let Some(connect_info) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
         return connect_info.0.ip();
     }

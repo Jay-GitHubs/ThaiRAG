@@ -1,0 +1,74 @@
+# Test Identity Provider (Keycloak) for OIDC integration testing.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d
+#
+# Keycloak admin console: http://localhost:9090
+#   Username: admin  /  Password: admin
+#
+# IMPORTANT — OIDC URL rules when running in Docker:
+#   - Issuer URL (backend → Keycloak):   use host.docker.internal:9090
+#   - Redirect URI (browser → nginx):    use localhost:8081
+#   - See docs/OIDC_TESTING.md for full setup and networking details.
+
+services:
+  # ── Keycloak (test OIDC identity provider) ─────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    entrypoint: ["/bin/bash", "/scripts/keycloak-init.sh"]
+    ports:
+      - "9090:9090"
+    environment:
+      KC_HTTP_PORT: 9090
+      KC_BOOTSTRAP_ADMIN_USERNAME: temp-bootstrap
+      KC_BOOTSTRAP_ADMIN_PASSWORD: temp-bootstrap
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./scripts/keycloak-init.sh:/scripts/keycloak-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; grep -q '200\\|UP' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
+  # ── Override ThaiRAG with super admin seed ─────────────────────────
+  thairag:
+    environment:
+      THAIRAG__ADMIN__EMAIL: admin@thairag.local
+      THAIRAG__ADMIN__PASSWORD: admin123
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  # ── Open WebUI with OIDC pointing to Keycloak ─────────────────────
+  # Open WebUI runs its own backend inside the container.
+  # OPENID_PROVIDER_URL must use host.docker.internal so that the discovery
+  # doc returns browser-reachable URLs (same rule as ThaiRAG's issuer URL).
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
+      OPENAI_API_KEYS: "unused"
+      # OIDC SSO via Keycloak
+      # Open WebUI's backend reaches Keycloak via host.docker.internal:9090.
+      # This ensures the browser also gets reachable URLs from the discovery doc.
+      # The browser redirect uses localhost:3000 (configured in Keycloak client).
+      ENABLE_OAUTH_SIGNUP: "true"
+      OAUTH_PROVIDER_NAME: "Keycloak"
+      OAUTH_CLIENT_ID: "open-webui"
+      OAUTH_CLIENT_SECRET: "rtAWAxhX7pzBISKA8DRzSJ2FDImTyJZm"
+      OPENID_PROVIDER_URL: "http://host.docker.internal:9090/realms/thairag/.well-known/openid-configuration"
+      OAUTH_SCOPES: "openid profile email"
+    depends_on:
+      - thairag
+      - keycloak
+
+volumes:
+  keycloak-data:
+  open-webui-data:

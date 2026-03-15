@@ -3,24 +3,41 @@ use std::sync::RwLock;
 
 use chrono::Utc;
 use thairag_core::models::{
-    Department, Document, Organization, PermissionScope, User, UserPermission, Workspace,
+    Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
+    UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 
 use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
+struct BlobData {
+    original_bytes: Option<Vec<u8>>,
+    converted_text: Option<String>,
+    image_count: i32,
+    table_count: i32,
+}
+
 pub struct MemoryKmStore {
     orgs: RwLock<HashMap<OrgId, Organization>>,
     depts: RwLock<HashMap<DeptId, Department>>,
     workspaces: RwLock<HashMap<WorkspaceId, Workspace>>,
     documents: RwLock<HashMap<DocId, Document>>,
+    document_blobs: RwLock<HashMap<DocId, BlobData>>,
     users: RwLock<HashMap<UserId, UserRecord>>,
     user_by_email: RwLock<HashMap<String, UserId>>,
     permissions: RwLock<Vec<UserPermission>>,
+    identity_providers: RwLock<HashMap<IdpId, IdentityProvider>>,
+    settings: RwLock<HashMap<String, String>>,
+}
+
+impl Default for MemoryKmStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryKmStore {
@@ -30,9 +47,12 @@ impl MemoryKmStore {
             depts: RwLock::new(HashMap::new()),
             workspaces: RwLock::new(HashMap::new()),
             documents: RwLock::new(HashMap::new()),
+            document_blobs: RwLock::new(HashMap::new()),
             users: RwLock::new(HashMap::new()),
             user_by_email: RwLock::new(HashMap::new()),
             permissions: RwLock::new(Vec::new()),
+            identity_providers: RwLock::new(HashMap::new()),
+            settings: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -149,6 +169,10 @@ impl KmStoreTrait for MemoryKmStore {
             .collect()
     }
 
+    fn list_workspaces_all(&self) -> Vec<Workspace> {
+        self.workspaces.read().unwrap().values().cloned().collect()
+    }
+
     fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
         if self.workspaces.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Workspace {id} not found")));
@@ -183,11 +207,80 @@ impl KmStoreTrait for MemoryKmStore {
             .collect()
     }
 
+    fn update_document_status(
+        &self,
+        id: DocId,
+        status: DocStatus,
+        chunk_count: i64,
+        error_message: Option<String>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.status = status;
+        doc.chunk_count = chunk_count;
+        doc.error_message = error_message;
+        doc.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
+    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.processing_step = step;
+        doc.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
     fn delete_document(&self, id: DocId) -> Result<()> {
         if self.documents.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
         Ok(())
+    }
+
+    fn save_document_blob(
+        &self,
+        doc_id: DocId,
+        original_bytes: Option<Vec<u8>>,
+        converted_text: Option<String>,
+        image_count: i32,
+        table_count: i32,
+    ) -> Result<()> {
+        let mut blobs = self.document_blobs.write().unwrap();
+        let entry = blobs.entry(doc_id).or_insert(BlobData {
+            original_bytes: None,
+            converted_text: None,
+            image_count: 0,
+            table_count: 0,
+        });
+        if original_bytes.is_some() {
+            entry.original_bytes = original_bytes;
+        }
+        if converted_text.is_some() {
+            entry.converted_text = converted_text;
+        }
+        entry.image_count = image_count;
+        entry.table_count = table_count;
+        Ok(())
+    }
+
+    fn get_document_content(&self, doc_id: DocId) -> Result<Option<String>> {
+        let blobs = self.document_blobs.read().unwrap();
+        Ok(blobs.get(&doc_id).and_then(|b| b.converted_text.clone()))
+    }
+
+    fn get_document_file(&self, doc_id: DocId) -> Result<Option<Vec<u8>>> {
+        let blobs = self.document_blobs.read().unwrap();
+        Ok(blobs.get(&doc_id).and_then(|b| b.original_bytes.clone()))
+    }
+
+    fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)> {
+        let blobs = self.document_blobs.read().unwrap();
+        Ok(blobs.get(&doc_id).map(|b| (b.image_count, b.table_count)).unwrap_or((0, 0)))
     }
 
     // ── User ──────────────────────────────────────────────────────────
@@ -208,6 +301,10 @@ impl KmStoreTrait for MemoryKmStore {
             id: UserId::new(),
             email: email_lower.clone(),
             name,
+            auth_provider: "local".into(),
+            external_id: None,
+            is_super_admin: false,
+            role: "viewer".into(),
             created_at: Utc::now(),
         };
         self.users.write().unwrap().insert(
@@ -222,6 +319,63 @@ impl KmStoreTrait for MemoryKmStore {
             .unwrap()
             .insert(email_lower, user.id);
         Ok(user)
+    }
+
+    fn upsert_user_by_email(
+        &self,
+        email: String,
+        name: String,
+        password_hash: String,
+        is_super_admin: bool,
+        role: String,
+    ) -> Result<User> {
+        let email_lower = email.to_lowercase();
+        let existing_id = self.user_by_email.read().unwrap().get(&email_lower).copied();
+
+        if let Some(id) = existing_id {
+            let mut users = self.users.write().unwrap();
+            if let Some(record) = users.get_mut(&id) {
+                record.user.name = name;
+                record.user.is_super_admin = is_super_admin;
+                record.user.role = role;
+                record.password_hash = password_hash;
+                return Ok(record.user.clone());
+            }
+        }
+
+        let user = User {
+            id: UserId::new(),
+            email: email_lower.clone(),
+            name,
+            auth_provider: "local".into(),
+            external_id: None,
+            is_super_admin,
+            role,
+            created_at: Utc::now(),
+        };
+        self.users.write().unwrap().insert(
+            user.id,
+            UserRecord {
+                user: user.clone(),
+                password_hash,
+            },
+        );
+        self.user_by_email
+            .write()
+            .unwrap()
+            .insert(email_lower, user.id);
+        Ok(user)
+    }
+
+    fn delete_user(&self, id: UserId) -> Result<()> {
+        let removed = self.users.write().unwrap().remove(&id);
+        match removed {
+            Some(record) => {
+                self.user_by_email.write().unwrap().remove(&record.user.email);
+                Ok(())
+            }
+            None => Err(ThaiRagError::NotFound(format!("User {id} not found"))),
+        }
     }
 
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
@@ -248,6 +402,93 @@ impl KmStoreTrait for MemoryKmStore {
             .get(&id)
             .map(|r| r.user.clone())
             .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))
+    }
+
+    fn list_users(&self) -> Vec<User> {
+        self.users
+            .read()
+            .unwrap()
+            .values()
+            .map(|r| r.user.clone())
+            .collect()
+    }
+
+    // ── Identity Providers ──────────────────────────────────────────
+
+    fn list_identity_providers(&self) -> Vec<IdentityProvider> {
+        self.identity_providers.read().unwrap().values().cloned().collect()
+    }
+
+    fn list_enabled_identity_providers(&self) -> Vec<IdentityProvider> {
+        self.identity_providers
+            .read()
+            .unwrap()
+            .values()
+            .filter(|p| p.enabled)
+            .cloned()
+            .collect()
+    }
+
+    fn get_identity_provider(&self, id: IdpId) -> Result<IdentityProvider> {
+        self.identity_providers
+            .read()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Identity provider {id} not found")))
+    }
+
+    fn insert_identity_provider(
+        &self,
+        name: String,
+        provider_type: String,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> Result<IdentityProvider> {
+        let now = Utc::now();
+        let idp = IdentityProvider {
+            id: IdpId::new(),
+            name,
+            provider_type,
+            enabled,
+            config,
+            created_at: now,
+            updated_at: now,
+        };
+        self.identity_providers
+            .write()
+            .unwrap()
+            .insert(idp.id, idp.clone());
+        Ok(idp)
+    }
+
+    fn update_identity_provider(
+        &self,
+        id: IdpId,
+        name: String,
+        provider_type: String,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> Result<IdentityProvider> {
+        let mut providers = self.identity_providers.write().unwrap();
+        let idp = providers
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Identity provider {id} not found")))?;
+        idp.name = name;
+        idp.provider_type = provider_type;
+        idp.enabled = enabled;
+        idp.config = config;
+        idp.updated_at = Utc::now();
+        Ok(idp.clone())
+    }
+
+    fn delete_identity_provider(&self, id: IdpId) -> Result<()> {
+        if self.identity_providers.write().unwrap().remove(&id).is_none() {
+            return Err(ThaiRagError::NotFound(format!(
+                "Identity provider {id} not found"
+            )));
+        }
+        Ok(())
     }
 
     // ── Permissions ──────────────────────────────────────────────────
@@ -316,6 +557,65 @@ impl KmStoreTrait for MemoryKmStore {
             })
             .map(|p| p.role)
             .max()
+    }
+
+    fn get_user_role_for_dept(
+        &self,
+        user_id: UserId,
+        org_id: OrgId,
+        dept_id: DeptId,
+    ) -> Option<Role> {
+        let perms = self.permissions.read().unwrap();
+        perms
+            .iter()
+            .filter(|p| p.user_id == user_id)
+            .filter(|p| match &p.scope {
+                PermissionScope::Org { org_id: oid } => *oid == org_id,
+                PermissionScope::Dept {
+                    org_id: oid,
+                    dept_id: did,
+                } => *oid == org_id && *did == dept_id,
+                _ => false,
+            })
+            .map(|p| p.role)
+            .max()
+    }
+
+    fn get_user_role_for_workspace(
+        &self,
+        user_id: UserId,
+        org_id: OrgId,
+        dept_id: DeptId,
+        workspace_id: WorkspaceId,
+    ) -> Option<Role> {
+        let perms = self.permissions.read().unwrap();
+        perms
+            .iter()
+            .filter(|p| p.user_id == user_id)
+            .filter(|p| match &p.scope {
+                PermissionScope::Org { org_id: oid } => *oid == org_id,
+                PermissionScope::Dept {
+                    org_id: oid,
+                    dept_id: did,
+                } => *oid == org_id && *did == dept_id,
+                PermissionScope::Workspace {
+                    org_id: oid,
+                    dept_id: did,
+                    workspace_id: wid,
+                } => *oid == org_id && *did == dept_id && *wid == workspace_id,
+            })
+            .map(|p| p.role)
+            .max()
+    }
+
+    fn list_user_permissions(&self, user_id: UserId) -> Vec<UserPermission> {
+        self.permissions
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|p| p.user_id == user_id)
+            .cloned()
+            .collect()
     }
 
     fn get_user_workspace_ids(&self, user_id: UserId) -> Vec<WorkspaceId> {
@@ -421,6 +721,18 @@ impl KmStoreTrait for MemoryKmStore {
         }
         self.delete_org(org_id)?;
         Ok(all_doc_ids)
+    }
+
+    fn get_setting(&self, key: &str) -> Option<String> {
+        self.settings.read().unwrap().get(key).cloned()
+    }
+
+    fn set_setting(&self, key: &str, value: &str) {
+        self.settings.write().unwrap().insert(key.to_string(), value.to_string());
+    }
+
+    fn delete_setting(&self, key: &str) {
+        self.settings.write().unwrap().remove(key);
     }
 }
 
@@ -574,6 +886,10 @@ mod tests {
             title: "test".into(),
             mime_type: "text/plain".into(),
             size_bytes: 0,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };
@@ -593,6 +909,10 @@ mod tests {
             title: "readme".into(),
             mime_type: "text/plain".into(),
             size_bytes: 42,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };
@@ -629,6 +949,10 @@ mod tests {
             title: "test".into(),
             mime_type: "text/plain".into(),
             size_bytes: 10,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };
@@ -656,6 +980,10 @@ mod tests {
             title: "test".into(),
             mime_type: "text/plain".into(),
             size_bytes: 10,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };
@@ -788,6 +1116,10 @@ mod tests {
             title: "test".into(),
             mime_type: "text/plain".into(),
             size_bytes: 10,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };

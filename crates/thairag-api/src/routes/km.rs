@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
@@ -5,14 +7,17 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use thairag_auth::AuthClaims;
-use thairag_core::models::{Department, Organization, PermissionScope, UserPermission, Workspace};
+use thairag_core::models::{
+    Department, Organization, PermissionScope, User, UserPermission, Workspace,
+};
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, OrgId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
-use crate::error::ApiError;
-use crate::store::scopes_match;
+use crate::audit::{AuditAction, audit_log};
+use crate::error::{ApiError, AppJson};
+use crate::store::{scope_org_id, scopes_match};
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -117,22 +122,89 @@ fn resolve_scope(org_id: OrgId, scope: ScopeRequest) -> PermissionScope {
     }
 }
 
-enum PermCheck {
+pub type PermCheckPublic = PermCheck;
+
+pub enum PermCheck {
     AuthDisabled,
+    SuperAdmin,
     Role(Role),
     NoPermission,
 }
 
+fn user_id_from_claims(claims: &AuthClaims) -> Option<UserId> {
+    claims.sub.parse::<Uuid>().ok().map(UserId)
+}
+
+fn is_super_admin(state: &AppState, user_id: UserId) -> bool {
+    state
+        .km_store
+        .get_user(user_id)
+        .map(|u| u.is_super_admin || u.role == "super_admin")
+        .unwrap_or(false)
+}
+
+/// Check permission at org level (considers all scopes within the org).
 fn resolve_perm(claims: &AuthClaims, state: &AppState, org_id: OrgId) -> PermCheck {
     if claims.sub == "anonymous" {
         return PermCheck::AuthDisabled;
     }
-    let Ok(user_id) = claims.sub.parse::<Uuid>() else {
+    let Some(user_id) = user_id_from_claims(claims) else {
         return PermCheck::NoPermission;
     };
+    if is_super_admin(state, user_id) {
+        return PermCheck::SuperAdmin;
+    }
+    match state.km_store.get_user_role_for_org(user_id, org_id) {
+        Some(role) => PermCheck::Role(role),
+        None => PermCheck::NoPermission,
+    }
+}
+
+/// Check permission at dept level (org + matching dept scope).
+fn resolve_perm_dept(
+    claims: &AuthClaims,
+    state: &AppState,
+    org_id: OrgId,
+    dept_id: DeptId,
+) -> PermCheck {
+    if claims.sub == "anonymous" {
+        return PermCheck::AuthDisabled;
+    }
+    let Some(user_id) = user_id_from_claims(claims) else {
+        return PermCheck::NoPermission;
+    };
+    if is_super_admin(state, user_id) {
+        return PermCheck::SuperAdmin;
+    }
     match state
         .km_store
-        .get_user_role_for_org(UserId(user_id), org_id)
+        .get_user_role_for_dept(user_id, org_id, dept_id)
+    {
+        Some(role) => PermCheck::Role(role),
+        None => PermCheck::NoPermission,
+    }
+}
+
+/// Check permission at workspace level (org + dept + matching ws scope).
+pub fn resolve_perm_ws(
+    claims: &AuthClaims,
+    state: &AppState,
+    org_id: OrgId,
+    dept_id: DeptId,
+    workspace_id: WorkspaceId,
+) -> PermCheck {
+    if claims.sub == "anonymous" {
+        return PermCheck::AuthDisabled;
+    }
+    let Some(user_id) = user_id_from_claims(claims) else {
+        return PermCheck::NoPermission;
+    };
+    if is_super_admin(state, user_id) {
+        return PermCheck::SuperAdmin;
+    }
+    match state
+        .km_store
+        .get_user_role_for_workspace(user_id, org_id, dept_id, workspace_id)
     {
         Some(role) => PermCheck::Role(role),
         None => PermCheck::NoPermission,
@@ -141,7 +213,7 @@ fn resolve_perm(claims: &AuthClaims, state: &AppState, org_id: OrgId) -> PermChe
 
 fn require(perm: &PermCheck, check: fn(&Role) -> bool, action: &str) -> Result<(), ApiError> {
     match perm {
-        PermCheck::AuthDisabled => Ok(()),
+        PermCheck::AuthDisabled | PermCheck::SuperAdmin => Ok(()),
         PermCheck::Role(role) if check(role) => Ok(()),
         PermCheck::Role(_) | PermCheck::NoPermission => Err(ApiError(
             ThaiRagError::Authorization(format!("Insufficient permission: {action}")),
@@ -149,25 +221,29 @@ fn require(perm: &PermCheck, check: fn(&Role) -> bool, action: &str) -> Result<(
     }
 }
 
+fn is_bypassed(perm: &PermCheck) -> bool {
+    matches!(perm, PermCheck::AuthDisabled | PermCheck::SuperAdmin)
+}
+
 // ── Organization handlers ───────────────────────────────────────────
 
 pub async fn create_org(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Json(body): Json<CreateOrgRequest>,
+    AppJson(body): AppJson<CreateOrgRequest>,
 ) -> Result<(StatusCode, Json<Organization>), ApiError> {
     let org = state.km_store.insert_org(body.name)?;
     tracing::info!(org_id = %org.id, name = %org.name, "Organization created");
 
     // Auto-grant Owner to creator
-    if claims.sub != "anonymous" {
-        if let Ok(user_id) = claims.sub.parse::<Uuid>() {
-            state.km_store.add_permission(UserPermission {
-                user_id: UserId(user_id),
-                scope: PermissionScope::Org { org_id: org.id },
-                role: Role::Owner,
-            });
-        }
+    if claims.sub != "anonymous"
+        && let Some(user_id) = user_id_from_claims(&claims)
+    {
+        state.km_store.add_permission(UserPermission {
+            user_id,
+            scope: PermissionScope::Org { org_id: org.id },
+            role: Role::Owner,
+        });
     }
 
     Ok((StatusCode::CREATED, Json(org)))
@@ -175,10 +251,29 @@ pub async fn create_org(
 
 pub async fn list_orgs(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
     Query(params): Query<PaginationParams>,
 ) -> Json<ListResponse<Organization>> {
-    let orgs = state.km_store.list_orgs();
+    let all_orgs = state.km_store.list_orgs();
+
+    let orgs = if claims.sub == "anonymous" {
+        all_orgs
+    } else if let Some(user_id) = user_id_from_claims(&claims) {
+        if is_super_admin(&state, user_id) {
+            all_orgs
+        } else {
+            let perms = state.km_store.list_user_permissions(user_id);
+            let accessible_org_ids: HashSet<OrgId> =
+                perms.iter().map(|p| scope_org_id(&p.scope)).collect();
+            all_orgs
+                .into_iter()
+                .filter(|o| accessible_org_ids.contains(&o.id))
+                .collect()
+        }
+    } else {
+        vec![]
+    };
+
     let (data, total) = paginate(orgs, &params);
     Json(ListResponse { data, total })
 }
@@ -205,7 +300,7 @@ pub async fn delete_org(
     require(&perm, Role::can_delete, "delete org")?;
     let doc_ids = state.km_store.cascade_delete_org(org_id)?;
     for doc_id in doc_ids {
-        let _ = state.search_engine.delete_doc(doc_id).await;
+        let _ = state.providers().search_engine.delete_doc(doc_id).await;
     }
     tracing::info!(%org_id, "Organization deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -217,9 +312,10 @@ pub async fn create_dept(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<CreateDeptRequest>,
+    AppJson(body): AppJson<CreateDeptRequest>,
 ) -> Result<(StatusCode, Json<Department>), ApiError> {
     let org_id = OrgId(org_id);
+    // Creating a dept is an org-level operation — need org-level perm
     let perm = resolve_perm(&claims, &state, org_id);
     require(&perm, Role::can_write, "create department")?;
     let dept = state.km_store.insert_dept(org_id, body.name)?;
@@ -234,9 +330,52 @@ pub async fn list_depts(
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<Department>>, ApiError> {
     let org_id = OrgId(org_id);
+    // Must have some permission in this org to list depts
     let perm = resolve_perm(&claims, &state, org_id);
     require(&perm, Role::can_read, "list departments")?;
-    let depts = state.km_store.list_depts_in_org(org_id);
+
+    let all_depts = state.km_store.list_depts_in_org(org_id);
+
+    let depts = if is_bypassed(&perm) {
+        all_depts
+    } else if let Some(user_id) = user_id_from_claims(&claims) {
+        let perms = state.km_store.list_user_permissions(user_id);
+        // Org-level perm → see all depts
+        let has_org_perm = perms.iter().any(|p| {
+            matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id)
+        });
+        if has_org_perm {
+            all_depts
+        } else {
+            // Collect dept_ids from dept-level and workspace-level perms
+            let mut dept_ids: HashSet<DeptId> = HashSet::new();
+            for p in &perms {
+                match &p.scope {
+                    PermissionScope::Dept {
+                        org_id: oid,
+                        dept_id,
+                    } if *oid == org_id => {
+                        dept_ids.insert(*dept_id);
+                    }
+                    PermissionScope::Workspace {
+                        org_id: oid,
+                        dept_id,
+                        ..
+                    } if *oid == org_id => {
+                        dept_ids.insert(*dept_id);
+                    }
+                    _ => {}
+                }
+            }
+            all_depts
+                .into_iter()
+                .filter(|d| dept_ids.contains(&d.id))
+                .collect()
+        }
+    } else {
+        vec![]
+    };
+
     let (data, total) = paginate(depts, &params);
     Ok(Json(ListResponse { data, total }))
 }
@@ -247,9 +386,10 @@ pub async fn get_dept(
     Path((org_id, dept_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Department>, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     require(&perm, Role::can_read, "read department")?;
-    let dept = state.km_store.get_dept(DeptId(dept_id))?;
+    let dept = state.km_store.get_dept(dept_id)?;
     Ok(Json(dept))
 }
 
@@ -259,11 +399,12 @@ pub async fn delete_dept(
     Path((org_id, dept_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     require(&perm, Role::can_delete, "delete department")?;
-    let doc_ids = state.km_store.cascade_delete_dept(DeptId(dept_id))?;
+    let doc_ids = state.km_store.cascade_delete_dept(dept_id)?;
     for doc_id in doc_ids {
-        let _ = state.search_engine.delete_doc(doc_id).await;
+        let _ = state.providers().search_engine.delete_doc(doc_id).await;
     }
     tracing::info!(%dept_id, "Department deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -275,12 +416,14 @@ pub async fn create_workspace(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((org_id, dept_id)): Path<(Uuid, Uuid)>,
-    Json(body): Json<CreateWorkspaceRequest>,
+    AppJson(body): AppJson<CreateWorkspaceRequest>,
 ) -> Result<(StatusCode, Json<Workspace>), ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    // Creating a workspace is a dept-level operation
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     require(&perm, Role::can_write, "create workspace")?;
-    let ws = state.km_store.insert_workspace(DeptId(dept_id), body.name)?;
+    let ws = state.km_store.insert_workspace(dept_id, body.name)?;
     tracing::info!(ws_id = %ws.id, %dept_id, name = %ws.name, "Workspace created");
     Ok((StatusCode::CREATED, Json(ws)))
 }
@@ -292,9 +435,46 @@ pub async fn list_workspaces(
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<Workspace>>, ApiError> {
     let org_id = OrgId(org_id);
+    let dept_id = DeptId(dept_id);
+    // Must have some access to this dept (or its children)
     let perm = resolve_perm(&claims, &state, org_id);
     require(&perm, Role::can_read, "list workspaces")?;
-    let workspaces = state.km_store.list_workspaces_in_dept(DeptId(dept_id));
+
+    let all_ws = state.km_store.list_workspaces_in_dept(dept_id);
+
+    let workspaces = if is_bypassed(&perm) {
+        all_ws
+    } else if let Some(user_id) = user_id_from_claims(&claims) {
+        let perms = state.km_store.list_user_permissions(user_id);
+        let has_org_perm = perms.iter().any(|p| {
+            matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id)
+        });
+        let has_dept_perm = perms.iter().any(|p| {
+            matches!(&p.scope, PermissionScope::Dept { org_id: oid, dept_id: did } if *oid == org_id && *did == dept_id)
+        });
+        if has_org_perm || has_dept_perm {
+            all_ws
+        } else {
+            let ws_ids: HashSet<WorkspaceId> = perms
+                .iter()
+                .filter_map(|p| match &p.scope {
+                    PermissionScope::Workspace {
+                        org_id: oid,
+                        dept_id: did,
+                        workspace_id,
+                    } if *oid == org_id && *did == dept_id => Some(*workspace_id),
+                    _ => None,
+                })
+                .collect();
+            all_ws
+                .into_iter()
+                .filter(|w| ws_ids.contains(&w.id))
+                .collect()
+        }
+    } else {
+        vec![]
+    };
+
     let (data, total) = paginate(workspaces, &params);
     Ok(Json(ListResponse { data, total }))
 }
@@ -302,28 +482,32 @@ pub async fn list_workspaces(
 pub async fn get_workspace(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Path((org_id, _dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path((org_id, dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Workspace>, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let workspace_id = WorkspaceId(ws_id);
+    let perm = resolve_perm_ws(&claims, &state, org_id, dept_id, workspace_id);
     require(&perm, Role::can_read, "read workspace")?;
-    let ws = state.km_store.get_workspace(WorkspaceId(ws_id))?;
+    let ws = state.km_store.get_workspace(workspace_id)?;
     Ok(Json(ws))
 }
 
 pub async fn delete_workspace(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Path((org_id, _dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path((org_id, dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    // Deleting a workspace is a dept-level operation
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     require(&perm, Role::can_delete, "delete workspace")?;
     let doc_ids = state
         .km_store
         .cascade_delete_workspace(WorkspaceId(ws_id))?;
     for doc_id in doc_ids {
-        let _ = state.search_engine.delete_doc(doc_id).await;
+        let _ = state.providers().search_engine.delete_doc(doc_id).await;
     }
     tracing::info!(%ws_id, "Workspace deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -335,19 +519,20 @@ pub async fn grant_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<GrantPermissionRequest>,
+    AppJson(body): AppJson<GrantPermissionRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
     let perm = resolve_perm(&claims, &state, org_id);
     require(&perm, Role::can_manage, "manage permissions")?;
 
     // Role ceiling: non-Owners can only grant roles strictly below their own
-    if let PermCheck::Role(caller_role) = &perm {
-        if *caller_role != Role::Owner && body.role >= *caller_role {
-            return Err(ApiError(ThaiRagError::Authorization(
-                "Cannot grant a role equal to or above your own".into(),
-            )));
-        }
+    if let PermCheck::Role(caller_role) = &perm
+        && *caller_role != Role::Owner
+        && body.role >= *caller_role
+    {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Cannot grant a role equal to or above your own".into(),
+        )));
     }
 
     let target = state.km_store.get_user_by_email(&body.email)?;
@@ -355,9 +540,13 @@ pub async fn grant_permission(
 
     state.km_store.upsert_permission(UserPermission {
         user_id: target.user.id,
-        scope,
+        scope: scope.clone(),
         role: body.role,
     });
+    audit_log(
+        &state.km_store, &claims.sub, AuditAction::PermissionGranted,
+        &body.email, true, Some(&format!("role={:?} scope={scope:?}", body.role)),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -407,7 +596,7 @@ pub async fn revoke_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(org_id): Path<Uuid>,
-    Json(body): Json<RevokePermissionRequest>,
+    AppJson(body): AppJson<RevokePermissionRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
     let perm = resolve_perm(&claims, &state, org_id);
@@ -435,6 +624,10 @@ pub async fn revoke_permission(
     }
 
     state.km_store.remove_permission(target.user.id, &scope)?;
+    audit_log(
+        &state.km_store, &claims.sub, AuditAction::PermissionRevoked,
+        &body.email, true, Some(&format!("scope={scope:?}")),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -450,20 +643,25 @@ fn grant_permission_inner(
     require(perm, Role::can_manage, "manage permissions")?;
 
     // Role ceiling: non-Owners can only grant roles strictly below their own
-    if let PermCheck::Role(caller_role) = perm {
-        if *caller_role != Role::Owner && role >= *caller_role {
-            return Err(ApiError(ThaiRagError::Authorization(
-                "Cannot grant a role equal to or above your own".into(),
-            )));
-        }
+    if let PermCheck::Role(caller_role) = perm
+        && *caller_role != Role::Owner
+        && role >= *caller_role
+    {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Cannot grant a role equal to or above your own".into(),
+        )));
     }
 
     let target = state.km_store.get_user_by_email(email)?;
     state.km_store.upsert_permission(UserPermission {
         user_id: target.user.id,
-        scope,
+        scope: scope.clone(),
         role,
     });
+    audit_log(
+        &state.km_store, "admin", AuditAction::PermissionGranted,
+        email, true, Some(&format!("role={role:?} scope={scope:?}")),
+    );
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -498,6 +696,10 @@ fn revoke_permission_inner(
     }
 
     state.km_store.remove_permission(target.user.id, &scope)?;
+    audit_log(
+        &state.km_store, "admin", AuditAction::PermissionRevoked,
+        email, true, Some(&format!("scope={scope:?}")),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -507,14 +709,12 @@ pub async fn grant_dept_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((org_id, dept_id)): Path<(Uuid, Uuid)>,
-    Json(body): Json<ScopedGrantRequest>,
+    AppJson(body): AppJson<ScopedGrantRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
-    let scope = PermissionScope::Dept {
-        org_id,
-        dept_id: DeptId(dept_id),
-    };
+    let dept_id = DeptId(dept_id);
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
+    let scope = PermissionScope::Dept { org_id, dept_id };
     grant_permission_inner(&state, &perm, scope, &body.email, body.role)
 }
 
@@ -525,27 +725,28 @@ pub async fn list_dept_permissions(
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<PermissionResponse>>, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id_typed = DeptId(dept_id);
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id_typed);
     require(&perm, Role::can_manage, "manage permissions")?;
-    let dept_id = DeptId(dept_id);
     let all_perms = state.km_store.list_permissions_for_org(org_id);
-    list_permissions_inner(&state, all_perms, |s| {
-        matches!(s, PermissionScope::Dept { dept_id: did, .. } if *did == dept_id)
-    }, &params)
+    list_permissions_inner(
+        &state,
+        all_perms,
+        |s| matches!(s, PermissionScope::Dept { dept_id: did, .. } if *did == dept_id_typed),
+        &params,
+    )
 }
 
 pub async fn revoke_dept_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((org_id, dept_id)): Path<(Uuid, Uuid)>,
-    Json(body): Json<ScopedRevokeRequest>,
+    AppJson(body): AppJson<ScopedRevokeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
-    let scope = PermissionScope::Dept {
-        org_id,
-        dept_id: DeptId(dept_id),
-    };
+    let dept_id = DeptId(dept_id);
+    let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
+    let scope = PermissionScope::Dept { org_id, dept_id };
     revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
 }
 
@@ -555,14 +756,16 @@ pub async fn grant_workspace_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((org_id, dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
-    Json(body): Json<ScopedGrantRequest>,
+    AppJson(body): AppJson<ScopedGrantRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let workspace_id = WorkspaceId(ws_id);
+    let perm = resolve_perm_ws(&claims, &state, org_id, dept_id, workspace_id);
     let scope = PermissionScope::Workspace {
         org_id,
-        dept_id: DeptId(dept_id),
-        workspace_id: WorkspaceId(ws_id),
+        dept_id,
+        workspace_id,
     };
     grant_permission_inner(&state, &perm, scope, &body.email, body.role)
 }
@@ -570,31 +773,70 @@ pub async fn grant_workspace_permission(
 pub async fn list_workspace_permissions(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Path((org_id, _dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path((org_id, dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListResponse<PermissionResponse>>, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let ws_id_typed = WorkspaceId(ws_id);
+    let perm = resolve_perm_ws(&claims, &state, org_id, dept_id, ws_id_typed);
     require(&perm, Role::can_manage, "manage permissions")?;
-    let ws_id = WorkspaceId(ws_id);
     let all_perms = state.km_store.list_permissions_for_org(org_id);
-    list_permissions_inner(&state, all_perms, |s| {
-        matches!(s, PermissionScope::Workspace { workspace_id, .. } if *workspace_id == ws_id)
-    }, &params)
+    list_permissions_inner(
+        &state,
+        all_perms,
+        |s| {
+            matches!(s, PermissionScope::Workspace { workspace_id, .. } if *workspace_id == ws_id_typed)
+        },
+        &params,
+    )
 }
 
 pub async fn revoke_workspace_permission(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((org_id, dept_id, ws_id)): Path<(Uuid, Uuid, Uuid)>,
-    Json(body): Json<ScopedRevokeRequest>,
+    AppJson(body): AppJson<ScopedRevokeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let org_id = OrgId(org_id);
-    let perm = resolve_perm(&claims, &state, org_id);
+    let dept_id = DeptId(dept_id);
+    let perm = resolve_perm_ws(&claims, &state, org_id, dept_id, WorkspaceId(ws_id));
     let scope = PermissionScope::Workspace {
         org_id,
-        dept_id: DeptId(dept_id),
+        dept_id,
         workspace_id: WorkspaceId(ws_id),
     };
     revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
+}
+
+// ── Users handler ───────────────────────────────────────────────────
+
+pub async fn list_users(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    Query(params): Query<PaginationParams>,
+) -> Json<ListResponse<User>> {
+    let users = state.km_store.list_users();
+    let (data, total) = paginate(users, &params);
+    Json(ListResponse { data, total })
+}
+
+pub async fn delete_user(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    Path(user_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let user = state.km_store.get_user(UserId(user_id))?;
+    if user.is_super_admin {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Cannot delete a super admin user".into(),
+        )));
+    }
+    state.km_store.delete_user(UserId(user_id))?;
+    audit_log(
+        &state.km_store, &_claims.sub, AuditAction::UserDeleted,
+        &user.email, true, None,
+    );
+    tracing::info!(%user_id, "User deleted");
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -11,23 +11,32 @@ pub struct OpenAiEmbeddingProvider {
     api_key: String,
     model: String,
     dimension: usize,
+    endpoint: String,
 }
 
 impl OpenAiEmbeddingProvider {
-    pub fn new(api_key: &str, model: &str, dimension: usize) -> Self {
+    pub fn new(api_key: &str, model: &str, dimension: usize, base_url: &str) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()
             .expect("Failed to build reqwest client");
 
-        info!(model, dimension, "Initialized OpenAI embedding provider");
+        let base = if base_url.is_empty() {
+            "https://api.openai.com"
+        } else {
+            base_url.trim_end_matches('/')
+        };
+        let endpoint = format!("{base}/v1/embeddings");
+
+        info!(model, dimension, %endpoint, "Initialized OpenAI embedding provider");
 
         Self {
             client,
             api_key: api_key.to_string(),
             model: model.to_string(),
             dimension,
+            endpoint,
         }
     }
 }
@@ -48,7 +57,7 @@ impl EmbeddingModel for OpenAiEmbeddingProvider {
 
         let resp = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()

@@ -34,9 +34,13 @@ impl HybridSearchEngine {
     }
 
     /// Index document chunks into both vector store and text search.
+    ///
+    /// When chunks have enrichment metadata (context_prefix, keywords,
+    /// hypothetical_queries), the embedding text is augmented with this
+    /// metadata for better retrieval, while the stored content is preserved.
     pub async fn index_chunks(&self, chunks: &[DocumentChunk]) -> Result<()> {
-        // Embed chunks
-        let texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        // Build enriched texts for embedding — includes metadata for better recall
+        let texts: Vec<String> = chunks.iter().map(Self::enriched_text).collect();
         let embeddings = self.embedding.embed(&texts).await?;
 
         let mut embedded_chunks: Vec<DocumentChunk> = chunks.to_vec();
@@ -55,6 +59,52 @@ impl HybridSearchEngine {
         Ok(())
     }
 
+    /// Build enriched text for embedding by prepending context and appending
+    /// keywords + hypothetical queries from chunk metadata.
+    fn enriched_text(chunk: &DocumentChunk) -> String {
+        let meta = match &chunk.metadata {
+            Some(m) => m,
+            None => return chunk.content.clone(),
+        };
+
+        let has_enrichment = meta.context_prefix.is_some()
+            || meta.keywords.as_ref().is_some_and(|k| !k.is_empty())
+            || meta.hypothetical_queries.as_ref().is_some_and(|h| !h.is_empty());
+
+        if !has_enrichment {
+            return chunk.content.clone();
+        }
+
+        let mut text = String::new();
+
+        // Prepend context (e.g., "From: Tax Policy 2025, Section 3.2")
+        if let Some(ref ctx) = meta.context_prefix {
+            text.push_str(ctx);
+            text.push('\n');
+        }
+
+        // Main content
+        text.push_str(&chunk.content);
+
+        // Append keywords for broader term matching
+        if let Some(ref kw) = meta.keywords {
+            if !kw.is_empty() {
+                text.push_str("\nKeywords: ");
+                text.push_str(&kw.join(", "));
+            }
+        }
+
+        // Append hypothetical queries (HyDE) for query-aware embedding
+        if let Some(ref hq) = meta.hypothetical_queries {
+            if !hq.is_empty() {
+                text.push_str("\nQueries: ");
+                text.push_str(&hq.join(" | "));
+            }
+        }
+
+        text
+    }
+
     /// Hybrid search: parallel vector + BM25, RRF merge, rerank.
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         // Embed the query
@@ -66,6 +116,7 @@ impl HybridSearchEngine {
             text: query.text.clone(),
             top_k: self.config.top_k,
             workspace_ids: query.workspace_ids.clone(),
+            unrestricted: query.unrestricted,
         };
         let text_query = vector_query.clone();
 
@@ -183,6 +234,7 @@ mod tests {
                 content: format!("chunk-{id}"),
                 chunk_index: 0,
                 embedding: None,
+                metadata: None,
             },
             score,
         }

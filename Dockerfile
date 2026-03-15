@@ -1,5 +1,5 @@
 # ── Builder ────────────────────────────────────────────────────────────
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
 
@@ -33,7 +33,10 @@ RUN cargo build --release -p thairag-api 2>/dev/null || true
 # 4. Copy real source and rebuild
 COPY crates/ crates/
 COPY config/ config/
-RUN cargo build --release -p thairag-api
+COPY prompts/ prompts/
+# Touch all source files to invalidate cargo's fingerprint cache from the stub build
+RUN find crates/ -name "*.rs" -exec touch {} + && \
+    cargo build --release -p thairag-api
 
 # ── Runtime ────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -44,6 +47,7 @@ RUN apt-get update && \
 
 COPY --from=builder /app/target/release/thairag-api /usr/local/bin/thairag-api
 COPY --from=builder /app/config/ /app/config/
+COPY --from=builder /app/prompts/ /app/prompts/
 
 WORKDIR /app
 

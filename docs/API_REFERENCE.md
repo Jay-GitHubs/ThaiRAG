@@ -1,0 +1,646 @@
+# API Reference
+
+Base URL: `http://localhost:8080`
+
+All protected endpoints require `Authorization: Bearer <jwt-token>` header.
+
+---
+
+## Health & Metrics
+
+### `GET /health`
+
+Health check endpoint.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `deep` | bool | If `true`, probes all providers (LLM, embedding, vector DB) |
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "providers": {
+    "llm": { "status": "ok" },
+    "embedding": { "status": "ok" },
+    "vector_store": { "status": "ok" },
+    "text_search": { "status": "ok" },
+    "reranker": { "status": "ok" }
+  }
+}
+```
+
+### `GET /metrics`
+
+Prometheus-format metrics.
+
+---
+
+## Authentication
+
+### `POST /api/auth/register`
+
+Register a new user. The first user becomes super admin.
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123",
+  "name": "User Name"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "name": "User Name",
+  "role": "viewer",
+  "auth_provider": "local",
+  "is_super_admin": false
+}
+```
+
+**Password Requirements:** Minimum 8 characters, must contain uppercase, lowercase, and digit.
+
+### `POST /api/auth/login`
+
+Authenticate and receive a JWT token.
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "eyJ...",
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "User Name",
+    "role": "super_admin"
+  }
+}
+```
+
+**Error:** `429 Too Many Requests` after too many failed attempts (brute-force protection).
+
+### `GET /api/auth/providers`
+
+List enabled identity providers (public, no auth required). Used by the login page to display SSO buttons.
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Corporate SSO",
+    "provider_type": "oidc"
+  }
+]
+```
+
+### `POST /api/auth/ldap` *(stubbed — returns 501)*
+
+LDAP authentication.
+
+### `GET /api/auth/oauth/{provider_id}/authorize` *(stubbed — returns 501)*
+
+OAuth2/OIDC authorization redirect.
+
+### `GET /api/auth/oauth/callback` *(stubbed — returns 501)*
+
+OAuth2/OIDC callback handler.
+
+---
+
+## OpenAI-Compatible API
+
+### `GET /v1/models`
+
+List available models.
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "ThaiRAG-1.0",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "thairag"
+    }
+  ]
+}
+```
+
+### `POST /v1/chat/completions`
+
+Chat completion (streaming and non-streaming). **Auth required.**
+
+**Request:**
+```json
+{
+  "model": "ThaiRAG-1.0",
+  "messages": [
+    { "role": "user", "content": "What is ThaiRAG?" }
+  ],
+  "stream": false,
+  "session_id": "optional-uuid"
+}
+```
+
+**Non-Streaming Response:**
+```json
+{
+  "id": "chatcmpl-uuid",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "ThaiRAG-1.0",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "ThaiRAG is..." },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 150,
+    "completion_tokens": 200,
+    "total_tokens": 350
+  }
+}
+```
+
+**Streaming Response:** Server-Sent Events (SSE)
+```
+data: {"id":"chatcmpl-uuid","choices":[{"delta":{"content":"Thai"},"index":0}]}
+
+data: {"id":"chatcmpl-uuid","choices":[{"delta":{"content":"RAG"},"index":0}]}
+
+data: {"id":"chatcmpl-uuid","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":150,"completion_tokens":200,"total_tokens":350}}
+
+data: [DONE]
+```
+
+### `POST /v1/chat/feedback`
+
+Submit feedback for a chat response. **Auth required.**
+
+**Request:**
+```json
+{
+  "response_id": "chatcmpl-uuid",
+  "thumbs_up": true,
+  "comment": "Optional feedback comment",
+  "query": "The original question",
+  "answer": "The response that was given",
+  "workspace_id": "optional-workspace-uuid",
+  "doc_ids": ["doc-uuid-1"],
+  "chunk_ids": ["chunk-uuid-1"],
+  "chunk_scores": [0.85]
+}
+```
+
+**Response:** `200 OK`
+```json
+{ "status": "ok" }
+```
+
+---
+
+## Knowledge Management
+
+All KM routes are under `/api/km` and require authentication.
+
+### Organizations
+
+#### `GET /api/km/orgs`
+List all organizations.
+
+#### `POST /api/km/orgs`
+Create an organization.
+```json
+{ "name": "Acme Corp" }
+```
+
+#### `GET /api/km/orgs/{org_id}`
+Get a single organization.
+
+#### `DELETE /api/km/orgs/{org_id}`
+Delete an organization (cascades to departments, workspaces, documents).
+
+### Departments
+
+#### `GET /api/km/orgs/{org_id}/depts`
+List departments in an organization.
+
+#### `POST /api/km/orgs/{org_id}/depts`
+Create a department.
+```json
+{ "name": "Engineering" }
+```
+
+#### `GET /api/km/orgs/{org_id}/depts/{dept_id}`
+Get a single department.
+
+#### `DELETE /api/km/orgs/{org_id}/depts/{dept_id}`
+Delete a department (cascades).
+
+### Workspaces
+
+#### `GET /api/km/orgs/{org_id}/depts/{dept_id}/workspaces`
+List workspaces in a department.
+
+#### `POST /api/km/orgs/{org_id}/depts/{dept_id}/workspaces`
+Create a workspace.
+```json
+{ "name": "Knowledge Base" }
+```
+
+#### `GET /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}`
+Get a single workspace.
+
+#### `DELETE /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}`
+Delete a workspace (cascades to documents).
+
+### Permissions
+
+Permissions can be managed at organization, department, or workspace level.
+
+#### `GET /api/km/orgs/{org_id}/permissions`
+#### `POST /api/km/orgs/{org_id}/permissions`
+#### `DELETE /api/km/orgs/{org_id}/permissions`
+
+#### `GET /api/km/orgs/{org_id}/depts/{dept_id}/permissions`
+#### `POST /api/km/orgs/{org_id}/depts/{dept_id}/permissions`
+#### `DELETE /api/km/orgs/{org_id}/depts/{dept_id}/permissions`
+
+#### `GET /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions`
+#### `POST /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions`
+#### `DELETE /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}/permissions`
+
+**Grant Request:**
+```json
+{ "user_id": "uuid" }
+```
+
+**Revoke Request:**
+```json
+{ "user_id": "uuid" }
+```
+
+### Users
+
+#### `GET /api/km/users`
+List all users.
+
+#### `DELETE /api/km/users/{user_id}`
+Delete a user. Returns 403 if the user is a super admin.
+
+---
+
+## Documents
+
+### `GET /api/km/workspaces/{workspace_id}/documents`
+List documents in a workspace.
+
+**Query Parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `page` | u32 | 1 | Page number |
+| `per_page` | u32 | 20 | Items per page |
+
+### `POST /api/km/workspaces/{workspace_id}/documents`
+Create a document from raw text.
+
+```json
+{
+  "title": "My Document",
+  "content": "Document text content...",
+  "format": "text/plain"
+}
+```
+
+### `POST /api/km/workspaces/{workspace_id}/documents/upload`
+Upload a file. **Multipart form data.**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | The document file |
+| `title` | string | Optional title (defaults to filename) |
+
+**Supported formats:** `text/plain`, `text/markdown`, `text/csv`, `text/html`, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (DOCX), `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (XLSX)
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}`
+Get document metadata.
+
+### `DELETE /api/km/workspaces/{workspace_id}/documents/{doc_id}`
+Delete a document and all its chunks.
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/content`
+Get the extracted text content.
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/download`
+Download the original file.
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/chunks`
+List chunks for a document.
+
+### `POST /api/km/workspaces/{workspace_id}/documents/{doc_id}/reprocess`
+Re-chunk and re-embed a document.
+
+---
+
+## Test Query
+
+### `POST /api/km/workspaces/{workspace_id}/test-query`
+
+Run a search + RAG answer against a specific workspace. Returns retrieved chunks with scores, timing, and provider info.
+
+**Request:**
+```json
+{ "query": "How does authentication work?" }
+```
+
+**Response:**
+```json
+{
+  "response_id": "uuid",
+  "query": "How does authentication work?",
+  "chunks": [
+    {
+      "chunk_id": "uuid",
+      "doc_id": "uuid",
+      "content": "Authentication is handled via...",
+      "score": 0.92,
+      "chunk_index": 3,
+      "page_numbers": [5],
+      "section_title": "Authentication",
+      "doc_title": "Security Guide"
+    }
+  ],
+  "answer": "Authentication works by...",
+  "usage": {
+    "prompt_tokens": 200,
+    "completion_tokens": 150,
+    "total_tokens": 350,
+    "chunks_retrieved": 5
+  },
+  "timing": {
+    "search_ms": 45,
+    "generation_ms": 1200,
+    "total_ms": 1250
+  },
+  "provider_info": {
+    "llm_kind": "claude",
+    "llm_model": "claude-sonnet-4-20250514",
+    "embedding_kind": "openai",
+    "embedding_model": "text-embedding-3-small"
+  }
+}
+```
+
+---
+
+## Settings (Super Admin)
+
+All settings routes are under `/api/km/settings` and require super admin access.
+
+### Identity Providers
+
+#### `GET /api/km/settings/identity-providers`
+List all configured identity providers.
+
+#### `POST /api/km/settings/identity-providers`
+Create an identity provider.
+```json
+{
+  "name": "Corporate OIDC",
+  "provider_type": "oidc",
+  "enabled": true,
+  "config": {
+    "issuer_url": "https://auth.example.com",
+    "client_id": "thairag",
+    "client_secret": "secret",
+    "scopes": "openid profile email",
+    "redirect_uri": "http://localhost:8080/api/auth/oauth/callback"
+  }
+}
+```
+
+#### `GET /api/km/settings/identity-providers/{id}`
+Get a single identity provider.
+
+#### `PUT /api/km/settings/identity-providers/{id}`
+Update an identity provider.
+
+#### `DELETE /api/km/settings/identity-providers/{id}`
+Delete an identity provider.
+
+#### `POST /api/km/settings/identity-providers/{id}/test`
+Test connectivity to the identity provider.
+
+### Provider Configuration
+
+#### `GET /api/km/settings/providers`
+Get current provider configuration.
+
+#### `PUT /api/km/settings/providers`
+Update provider configuration.
+
+#### `GET /api/km/settings/providers/models`
+List available models from configured providers.
+
+#### `POST /api/km/settings/providers/models/sync`
+Sync model list from LLM provider.
+
+#### `POST /api/km/settings/providers/embedding-models/sync`
+Sync model list from embedding provider.
+
+#### `POST /api/km/settings/providers/reranker-models/sync`
+Sync model list from reranker provider.
+
+### Document Configuration
+
+#### `GET /api/km/settings/document`
+Get document processing configuration.
+
+#### `PUT /api/km/settings/document`
+Update document processing configuration.
+
+### Chat Pipeline
+
+#### `GET /api/km/settings/chat-pipeline`
+Get chat pipeline configuration.
+
+#### `PUT /api/km/settings/chat-pipeline`
+Update chat pipeline configuration.
+
+### Presets
+
+#### `GET /api/km/settings/presets`
+List available configuration presets.
+
+#### `POST /api/km/settings/presets/apply`
+Apply a preset configuration.
+```json
+{ "preset": "standard" }
+```
+
+### Ollama Management
+
+#### `GET /api/km/settings/ollama/models`
+List downloaded Ollama models.
+
+#### `POST /api/km/settings/ollama/pull`
+Pull a new Ollama model.
+```json
+{ "model": "llama3.2" }
+```
+
+### Prompts
+
+#### `GET /api/km/settings/prompts`
+List all prompt templates.
+
+#### `GET /api/km/settings/prompts/{key}`
+Get a specific prompt template.
+
+#### `PUT /api/km/settings/prompts/{key}`
+Override a prompt template.
+```json
+{ "content": "You are a helpful assistant..." }
+```
+
+#### `DELETE /api/km/settings/prompts/{key}`
+Delete a prompt override (reverts to default).
+
+### Feedback & Tuning
+
+#### `GET /api/km/settings/feedback/stats`
+Get feedback statistics.
+
+**Response:**
+```json
+{
+  "total": 100,
+  "positive": 75,
+  "negative": 25,
+  "satisfaction_rate": 0.75,
+  "adaptive_threshold": 0.65
+}
+```
+
+#### `GET /api/km/settings/feedback/entries`
+List feedback entries with pagination and filtering.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `page` | u32 | Page number |
+| `per_page` | u32 | Items per page |
+| `filter` | string | `all`, `positive`, `negative` |
+| `workspace_id` | string | Filter by workspace |
+
+#### `GET /api/km/settings/feedback/document-boosts`
+Get per-document boost/penalty multipliers.
+
+#### `GET /api/km/settings/feedback/golden-examples`
+List golden Q&A examples.
+
+#### `POST /api/km/settings/feedback/golden-examples`
+Create a golden example.
+```json
+{
+  "query": "What is ThaiRAG?",
+  "answer": "ThaiRAG is a production-ready RAG platform...",
+  "workspace_id": "optional-uuid"
+}
+```
+
+#### `DELETE /api/km/settings/feedback/golden-examples`
+Delete a golden example.
+```json
+{ "id": "example-id" }
+```
+
+#### `GET /api/km/settings/feedback/retrieval-params`
+Get current retrieval parameters and suggestions.
+
+**Response:**
+```json
+{
+  "top_k": 5,
+  "rrf_k": 60,
+  "vector_weight": 0.6,
+  "bm25_weight": 0.4,
+  "min_score_threshold": 0.0,
+  "auto_tuned": false,
+  "suggested": {
+    "top_k": 7,
+    "vector_weight": 0.65,
+    "bm25_weight": 0.35,
+    "reason": "Feedback suggests increasing retrieval depth"
+  }
+}
+```
+
+#### `PUT /api/km/settings/feedback/retrieval-params`
+Update retrieval parameters.
+
+### Audit Log
+
+#### `GET /api/km/settings/audit-log`
+Get audit log entries.
+
+### Usage Stats
+
+#### `GET /api/km/settings/usage`
+Get usage statistics.
+
+---
+
+## Error Responses
+
+All errors follow a consistent format:
+
+```json
+{
+  "error": {
+    "type": "validation",
+    "message": "query must not be empty"
+  }
+}
+```
+
+| HTTP Status | Error Type | Description |
+|-------------|-----------|-------------|
+| 400 | `validation` | Invalid request data |
+| 401 | `authentication` | Missing or invalid JWT |
+| 403 | `authorization` | Insufficient permissions |
+| 404 | `not_found` | Resource not found |
+| 429 | `rate_limit` | Rate limit exceeded |
+| 500 | `internal` | Server error |
+
+---
+
+## Rate Limiting
+
+Rate limiting uses a per-IP token bucket algorithm:
+- Default: 10 requests/second with burst of 20
+- Health and metrics endpoints are exempt
+- Returns `429 Too Many Requests` with `Retry-After` header when exceeded
+
+## CSRF Protection
+
+State-changing endpoints (POST, PUT, DELETE) on protected routes require a valid auth token. The CSRF middleware validates the presence of the `Authorization` header to prevent cross-site request forgery.

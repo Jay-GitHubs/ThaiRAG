@@ -3,10 +3,11 @@ use std::sync::Mutex;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
 use thairag_core::models::{
-    Department, Document, Organization, PermissionScope, User, UserPermission, Workspace,
+    Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
+    UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
 use thairag_core::ThaiRagError;
 use uuid::Uuid;
 
@@ -30,6 +31,22 @@ impl SqliteKmStore {
         conn.execute_batch(schema)
             .map_err(|e| ThaiRagError::Config(format!("SQLite schema failed: {e}")))?;
 
+        // Migrations for existing databases — add columns if missing
+        for stmt in &[
+            "ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'local'",
+            "ALTER TABLE users ADD COLUMN external_id TEXT",
+            "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
+            "ALTER TABLE documents ADD COLUMN processing_step TEXT",
+        ] {
+            let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
+        }
+
+        // Fix existing super admins that have default 'viewer' role
+        let _ = conn.execute_batch(
+            "UPDATE users SET role = 'super_admin' WHERE is_super_admin = 1 AND role = 'viewer'"
+        );
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -50,6 +67,33 @@ fn ts(dt: &DateTime<Utc>) -> String {
 
 fn parse_uuid(s: &str) -> Uuid {
     s.parse().unwrap_or_default()
+}
+
+fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
+    let id_s: String = row.get(0)?;
+    let ws_s: String = row.get(1)?;
+    let title: String = row.get(2)?;
+    let mime: String = row.get(3)?;
+    let size: i64 = row.get(4)?;
+    let status_s: String = row.get(5)?;
+    let chunk_count: i64 = row.get(6)?;
+    let error_message: Option<String> = row.get(7)?;
+    let processing_step: Option<String> = row.get(8)?;
+    let ca: String = row.get(9)?;
+    let ua: String = row.get(10)?;
+    Ok(Document {
+        id: DocId(parse_uuid(&id_s)),
+        workspace_id: WorkspaceId(parse_uuid(&ws_s)),
+        title,
+        mime_type: mime,
+        size_bytes: size,
+        status: DocStatus::from_str_lossy(&status_s),
+        chunk_count,
+        error_message,
+        processing_step,
+        created_at: parse_ts(&ca),
+        updated_at: parse_ts(&ua),
+    })
 }
 
 fn scope_to_parts(scope: &PermissionScope) -> (&str, String, String, String) {
@@ -329,6 +373,30 @@ impl KmStoreTrait for SqliteKmStore {
         .collect()
     }
 
+    fn list_workspaces_all(&self) -> Vec<Workspace> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, dept_id, name, created_at, updated_at FROM workspaces")
+            .unwrap();
+        stmt.query_map([], |row| {
+            let id_s: String = row.get(0)?;
+            let dept_s: String = row.get(1)?;
+            let name: String = row.get(2)?;
+            let ca: String = row.get(3)?;
+            let ua: String = row.get(4)?;
+            Ok(Workspace {
+                id: WorkspaceId(parse_uuid(&id_s)),
+                dept_id: DeptId(parse_uuid(&dept_s)),
+                name,
+                created_at: parse_ts(&ca),
+                updated_at: parse_ts(&ua),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
     fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
@@ -346,13 +414,17 @@ impl KmStoreTrait for SqliteKmStore {
         self.get_workspace(doc.workspace_id)?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 doc.id.0.to_string(),
                 doc.workspace_id.0.to_string(),
                 doc.title,
                 doc.mime_type,
                 doc.size_bytes,
+                doc.status.to_string(),
+                doc.chunk_count,
+                doc.error_message,
+                doc.processing_step,
                 ts(&doc.created_at),
                 ts(&doc.updated_at),
             ],
@@ -364,26 +436,9 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_document(&self, id: DocId) -> Result<Document> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, title, mime_type, size_bytes, created_at, updated_at FROM documents WHERE id = ?1",
+            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE id = ?1",
             params![id.0.to_string()],
-            |row| {
-                let id_s: String = row.get(0)?;
-                let ws_s: String = row.get(1)?;
-                let title: String = row.get(2)?;
-                let mime: String = row.get(3)?;
-                let size: i64 = row.get(4)?;
-                let ca: String = row.get(5)?;
-                let ua: String = row.get(6)?;
-                Ok(Document {
-                    id: DocId(parse_uuid(&id_s)),
-                    workspace_id: WorkspaceId(parse_uuid(&ws_s)),
-                    title,
-                    mime_type: mime,
-                    size_bytes: size,
-                    created_at: parse_ts(&ca),
-                    updated_at: parse_ts(&ua),
-                })
-            },
+            doc_from_row,
         )
         .map_err(|_| ThaiRagError::NotFound(format!("Document {id} not found")))
     }
@@ -391,29 +446,52 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, created_at, updated_at FROM documents WHERE workspace_id = ?1")
+            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE workspace_id = ?1")
             .unwrap();
-        stmt.query_map(params![workspace_id.0.to_string()], |row| {
-            let id_s: String = row.get(0)?;
-            let ws_s: String = row.get(1)?;
-            let title: String = row.get(2)?;
-            let mime: String = row.get(3)?;
-            let size: i64 = row.get(4)?;
-            let ca: String = row.get(5)?;
-            let ua: String = row.get(6)?;
-            Ok(Document {
-                id: DocId(parse_uuid(&id_s)),
-                workspace_id: WorkspaceId(parse_uuid(&ws_s)),
-                title,
-                mime_type: mime,
-                size_bytes: size,
-                created_at: parse_ts(&ca),
-                updated_at: parse_ts(&ua),
-            })
-        })
-        .unwrap()
-        .filter_map(|r| r.ok())
-        .collect()
+        stmt.query_map(params![workspace_id.0.to_string()], doc_from_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    fn update_document_status(
+        &self,
+        id: DocId,
+        status: DocStatus,
+        chunk_count: i64,
+        error_message: Option<String>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE documents SET status = ?1, chunk_count = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?5",
+                params![
+                    status.to_string(),
+                    chunk_count,
+                    error_message,
+                    ts(&Utc::now()),
+                    id.0.to_string(),
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update document status: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE documents SET processing_step = ?1, updated_at = ?2 WHERE id = ?3",
+                params![step, ts(&Utc::now()), id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update document step: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
     }
 
     fn delete_document(&self, id: DocId) -> Result<()> {
@@ -427,6 +505,63 @@ impl KmStoreTrait for SqliteKmStore {
         Ok(())
     }
 
+    fn save_document_blob(
+        &self,
+        doc_id: DocId,
+        original_bytes: Option<Vec<u8>>,
+        converted_text: Option<String>,
+        image_count: i32,
+        table_count: i32,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&Utc::now());
+        conn.execute(
+            "INSERT INTO document_blobs (doc_id, original_bytes, converted_text, image_count, table_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(doc_id) DO UPDATE SET original_bytes = ?2, converted_text = ?3, image_count = ?4, table_count = ?5",
+            params![
+                doc_id.0.to_string(),
+                original_bytes,
+                converted_text,
+                image_count,
+                table_count,
+                now,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite save document blob: {e}")))?;
+        Ok(())
+    }
+
+    fn get_document_content(&self, doc_id: DocId) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT converted_text FROM document_blobs WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
+    }
+
+    fn get_document_file(&self, doc_id: DocId) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT original_bytes FROM document_blobs WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
+    }
+
+    fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT image_count, table_count FROM document_blobs WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
+    }
+
     // ── User ──────────────────────────────────────────────────────────
 
     fn insert_user(
@@ -438,7 +573,6 @@ impl KmStoreTrait for SqliteKmStore {
         let email_lower = email.to_lowercase();
         let conn = self.conn.lock().unwrap();
 
-        // Check uniqueness
         let exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM users WHERE email = ?1",
@@ -457,15 +591,23 @@ impl KmStoreTrait for SqliteKmStore {
             id: UserId::new(),
             email: email_lower.clone(),
             name,
+            auth_provider: "local".into(),
+            external_id: None,
+            is_super_admin: false,
+            role: "viewer".into(),
             created_at: Utc::now(),
         };
         conn.execute(
-            "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 user.id.0.to_string(),
                 user.email,
                 user.name,
                 password_hash,
+                user.auth_provider,
+                user.external_id,
+                user.is_super_admin as i32,
+                user.role,
                 ts(&user.created_at),
             ],
         )
@@ -473,23 +615,99 @@ impl KmStoreTrait for SqliteKmStore {
         Ok(user)
     }
 
+    fn upsert_user_by_email(
+        &self,
+        email: String,
+        name: String,
+        password_hash: String,
+        is_super_admin: bool,
+        role: String,
+    ) -> Result<User> {
+        let email_lower = email.to_lowercase();
+        let conn = self.conn.lock().unwrap();
+
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM users WHERE email = ?1",
+                params![email_lower],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(id_s) = existing {
+            conn.execute(
+                "UPDATE users SET name = ?1, password_hash = ?2, is_super_admin = ?3, role = ?4 WHERE id = ?5",
+                params![name, password_hash, is_super_admin as i32, role, id_s],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite upsert user: {e}")))?;
+            drop(conn);
+            return self.get_user(UserId(parse_uuid(&id_s)));
+        }
+
+        let user = User {
+            id: UserId::new(),
+            email: email_lower.clone(),
+            name,
+            auth_provider: "local".into(),
+            external_id: None,
+            is_super_admin,
+            role,
+            created_at: Utc::now(),
+        };
+        conn.execute(
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                user.id.0.to_string(),
+                user.email,
+                user.name,
+                password_hash,
+                user.auth_provider,
+                user.external_id,
+                user.is_super_admin as i32,
+                user.role,
+                ts(&user.created_at),
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite upsert user insert: {e}")))?;
+        Ok(user)
+    }
+
+    fn delete_user(&self, id: UserId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute("DELETE FROM users WHERE id = ?1", params![id.0.to_string()])
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite delete user: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("User {id} not found")));
+        }
+        Ok(())
+    }
+
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
         let email_lower = email.to_lowercase();
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?1",
+            "SELECT id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE email = ?1",
             params![email_lower],
             |row| {
                 let id_s: String = row.get(0)?;
                 let email: String = row.get(1)?;
                 let name: String = row.get(2)?;
                 let pw: String = row.get(3)?;
-                let ca: String = row.get(4)?;
+                let auth_provider: String = row.get(4)?;
+                let external_id: Option<String> = row.get(5)?;
+                let is_super_admin: i32 = row.get(6)?;
+                let role: String = row.get(7)?;
+                let ca: String = row.get(8)?;
                 Ok(UserRecord {
                     user: User {
                         id: UserId(parse_uuid(&id_s)),
                         email,
                         name,
+                        auth_provider,
+                        external_id,
+                        is_super_admin: is_super_admin != 0,
+                        role,
                         created_at: parse_ts(&ca),
                     },
                     password_hash: pw,
@@ -502,22 +720,199 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_user(&self, id: UserId) -> Result<User> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, name, created_at FROM users WHERE id = ?1",
+            "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE id = ?1",
             params![id.0.to_string()],
             |row| {
                 let id_s: String = row.get(0)?;
                 let email: String = row.get(1)?;
                 let name: String = row.get(2)?;
-                let ca: String = row.get(3)?;
+                let auth_provider: String = row.get(3)?;
+                let external_id: Option<String> = row.get(4)?;
+                let is_super_admin: i32 = row.get(5)?;
+                let role: String = row.get(6)?;
+                let ca: String = row.get(7)?;
                 Ok(User {
                     id: UserId(parse_uuid(&id_s)),
                     email,
                     name,
+                    auth_provider,
+                    external_id,
+                    is_super_admin: is_super_admin != 0,
+                    role,
                     created_at: parse_ts(&ca),
                 })
             },
         )
         .map_err(|_| ThaiRagError::NotFound(format!("User {id} not found")))
+    }
+
+    fn list_users(&self) -> Vec<User> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users")
+            .unwrap();
+        stmt.query_map([], |row| {
+            let id_s: String = row.get(0)?;
+            let email: String = row.get(1)?;
+            let name: String = row.get(2)?;
+            let auth_provider: String = row.get(3)?;
+            let external_id: Option<String> = row.get(4)?;
+            let is_super_admin: i32 = row.get(5)?;
+            let role: String = row.get(6)?;
+            let ca: String = row.get(7)?;
+            Ok(User {
+                id: UserId(parse_uuid(&id_s)),
+                email,
+                name,
+                auth_provider,
+                external_id,
+                is_super_admin: is_super_admin != 0,
+                role,
+                created_at: parse_ts(&ca),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    // ── Identity Providers ──────────────────────────────────────────
+
+    fn list_identity_providers(&self) -> Vec<IdentityProvider> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, provider_type, enabled, config_json, created_at, updated_at FROM identity_providers")
+            .unwrap();
+        stmt.query_map([], |row| {
+            let id_s: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let pt: String = row.get(2)?;
+            let enabled: i32 = row.get(3)?;
+            let config_json: String = row.get(4)?;
+            let ca: String = row.get(5)?;
+            let ua: String = row.get(6)?;
+            Ok(IdentityProvider {
+                id: IdpId(parse_uuid(&id_s)),
+                name,
+                provider_type: pt,
+                enabled: enabled != 0,
+                config: serde_json::from_str(&config_json).unwrap_or_default(),
+                created_at: parse_ts(&ca),
+                updated_at: parse_ts(&ua),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn list_enabled_identity_providers(&self) -> Vec<IdentityProvider> {
+        self.list_identity_providers()
+            .into_iter()
+            .filter(|p| p.enabled)
+            .collect()
+    }
+
+    fn get_identity_provider(&self, id: IdpId) -> Result<IdentityProvider> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, provider_type, enabled, config_json, created_at, updated_at FROM identity_providers WHERE id = ?1",
+            params![id.0.to_string()],
+            |row| {
+                let id_s: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let pt: String = row.get(2)?;
+                let enabled: i32 = row.get(3)?;
+                let config_json: String = row.get(4)?;
+                let ca: String = row.get(5)?;
+                let ua: String = row.get(6)?;
+                Ok(IdentityProvider {
+                    id: IdpId(parse_uuid(&id_s)),
+                    name,
+                    provider_type: pt,
+                    enabled: enabled != 0,
+                    config: serde_json::from_str(&config_json).unwrap_or_default(),
+                    created_at: parse_ts(&ca),
+                    updated_at: parse_ts(&ua),
+                })
+            },
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Identity provider {id} not found")))
+    }
+
+    fn insert_identity_provider(
+        &self,
+        name: String,
+        provider_type: String,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> Result<IdentityProvider> {
+        let now = Utc::now();
+        let idp = IdentityProvider {
+            id: IdpId::new(),
+            name,
+            provider_type,
+            enabled,
+            config: config.clone(),
+            created_at: now,
+            updated_at: now,
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO identity_providers (id, name, provider_type, enabled, config_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                idp.id.0.to_string(),
+                idp.name,
+                idp.provider_type,
+                idp.enabled as i32,
+                serde_json::to_string(&config).unwrap_or_default(),
+                ts(&now),
+                ts(&now),
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite insert idp: {e}")))?;
+        Ok(idp)
+    }
+
+    fn update_identity_provider(
+        &self,
+        id: IdpId,
+        name: String,
+        provider_type: String,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> Result<IdentityProvider> {
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE identity_providers SET name = ?1, provider_type = ?2, enabled = ?3, config_json = ?4, updated_at = ?5 WHERE id = ?6",
+                params![
+                    name,
+                    provider_type,
+                    enabled as i32,
+                    serde_json::to_string(&config).unwrap_or_default(),
+                    ts(&now),
+                    id.0.to_string(),
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update idp: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+        }
+        drop(conn);
+        self.get_identity_provider(id)
+    }
+
+    fn delete_identity_provider(&self, id: IdpId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute("DELETE FROM identity_providers WHERE id = ?1", params![id.0.to_string()])
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite delete idp: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+        }
+        Ok(())
     }
 
     // ── Permissions ─────────────────────────────────────────────────
@@ -616,6 +1011,97 @@ impl KmStoreTrait for SqliteKmStore {
             .filter_map(|r| r.ok())
             .collect();
         roles.into_iter().max()
+    }
+
+    fn get_user_role_for_dept(
+        &self,
+        user_id: UserId,
+        org_id: OrgId,
+        dept_id: DeptId,
+    ) -> Option<Role> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT role FROM permissions WHERE user_id = ?1 AND org_id = ?2 \
+                 AND ((scope_level = 'Org') OR (scope_level = 'Dept' AND dept_id = ?3))",
+            )
+            .unwrap();
+        let roles: Vec<Role> = stmt
+            .query_map(
+                params![
+                    user_id.0.to_string(),
+                    org_id.0.to_string(),
+                    dept_id.0.to_string()
+                ],
+                |row| {
+                    let r: String = row.get(0)?;
+                    Ok(parse_role(&r))
+                },
+            )
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        roles.into_iter().max()
+    }
+
+    fn get_user_role_for_workspace(
+        &self,
+        user_id: UserId,
+        org_id: OrgId,
+        dept_id: DeptId,
+        workspace_id: WorkspaceId,
+    ) -> Option<Role> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT role FROM permissions WHERE user_id = ?1 AND org_id = ?2 \
+                 AND ((scope_level = 'Org') \
+                  OR (scope_level = 'Dept' AND dept_id = ?3) \
+                  OR (scope_level = 'Workspace' AND dept_id = ?3 AND workspace_id = ?4))",
+            )
+            .unwrap();
+        let roles: Vec<Role> = stmt
+            .query_map(
+                params![
+                    user_id.0.to_string(),
+                    org_id.0.to_string(),
+                    dept_id.0.to_string(),
+                    workspace_id.0.to_string()
+                ],
+                |row| {
+                    let r: String = row.get(0)?;
+                    Ok(parse_role(&r))
+                },
+            )
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        roles.into_iter().max()
+    }
+
+    fn list_user_permissions(&self, user_id: UserId) -> Vec<UserPermission> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT scope_level, org_id, dept_id, workspace_id, role \
+                 FROM permissions WHERE user_id = ?1",
+            )
+            .unwrap();
+        stmt.query_map(params![user_id.0.to_string()], |row| {
+            let level: String = row.get(0)?;
+            let oid: String = row.get(1)?;
+            let did: String = row.get(2)?;
+            let wid: String = row.get(3)?;
+            let role_str: String = row.get(4)?;
+            Ok(UserPermission {
+                user_id,
+                scope: parts_to_scope(&level, &oid, &did, &wid),
+                role: parse_role(&role_str),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
     }
 
     fn get_user_workspace_ids(&self, user_id: UserId) -> Vec<WorkspaceId> {
@@ -784,6 +1270,32 @@ impl KmStoreTrait for SqliteKmStore {
         self.delete_org(org_id)?;
         Ok(all_doc_ids)
     }
+
+    fn get_setting(&self, key: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    fn set_setting(&self, key: &str, value: &str) {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
+            params![key, value, now],
+        )
+        .ok();
+    }
+
+    fn delete_setting(&self, key: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM settings WHERE key = ?1", params![key]).ok();
+    }
 }
 
 #[cfg(test)]
@@ -849,6 +1361,10 @@ mod tests {
             title: "readme".into(),
             mime_type: "text/plain".into(),
             size_bytes: 42,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };
@@ -866,6 +1382,8 @@ mod tests {
             .insert_user("Alice@Example.com".into(), "Alice".into(), "hash123".into())
             .unwrap();
         assert_eq!(user.email, "alice@example.com");
+        assert_eq!(user.auth_provider, "local");
+        assert!(!user.is_super_admin);
 
         let record = store.get_user_by_email("alice@example.com").unwrap();
         assert_eq!(record.user.id, user.id);
@@ -873,6 +1391,61 @@ mod tests {
 
         let fetched = store.get_user(user.id).unwrap();
         assert_eq!(fetched.name, "Alice");
+    }
+
+    #[test]
+    fn upsert_user_by_email_creates_and_updates() {
+        let store = mem_store();
+        let user = store
+            .upsert_user_by_email("admin@test.com".into(), "Admin".into(), "h1".into(), true, "super_admin".into())
+            .unwrap();
+        assert!(user.is_super_admin);
+        assert_eq!(user.role, "super_admin");
+        assert_eq!(user.email, "admin@test.com");
+
+        let updated = store
+            .upsert_user_by_email("admin@test.com".into(), "Admin Updated".into(), "h2".into(), true, "super_admin".into())
+            .unwrap();
+        assert_eq!(updated.id, user.id);
+        assert_eq!(updated.name, "Admin Updated");
+    }
+
+    #[test]
+    fn delete_user_works() {
+        let store = mem_store();
+        let user = store.insert_user("del@test.com".into(), "Del".into(), "h".into()).unwrap();
+        store.delete_user(user.id).unwrap();
+        assert!(store.get_user(user.id).is_err());
+    }
+
+    #[test]
+    fn identity_provider_crud() {
+        let store = mem_store();
+        let idp = store
+            .insert_identity_provider(
+                "Google".into(),
+                "oidc".into(),
+                true,
+                serde_json::json!({"issuer_url": "https://accounts.google.com"}),
+            )
+            .unwrap();
+        assert_eq!(idp.name, "Google");
+        assert!(idp.enabled);
+
+        let fetched = store.get_identity_provider(idp.id).unwrap();
+        assert_eq!(fetched.provider_type, "oidc");
+
+        let updated = store
+            .update_identity_provider(idp.id, "Google SSO".into(), "oidc".into(), false, serde_json::json!({}))
+            .unwrap();
+        assert_eq!(updated.name, "Google SSO");
+        assert!(!updated.enabled);
+
+        assert_eq!(store.list_identity_providers().len(), 1);
+        assert_eq!(store.list_enabled_identity_providers().len(), 0);
+
+        store.delete_identity_provider(idp.id).unwrap();
+        assert!(store.get_identity_provider(idp.id).is_err());
     }
 
     #[test]
@@ -955,6 +1528,10 @@ mod tests {
             title: "test".into(),
             mime_type: "text/plain".into(),
             size_bytes: 10,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
             created_at: now,
             updated_at: now,
         };

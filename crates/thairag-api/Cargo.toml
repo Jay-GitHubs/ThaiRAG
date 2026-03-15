@@ -32,9 +32,16 @@ uuid = { workspace = true }
 argon2 = { workspace = true }
 password-hash = { workspace = true }
 rusqlite = { workspace = true }
+sqlx = { workspace = true }
 dashmap = { workspace = true }
+prometheus = { workspace = true }
+reqwest = { workspace = true }
+openidconnect = { workspace = true }
+urlencoding = { workspace = true }
+base64 = "0.22"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }
 async-trait = { workspace = true }
+tokio-stream = { workspace = true }

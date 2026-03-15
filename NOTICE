@@ -1,0 +1,13 @@
+ThaiRAG
+Copyright (C) 2026 Anuwat Yodngoen <jdevspecialist@gmail.com>
+
+This product is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See the LICENSE file for the full license text.
+
+This software includes the following components:
+- ThaiRAG Core API (Rust)
+- ThaiRAG Admin UI (React + Ant Design)
+- ThaiRAG Document Processing Pipeline
+- ThaiRAG Hybrid Search Engine (Vector + BM25 + RRF)
+
+For commercial licensing inquiries, contact: jdevspecialist@gmail.com

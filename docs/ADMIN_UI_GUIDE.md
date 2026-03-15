@@ -1,0 +1,352 @@
+# Admin UI Guide
+
+The ThaiRAG Admin UI is a React + Ant Design application for managing the entire ThaiRAG platform. It runs on port 8081 (Docker) or 5173 (dev server).
+
+## Table of Contents
+
+1. [Login](#login)
+2. [Dashboard](#dashboard)
+3. [KM Hierarchy](#km-hierarchy)
+4. [Documents](#documents)
+5. [Test Chat](#test-chat)
+6. [Users](#users)
+7. [Permissions](#permissions)
+8. [Usage & Costs](#usage--costs)
+9. [Feedback & Tuning](#feedback--tuning)
+10. [Settings](#settings)
+11. [Health](#health)
+
+## Access Control
+
+Pages are role-gated:
+
+| Role | Accessible Pages |
+|------|-----------------|
+| `viewer` | Dashboard, Health |
+| `editor` | + KM Hierarchy, Documents, Test Chat |
+| `admin` | + Users, Permissions, Usage & Costs, Feedback & Tuning |
+| `super_admin` | + Settings |
+
+The sidebar menu automatically shows only pages the logged-in user can access.
+
+---
+
+## Login
+
+**Path:** `/login`
+
+Standard email/password login form. On first use, register a new account — the first user automatically becomes a super admin.
+
+If external identity providers are configured (OIDC, OAuth2, SAML, LDAP), their buttons appear below the local login form under a "or sign in with" divider.
+
+- **OIDC/OAuth2/SAML** providers show as redirect buttons
+- **LDAP** providers show an inline username/password form
+
+---
+
+## Dashboard
+
+**Path:** `/` | **Min role:** `viewer`
+
+Overview page showing system status at a glance:
+
+- **KM Statistics** — Total organizations, departments, workspaces, documents, chunks
+- **System Status** — API health, provider connectivity
+- **Recent Activity** — Latest document uploads and user actions
+- **Quick Actions** — Links to common tasks (upload document, create workspace)
+
+---
+
+## KM Hierarchy
+
+**Path:** `/km` | **Min role:** `editor`
+
+Manage the knowledge management hierarchy: **Organizations → Departments → Workspaces**.
+
+### Organizations
+- **Create** — Click "Add Organization", enter name
+- **View** — Click an org to see its departments
+- **Delete** — Delete button with confirmation (cascades to departments and workspaces)
+
+### Departments
+- **Create** — Within an org, click "Add Department"
+- **View** — Click a department to see its workspaces
+- **Delete** — Removes department and all child workspaces
+
+### Workspaces
+- **Create** — Within a department, click "Add Workspace"
+- **View** — Shows workspace details and document count
+- **Delete** — Removes workspace and all associated documents
+
+The page uses a tree/list layout where you drill down through the hierarchy.
+
+---
+
+## Documents
+
+**Path:** `/documents` | **Min role:** `editor`
+
+Manage documents within workspaces.
+
+### Document List
+- Select a workspace from the dropdown to view its documents
+- Table shows: Title, Format, Size, Chunks, Status, Created date
+- Click a document to view its content and chunk details
+
+### Upload
+- Click "Upload Document" to open the upload modal
+- **Supported formats:** PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text
+- Documents are automatically converted, chunked, embedded, and indexed
+- Upload size limit is configurable (default varies by tier)
+
+### Document Actions
+- **View Content** — See the extracted text content
+- **View Chunks** — Browse individual chunks with their metadata (page numbers, section titles, chunk index)
+- **Download** — Download the original file
+- **Reprocess** — Re-chunk and re-embed the document (useful after changing chunk settings)
+- **Delete** — Remove document and all its chunks from vector DB and search index
+
+---
+
+## Test Chat
+
+**Path:** `/test-chat` | **Min role:** `editor`
+
+Interactive chat interface for testing RAG responses against specific workspaces.
+
+### Chat Interface
+1. Select a workspace from the dropdown
+2. Type a query and press Enter or click Send
+3. The response shows:
+   - Generated answer from the RAG pipeline
+   - Retrieved chunks with relevance scores
+   - Timing breakdown (search time, generation time, total)
+   - Token usage (prompt + completion)
+   - Provider info (LLM model, embedding model)
+
+### Feedback Controls
+Each response has three action buttons:
+- **Thumbs Up** — Mark response as good quality (turns green when active)
+- **Thumbs Down** — Mark response as poor quality, opens a comment modal for details
+- **Star** — Save the Q&A pair as a golden example for few-shot learning
+
+Feedback is stored with full context (query, answer, retrieved chunks, scores, workspace ID) and drives the auto-tuning system.
+
+### Session Management
+- Each chat session maintains conversation history (up to 50 messages)
+- Sessions auto-expire after 1 hour of inactivity
+- Start a new session by refreshing or selecting a different workspace
+
+---
+
+## Users
+
+**Path:** `/users` | **Min role:** `admin`
+
+Manage platform users.
+
+### User Table
+Columns:
+- **Email** — User's email address
+- **Name** — Display name
+- **Role** — `viewer`, `editor`, `admin`, or `super_admin`
+- **Provider** — Auth provider shown as a colored tag:
+  - Blue: `local`
+  - Green: `oidc`
+  - Purple: `oauth2`
+  - Orange: `saml`
+  - Cyan: `ldap`
+- **Super Admin** — Badge shown for super admin users
+- **Created** — Registration date
+- **Actions** — Delete button (disabled for super admin accounts)
+
+### Deleting Users
+- Click the delete button and confirm via the popover
+- Super admin users cannot be deleted (button is disabled)
+- Deleting a user revokes all their workspace permissions
+
+---
+
+## Permissions
+
+**Path:** `/permissions` | **Min role:** `admin`
+
+Manage workspace access permissions for users.
+
+### Permission Levels
+Permissions can be granted at three levels, each cascading downward:
+- **Organization level** — Grants access to all workspaces in all departments
+- **Department level** — Grants access to all workspaces in the department
+- **Workspace level** — Grants access to a single workspace
+
+### Managing Permissions
+1. Select the scope level (Organization, Department, or Workspace)
+2. Select the specific entity
+3. View current permissions in the table
+4. **Grant** — Select a user and click "Grant Access"
+5. **Revoke** — Click the revoke button next to an existing permission
+
+---
+
+## Usage & Costs
+
+**Path:** `/usage` | **Min role:** `admin`
+
+Monitor API usage and estimate costs.
+
+### Usage Statistics
+- **Total Tokens** — Cumulative prompt and completion tokens
+- **Request Counts** — Total API requests by endpoint
+- **Cost Estimation** — Estimated costs based on provider pricing:
+  - LLM tokens (prompt/completion rates vary by model)
+  - Embedding tokens
+  - Reranker API calls
+
+### Provider Info
+Shows the current provider configuration for cost context:
+- LLM provider and model
+- Embedding provider and model
+- This helps admins understand cost implications
+
+Usage data persists across server restarts via the KV store.
+
+---
+
+## Feedback & Tuning
+
+**Path:** `/feedback` | **Min role:** `admin`
+
+The feedback-driven auto-tuning dashboard with five tabs.
+
+### Overview Tab
+- **Stats Cards** — Total feedback, positive count, negative count, satisfaction rate
+- **Quality Guard Threshold** — Current adaptive threshold based on feedback ratio
+- **Auto-Tuning Status** — Whether document boosts and retrieval adjustments are active
+
+### Entries Tab
+- Paginated log of all feedback entries
+- **Filter** — All, Positive only, Negative only
+- **Workspace Filter** — Filter by workspace
+- Each entry shows: timestamp, query, thumbs rating, workspace
+- **Expandable rows** — Click to see the full answer and chunk scores
+
+### Document Boosts Tab
+- Table showing per-document boost/penalty multipliers
+- Columns: Document ID, Boost (percentage), Positive count, Negative count
+- Boost range: 50% to 150% (requires minimum 3 feedback samples)
+- Documents with mostly positive feedback get boosted in search results
+- Documents with mostly negative feedback get penalized
+
+### Golden Examples Tab
+- Table of curated Q&A pairs used for few-shot learning
+- Columns: Query, Answer (truncated), Workspace, Created date
+- **Delete** — Remove an example with confirmation
+- **Expandable rows** — View full answer text
+- Up to 5 examples are injected per query (workspace-specific + global)
+- Maximum 100 golden examples stored
+
+### Retrieval Tuning Tab
+- **Auto-Suggestions** — When enough feedback data exists, the system suggests parameter adjustments. Click "Apply" to accept.
+- **Parameter Controls:**
+  - `top_k` — Number of chunks to retrieve (InputNumber, 1-50)
+  - `min_score_threshold` — Minimum relevance score to include a chunk (Slider, 0-1)
+  - `vector_weight` — Weight for vector search in RRF (Slider, 0-1)
+  - `bm25_weight` — Weight for BM25 search in RRF (Slider, 0-1)
+- **Save** — Persist changes (applied to the next query)
+- **Reset** — Revert to default parameters
+
+---
+
+## Settings
+
+**Path:** `/settings` | **Min role:** `super_admin`
+
+System configuration for super administrators. Contains multiple tabs.
+
+### Identity Providers Tab
+Manage external authentication providers:
+
+- **Table** — Shows all configured identity providers with columns: Name, Type (Tag), Enabled (Tag), Created, Actions
+- **Add Provider** — Opens a form modal with:
+  - Name, Type (OIDC, OAuth2, SAML, LDAP), Enabled toggle
+  - Dynamic config fields based on type:
+    - **OIDC:** Issuer URL, Client ID, Client Secret, Scopes, Redirect URI
+    - **OAuth2:** Authorize URL, Token URL, UserInfo URL, Client ID, Client Secret, Scopes
+    - **SAML:** IdP Entity ID, SSO URL, SLO URL, Certificate, SP Entity ID
+    - **LDAP:** Server URL, Bind DN, Bind Password, Search Base, Search Filter, TLS toggle
+  - Secrets are rendered as password inputs
+- **Test** — Test connectivity to the provider (returns success/failure)
+- **Edit** — Modify provider configuration
+- **Delete** — Remove provider with confirmation
+
+### Provider Configuration Tab
+Configure the AI provider stack at runtime:
+- **LLM** — Provider type (Claude/OpenAI/Ollama), model selection, API key
+- **Embeddings** — Provider type, model, dimension
+- **Reranker** — Provider type, model
+- **Model Sync** — Fetch available models from configured providers
+- **Presets** — Quick-apply preset configurations (free, standard, premium)
+
+### Document Processing Tab
+Configure document ingestion parameters:
+- Chunk size and overlap
+- Maximum upload size
+
+### Chat Pipeline Tab
+Configure the RAG pipeline behavior:
+- System prompt customization
+- Guardrail settings
+- Pre/post processor configuration
+
+### Prompts Tab
+Manage system prompts:
+- View all prompt templates
+- Edit prompt overrides
+- Delete custom overrides (reverts to default)
+
+### Ollama Management Tab
+For Ollama LLM provider:
+- List downloaded models
+- Pull new models
+
+### Local Auth Tab
+- Shows whether local authentication is enabled
+- Configuration note: "Configure via `THAIRAG__AUTH__ENABLED` env var"
+
+---
+
+## Health
+
+**Path:** `/system` | **Min role:** `viewer`
+
+System health monitoring.
+
+### Health Check
+- Calls `GET /health?deep=true` to probe all providers
+- Shows status for each subsystem:
+  - API server
+  - Database connection
+  - LLM provider
+  - Embedding provider
+  - Vector database
+  - Search engine (Tantivy)
+  - Reranker
+- Each shows green (healthy) or red (error with message)
+
+### System Info
+- Server version
+- Uptime
+- Configuration tier
+- Provider details
+
+---
+
+## Theme
+
+The Admin UI supports light and dark modes. Toggle via the sun/moon button in the top-right header. The preference persists in local storage.
+
+## Navigation
+
+- **Sidebar** — Collapsible sidebar with icons and labels for all pages
+- **Header** — Shows logged-in user email, theme toggle, and logout button
+- **Title** — Shows "ThaiRAG Admin" (or "TR" when collapsed)

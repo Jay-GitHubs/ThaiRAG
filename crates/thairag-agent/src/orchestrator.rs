@@ -4,6 +4,7 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, QueryIntent};
+use thairag_core::PromptRegistry;
 use thairag_thai::ThaiNormalizer;
 
 use crate::rag_engine::RagEngine;
@@ -85,7 +86,7 @@ fn heuristic_normalize(query: &str) -> String {
 
     // Strip trailing punctuation
     let trimmed = normalized
-        .trim_end_matches(|c: char| matches!(c, '?' | '!' | '.' | '…'));
+        .trim_end_matches(['?', '!', '.', '…']);
     let trimmed = trimmed.trim();
 
     // Remove one filler prefix (longest match first — lists are ordered long→short)
@@ -119,6 +120,16 @@ fn needs_llm_rewrite(normalized: &str) -> bool {
     }
     let lower = normalized.to_lowercase();
     CONVERSATIONAL_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// Public wrapper for use by other agents (e.g. query_analyzer fallback).
+pub fn classify_intent_pub(query: &str) -> QueryIntent {
+    classify_intent(query)
+}
+
+/// Public wrapper for heuristic normalization.
+pub fn heuristic_normalize_pub(query: &str) -> String {
+    heuristic_normalize(query)
 }
 
 /// Classify intent from the raw user query (free fn — no `self`).
@@ -182,11 +193,16 @@ fn classify_intent(query: &str) -> QueryIntent {
 pub struct QueryOrchestrator {
     llm: Arc<dyn LlmProvider>,
     rag_engine: Arc<RagEngine>,
+    prompts: Arc<PromptRegistry>,
 }
 
 impl QueryOrchestrator {
     pub fn new(llm: Arc<dyn LlmProvider>, rag_engine: Arc<RagEngine>) -> Self {
-        Self { llm, rag_engine }
+        Self { llm, rag_engine, prompts: Arc::new(PromptRegistry::new()) }
+    }
+
+    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, rag_engine: Arc<RagEngine>, prompts: Arc<PromptRegistry>) -> Self {
+        Self { llm, rag_engine, prompts }
     }
 
     /// Process a user query through the orchestration pipeline.
@@ -261,12 +277,13 @@ impl QueryOrchestrator {
         }
 
         // Stage 2: LLM rewrite
+        const DEFAULT_REWRITER: &str = "Rewrite the user's query into a concise, keyword-rich search query. \
+Output ONLY the rewritten query, nothing else. \
+Preserve the original language (Thai or English).";
+
         let system = ChatMessage {
             role: "system".to_string(),
-            content: "Rewrite the user's query into a concise, keyword-rich search query. \
-                      Output ONLY the rewritten query, nothing else. \
-                      Preserve the original language (Thai or English)."
-                .to_string(),
+            content: self.prompts.render_or_default("chat.orchestrator_query_rewriter", DEFAULT_REWRITER, &[]),
         };
         let user = ChatMessage {
             role: "user".to_string(),

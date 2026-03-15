@@ -108,13 +108,18 @@ impl VectorStore for QdrantVectorStore {
 
     #[instrument(skip(self, embedding), fields(collection = %self.collection, top_k = query.top_k))]
     async fn search(&self, embedding: &[f32], query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        // No access: not unrestricted and no workspace permissions
+        if !query.unrestricted && query.workspace_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
         let mut request = QueryPointsBuilder::new(&self.collection)
             .query(embedding.to_vec())
             .limit(query.top_k as u64)
             .with_payload(true);
 
-        // Apply workspace filter if workspace_ids are specified
-        if !query.workspace_ids.is_empty() {
+        // Apply workspace filter unless unrestricted
+        if !query.unrestricted && !query.workspace_ids.is_empty() {
             let workspace_strings: Vec<String> = query
                 .workspace_ids
                 .iter()
@@ -164,6 +169,7 @@ impl VectorStore for QdrantVectorStore {
                     content: content.to_string(),
                     chunk_index,
                     embedding: None,
+                    metadata: None,
                 };
 
                 Some(SearchResult { chunk, score })

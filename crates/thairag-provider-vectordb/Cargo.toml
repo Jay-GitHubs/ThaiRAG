@@ -8,10 +8,13 @@ thairag-core = { workspace = true }
 thairag-config = { workspace = true }
 async-trait = { workspace = true }
 qdrant-client = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }

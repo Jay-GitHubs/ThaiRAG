@@ -54,7 +54,7 @@ impl VectorStore for InMemoryVectorStore {
         let mut results: Vec<SearchResult> = store
             .values()
             .filter(|chunk| {
-                query.workspace_ids.is_empty()
+                query.unrestricted
                     || query.workspace_ids.contains(&chunk.workspace_id)
             })
             .filter_map(|chunk| {
@@ -94,6 +94,7 @@ mod tests {
             content: format!("content-{id}"),
             chunk_index: 0,
             embedding: Some(emb),
+            metadata: None,
         }
     }
 
@@ -115,6 +116,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -145,6 +147,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -176,6 +179,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![ws_a],
+            unrestricted: false,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -198,6 +202,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 2,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -230,6 +235,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -243,6 +249,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert!(results.is_empty());
@@ -266,6 +273,7 @@ mod tests {
             text: "test".to_string(),
             top_k: 10,
             workspace_ids: vec![],
+            unrestricted: true,
         };
         let results = store.search(&[0.0, 1.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);

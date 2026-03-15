@@ -8,11 +8,17 @@ thairag-core = { workspace = true }
 thairag-config = { workspace = true }
 thairag-search = { workspace = true }
 thairag-thai = { workspace = true }
+async-stream = { workspace = true }
 async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tokio-stream = { workspace = true }
 futures-core = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
 
 [dependencies.thairag-provider-llm]
 path = "../thairag-provider-llm"

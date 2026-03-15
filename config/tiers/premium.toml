@@ -1,4 +1,8 @@
 # Premium tier: Claude + large OpenAI embeddings + Qdrant + Cohere reranker v3.5
+[database]
+url = "postgresql://thairag:thairag@localhost:5432/thairag"
+max_connections = 20
+
 [providers.llm]
 kind = "claude"
 model = "claude-sonnet-4-20250514"

@@ -32,20 +32,33 @@ impl Role {
 #[derive(Debug, Clone)]
 pub struct AccessScope {
     pub workspace_ids: Vec<WorkspaceId>,
+    unrestricted: bool,
 }
 
 impl AccessScope {
     pub fn new(workspace_ids: Vec<WorkspaceId>) -> Self {
-        Self { workspace_ids }
+        Self {
+            workspace_ids,
+            unrestricted: false,
+        }
     }
 
     pub fn unrestricted() -> Self {
         Self {
             workspace_ids: vec![],
+            unrestricted: true,
+        }
+    }
+
+    /// No workspace access — search will return no results.
+    pub fn none() -> Self {
+        Self {
+            workspace_ids: vec![],
+            unrestricted: false,
         }
     }
 
     pub fn is_unrestricted(&self) -> bool {
-        self.workspace_ids.is_empty()
+        self.unrestricted
     }
 }

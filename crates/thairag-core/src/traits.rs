@@ -4,7 +4,8 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::types::{
-    ChatMessage, DocumentChunk, LlmResponse, LlmStreamResponse, SearchQuery, SearchResult,
+    ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, LlmResponse,
+    LlmStreamResponse, QualityReport, SearchQuery, SearchResult, VisionMessage,
 };
 
 #[async_trait]
@@ -25,6 +26,29 @@ pub trait LlmProvider: Send + Sync {
     }
 
     fn model_name(&self) -> &str;
+
+    /// Whether this provider's current model supports vision (image) input.
+    fn supports_vision(&self) -> bool {
+        false
+    }
+
+    /// Generate a response from messages containing images.
+    /// Default implementation ignores images and falls back to text-only.
+    async fn generate_vision(
+        &self,
+        messages: &[VisionMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
+        // Fallback: convert to text-only messages
+        let text_messages: Vec<ChatMessage> = messages
+            .iter()
+            .map(|m| ChatMessage {
+                role: m.role.clone(),
+                content: m.text.clone(),
+            })
+            .collect();
+        self.generate(&text_messages, max_tokens).await
+    }
 }
 
 #[async_trait]
@@ -62,4 +86,38 @@ pub trait ThaiTokenizer: Send + Sync {
 
 pub trait Chunker: Send + Sync {
     fn chunk(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String>;
+}
+
+// ── AI Document Preprocessing Traits ─────────────────────────────────
+
+#[async_trait]
+pub trait DocumentAnalyzer: Send + Sync {
+    async fn analyze(&self, raw_text: &str, mime_type: &str, doc_size_bytes: usize) -> Result<DocumentAnalysis>;
+}
+
+#[async_trait]
+pub trait AiDocumentConverter: Send + Sync {
+    async fn convert(
+        &self,
+        raw_text: &str,
+        analysis: &DocumentAnalysis,
+    ) -> Result<ConvertedDocument>;
+}
+
+#[async_trait]
+pub trait QualityChecker: Send + Sync {
+    async fn check(
+        &self,
+        original_text: &str,
+        converted: &ConvertedDocument,
+    ) -> Result<QualityReport>;
+}
+
+#[async_trait]
+pub trait SmartChunker: Send + Sync {
+    async fn chunk(
+        &self,
+        converted: &ConvertedDocument,
+        max_chunk_size: usize,
+    ) -> Result<Vec<EnrichedChunk>>;
 }

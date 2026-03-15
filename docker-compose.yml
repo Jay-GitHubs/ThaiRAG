@@ -1,4 +1,21 @@
 services:
+  # ── PostgreSQL ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ── ThaiRAG API ──────────────────────────────────────────────────────
   thairag:
     build: .
@@ -6,38 +23,62 @@ services:
       - "8080:8080"
     volumes:
       - thairag-data:/data
+    env_file: .env
     environment:
-      THAIRAG_TIER: free
       THAIRAG__SERVER__HOST: "0.0.0.0"
-      THAIRAG__PROVIDERS__LLM__BASE_URL: http://ollama:11434
     depends_on:
-      - ollama
+      postgres:
+        condition: service_healthy
 
-  # ── Ollama (local LLM for free tier) ────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
+  # ── Admin UI ────────────────────────────────────────────────────────
+  admin-ui:
+    build: ./admin-ui
     ports:
-      - "11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
+      - "8081:80"
+    depends_on:
+      - thairag
 
-  # ── Standard tier (uncomment to use) ────────────────────────────────
-  # qdrant:
-  #   image: qdrant/qdrant:latest
-  #   ports:
-  #     - "6333:6333"
-  #     - "6334:6334"
-  #   volumes:
-  #     - qdrant-data:/qdrant/storage
-  #
-  # To use standard tier, set these on thairag:
-  #   THAIRAG_TIER: standard
-  #   THAIRAG__PROVIDERS__VECTOR_DB__URL: http://qdrant:6334
-  #   THAIRAG__PROVIDERS__LLM__API_KEY: <your-anthropic-key>
-  #   THAIRAG__PROVIDERS__EMBEDDING__API_KEY: <your-openai-key>
-  #   THAIRAG__PROVIDERS__RERANKER__API_KEY: <your-cohere-key>
+  # ── Qdrant (vector database, free & open-source) ───────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  # ── Ollama (local LLM for free tier) ───────────────────────────────
+  #ollama:
+  #  image: ollama/ollama:latest
+  #  ports:
+  #    - "11434:11434"
+  #  volumes:
+  #    - ollama-models:/root/.ollama
+
+  # ── Open WebUI (chat interface) ────────────────────────────────────
+  # For local testing with Keycloak, use docker-compose.test-idp.yml instead.
+  #open-webui:
+  #  image: ghcr.io/open-webui/open-webui:main
+  #  ports:
+  #    - "3000:8080"
+  #  volumes:
+  #    - open-webui-data:/app/backend/data
+  #  environment:
+  #    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
+  #    OPENAI_API_KEYS: "unused"
+  #    # ── OIDC SSO ──────────────────────────────────────────
+  #    ENABLE_OAUTH_SIGNUP: "true"
+  #    OAUTH_PROVIDER_NAME: "SSO"
+  #    OAUTH_CLIENT_ID: "<client-id>"
+  #    OAUTH_CLIENT_SECRET: "<client-secret>"
+  #    OPENID_PROVIDER_URL: "https://<your-idp>/.well-known/openid-configuration"
+  #    OAUTH_SCOPES: "openid profile email"
+  #  depends_on:
+  #    - thairag
 
 volumes:
+  postgres-data:
   thairag-data:
+  qdrant-data:
   ollama-models:
-  # qdrant-data:
+  open-webui-data:

@@ -139,6 +139,11 @@ impl TextSearch for TantivySearch {
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        // No access: not unrestricted and no workspace permissions
+        if !query.unrestricted && query.workspace_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
         let searcher = self.reader.searcher();
 
         let query_parser = QueryParser::for_index(&self.index, vec![self.fields.content]);
@@ -148,7 +153,7 @@ impl TextSearch for TantivySearch {
         })?;
 
         // Build final query: text + workspace filter
-        let final_query = if query.workspace_ids.is_empty() {
+        let final_query = if query.unrestricted || query.workspace_ids.is_empty() {
             text_query
         } else {
             // OR of workspace_id terms
@@ -215,6 +220,7 @@ impl TextSearch for TantivySearch {
                     content,
                     chunk_index,
                     embedding: None,
+                    metadata: None,
                 },
                 score,
             });
@@ -237,6 +243,7 @@ mod tests {
             content: content.to_string(),
             chunk_index: 0,
             embedding: None,
+            metadata: None,
         }
     }
 
@@ -253,6 +260,7 @@ mod tests {
             text: "ห้องสมุด".to_string(),
             workspace_ids: vec![],
             top_k: 10,
+            unrestricted: true,
         };
         let results = search.search(&query).await.unwrap();
         assert!(
@@ -272,6 +280,7 @@ mod tests {
             text: "hello".to_string(),
             workspace_ids: vec![],
             top_k: 10,
+            unrestricted: true,
         };
         let results = search.search(&query).await.unwrap();
         assert!(

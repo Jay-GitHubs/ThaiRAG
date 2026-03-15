@@ -4,9 +4,14 @@ use std::time::Duration;
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHasher};
+
 use thairag_api::app_state::AppState;
 use thairag_api::rate_limit::RateLimiter;
 use thairag_api::routes::build_router;
+use thairag_api::store::KmStoreTrait;
 
 #[tokio::main]
 async fn main() {
@@ -35,12 +40,40 @@ async fn main() {
     // Build app state with all providers wired
     let state = AppState::build(config.clone());
 
+    // Seed super admin from env vars
+    seed_super_admin(&*state.km_store);
+
+    // Load saved provider config from DB (if any) and hot-reload
+    if let Some(saved) = state.km_store.get_setting("provider_config") {
+        match serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&saved) {
+            Ok(pc) => {
+                let mut validate_cfg = config.clone();
+                validate_cfg.providers = pc.clone();
+                if let Err(e) = validate_cfg.validate() {
+                    tracing::warn!("Saved provider config is invalid, ignoring: {e}");
+                } else {
+                    let bundle = thairag_api::app_state::ProviderBundle::build(
+                        &pc,
+                        &config.search,
+                        &config.document,
+                        &config.chat_pipeline,
+                    );
+                    state.reload_providers(bundle);
+                    tracing::info!("Loaded saved provider config from database");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse saved provider config, ignoring: {e}");
+            }
+        }
+    }
+
     // Create rate limiter (if enabled) and spawn background cleanup
     let rate_limiter = if config.server.rate_limit.enabled {
         Some(RateLimiter::new(
             config.server.rate_limit.requests_per_second,
             config.server.rate_limit.burst_size,
-        ))
+        ).with_trust_proxy(config.server.trust_proxy))
     } else {
         None
     };
@@ -52,6 +85,32 @@ async fn main() {
             loop {
                 interval.tick().await;
                 limiter.cleanup_stale(Duration::from_secs(3600));
+            }
+        });
+    }
+
+    // Spawn user rate limiter cleanup task
+    {
+        let user_rl = state.user_rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                user_rl.cleanup_stale(Duration::from_secs(3600));
+            }
+        });
+    }
+
+    // Spawn session cleanup task (evict sessions idle > 1 hour)
+    {
+        let session_store = state.session_store.clone();
+        let oidc_cache = state.oidc_state_cache.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                session_store.cleanup_stale(Duration::from_secs(3600));
+                oidc_cache.cleanup_stale(Duration::from_secs(600));
             }
         });
     }
@@ -74,6 +133,33 @@ async fn main() {
     .expect("Server error");
 
     tracing::info!("Server shutdown complete");
+}
+
+fn seed_super_admin(store: &dyn KmStoreTrait) {
+    let email = std::env::var("THAIRAG__ADMIN__EMAIL").unwrap_or_default();
+    let password = std::env::var("THAIRAG__ADMIN__PASSWORD").unwrap_or_default();
+
+    if email.is_empty() || password.is_empty() {
+        return;
+    }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = match Argon2::default().hash_password(password.as_bytes(), &salt) {
+        Ok(h) => h.to_string(),
+        Err(e) => {
+            tracing::error!("Failed to hash super admin password: {e}");
+            return;
+        }
+    };
+
+    match store.upsert_user_by_email(email.clone(), "Super Admin".into(), password_hash, true, "super_admin".into()) {
+        Ok(user) => {
+            tracing::info!(email = %email, user_id = %user.id, "Super admin seeded");
+        }
+        Err(e) => {
+            tracing::error!("Failed to seed super admin: {e}");
+        }
+    }
 }
 
 async fn shutdown_signal(timeout: Duration) {

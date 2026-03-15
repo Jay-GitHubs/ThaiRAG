@@ -5,7 +5,7 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
 use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
@@ -13,22 +13,30 @@ pub struct OpenAiLlmProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    base_url: String,
 }
 
 impl OpenAiLlmProvider {
-    pub fn new(api_key: &str, model: &str) -> Self {
+    pub fn new(api_key: &str, model: &str, base_url: &str) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
             .expect("Failed to build reqwest client");
 
-        info!(model, "Initialized OpenAI LLM provider");
+        let base_url = if base_url.is_empty() {
+            "https://api.openai.com".to_string()
+        } else {
+            base_url.trim_end_matches('/').to_string()
+        };
+
+        info!(model, base_url, "Initialized OpenAI LLM provider");
 
         Self {
             client,
             api_key: api_key.to_string(),
             model: model.to_string(),
+            base_url,
         }
     }
 }
@@ -48,7 +56,7 @@ impl LlmProvider for OpenAiLlmProvider {
 
         let resp = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
@@ -100,7 +108,7 @@ impl LlmProvider for OpenAiLlmProvider {
 
         let resp = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send()
@@ -155,10 +163,10 @@ impl LlmProvider for OpenAiLlmProvider {
                         }
                     }
 
-                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
-                        if !content.is_empty() {
-                            yield content.to_string();
-                        }
+                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str()
+                        && !content.is_empty()
+                    {
+                        yield content.to_string();
                     }
                 }
             }
@@ -172,5 +180,83 @@ impl LlmProvider for OpenAiLlmProvider {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn supports_vision(&self) -> bool {
+        let m = &self.model;
+        m.contains("gpt-4o") || m.contains("gpt-4.1") || m.contains("gpt-4-vision")
+            || m.starts_with("o3") || m.starts_with("o4")
+    }
+
+    async fn generate_vision(
+        &self,
+        messages: &[VisionMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let mut content: Vec<serde_json::Value> = Vec::new();
+                // Add images
+                for img in &m.images {
+                    let data_url = format!("data:{};base64,{}", img.media_type, img.base64_data);
+                    content.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": { "url": data_url },
+                    }));
+                }
+                // Add text
+                if !m.text.is_empty() {
+                    content.push(serde_json::json!({
+                        "type": "text",
+                        "text": m.text,
+                    }));
+                }
+                serde_json::json!({
+                    "role": m.role,
+                    "content": content,
+                })
+            })
+            .collect();
+
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": api_messages,
+        });
+
+        if let Some(max) = max_tokens {
+            body["max_tokens"] = serde_json::json!(max);
+        }
+
+        let resp = self.client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI vision request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(ThaiRagError::LlmProvider(format!(
+                "OpenAI returned HTTP {status}: {error_body}"
+            )));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}")))?;
+
+        let content = json["choices"][0]["message"]["content"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in OpenAI response".into()))?;
+
+        let usage = LlmUsage {
+            prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+            completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+        };
+
+        Ok(LlmResponse { content, usage })
     }
 }
