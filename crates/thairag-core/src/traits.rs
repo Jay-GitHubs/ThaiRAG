@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::types::{
     ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, LlmResponse,
-    LlmStreamResponse, QualityReport, SearchQuery, SearchResult, VisionMessage,
+    LlmStreamResponse, MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, UserId,
+    VisionMessage,
 };
 
 #[async_trait]
@@ -90,6 +91,31 @@ pub trait ThaiTokenizer: Send + Sync {
 
 pub trait Chunker: Send + Sync {
     fn chunk(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String>;
+}
+
+// ── Personal Memory Store ────────────────────────────────────────────
+
+#[async_trait]
+pub trait PersonalMemoryStore: Send + Sync {
+    /// Store a personal memory (embeds and upserts to vector store).
+    async fn store(&self, memory: &PersonalMemory, embedding: Vec<f32>) -> Result<()>;
+
+    /// Search relevant memories for a user given a query embedding.
+    async fn search(
+        &self,
+        user_id: UserId,
+        query_embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<PersonalMemory>>;
+
+    /// Delete a specific memory by ID.
+    async fn delete(&self, id: MemoryId) -> Result<()>;
+
+    /// Delete all memories for a user.
+    async fn delete_all_for_user(&self, user_id: UserId) -> Result<()>;
+
+    /// Apply relevance decay to all memories older than the given age (in seconds).
+    async fn apply_decay(&self, decay_factor: f32, min_score: f32) -> Result<usize>;
 }
 
 // ── AI Document Preprocessing Traits ─────────────────────────────────

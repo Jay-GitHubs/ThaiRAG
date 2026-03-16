@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -6,14 +8,17 @@ use chrono::Utc;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
+use thairag_agent::context_compactor::ContextCompactor;
 use thairag_agent::conversation_memory::MemoryEntry;
+use thairag_agent::personal_memory::PersonalMemoryManager;
 use thairag_agent::tool_router::SearchableScope;
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
 use thairag_core::types::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, SessionId, UserId,
+    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, PersonalMemory, SessionId,
+    UserId,
 };
 
 use crate::app_state::AppState;
@@ -23,6 +28,7 @@ use crate::routes::feedback;
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    headers: axum::http::HeaderMap,
     AppJson(req): AppJson<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
     // ── Request validation ──────────────────────────────────────────
@@ -104,7 +110,40 @@ pub async fn chat_completions(
     };
 
     // ── Scope resolution ────────────────────────────────────────────
-    let user_id = if claims.sub == "anonymous" {
+    // For API key auth: check X-OpenWebUI-User-Email header to resolve real user.
+    // This allows Open WebUI (with ENABLE_FORWARD_USER_INFO_HEADERS=true) to
+    // enforce per-user workspace permissions even through a shared API key.
+    let user_id = if claims.sub == "api-key" {
+        // Resolve real user from forwarded headers (e.g., Open WebUI with
+        // ENABLE_FORWARD_USER_INFO_HEADERS=true). If the user doesn't exist
+        // in ThaiRAG yet, auto-create them as a viewer.
+        headers
+            .get("x-openwebui-user-email")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|email| {
+                match state.km_store.get_user_by_email(email) {
+                    Ok(u) => Some(u.user.id),
+                    Err(_) => {
+                        // Auto-provision: create user from forwarded identity
+                        let name = headers
+                            .get("x-openwebui-user-name")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or(email);
+                        state
+                            .km_store
+                            .upsert_user_by_email(
+                                email.to_string(),
+                                name.to_string(),
+                                String::new(),
+                                false,
+                                "viewer".to_string(),
+                            )
+                            .ok()
+                            .map(|u| u.id)
+                    }
+                }
+            })
+    } else if claims.sub == "anonymous" {
         None
     } else {
         claims.sub.parse::<Uuid>().ok().map(UserId)
@@ -117,12 +156,25 @@ pub async fn chat_completions(
         } else {
             AccessScope::new(ws_ids)
         }
-    } else {
+    } else if claims.sub == "anonymous" {
+        // Auth disabled: unrestricted for dev/testing convenience
         AccessScope::unrestricted()
+    } else if claims.sub == "api-key" {
+        // API key without forwarded user email: unrestricted (machine-to-machine)
+        AccessScope::unrestricted()
+    } else {
+        // JWT user whose UUID didn't parse: no access
+        AccessScope::none()
     };
 
     // ── Load conversation memories (Feature 1) ─────────────────────
     let memories = load_memories(&state, user_id);
+
+    // ── Context Compaction (Claude Code style) ──────────────────────
+    let full_messages = maybe_compact_context(&state, full_messages, session_id, user_id).await;
+
+    // ── Personal Memory Retrieval (Per-User RAG) ────────────────────
+    let personal_memories = retrieve_personal_memories(&state, user_id, &full_messages).await;
 
     // ── Build available scopes for tool router (Feature 3) ─────────
     let available_scopes = build_searchable_scopes(&state, &scope);
@@ -137,6 +189,7 @@ pub async fn chat_completions(
             memories,
             available_scopes,
             user_id,
+            personal_memories,
         )
         .await
     } else {
@@ -149,9 +202,21 @@ pub async fn chat_completions(
             memories,
             available_scopes,
             user_id,
+            personal_memories,
         )
         .await
     }
+}
+
+/// Inject personal memory context as a system message at the beginning of the conversation.
+fn inject_personal_memory_context(
+    mut messages: Vec<ChatMessage>,
+    personal_memories: &[PersonalMemory],
+) -> Vec<ChatMessage> {
+    if let Some(ctx_msg) = PersonalMemoryManager::build_memory_context(personal_memories) {
+        messages.insert(0, ctx_msg);
+    }
+    messages
 }
 
 /// Persist cumulative token usage to KV store so it survives restarts.
@@ -190,6 +255,121 @@ fn save_memories(state: &AppState, user_id: UserId, memories: &[MemoryEntry], ma
     let key = format!("memory:{}", user_id.0);
     if let Ok(json) = serde_json::to_string(&entries) {
         state.km_store.set_setting(&key, &json);
+    }
+}
+
+/// Check if context compaction is needed and perform it if so.
+async fn maybe_compact_context(
+    state: &AppState,
+    messages: Vec<ChatMessage>,
+    session_id: Option<SessionId>,
+    user_id: Option<UserId>,
+) -> Vec<ChatMessage> {
+    let p = state.providers();
+    let Some(ref compactor) = p.context_compactor else {
+        return messages;
+    };
+    let Some(uid) = user_id else {
+        return messages;
+    };
+    let Some(sid) = session_id else {
+        return messages;
+    };
+
+    let chat_config = &p.chat_pipeline_config;
+    let context_window = chat_config.model_context_window;
+    let threshold = chat_config.compaction_threshold;
+    let keep_recent = chat_config.compaction_keep_recent;
+    let rag_budget = chat_config.max_context_tokens;
+
+    if !ContextCompactor::needs_compaction(&messages, context_window, threshold, rag_budget) {
+        return messages;
+    }
+
+    tracing::info!(
+        user_id = %uid,
+        session_id = %sid,
+        msg_count = messages.len(),
+        "Context compaction triggered"
+    );
+
+    match compactor.compact(&messages, keep_recent, uid).await {
+        Ok(result) => {
+            if result.messages_compacted == 0 {
+                return messages;
+            }
+
+            // Store extracted personal memories in background
+            if !result.extracted_memories.is_empty()
+                && let Some(ref pm) = p.personal_memory_manager
+            {
+                let pm = Arc::clone(pm);
+                let memories = result.extracted_memories.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = pm.store_memories(&memories).await {
+                        tracing::warn!(error = %e, "Failed to store personal memories from compaction");
+                    }
+                });
+            }
+
+            // Build compacted messages
+            let recent_start = messages.len().saturating_sub(result.messages_kept);
+            let recent = &messages[recent_start..];
+            let compacted = ContextCompactor::build_compacted_messages(&result.summary, recent);
+
+            // Update session with compacted history
+            state
+                .session_store
+                .replace_messages(&sid, compacted.clone());
+
+            tracing::info!(
+                compacted = result.messages_compacted,
+                kept = result.messages_kept,
+                memories = result.extracted_memories.len(),
+                "Context compaction complete"
+            );
+
+            compacted
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Context compaction failed, using original messages");
+            messages
+        }
+    }
+}
+
+/// Retrieve relevant personal memories for the current query.
+async fn retrieve_personal_memories(
+    state: &AppState,
+    user_id: Option<UserId>,
+    messages: &[ChatMessage],
+) -> Vec<PersonalMemory> {
+    let p = state.providers();
+    let Some(ref pm) = p.personal_memory_manager else {
+        return vec![];
+    };
+    let Some(uid) = user_id else {
+        return vec![];
+    };
+
+    // Use the last user message as the query
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+
+    if query.is_empty() {
+        return vec![];
+    }
+
+    match pm.retrieve(uid, query).await {
+        Ok(memories) => memories,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to retrieve personal memories");
+            vec![]
+        }
     }
 }
 
@@ -236,7 +416,11 @@ async fn handle_non_stream(
     memories: Vec<MemoryEntry>,
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
+    personal_memories: Vec<PersonalMemory>,
 ) -> Result<Response, ApiError> {
+    // Inject personal memory context
+    let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
+
     // Inject golden examples as few-shot demonstrations
     let golden = feedback::load_golden_examples_for_workspace(&state, None);
     let augmented_messages = if golden.is_empty() {
@@ -289,9 +473,12 @@ async fn handle_non_stream(
             role: "assistant".to_string(),
             content: llm_resp.content.clone(),
         };
-        state
-            .session_store
-            .append(sid, last_user_msg.clone(), assistant_msg.clone());
+        state.session_store.append_with_user(
+            sid,
+            last_user_msg.clone(),
+            assistant_msg.clone(),
+            user_id,
+        );
 
         // Feature 1: Async memory summarization
         if let Some(uid) = user_id {
@@ -333,6 +520,7 @@ async fn handle_non_stream(
 }
 
 /// Trigger async memory summarization if enough turns have accumulated.
+#[allow(clippy::too_many_arguments)]
 fn maybe_summarize_memory(
     state: AppState,
     pipeline: Option<std::sync::Arc<thairag_agent::ChatPipeline>>,
@@ -392,10 +580,14 @@ async fn handle_stream(
     memories: Vec<MemoryEntry>,
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
+    personal_memories: Vec<PersonalMemory>,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
     let model = "ThaiRAG-1.0".to_string();
+
+    // Inject personal memory context
+    let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
 
     // Inject golden examples as few-shot demonstrations
     let golden = feedback::load_golden_examples_for_workspace(&state, None);
@@ -418,28 +610,44 @@ async fn handle_stream(
         msgs
     };
 
-    let p = state.providers();
-    let LlmStreamResponse {
-        stream: token_stream,
-        usage: usage_cell,
-    } = if let Some(ref pipeline) = p.chat_pipeline {
-        pipeline
-            .process_stream(&augmented_messages, &scope, &memories, &available_scopes)
-            .await
-            .map_err(ApiError::from)?
-    } else {
-        p.orchestrator
-            .process_stream(&augmented_messages, &scope)
-            .await
-            .map_err(ApiError::from)?
-    };
-
     let id_clone = id.clone();
     let model_clone = model.clone();
     let last_user_msg = req.messages.last().cloned();
-    let pipeline_for_memory = p.chat_pipeline.clone();
 
+    // Move the pipeline call INSIDE the stream so the SSE connection starts
+    // immediately and KeepAlive comments keep it alive during long processing.
     let sse_stream = async_stream::stream! {
+        // Run the pipeline inside the stream — KeepAlive sends SSE comments
+        // while we wait, preventing connection timeouts from clients.
+        let p = state.providers();
+        let pipeline_for_memory = p.chat_pipeline.clone();
+        let stream_result = if let Some(ref pipeline) = p.chat_pipeline {
+            pipeline
+                .process_stream(&augmented_messages, &scope, &memories, &available_scopes)
+                .await
+        } else {
+            p.orchestrator
+                .process_stream(&augmented_messages, &scope)
+                .await
+        };
+
+        let LlmStreamResponse {
+            stream: token_stream,
+            usage: usage_cell,
+        } = match stream_result {
+            Ok(resp) => resp,
+            Err(e) => {
+                let error_data = serde_json::json!({
+                    "error": { "message": e.to_string(), "type": "pipeline_error" }
+                });
+                yield Ok::<_, std::convert::Infallible>(
+                    Event::default().data(serde_json::to_string(&error_data).unwrap())
+                );
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
+
         // First chunk: role
         let role_chunk = ChatCompletionChunk {
             id: id_clone.clone(),
@@ -502,7 +710,7 @@ async fn handle_stream(
                 role: "assistant".to_string(),
                 content: accumulated_content,
             };
-            state.session_store.append(sid, user_msg, assistant_msg);
+            state.session_store.append_with_user(sid, user_msg, assistant_msg, user_id);
 
             // Feature 1: Async memory summarization
             if let Some(uid) = user_id {
@@ -553,6 +761,10 @@ async fn handle_stream(
     };
 
     Ok(Sse::new(sse_stream)
-        .keep_alive(KeepAlive::default())
+        .keep_alive(
+            KeepAlive::new()
+                .interval(std::time::Duration::from_secs(15))
+                .text("ping"),
+        )
         .into_response())
 }

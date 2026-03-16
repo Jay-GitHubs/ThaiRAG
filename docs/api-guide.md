@@ -175,6 +175,17 @@ GET    /api/km/settings/chat-pipeline      # Get pipeline config
 PUT    /api/km/settings/chat-pipeline      # Update + hot-reload
 ```
 
+Includes **Context Compaction** and **Personal Memory** settings:
+- `context_compaction_enabled` — Auto-summarize older messages when near context limit
+- `model_context_window` — Context window size in tokens (0 = auto-detect)
+- `compaction_threshold` — Trigger at this fraction of context window (default: 0.8)
+- `compaction_keep_recent` — Recent messages to keep intact (default: 6)
+- `personal_memory_enabled` — Per-user memory across sessions
+- `personal_memory_top_k` — Memories retrieved per query (default: 5)
+- `personal_memory_max_per_user` — Max memories per user (default: 200)
+- `personal_memory_decay_factor` — Relevance decay rate (default: 0.95)
+- `personal_memory_min_relevance` — Prune threshold (default: 0.1)
+
 ### Document Processing Configuration
 ```
 GET    /api/km/settings/document           # Get document config

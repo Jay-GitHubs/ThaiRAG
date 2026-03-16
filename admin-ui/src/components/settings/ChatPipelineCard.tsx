@@ -322,6 +322,19 @@ export function ChatPipelineCard() {
   const [activeLearningMinInteractions, setActiveLearningMinInteractions] = useState(5);
   const [activeLearningMaxLowConfidence, setActiveLearningMaxLowConfidence] = useState(100);
 
+  // Context Compaction
+  const [contextCompactionEnabled, setContextCompactionEnabled] = useState(false);
+  const [modelContextWindow, setModelContextWindow] = useState(0);
+  const [compactionThreshold, setCompactionThreshold] = useState(0.8);
+  const [compactionKeepRecent, setCompactionKeepRecent] = useState(6);
+
+  // Personal Memory (Per-User RAG)
+  const [personalMemoryEnabled, setPersonalMemoryEnabled] = useState(false);
+  const [personalMemoryTopK, setPersonalMemoryTopK] = useState(5);
+  const [personalMemoryMaxPerUser, setPersonalMemoryMaxPerUser] = useState(200);
+  const [personalMemoryDecayFactor, setPersonalMemoryDecayFactor] = useState(0.95);
+  const [personalMemoryMinRelevance, setPersonalMemoryMinRelevance] = useState(0.1);
+
   // Sync state
   const [syncedModels, setSyncedModels] = useState<AvailableModel[] | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -408,6 +421,15 @@ export function ChatPipelineCard() {
       setActiveLearningEnabled(data.active_learning_enabled);
       setActiveLearningMinInteractions(data.active_learning_min_interactions);
       setActiveLearningMaxLowConfidence(data.active_learning_max_low_confidence);
+      setContextCompactionEnabled(data.context_compaction_enabled);
+      setModelContextWindow(data.model_context_window);
+      setCompactionThreshold(data.compaction_threshold);
+      setCompactionKeepRecent(data.compaction_keep_recent);
+      setPersonalMemoryEnabled(data.personal_memory_enabled);
+      setPersonalMemoryTopK(data.personal_memory_top_k);
+      setPersonalMemoryMaxPerUser(data.personal_memory_max_per_user);
+      setPersonalMemoryDecayFactor(data.personal_memory_decay_factor);
+      setPersonalMemoryMinRelevance(data.personal_memory_min_relevance);
 
       // Load feedback stats if adaptive threshold is relevant
       try {
@@ -492,6 +514,15 @@ export function ChatPipelineCard() {
         active_learning_enabled: activeLearningEnabled,
         active_learning_min_interactions: activeLearningMinInteractions,
         active_learning_max_low_confidence: activeLearningMaxLowConfidence,
+        context_compaction_enabled: contextCompactionEnabled,
+        model_context_window: modelContextWindow,
+        compaction_threshold: compactionThreshold,
+        compaction_keep_recent: compactionKeepRecent,
+        personal_memory_enabled: personalMemoryEnabled,
+        personal_memory_top_k: personalMemoryTopK,
+        personal_memory_max_per_user: personalMemoryMaxPerUser,
+        personal_memory_decay_factor: personalMemoryDecayFactor,
+        personal_memory_min_relevance: personalMemoryMinRelevance,
       };
 
       // LLM configs based on mode
@@ -1366,6 +1397,93 @@ export function ChatPipelineCard() {
                           </Space>
                         </Tooltip>
                       </>
+                    )}
+                  </Space>
+                ),
+              },
+              {
+                key: 'context_compaction',
+                label: (
+                  <Space>
+                    <span>Context Compaction</span>
+                    <Switch size="small" checked={contextCompactionEnabled} onChange={setContextCompactionEnabled} onClick={(_, e) => e.stopPropagation()} />
+                    <Tag color={contextCompactionEnabled ? 'green' : 'default'}>{contextCompactionEnabled ? 'ON' : 'OFF'}</Tag>
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Paragraph style={{ margin: 0 }}>
+                      Automatically compacts conversation history when approaching the model's context window limit.
+                      Older messages are summarized while keeping recent messages intact — like Claude Code's context compaction.
+                    </Paragraph>
+                    {contextCompactionEnabled && (
+                      <Space size="large" wrap>
+                        <Tooltip title="Model's context window size in tokens. 0 = use max_context_tokens as estimate.">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Model Context Window <QuestionCircleOutlined /></Text>
+                            <InputNumber min={0} step={1024} value={modelContextWindow} onChange={v => setModelContextWindow(v ?? 0)} style={{ width: 140 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Trigger compaction when context exceeds this fraction of the window (0.0\u20131.0)">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Compaction Threshold <QuestionCircleOutlined /></Text>
+                            <InputNumber min={0.5} max={1.0} step={0.05} value={compactionThreshold} onChange={v => setCompactionThreshold(v ?? 0.8)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Number of recent messages to keep intact during compaction">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Keep Recent Messages <QuestionCircleOutlined /></Text>
+                            <InputNumber min={2} max={20} value={compactionKeepRecent} onChange={v => setCompactionKeepRecent(v ?? 6)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                      </Space>
+                    )}
+                  </Space>
+                ),
+              },
+              {
+                key: 'personal_memory',
+                label: (
+                  <Space>
+                    <span>Personal Memory</span>
+                    <Switch size="small" checked={personalMemoryEnabled} onChange={setPersonalMemoryEnabled} onClick={(_, e) => e.stopPropagation()} />
+                    <Tag color={personalMemoryEnabled ? 'green' : 'default'}>{personalMemoryEnabled ? 'ON' : 'OFF'}</Tag>
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Paragraph style={{ margin: 0 }}>
+                      Stores per-user memories in the vector database. During conversation, relevant past memories are
+                      retrieved and injected into context — giving each user a personalized AI assistant that remembers
+                      their preferences, facts, and decisions.
+                    </Paragraph>
+                    {personalMemoryEnabled && (
+                      <Space size="large" wrap>
+                        <Tooltip title="Max personal memories to retrieve per query">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Memories Per Query <QuestionCircleOutlined /></Text>
+                            <InputNumber min={1} max={20} value={personalMemoryTopK} onChange={v => setPersonalMemoryTopK(v ?? 5)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Maximum memories stored per user">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Max Per User <QuestionCircleOutlined /></Text>
+                            <InputNumber min={10} max={1000} step={10} value={personalMemoryMaxPerUser} onChange={v => setPersonalMemoryMaxPerUser(v ?? 200)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Daily relevance decay (0.95 = loses 5% relevance per day)">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Decay Factor <QuestionCircleOutlined /></Text>
+                            <InputNumber min={0.5} max={1.0} step={0.01} value={personalMemoryDecayFactor} onChange={v => setPersonalMemoryDecayFactor(v ?? 0.95)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Memories below this score are pruned">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Min Relevance <QuestionCircleOutlined /></Text>
+                            <InputNumber min={0.01} max={0.5} step={0.01} value={personalMemoryMinRelevance} onChange={v => setPersonalMemoryMinRelevance(v ?? 0.1)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                      </Space>
                     )}
                   </Space>
                 ),

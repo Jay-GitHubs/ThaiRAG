@@ -447,6 +447,18 @@ export interface ChatPipelineConfigResponse {
   active_learning_enabled: boolean;
   active_learning_min_interactions: number;
   active_learning_max_low_confidence: number;
+  // Context Compaction
+  context_compaction_enabled: boolean;
+  model_context_window: number;
+  compaction_threshold: number;
+  compaction_keep_recent: number;
+  // Personal Memory (Per-User RAG)
+  personal_memory_enabled: boolean;
+  personal_memory_top_k: number;
+  personal_memory_max_per_user: number;
+  personal_memory_decay_factor: number;
+  personal_memory_min_relevance: number;
+  personal_memory_llm?: LlmProviderInfo;
 }
 
 export interface UpdateChatPipelineRequest {
@@ -552,6 +564,17 @@ export interface UpdateChatPipelineRequest {
   active_learning_enabled?: boolean;
   active_learning_min_interactions?: number;
   active_learning_max_low_confidence?: number;
+  // Context Compaction
+  context_compaction_enabled?: boolean;
+  model_context_window?: number;
+  compaction_threshold?: number;
+  compaction_keep_recent?: number;
+  // Personal Memory (Per-User RAG)
+  personal_memory_enabled?: boolean;
+  personal_memory_top_k?: number;
+  personal_memory_max_per_user?: number;
+  personal_memory_decay_factor?: number;
+  personal_memory_min_relevance?: number;
 }
 
 // ── Feedback ─────────────────────────────────────────────────────────

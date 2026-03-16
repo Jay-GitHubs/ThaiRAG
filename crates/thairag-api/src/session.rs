@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use thairag_core::types::{ChatMessage, SessionId};
+use thairag_core::types::{ChatMessage, SessionId, UserId};
 
 const MAX_HISTORY: usize = 50;
 
 struct Session {
     messages: Vec<ChatMessage>,
+    user_id: Option<UserId>,
     #[allow(dead_code)]
     created_at: Instant,
     updated_at: Instant,
@@ -35,9 +36,20 @@ impl SessionStore {
     }
 
     pub fn append(&self, id: SessionId, user_msg: ChatMessage, assistant_msg: ChatMessage) {
+        self.append_with_user(id, user_msg, assistant_msg, None);
+    }
+
+    pub fn append_with_user(
+        &self,
+        id: SessionId,
+        user_msg: ChatMessage,
+        assistant_msg: ChatMessage,
+        user_id: Option<UserId>,
+    ) {
         let now = Instant::now();
         let mut entry = self.sessions.entry(id).or_insert_with(|| Session {
             messages: Vec::new(),
+            user_id,
             created_at: now,
             updated_at: now,
         });
@@ -55,6 +67,29 @@ impl SessionStore {
 
     pub fn count(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// Replace the session's message history with a compacted version.
+    /// Used by context compaction to swap old messages with summary + recent.
+    pub fn replace_messages(&self, id: &SessionId, new_messages: Vec<ChatMessage>) {
+        if let Some(mut entry) = self.sessions.get_mut(id) {
+            entry.messages = new_messages;
+            entry.updated_at = Instant::now();
+        }
+    }
+
+    /// Get the current message count for a session.
+    pub fn message_count(&self, id: &SessionId) -> usize {
+        self.sessions.get(id).map(|s| s.messages.len()).unwrap_or(0)
+    }
+
+    /// Remove all sessions belonging to a specific user.
+    /// Called when permissions are revoked to prevent stale context leaks.
+    pub fn clear_user_sessions(&self, user_id: UserId) -> usize {
+        let before = self.sessions.len();
+        self.sessions
+            .retain(|_id, session| session.user_id != Some(user_id));
+        before - self.sessions.len()
     }
 
     pub fn cleanup_stale(&self, max_age: Duration) {
@@ -130,6 +165,36 @@ mod tests {
         let sid2 = SessionId(Uuid::new_v4());
         store.append(sid2, msg("user", "hello"), msg("assistant", "world"));
         assert_eq!(store.count(), 2);
+    }
+
+    #[test]
+    fn clear_user_sessions_removes_only_matching() {
+        let store = SessionStore::new();
+        let uid1 = UserId(Uuid::new_v4());
+        let uid2 = UserId(Uuid::new_v4());
+
+        let sid1 = SessionId(Uuid::new_v4());
+        store.append_with_user(sid1, msg("user", "hi"), msg("assistant", "hey"), Some(uid1));
+
+        let sid2 = SessionId(Uuid::new_v4());
+        store.append_with_user(
+            sid2,
+            msg("user", "hello"),
+            msg("assistant", "world"),
+            Some(uid2),
+        );
+
+        let sid3 = SessionId(Uuid::new_v4());
+        store.append_with_user(sid3, msg("user", "yo"), msg("assistant", "sup"), Some(uid1));
+
+        assert_eq!(store.count(), 3);
+
+        let cleared = store.clear_user_sessions(uid1);
+        assert_eq!(cleared, 2);
+        assert_eq!(store.count(), 1);
+        assert!(store.get_history(&sid1).is_none());
+        assert!(store.get_history(&sid2).is_some());
+        assert!(store.get_history(&sid3).is_none());
     }
 
     #[test]

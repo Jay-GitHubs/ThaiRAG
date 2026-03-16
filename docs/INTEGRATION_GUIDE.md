@@ -20,7 +20,7 @@ This starts ThaiRAG API, Admin UI, PostgreSQL, Qdrant, Keycloak (OIDC), and Open
 | Open WebUI | http://localhost:3000 | Login via Keycloak SSO |
 | Keycloak | http://localhost:9090 | `admin` / `admin` |
 
-### Authentication
+### Authentication & User Identity
 
 Open WebUI authenticates to ThaiRAG using a static API key (configured automatically via `THAIRAG_OPENWEBUI_API_KEY` in `.env`). No JWT token management needed.
 
@@ -28,6 +28,34 @@ To use a custom API key, set in your `.env`:
 ```bash
 THAIRAG_OPENWEBUI_API_KEY=sk-your-custom-key
 ```
+
+### Per-User Permission Enforcement
+
+By default, API key auth grants unrestricted access to all knowledge bases. To enforce per-user workspace permissions through Open WebUI, enable **user identity forwarding**:
+
+```yaml
+# In docker-compose.test-idp.yml (or your Open WebUI config)
+open-webui:
+  environment:
+    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+```
+
+When enabled, Open WebUI sends `X-OpenWebUI-User-Email` and `X-OpenWebUI-User-Name` headers with every API request. ThaiRAG resolves the real user from these headers and applies their workspace permissions:
+
+1. **User lookup** — ThaiRAG looks up the user by email in its database
+2. **Auto-provisioning** — If the user doesn't exist, they are auto-created with `viewer` role
+3. **Permission scoping** — The user's workspace permissions determine which knowledge bases are searched
+4. **Session tracking** — Sessions are associated with the resolved user for permission enforcement
+
+> **Without** `ENABLE_FORWARD_USER_INFO_HEADERS`, all Open WebUI users share the API key's unrestricted access — no per-user permission enforcement.
+
+### Permission Revocation Behavior
+
+When an admin revokes a user's workspace permission via the Admin UI:
+
+- **New sessions** — The user immediately loses access to the revoked workspace's content
+- **Existing sessions** — Server-side session history and personal memories for the revoked user are cleared to prevent stale context leaks
+- **Open WebUI client-side history** — Messages already displayed in Open WebUI's chat window remain visible (client-side cache), but starting a new chat enforces the updated permissions
 
 ### Manual Setup (without docker-compose.test-idp.yml)
 
@@ -43,6 +71,10 @@ open-webui:
   environment:
     OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
     OPENAI_API_KEYS: "sk-thairag-openwebui"
+    # Enable per-user permission enforcement (recommended)
+    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+    # Increase timeout for pipeline responses (multi-agent processing can take 60+ seconds)
+    AIOHTTP_CLIENT_TIMEOUT: "600"
   depends_on:
     - thairag
 ```
@@ -71,6 +103,10 @@ docker run -d \
 - Chat completions — Both streaming and non-streaming
 - Session management — Conversation history is maintained server-side
 - RAG — All responses are automatically augmented with knowledge base content
+- Context compaction — Long conversations are automatically summarized to stay within context limits (when enabled)
+- Personal memory — Per-user memory retrieval across sessions for personalized responses (when enabled)
+- Per-user permissions — When `ENABLE_FORWARD_USER_INFO_HEADERS` is set, each user only sees content from workspaces they have access to
+- SSE keepalive — Long pipeline processing (60+ seconds) stays connected via automatic ping comments every 15 seconds
 
 ### What Doesn't Work (by design)
 

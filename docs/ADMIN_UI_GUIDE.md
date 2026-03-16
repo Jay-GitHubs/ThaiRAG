@@ -136,6 +136,8 @@ Feedback is stored with full context (query, answer, retrieved chunks, scores, w
 - Each chat session maintains conversation history (up to 50 messages)
 - Sessions auto-expire after 1 hour of inactivity
 - Start a new session by refreshing or selecting a different workspace
+- **Context compaction**: When enabled, long conversations are automatically compacted — older messages are summarized and recent messages kept intact, so the user can continue chatting without hitting context limits
+- **Personal memory**: When enabled, the system remembers user preferences, facts, and decisions across sessions via per-user vector storage
 
 ---
 
@@ -297,6 +299,23 @@ Configure the RAG pipeline behavior:
 - System prompt customization
 - Guardrail settings
 - Pre/post processor configuration
+
+**Advanced Features** section (inside collapsible panels):
+
+#### Context Compaction
+Automatic summarization of older messages when conversations approach the model's context window limit. Works like Claude Code's context compaction — users can continue chatting seamlessly without losing context.
+- **Enabled** (Switch) — Turn on/off context compaction
+- **Model Context Window** (InputNumber) — Context window size in tokens (0 = auto-detect from model)
+- **Compaction Threshold** (InputNumber, 0.0–1.0) — Trigger compaction when token usage exceeds this fraction of context window (default: 0.8)
+- **Keep Recent Messages** (InputNumber) — Number of recent messages to keep intact during compaction (default: 6)
+
+#### Personal Memory
+Per-user memory that persists across sessions. The system extracts typed memories (preferences, facts, decisions, corrections) from conversations and retrieves relevant ones for future chats — giving each user a personalized experience.
+- **Enabled** (Switch) — Turn on/off personal memory
+- **Top K** (InputNumber) — Number of memories to retrieve per query (default: 5)
+- **Max Per User** (InputNumber) — Maximum memories stored per user (default: 200)
+- **Decay Factor** (InputNumber, 0.0–1.0) — Relevance decay rate applied periodically (default: 0.95)
+- **Min Relevance** (InputNumber, 0.0–1.0) — Minimum relevance score before a memory is pruned (default: 0.1)
 
 ### Prompts Tab
 Manage system prompts:

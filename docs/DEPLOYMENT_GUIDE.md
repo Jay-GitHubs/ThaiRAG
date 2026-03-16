@@ -112,17 +112,21 @@ Uncomment the `open-webui` service in `docker-compose.yml`. Configure it to poin
 
 ```yaml
 open-webui:
-  image: ghcr.io/open-webui/open-webui:main
+  image: ghcr.io/open-webui/open-webui:v0.8.10
   ports:
     - "3000:8080"
   environment:
     OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-    OPENAI_API_KEYS: "your-jwt-token"
+    OPENAI_API_KEYS: "sk-thairag-openwebui"
+    # Forward real user identity to ThaiRAG for per-user permission enforcement
+    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+    # Increase timeout for multi-agent pipeline (can take 60+ seconds)
+    AIOHTTP_CLIENT_TIMEOUT: "600"
   depends_on:
     - thairag
 ```
 
-See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup.
+See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup including per-user permission enforcement.
 
 ### Persistent Volumes
 
@@ -254,6 +258,20 @@ cd admin-ui && npx playwright test
 | `search.rrf_k` | `THAIRAG__SEARCH__RRF_K` | `60` | RRF fusion parameter |
 | `search.vector_weight` | `THAIRAG__SEARCH__VECTOR_WEIGHT` | `0.6` | Vector search weight |
 | `search.text_weight` | `THAIRAG__SEARCH__TEXT_WEIGHT` | `0.4` | BM25 search weight |
+
+### Chat Pipeline — Context Compaction & Personal Memory
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `chat_pipeline.context_compaction_enabled` | `THAIRAG__CHAT_PIPELINE__CONTEXT_COMPACTION_ENABLED` | `false` | Auto-summarize older messages when near context limit |
+| `chat_pipeline.model_context_window` | `THAIRAG__CHAT_PIPELINE__MODEL_CONTEXT_WINDOW` | `0` | Context window in tokens (0 = auto-detect) |
+| `chat_pipeline.compaction_threshold` | `THAIRAG__CHAT_PIPELINE__COMPACTION_THRESHOLD` | `0.8` | Trigger compaction at this fraction of context window |
+| `chat_pipeline.compaction_keep_recent` | `THAIRAG__CHAT_PIPELINE__COMPACTION_KEEP_RECENT` | `6` | Recent messages to keep intact |
+| `chat_pipeline.personal_memory_enabled` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_ENABLED` | `false` | Per-user memory across sessions |
+| `chat_pipeline.personal_memory_top_k` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_TOP_K` | `5` | Memories retrieved per query |
+| `chat_pipeline.personal_memory_max_per_user` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MAX_PER_USER` | `200` | Max memories stored per user |
+| `chat_pipeline.personal_memory_decay_factor` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_DECAY_FACTOR` | `0.95` | Relevance decay rate (0.0–1.0) |
+| `chat_pipeline.personal_memory_min_relevance` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MIN_RELEVANCE` | `0.1` | Prune memories below this score |
 
 ### Document Processing
 

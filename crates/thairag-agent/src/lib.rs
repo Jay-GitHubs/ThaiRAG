@@ -1,6 +1,7 @@
 pub mod active_learning;
 pub mod chat_pipeline;
 pub mod colbert_reranker;
+pub mod context_compactor;
 pub mod context_curator;
 pub mod contextual_compression;
 pub mod conversation_memory;
@@ -10,6 +11,7 @@ pub mod language_adapter;
 pub mod map_reduce;
 pub mod multimodal_rag;
 pub mod orchestrator;
+pub mod personal_memory;
 pub mod pipeline_orchestrator;
 pub mod quality_guard;
 pub mod query_analyzer;

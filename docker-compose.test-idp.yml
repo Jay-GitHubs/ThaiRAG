@@ -56,6 +56,10 @@ services:
     environment:
       OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
       OPENAI_API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
+      # Increase timeout for pipeline responses (multiple sequential LLM calls)
+      AIOHTTP_CLIENT_TIMEOUT: "600"
+      # Forward user identity headers to ThaiRAG for per-user permission enforcement
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
       # OIDC SSO via Keycloak
       # Open WebUI's backend reaches Keycloak via host.docker.internal:9090.
       # This ensures the browser also gets reachable URLs from the discovery doc.

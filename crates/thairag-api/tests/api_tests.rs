@@ -222,11 +222,14 @@ fn build_test_state(auth_enabled: bool) -> AppState {
 
     let bundle = ProviderBundle {
         providers_config: config.providers.clone(),
+        chat_pipeline_config: config.chat_pipeline.clone(),
         orchestrator,
         chat_pipeline: None,
         document_pipeline,
         search_engine,
         embedding,
+        context_compactor: None,
+        personal_memory_manager: None,
     };
 
     AppState::from_parts(
@@ -1632,11 +1635,14 @@ fn build_streaming_test_app() -> Router {
 
     let bundle = ProviderBundle {
         providers_config: config.providers.clone(),
+        chat_pipeline_config: config.chat_pipeline.clone(),
         orchestrator,
         chat_pipeline: None,
         document_pipeline,
         search_engine,
         embedding,
+        context_compactor: None,
+        personal_memory_manager: None,
     };
 
     let state = AppState::from_parts(

@@ -1984,6 +1984,17 @@ pub struct ChatPipelineConfigResponse {
     pub active_learning_enabled: bool,
     pub active_learning_min_interactions: u32,
     pub active_learning_max_low_confidence: usize,
+    // Context Compaction
+    pub context_compaction_enabled: bool,
+    pub model_context_window: usize,
+    pub compaction_threshold: f32,
+    pub compaction_keep_recent: usize,
+    // Personal Memory
+    pub personal_memory_enabled: bool,
+    pub personal_memory_top_k: usize,
+    pub personal_memory_max_per_user: usize,
+    pub personal_memory_decay_factor: f32,
+    pub personal_memory_min_relevance: f32,
 }
 
 #[derive(Deserialize)]
@@ -2090,9 +2101,20 @@ pub struct UpdateChatPipelineRequest {
     pub active_learning_enabled: Option<bool>,
     pub active_learning_min_interactions: Option<u32>,
     pub active_learning_max_low_confidence: Option<usize>,
+    // Context Compaction
+    pub context_compaction_enabled: Option<bool>,
+    pub model_context_window: Option<usize>,
+    pub compaction_threshold: Option<f32>,
+    pub compaction_keep_recent: Option<usize>,
+    // Personal Memory
+    pub personal_memory_enabled: Option<bool>,
+    pub personal_memory_top_k: Option<usize>,
+    pub personal_memory_max_per_user: Option<usize>,
+    pub personal_memory_decay_factor: Option<f32>,
+    pub personal_memory_min_relevance: Option<f32>,
 }
 
-fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
+pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
     let cp = &state.config.chat_pipeline;
     let s = |key: &str| state.km_store.get_setting(key);
 
@@ -2319,6 +2341,38 @@ fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::Chat
         max_llm_calls_per_request: s("chat_pipeline.max_llm_calls_per_request")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.max_llm_calls_per_request),
+        // Context Compaction
+        context_compaction_enabled: s("chat_pipeline.context_compaction_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.context_compaction_enabled),
+        model_context_window: s("chat_pipeline.model_context_window")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.model_context_window),
+        compaction_threshold: s("chat_pipeline.compaction_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.compaction_threshold),
+        compaction_keep_recent: s("chat_pipeline.compaction_keep_recent")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.compaction_keep_recent),
+        // Personal Memory
+        personal_memory_enabled: s("chat_pipeline.personal_memory_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.personal_memory_enabled),
+        personal_memory_top_k: s("chat_pipeline.personal_memory_top_k")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.personal_memory_top_k),
+        personal_memory_max_per_user: s("chat_pipeline.personal_memory_max_per_user")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.personal_memory_max_per_user),
+        personal_memory_decay_factor: s("chat_pipeline.personal_memory_decay_factor")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.personal_memory_decay_factor),
+        personal_memory_min_relevance: s("chat_pipeline.personal_memory_min_relevance")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.personal_memory_min_relevance),
+        personal_memory_llm: s("chat_pipeline.personal_memory_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.personal_memory_llm.clone()),
     }
 }
 
@@ -2413,6 +2467,17 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         active_learning_enabled: eff.active_learning_enabled,
         active_learning_min_interactions: eff.active_learning_min_interactions,
         active_learning_max_low_confidence: eff.active_learning_max_low_confidence,
+        // Context Compaction
+        context_compaction_enabled: eff.context_compaction_enabled,
+        model_context_window: eff.model_context_window,
+        compaction_threshold: eff.compaction_threshold,
+        compaction_keep_recent: eff.compaction_keep_recent,
+        // Personal Memory
+        personal_memory_enabled: eff.personal_memory_enabled,
+        personal_memory_top_k: eff.personal_memory_top_k,
+        personal_memory_max_per_user: eff.personal_memory_max_per_user,
+        personal_memory_decay_factor: eff.personal_memory_decay_factor,
+        personal_memory_min_relevance: eff.personal_memory_min_relevance,
     }
 }
 
@@ -2581,6 +2646,35 @@ pub async fn update_chat_pipeline_config(
     persist_num!(
         active_learning_max_low_confidence,
         "chat_pipeline.active_learning_max_low_confidence"
+    );
+    // Context Compaction
+    persist_bool!(
+        context_compaction_enabled,
+        "chat_pipeline.context_compaction_enabled"
+    );
+    persist_num!(model_context_window, "chat_pipeline.model_context_window");
+    persist_num!(compaction_threshold, "chat_pipeline.compaction_threshold");
+    persist_num!(
+        compaction_keep_recent,
+        "chat_pipeline.compaction_keep_recent"
+    );
+    // Personal Memory
+    persist_bool!(
+        personal_memory_enabled,
+        "chat_pipeline.personal_memory_enabled"
+    );
+    persist_num!(personal_memory_top_k, "chat_pipeline.personal_memory_top_k");
+    persist_num!(
+        personal_memory_max_per_user,
+        "chat_pipeline.personal_memory_max_per_user"
+    );
+    persist_num!(
+        personal_memory_decay_factor,
+        "chat_pipeline.personal_memory_decay_factor"
+    );
+    persist_num!(
+        personal_memory_min_relevance,
+        "chat_pipeline.personal_memory_min_relevance"
     );
 
     // Helper: persist LLM config

@@ -24,6 +24,8 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 14. [Automated Testing](#14-automated-testing) — backend tests, Playwright e2e, security test coverage
 15. [OWASP LLM Top 10 Security](#15-owasp-llm-top-10-security) — prompt injection defense, error sanitization, input validation, CSRF, audit log
 16. [Smoke Testing](#16-smoke-testing) — end-to-end smoke test script
+17. [Context Compaction & Personal Memory](#17-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
+18. [Open WebUI Permission Enforcement](#18-open-webui-permission-enforcement) — user identity passthrough, per-user scoping, revocation, SSE keepalive
 
 ---
 
@@ -2386,21 +2388,26 @@ npx playwright test --headed    # Headed mode (visible browser)
 npx playwright test              # Headless mode (CI)
 ```
 
-**Current test count:** 48 tests (1 setup + 47 specs)
+**Current test count:** 90 tests (1 setup + 89 specs)
 
 Test files:
 | File | Tests | Description |
 |------|-------|-------------|
 | `auth.setup.ts` | 1 | Registers test users via API |
 | `login.spec.ts` | 4 | Login form, invalid credentials, success, logout |
-| `comprehensive.spec.ts` | 22 | Auth session, navigation, KM CRUD, users, documents, permissions, theme |
+| `comprehensive.spec.ts` | 23 | Auth session, navigation, KM CRUD, users, documents, permissions, theme |
 | `km.spec.ts` | 1 | Full KM hierarchy CRUD |
 | `documents.spec.ts` | 1 | Document ingest, verify, delete |
+| `document-processing.spec.ts` | 13 | Document formats, upload, chunking, metadata |
 | `permissions.spec.ts` | 1 | Grant and revoke permission |
 | `users.spec.ts` | 2 | Users table and columns |
 | `dashboard.spec.ts` | 3 | Dashboard heading, stats, health |
 | `health.spec.ts` | 5 | System health, deep check, metrics |
 | `security.spec.ts` | 7 | OWASP headers, password policy, brute-force lockout |
+| `chat-pipeline.spec.ts` | 10 | Pipeline switch, agent panels, LLM modes, persistence, save |
+| `advanced-features.spec.ts` | 10 | Context Compaction & Personal Memory toggles, parameters, persistence |
+| `presets.spec.ts` | 7 | Chat presets CRUD, selection, defaults |
+| `settings-debug.spec.ts` | 2 | Settings page debug/diagnostics |
 
 **Playwright configuration** (`admin-ui/playwright.config.ts`):
 - Base URL: `http://localhost:8081`
@@ -2582,3 +2589,337 @@ Run a comprehensive end-to-end smoke test that exercises the full API surface in
 | Cleanup | Delete doc, cascade delete org, verify cleanup |
 
 **Pass criteria:** Script exits with code 0 and reports "ALL N/N CHECKS PASSED".
+
+---
+
+## 17. Context Compaction & Personal Memory
+
+### Purpose
+
+Verify the automatic context compaction and per-user personal memory features. These features work together to provide seamless long conversations and personalized responses.
+
+### Prerequisites
+
+- Docker Desktop running with ThaiRAG stack (`docker compose up --build -d`)
+- Admin UI accessible at `http://localhost:8081`
+- A user account (register via Admin UI or API)
+- For free tier: Ollama running with a model pulled (e.g., `llama3.2`)
+
+### 17.1 Enable Features via Admin UI
+
+1. Log in to Admin UI as super admin
+2. Navigate to **Settings** → **Chat & Response Pipeline** tab
+3. Scroll to **Advanced Features** section
+4. Expand **Context Compaction** panel:
+   - Toggle **Enabled** to ON
+   - Set **Model Context Window** to `4096` (use a small value for easier testing)
+   - Set **Compaction Threshold** to `0.8`
+   - Set **Keep Recent Messages** to `6`
+5. Expand **Personal Memory** panel:
+   - Toggle **Enabled** to ON
+   - Set **Top K** to `5`
+   - Set **Max Per User** to `200`
+   - Set **Decay Factor** to `0.95`
+   - Set **Min Relevance** to `0.1`
+6. Click **Save**
+
+**Pass criteria:** Settings save successfully (green notification).
+
+### 17.2 Enable Features via API
+
+Alternatively, configure via the settings API:
+
+```bash
+# Login first
+TOKEN=$(curl -s http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@test.com","password":"Admin123"}' | jq -r .token)
+
+# Enable both features
+curl -X PUT http://localhost:8080/api/km/settings/chat-pipeline \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "context_compaction_enabled": true,
+    "model_context_window": 4096,
+    "compaction_threshold": 0.8,
+    "compaction_keep_recent": 6,
+    "personal_memory_enabled": true,
+    "personal_memory_top_k": 5,
+    "personal_memory_max_per_user": 200,
+    "personal_memory_decay_factor": 0.95,
+    "personal_memory_min_relevance": 0.1
+  }'
+```
+
+**Pass criteria:** Response returns the updated config with all values reflected.
+
+### 17.3 Verify Settings Persistence
+
+```bash
+curl -s http://localhost:8080/api/km/settings/chat-pipeline \
+  -H "Authorization: Bearer $TOKEN" | jq '{
+    context_compaction_enabled,
+    model_context_window,
+    compaction_threshold,
+    compaction_keep_recent,
+    personal_memory_enabled,
+    personal_memory_top_k,
+    personal_memory_max_per_user,
+    personal_memory_decay_factor,
+    personal_memory_min_relevance
+  }'
+```
+
+**Pass criteria:** All values match what was set in 17.1 or 17.2.
+
+### 17.4 Test Context Compaction
+
+Context compaction triggers when the conversation token count exceeds `threshold * context_window`. With a 4096-token window and 0.8 threshold, compaction triggers at ~3277 tokens.
+
+#### Step 1: Create a session with enough messages to trigger compaction
+
+```bash
+SESSION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+
+# Send several long messages to build up token count
+for i in $(seq 1 15); do
+  curl -s http://localhost:8080/v1/chat/completions \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"model\": \"ThaiRAG-1.0\",
+      \"messages\": [{\"role\": \"user\", \"content\": \"Tell me about topic number $i. Please provide a detailed explanation with examples and use cases. I want to understand this thoroughly. This is message $i in our conversation.\"}],
+      \"session_id\": \"$SESSION_ID\",
+      \"stream\": false
+    }" | jq -r '.choices[0].message.content' | head -1
+  echo "--- Message $i sent ---"
+done
+```
+
+#### Step 2: Verify the session still works after compaction
+
+```bash
+# Send another message — should work seamlessly even after compaction
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"ThaiRAG-1.0\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"Can you summarize what we discussed earlier?\"}],
+    \"session_id\": \"$SESSION_ID\",
+    \"stream\": false
+  }" | jq '.choices[0].message.content'
+```
+
+**Pass criteria:**
+- The conversation continues without errors
+- The response references earlier topics (from the compacted summary)
+- Check Docker logs for compaction activity: `docker compose logs thairag | grep -i compact`
+
+### 17.5 Test Personal Memory
+
+Personal memory extracts preferences, facts, and decisions from conversations and retrieves them in future sessions.
+
+#### Step 1: Express preferences in a conversation
+
+```bash
+SESSION1=$(uuidgen | tr '[:upper:]' '[:lower:]')
+
+# Tell the system some preferences
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"ThaiRAG-1.0\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"I prefer concise answers. My name is Jay. I work with Rust and TypeScript. I like dark mode.\"}],
+    \"session_id\": \"$SESSION1\",
+    \"stream\": false
+  }" | jq '.choices[0].message.content'
+```
+
+#### Step 2: Start a new session and check if memories are used
+
+```bash
+SESSION2=$(uuidgen | tr '[:upper:]' '[:lower:]')
+
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"ThaiRAG-1.0\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"What do you remember about me?\"}],
+    \"session_id\": \"$SESSION2\",
+    \"stream\": false
+  }" | jq '.choices[0].message.content'
+```
+
+**Pass criteria:**
+- The response in Session 2 references information from Session 1 (name, preferences, tech stack)
+- Check Docker logs for memory activity: `docker compose logs thairag | grep -i "personal.*memory"`
+
+> **Note:** Personal memory extraction happens during context compaction. If the conversation in Step 1 isn't long enough to trigger compaction, send more messages to build up the token count first, or set `model_context_window` to a very small value (e.g., 2048) to trigger compaction sooner.
+
+### 17.6 Test with Streaming
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"ThaiRAG-1.0\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"Hello, do you remember my preferences?\"}],
+    \"session_id\": \"$(uuidgen | tr '[:upper:]' '[:lower:]')\",
+    \"stream\": true
+  }"
+```
+
+**Pass criteria:** SSE stream returns content chunks, followed by a usage chunk and `[DONE]`. Personal memories should influence the response if previously stored.
+
+### 17.7 Docker Log Verification
+
+```bash
+# Check for context compaction events
+docker compose logs thairag 2>&1 | grep -i "compact" | tail -10
+
+# Check for personal memory events
+docker compose logs thairag 2>&1 | grep -i "personal.*memory\|memory.*store\|memory.*retrieve" | tail -10
+
+# Check for any errors
+docker compose logs thairag 2>&1 | grep -i "error" | tail -10
+```
+
+**Pass criteria:**
+- Compaction logs show summarization activity when conversations are long
+- Memory logs show store/retrieve operations
+- No unexpected errors
+
+### 17.8 Admin UI Verification
+
+1. Navigate to **Settings** → **Chat & Response Pipeline**
+2. Verify the Advanced Features section shows:
+   - Context Compaction toggle is ON with the correct parameters
+   - Personal Memory toggle is ON with the correct parameters
+3. Toggle Context Compaction OFF, save, and verify it persists on page reload
+4. Toggle it back ON
+
+**Pass criteria:** All toggles and parameters save and persist correctly.
+
+### 17.9 Backend Unit Tests
+
+```bash
+# Run tests for the new modules
+docker compose exec thairag cargo test context_compactor 2>&1 || \
+  cargo test context_compactor 2>&1
+
+docker compose exec thairag cargo test personal_memory 2>&1 || \
+  cargo test personal_memory 2>&1
+```
+
+Or run locally:
+
+```bash
+cargo test -p thairag-agent -- context_compactor
+cargo test -p thairag-agent -- personal_memory
+cargo test -p thairag-provider-vectordb -- personal_memory
+```
+
+**Pass criteria:** All tests pass.
+
+---
+
+## 18. Open WebUI Permission Enforcement
+
+### Purpose
+
+Verify that per-user workspace permissions are enforced when users access ThaiRAG through Open WebUI, even though Open WebUI uses a shared API key.
+
+### Prerequisites
+
+- Full stack running: `docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d`
+- Open WebUI at `http://localhost:3000` with `ENABLE_FORWARD_USER_INFO_HEADERS: "true"`
+- At least one workspace with uploaded documents
+- Two user accounts with different workspace permissions
+
+### 18.1 Verify User Identity Forwarding
+
+1. Log in to Open WebUI via Keycloak SSO as **User A**
+2. Send a chat message in Open WebUI
+3. Check ThaiRAG logs for the resolved identity:
+
+```bash
+docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*provision" | tail -5
+```
+
+**Pass criteria:** Logs show that ThaiRAG resolved User A's email from the `X-OpenWebUI-User-Email` header, not the generic `api-key` identity.
+
+### 18.2 Test Per-User Permission Scoping
+
+1. As **admin**, grant User A access to workspace "BA101" via Admin UI → Permissions
+2. Grant User B access to workspace "HR-Docs" only (no access to BA101)
+3. In Open WebUI, log in as **User A** and ask about BA101 content
+4. Log out, log in as **User B** and ask the same question about BA101
+
+**Pass criteria:**
+- User A gets a relevant answer with BA101 document content
+- User B gets a response indicating no relevant information found (permission denied)
+
+### 18.3 Test Auto-Provisioning
+
+1. Create a new user in Keycloak that does not exist in ThaiRAG
+2. Log in to Open WebUI with this new user
+3. Send a chat message
+4. Check Admin UI → Users page
+
+**Pass criteria:**
+- The new user appears in ThaiRAG's user list with role `viewer`
+- The user was auto-created from the `X-OpenWebUI-User-Email` header
+- The user has no workspace permissions (cannot access any knowledge base content)
+
+### 18.4 Test Permission Revocation
+
+1. As admin, grant User A access to workspace "BA101"
+2. In Open WebUI as User A, ask about BA101 → should get an answer
+3. As admin, **revoke** User A's access to BA101
+4. In Open WebUI as User A, **start a new chat** and ask the same question
+
+**Pass criteria:**
+- After revocation, the new chat does NOT return BA101 content
+- ThaiRAG responds with "no relevant information" or similar
+
+> **Note:** The old chat window in Open WebUI may still display previous messages (client-side cache). This is expected — only server-side data is cleared on revocation. Always test with a **new chat session**.
+
+### 18.5 Test Session Clearing on Revocation
+
+1. Grant User A access to workspace "BA101"
+2. In Open WebUI as User A, have a multi-turn conversation about BA101 (3+ messages)
+3. As admin, revoke User A's BA101 access
+4. Check ThaiRAG logs:
+
+```bash
+docker compose logs thairag 2>&1 | grep -i "clear.*session\|session.*clear\|revoke" | tail -5
+```
+
+**Pass criteria:** Logs show that User A's sessions were cleared when the permission was revoked.
+
+### 18.6 Test SSE Keepalive for Long Pipeline Processing
+
+When the chat pipeline is enabled with multiple agents, processing can take 60+ seconds. The SSE keepalive prevents client disconnection.
+
+1. Enable the full pipeline in Admin UI → Settings → Chat & Response Pipeline (all agents ON)
+2. In Open WebUI, send a message that triggers the full pipeline
+3. Observe that the response arrives even if processing takes longer than 30 seconds
+
+**Pass criteria:**
+- No "500: Server Connection Error" or "ServerDisconnectedError"
+- The response streams normally after the pipeline finishes processing
+- If using Chrome DevTools Network tab, you should see SSE `:ping` comments during the waiting period
+
+### 18.7 Test Without Identity Forwarding (Negative Test)
+
+1. Stop the stack and set `ENABLE_FORWARD_USER_INFO_HEADERS: "false"` in Open WebUI
+2. Restart the stack
+3. Log in to Open WebUI and send a message
+4. The user should have unrestricted access to all workspaces
+
+**Pass criteria:** All workspace content is accessible regardless of user permissions — confirming that without the header forwarding, the shared API key grants full access.
