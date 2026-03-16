@@ -9,14 +9,13 @@ use crate::schema::AppConfig;
 /// 3. config/local.toml — local overrides (optional)
 /// 4. THAIRAG__* environment variables
 pub fn load_config() -> std::result::Result<AppConfig, ThaiRagError> {
-    let mut builder = Config::builder()
-        .add_source(File::with_name("config/default").required(true));
+    let mut builder =
+        Config::builder().add_source(File::with_name("config/default").required(true));
 
     // Layer 2: tier preset
     if let Ok(tier) = std::env::var("THAIRAG_TIER") {
-        builder = builder.add_source(
-            File::with_name(&format!("config/tiers/{tier}")).required(false),
-        );
+        builder =
+            builder.add_source(File::with_name(&format!("config/tiers/{tier}")).required(false));
     }
 
     // Layer 3: local overrides

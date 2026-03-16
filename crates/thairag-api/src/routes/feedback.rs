@@ -313,7 +313,9 @@ fn recompute_document_boosts(state: &AppState, entries: &[FeedbackEntry]) {
         .collect();
 
     if let Ok(json) = serde_json::to_string(&boosts) {
-        state.km_store.set_setting("feedback:document_boosts", &json);
+        state
+            .km_store
+            .set_setting("feedback:document_boosts", &json);
     }
 }
 
@@ -574,7 +576,9 @@ pub fn load_retrieval_params(state: &AppState) -> RetrievalParams {
 
 fn save_retrieval_params(state: &AppState, params: &RetrievalParams) {
     if let Ok(json) = serde_json::to_string(params) {
-        state.km_store.set_setting("feedback:retrieval_params", &json);
+        state
+            .km_store
+            .set_setting("feedback:retrieval_params", &json);
     }
 }
 
@@ -596,9 +600,7 @@ fn compute_suggested_params(entries: &[FeedbackEntry]) -> Option<SuggestedParams
 
     let negative_with_low_scores = negative_with_chunks
         .iter()
-        .filter(|e| {
-            e.chunk_scores.iter().all(|&s| s < 0.01)
-        })
+        .filter(|e| e.chunk_scores.iter().all(|&s| s < 0.01))
         .count();
 
     let mut reason_parts = Vec::new();

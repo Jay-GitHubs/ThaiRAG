@@ -1,16 +1,16 @@
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use thairag_config::schema::ChatPipelineConfig;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{
     ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, QueryIntent, SearchQuery,
 };
-use thairag_core::PromptRegistry;
-use tokio_stream::StreamExt;
 use thairag_search::HybridSearchEngine;
+use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::active_learning::ActiveLearning;
@@ -18,7 +18,7 @@ use crate::colbert_reranker::ColbertReranker;
 use crate::context_curator::{self, ContextCurator, CuratedContext};
 use crate::contextual_compression::ContextualCompression;
 use crate::conversation_memory::{ConversationMemory, MemoryEntry};
-use crate::corrective_rag::{CorrectiveRag, ContextAction};
+use crate::corrective_rag::{ContextAction, CorrectiveRag};
 use crate::graph_rag::{GraphRag, KnowledgeGraph};
 use crate::language_adapter::LanguageAdapter;
 use crate::map_reduce::MapReduceRag;
@@ -30,7 +30,7 @@ use crate::query_rewriter::{self, QueryRewriter, RewrittenQueries};
 use crate::ragas_eval::RagasEvaluator;
 use crate::raptor::Raptor;
 use crate::response_generator::ResponseGenerator;
-use crate::self_rag::{SelfRag, RetrievalDecision};
+use crate::self_rag::{RetrievalDecision, SelfRag};
 use crate::speculative_rag::SpeculativeRag;
 use crate::tool_router::{SearchableScope, ToolRouter};
 
@@ -156,10 +156,7 @@ impl ChatPipeline {
         let full_messages = self.inject_memory(messages, memories);
         let messages = &full_messages;
 
-        let user_query = messages
-            .last()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
+        let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
         // ── Agent 1: Query Analyzer ──
         let analysis = self.run_analyzer(user_query, messages).await?;
@@ -167,10 +164,13 @@ impl ChatPipeline {
 
         // ── Self-RAG gate: skip retrieval if not needed ──
         if let Some(ref self_rag) = self.self_rag {
-            if let Ok(RetrievalDecision::NoRetrieve { confidence }) = self_rag.should_retrieve(user_query, messages).await {
+            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
+                self_rag.should_retrieve(user_query, messages).await
+            {
                 info!(confidence, "Self-RAG: skipping retrieval");
                 let response = self.main_llm.generate(messages, None).await?;
-                self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content).await;
+                self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
+                    .await;
                 return self.maybe_adapt(response, &analysis).await;
             }
         }
@@ -183,7 +183,8 @@ impl ChatPipeline {
             PipelineRoute::DirectLlm => {
                 return match analysis.intent {
                     QueryIntent::Clarification => Ok(LlmResponse {
-                        content: "Could you please provide more details about your question?".into(),
+                        content: "Could you please provide more details about your question?"
+                            .into(),
                         usage: LlmUsage::default(),
                     }),
                     _ => self.main_llm.generate(messages, None).await,
@@ -191,31 +192,46 @@ impl ChatPipeline {
             }
             PipelineRoute::SimpleRetrieval => {
                 let rewritten = query_rewriter::fallback_rewrite(user_query);
-                let results = self.run_search_with_tools(
-                    &rewritten, scope, user_query, available_scopes,
-                ).await?;
+                let results = self
+                    .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
+                    .await?;
                 debug!(results = results.len(), "Pipeline(simple): searched");
                 let context = self.run_curator(user_query, &results).await?;
 
                 // Retrieval refinement
-                let context = self.maybe_refine_retrieval(
-                    user_query, &analysis, scope, context, available_scopes,
-                ).await?;
+                let context = self
+                    .maybe_refine_retrieval(user_query, &analysis, scope, context, available_scopes)
+                    .await?;
 
-                let response = self.response_generator.generate(
-                    &analysis, &context, messages, None,
-                ).await?;
+                let response = self
+                    .response_generator
+                    .generate(&analysis, &context, messages, None)
+                    .await?;
                 return self.maybe_adapt(response, &analysis).await;
             }
             PipelineRoute::FullPipeline => {
-                return self.execute_full(
-                    user_query, messages, scope, &analysis, false, available_scopes,
-                ).await;
+                return self
+                    .execute_full(
+                        user_query,
+                        messages,
+                        scope,
+                        &analysis,
+                        false,
+                        available_scopes,
+                    )
+                    .await;
             }
             PipelineRoute::ComplexPipeline => {
-                return self.execute_full(
-                    user_query, messages, scope, &analysis, true, available_scopes,
-                ).await;
+                return self
+                    .execute_full(
+                        user_query,
+                        messages,
+                        scope,
+                        &analysis,
+                        true,
+                        available_scopes,
+                    )
+                    .await;
             }
         }
     }
@@ -235,9 +251,9 @@ impl ChatPipeline {
         debug!(primary = %rewritten.primary, sub = rewritten.sub_queries.len(), "Pipeline: rewritten");
 
         // ── Search (with tool router if enabled) ──
-        let mut results = self.run_search_with_tools(
-            &rewritten, scope, user_query, available_scopes,
-        ).await?;
+        let mut results = self
+            .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
+            .await?;
         debug!(results = results.len(), "Pipeline: searched");
 
         // ── ColBERT reranking: fine-grained LLM-based reranking ──
@@ -255,13 +271,18 @@ impl ChatPipeline {
         if let Some(ref graph_rag) = self.graph_rag {
             let graph = self.knowledge_graph.read().unwrap().clone();
             if graph.entity_count() > 0 {
-                results = graph_rag.enhance_results(user_query, &results, &graph).await?;
+                results = graph_rag
+                    .enhance_results(user_query, &results, &graph)
+                    .await?;
                 debug!(results = results.len(), "Pipeline: graph-enhanced");
             }
             // Extract entities from results to grow the graph
             if results.len() > 0 {
-                let texts: Vec<String> = results.iter().take(3)
-                    .map(|r| r.chunk.content.clone()).collect();
+                let texts: Vec<String> = results
+                    .iter()
+                    .take(3)
+                    .map(|r| r.chunk.content.clone())
+                    .collect();
                 let combined = texts.join("\n\n");
                 if let Ok(extraction) = graph_rag.extract_entities(&combined).await {
                     let mut graph = self.knowledge_graph.write().unwrap();
@@ -277,12 +298,16 @@ impl ChatPipeline {
 
         // ── Agent 3: Context Curator ──
         let context = self.run_curator(user_query, &results).await?;
-        debug!(chunks = context.chunks.len(), tokens = context.total_tokens_est, "Pipeline: curated");
+        debug!(
+            chunks = context.chunks.len(),
+            tokens = context.total_tokens_est,
+            "Pipeline: curated"
+        );
 
         // ── Retrieval Refinement ──
-        let context = self.maybe_refine_retrieval(
-            user_query, analysis, scope, context, available_scopes,
-        ).await?;
+        let context = self
+            .maybe_refine_retrieval(user_query, analysis, scope, context, available_scopes)
+            .await?;
 
         // ── CRAG: check context quality, fall back to web if needed ──
         let context = self.maybe_corrective_rag(user_query, context).await?;
@@ -313,7 +338,8 @@ impl ChatPipeline {
             if mr.should_use(analysis, &results) {
                 info!("Pipeline: using map-reduce for synthesis query");
                 let response = mr.process(user_query, &results).await?;
-                self.maybe_run_ragas(user_query, &context, &response.content).await;
+                self.maybe_run_ragas(user_query, &context, &response.content)
+                    .await;
                 return self.maybe_adapt(response, analysis).await;
             }
         }
@@ -321,11 +347,12 @@ impl ChatPipeline {
         // ── Agent 4: Response Generator (or Speculative RAG) ──
         let mut response = if let Some(ref spec) = self.speculative_rag {
             info!("Pipeline: using speculative generation");
-            spec.speculative_generate(analysis, &context, messages, user_query).await?
+            spec.speculative_generate(analysis, &context, messages, user_query)
+                .await?
         } else {
-            self.response_generator.generate(
-                analysis, &context, messages, None,
-            ).await?
+            self.response_generator
+                .generate(analysis, &context, messages, None)
+                .await?
         };
         debug!(len = response.content.len(), "Pipeline: generated");
 
@@ -335,21 +362,22 @@ impl ChatPipeline {
         if run_guard {
             if let Some(ref guard) = self.quality_guard {
                 for attempt in 0..=self.config.quality_guard_max_retries {
-                    let verdict = guard.check_with_threshold(
-                        user_query, &response.content, &context, threshold,
-                    ).await?;
+                    let verdict = guard
+                        .check_with_threshold(user_query, &response.content, &context, threshold)
+                        .await?;
                     if verdict.pass {
                         debug!(attempt, "Pipeline: quality passed");
                         break;
                     }
                     if attempt < self.config.quality_guard_max_retries {
-                        let feedback = verdict.feedback.unwrap_or_else(||
+                        let feedback = verdict.feedback.unwrap_or_else(|| {
                             "Improve relevance and reduce hallucination.".into()
-                        );
+                        });
                         warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
-                        response = self.response_generator.generate_with_feedback(
-                            analysis, &context, messages, &feedback, None,
-                        ).await?;
+                        response = self
+                            .response_generator
+                            .generate_with_feedback(analysis, &context, messages, &feedback, None)
+                            .await?;
                     } else {
                         warn!("Pipeline: quality guard exhausted retries, using last response");
                     }
@@ -358,7 +386,8 @@ impl ChatPipeline {
         }
 
         // ── RAGAS evaluation (async, sampled) ──
-        self.maybe_run_ragas(user_query, &context, &response.content).await;
+        self.maybe_run_ragas(user_query, &context, &response.content)
+            .await;
 
         // ── Agent 6: Language Adapter ──
         let response = self.maybe_adapt(response, analysis).await?;
@@ -381,7 +410,11 @@ impl ChatPipeline {
     }
 
     /// Inject conversation memory into the message list.
-    fn inject_memory(&self, messages: &[ChatMessage], memories: &[MemoryEntry]) -> Vec<ChatMessage> {
+    fn inject_memory(
+        &self,
+        messages: &[ChatMessage],
+        memories: &[MemoryEntry],
+    ) -> Vec<ChatMessage> {
         if memories.is_empty() || !self.config.conversation_memory_enabled {
             return messages.to_vec();
         }
@@ -410,7 +443,11 @@ impl ChatPipeline {
         let avg_score = if context.chunks.is_empty() {
             0.0
         } else {
-            context.chunks.iter().map(|c| c.relevance_score).sum::<f32>()
+            context
+                .chunks
+                .iter()
+                .map(|c| c.relevance_score)
+                .sum::<f32>()
                 / context.chunks.len() as f32
         };
 
@@ -436,13 +473,13 @@ impl ChatPipeline {
                  Try different keywords or broader/narrower terms.",
                 avg_score
             );
-            let alt_rewritten = rewriter.rewrite_with_feedback(
-                user_query, analysis, &feedback,
-            ).await?;
+            let alt_rewritten = rewriter
+                .rewrite_with_feedback(user_query, analysis, &feedback)
+                .await?;
 
-            let mut alt_results = self.run_search_with_tools(
-                &alt_rewritten, scope, user_query, available_scopes,
-            ).await?;
+            let mut alt_results = self
+                .run_search_with_tools(&alt_rewritten, scope, user_query, available_scopes)
+                .await?;
 
             // Merge with previous results
             let prev_results: Vec<thairag_core::types::SearchResult> = best_context
@@ -468,11 +505,20 @@ impl ChatPipeline {
             let new_avg = if new_context.chunks.is_empty() {
                 0.0
             } else {
-                new_context.chunks.iter().map(|c| c.relevance_score).sum::<f32>()
+                new_context
+                    .chunks
+                    .iter()
+                    .map(|c| c.relevance_score)
+                    .sum::<f32>()
                     / new_context.chunks.len() as f32
             };
 
-            debug!(attempt, old_avg = avg_score, new_avg, "Retrieval refinement attempt");
+            debug!(
+                attempt,
+                old_avg = avg_score,
+                new_avg,
+                "Retrieval refinement attempt"
+            );
 
             if new_avg > avg_score {
                 best_context = new_context;
@@ -497,17 +543,16 @@ impl ChatPipeline {
         let full_messages = self.inject_memory(messages, memories);
         let messages = &full_messages;
 
-        let user_query = messages
-            .last()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
+        let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
         // ── Agent 1: Query Analyzer ──
         let analysis = self.run_analyzer(user_query, messages).await?;
 
         // ── Self-RAG gate (streaming) ──
         if let Some(ref self_rag) = self.self_rag {
-            if let Ok(RetrievalDecision::NoRetrieve { confidence }) = self_rag.should_retrieve(user_query, messages).await {
+            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
+                self_rag.should_retrieve(user_query, messages).await
+            {
                 info!(confidence, "Self-RAG(stream): skipping retrieval");
                 return self.main_llm.generate_stream(messages, None).await;
             }
@@ -521,7 +566,8 @@ impl ChatPipeline {
             PipelineRoute::DirectLlm => {
                 return match analysis.intent {
                     QueryIntent::Clarification => {
-                        let msg = "Could you please provide more details about your question?".into();
+                        let msg =
+                            "Could you please provide more details about your question?".into();
                         Ok(LlmStreamResponse {
                             stream: Box::pin(tokio_stream::once(Ok(msg))),
                             usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -532,36 +578,38 @@ impl ChatPipeline {
             }
             PipelineRoute::SimpleRetrieval => {
                 let rewritten = query_rewriter::fallback_rewrite(user_query);
-                let results = self.run_search_with_tools(
-                    &rewritten, scope, user_query, available_scopes,
-                ).await?;
+                let results = self
+                    .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
+                    .await?;
                 let context = self.run_curator(user_query, &results).await?;
-                let context = self.maybe_refine_retrieval(
-                    user_query, &analysis, scope, context, available_scopes,
-                ).await?;
+                let context = self
+                    .maybe_refine_retrieval(user_query, &analysis, scope, context, available_scopes)
+                    .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
                     return Ok(resp);
                 }
-                let stream = self.response_generator.generate_stream(
-                    &analysis, &context, messages, None,
-                ).await?;
+                let stream = self
+                    .response_generator
+                    .generate_stream(&analysis, &context, messages, None)
+                    .await?;
                 return Ok(self.wrap_stream_with_quality_guard(stream, user_query, context));
             }
             PipelineRoute::FullPipeline | PipelineRoute::ComplexPipeline => {
                 let rewritten = self.run_rewriter(user_query, &analysis).await?;
-                let results = self.run_search_with_tools(
-                    &rewritten, scope, user_query, available_scopes,
-                ).await?;
+                let results = self
+                    .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
+                    .await?;
                 let context = self.run_curator(user_query, &results).await?;
-                let context = self.maybe_refine_retrieval(
-                    user_query, &analysis, scope, context, available_scopes,
-                ).await?;
+                let context = self
+                    .maybe_refine_retrieval(user_query, &analysis, scope, context, available_scopes)
+                    .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
                     return Ok(resp);
                 }
-                let stream = self.response_generator.generate_stream(
-                    &analysis, &context, messages, None,
-                ).await?;
+                let stream = self
+                    .response_generator
+                    .generate_stream(&analysis, &context, messages, None)
+                    .await?;
                 return Ok(self.wrap_stream_with_quality_guard(stream, user_query, context));
             }
         }
@@ -580,13 +628,21 @@ impl ChatPipeline {
             });
         }
 
-        let avg_score = context.chunks.iter().map(|c| c.relevance_score).sum::<f32>()
+        let avg_score = context
+            .chunks
+            .iter()
+            .map(|c| c.relevance_score)
+            .sum::<f32>()
             / context.chunks.len() as f32;
         if avg_score < 0.15 {
-            let msg = "I found some documents but they don't appear to be relevant to your question. \
+            let msg =
+                "I found some documents but they don't appear to be relevant to your question. \
                        Could you rephrase your query or provide more details?"
-                .to_string();
-            info!(avg_score, "Pipeline(stream): context too low quality, returning insufficient-info response");
+                    .to_string();
+            info!(
+                avg_score,
+                "Pipeline(stream): context too low quality, returning insufficient-info response"
+            );
             return Some(LlmStreamResponse {
                 stream: Box::pin(tokio_stream::once(Ok(msg))),
                 usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -667,11 +723,7 @@ impl ChatPipeline {
 
     // ── Agent runners with fallback ──
 
-    async fn run_analyzer(
-        &self,
-        query: &str,
-        messages: &[ChatMessage],
-    ) -> Result<QueryAnalysis> {
+    async fn run_analyzer(&self, query: &str, messages: &[ChatMessage]) -> Result<QueryAnalysis> {
         if let Some(ref analyzer) = self.query_analyzer {
             analyzer.analyze(query, messages).await
         } else {
@@ -702,11 +754,9 @@ impl ChatPipeline {
         // Feature 3: Agentic Tool Use
         if self.config.tool_use_enabled {
             if let Some(ref router) = self.tool_router {
-                return router.plan_and_execute(
-                    original_query,
-                    available_scopes,
-                    scope.is_unrestricted(),
-                ).await;
+                return router
+                    .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
+                    .await;
             }
         }
 
@@ -766,7 +816,10 @@ impl ChatPipeline {
         if let Some(ref curator) = self.context_curator {
             curator.curate(query, results).await
         } else {
-            Ok(context_curator::fallback_curate(results, self.config.max_context_tokens))
+            Ok(context_curator::fallback_curate(
+                results,
+                self.config.max_context_tokens,
+            ))
         }
     }
 
@@ -789,8 +842,14 @@ impl ChatPipeline {
             }
             ContextAction::Ambiguous | ContextAction::Incorrect => {
                 if !crag.has_web_search() {
-                    debug!("CRAG: context is {:?} but no web search configured",
-                           if matches!(action, ContextAction::Ambiguous) { "ambiguous" } else { "incorrect" });
+                    debug!(
+                        "CRAG: context is {:?} but no web search configured",
+                        if matches!(action, ContextAction::Ambiguous) {
+                            "ambiguous"
+                        } else {
+                            "incorrect"
+                        }
+                    );
                     return Ok(context);
                 }
                 let web_results = crag.web_search(query).await?;
@@ -810,7 +869,10 @@ impl ChatPipeline {
                     source_doc_id: Default::default(),
                     source_chunk_id: Default::default(),
                 });
-                info!(web_results = web_results.len(), "CRAG: supplemented with web search");
+                info!(
+                    web_results = web_results.len(),
+                    "CRAG: supplemented with web search"
+                );
                 Ok(enhanced)
             }
         }
@@ -885,6 +947,10 @@ fn deduplicate_results(results: &mut Vec<thairag_core::types::SearchResult>) {
         }
     }
 
-    keep.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    keep.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     *results = keep;
 }

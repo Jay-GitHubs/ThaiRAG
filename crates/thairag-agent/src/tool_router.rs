@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::PromptRegistry;
 use thairag_search::HybridSearchEngine;
 use tracing::{debug, info, warn};
 
@@ -28,7 +28,9 @@ pub struct ToolCall {
     pub top_k: usize,
 }
 
-fn default_top_k() -> usize { 5 }
+fn default_top_k() -> usize {
+    5
+}
 
 /// Agent: Tool Router.
 /// Lets the LLM decide which knowledge bases to search and with what strategy.
@@ -47,7 +49,13 @@ impl ToolRouter {
         max_calls: u32,
         max_tokens: u32,
     ) -> Self {
-        Self { llm, search_engine, max_calls, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            search_engine,
+            max_calls,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
     pub fn new_with_prompts(
@@ -57,7 +65,13 @@ impl ToolRouter {
         max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, search_engine, max_calls, max_tokens, prompts }
+        Self {
+            llm,
+            search_engine,
+            max_calls,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Plan and execute tool calls to gather search results.
@@ -77,7 +91,9 @@ impl ToolRouter {
             .collect();
 
         for call in calls.iter().take(self.max_calls as usize) {
-            let results = self.execute_call(call, query, &allowed_ws, unrestricted).await;
+            let results = self
+                .execute_call(call, query, &allowed_ws, unrestricted)
+                .await;
             match results {
                 Ok(mut r) => {
                     debug!(tool = %call.tool, results = r.len(), "Tool call executed");
@@ -106,7 +122,10 @@ impl ToolRouter {
                 .iter()
                 .map(|s| {
                     let desc = s.description.as_deref().unwrap_or("");
-                    format!("  - workspace_id: \"{}\", name: \"{}\" {}", s.workspace_id, s.name, desc)
+                    format!(
+                        "  - workspace_id: \"{}\", name: \"{}\" {}",
+                        s.workspace_id, s.name, desc
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -133,14 +152,22 @@ Output ONLY valid JSON array.";
 
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.tool_router", DEFAULT_TOOL_ROUTER, &[("scopes_desc", &scopes_desc)]),
+            content: self.prompts.render_or_default(
+                "chat.tool_router",
+                DEFAULT_TOOL_ROUTER,
+                &[("scopes_desc", &scopes_desc)],
+            ),
         };
         let user = ChatMessage {
             role: "user".into(),
             content: query.to_string(),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json_array(resp.content.trim());
                 match serde_json::from_str::<Vec<ToolCall>>(json_str) {
@@ -188,8 +215,9 @@ Output ONLY valid JSON array.";
                         warn!(workspace_id = %ws_id, "Tool router: workspace not in allowed set, skipping");
                         return Ok(vec![]);
                     }
-                    let ws_uuid = ws_id.parse::<uuid::Uuid>()
-                        .map_err(|e| thairag_core::ThaiRagError::Internal(format!("Invalid workspace_id: {e}")))?;
+                    let ws_uuid = ws_id.parse::<uuid::Uuid>().map_err(|e| {
+                        thairag_core::ThaiRagError::Internal(format!("Invalid workspace_id: {e}"))
+                    })?;
                     let sq = SearchQuery {
                         text: query_text.to_string(),
                         top_k: call.top_k,
@@ -238,7 +266,11 @@ fn deduplicate(results: &mut Vec<SearchResult>) {
             keep.push(r.clone());
         }
     }
-    keep.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    keep.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     *results = keep;
 }
 

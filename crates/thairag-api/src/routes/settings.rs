@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use thairag_auth::AuthClaims;
-use thairag_core::models::IdentityProvider;
-use thairag_core::types::IdpId;
-use thairag_core::prompt_registry::PromptSource;
 use thairag_core::ThaiRagError;
+use thairag_core::models::IdentityProvider;
+use thairag_core::prompt_registry::PromptSource;
+use thairag_core::types::IdpId;
 
 use crate::app_state::AppState;
 use crate::audit::{self, AuditEntry};
@@ -204,9 +204,7 @@ fn require_super_admin(claims: &AuthClaims, state: &AppState) -> Result<(), ApiE
         return Ok(());
     }
     let Ok(user_id) = claims.sub.parse::<Uuid>() else {
-        return Err(ApiError(ThaiRagError::Authorization(
-            "Invalid user".into(),
-        )));
+        return Err(ApiError(ThaiRagError::Authorization("Invalid user".into())));
     };
     let user = state
         .km_store
@@ -318,7 +316,11 @@ pub async fn test_idp_connection(
 
 fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderConfigResponse {
     let non_empty = |s: &str| -> Option<String> {
-        if s.is_empty() { None } else { Some(s.to_string()) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
     };
     ProviderConfigResponse {
         llm: LlmProviderInfo {
@@ -421,31 +423,51 @@ pub async fn update_provider_config(
     // Apply partial updates
     if let Some(llm) = body.llm {
         if let Some(kind) = llm.kind {
-            pc.llm.kind = parse_llm_kind(&kind)
-                .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            pc.llm.kind =
+                parse_llm_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         }
-        if let Some(model) = llm.model { pc.llm.model = model; }
-        if let Some(base_url) = llm.base_url { pc.llm.base_url = base_url; }
-        if let Some(api_key) = llm.api_key { pc.llm.api_key = api_key; }
+        if let Some(model) = llm.model {
+            pc.llm.model = model;
+        }
+        if let Some(base_url) = llm.base_url {
+            pc.llm.base_url = base_url;
+        }
+        if let Some(api_key) = llm.api_key {
+            pc.llm.api_key = api_key;
+        }
     }
     if let Some(emb) = body.embedding {
         if let Some(kind) = emb.kind {
-            pc.embedding.kind = parse_embedding_kind(&kind)
-                .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            pc.embedding.kind =
+                parse_embedding_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         }
-        if let Some(model) = emb.model { pc.embedding.model = model; }
-        if let Some(dimension) = emb.dimension { pc.embedding.dimension = dimension; }
-        if let Some(base_url) = emb.base_url { pc.embedding.base_url = base_url; }
-        if let Some(api_key) = emb.api_key { pc.embedding.api_key = api_key; }
+        if let Some(model) = emb.model {
+            pc.embedding.model = model;
+        }
+        if let Some(dimension) = emb.dimension {
+            pc.embedding.dimension = dimension;
+        }
+        if let Some(base_url) = emb.base_url {
+            pc.embedding.base_url = base_url;
+        }
+        if let Some(api_key) = emb.api_key {
+            pc.embedding.api_key = api_key;
+        }
     }
     if let Some(vs) = body.vector_store {
         if let Some(kind) = vs.kind {
             pc.vector_store.kind = parse_vector_store_kind(&kind)
                 .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         }
-        if let Some(url) = vs.url { pc.vector_store.url = url; }
-        if let Some(collection) = vs.collection { pc.vector_store.collection = collection; }
-        if let Some(api_key) = vs.api_key { pc.vector_store.api_key = api_key; }
+        if let Some(url) = vs.url {
+            pc.vector_store.url = url;
+        }
+        if let Some(collection) = vs.collection {
+            pc.vector_store.collection = collection;
+        }
+        if let Some(api_key) = vs.api_key {
+            pc.vector_store.api_key = api_key;
+        }
         if let Some(isolation) = vs.isolation {
             pc.vector_store.isolation = parse_vector_isolation(&isolation)
                 .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -453,17 +475,23 @@ pub async fn update_provider_config(
     }
     if let Some(rr) = body.reranker {
         if let Some(kind) = rr.kind {
-            pc.reranker.kind = parse_reranker_kind(&kind)
-                .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            pc.reranker.kind =
+                parse_reranker_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         }
-        if let Some(model) = rr.model { pc.reranker.model = model; }
-        if let Some(api_key) = rr.api_key { pc.reranker.api_key = api_key; }
+        if let Some(model) = rr.model {
+            pc.reranker.model = model;
+        }
+        if let Some(api_key) = rr.api_key {
+            pc.reranker.api_key = api_key;
+        }
     }
 
     // Validate the new config
     let mut validate_config = (*state.config).clone();
     validate_config.providers = pc.clone();
-    validate_config.validate().map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+    validate_config
+        .validate()
+        .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
 
     // Persist to DB
     let json = serde_json::to_string(&pc)
@@ -497,9 +525,18 @@ async fn fetch_models_for_provider(
 
     match kind {
         LlmKind::Ollama => {
-            let effective_url = if base_url.is_empty() { "http://localhost:11434" } else { base_url };
+            let effective_url = if base_url.is_empty() {
+                "http://localhost:11434"
+            } else {
+                base_url
+            };
             let url = format!("{}/api/tags", effective_url.trim_end_matches('/'));
-            match client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await {
+            match client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
                 Ok(resp) => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         let models = body["models"]
@@ -510,34 +547,71 @@ async fn fetch_models_for_provider(
                                         id: m["name"].as_str().unwrap_or("").to_string(),
                                         name: m["name"].as_str().unwrap_or("").to_string(),
                                         size: m["size"].as_u64(),
-                                        modified_at: m["modified_at"].as_str().map(|s| s.to_string()),
+                                        modified_at: m["modified_at"]
+                                            .as_str()
+                                            .map(|s| s.to_string()),
                                     })
                                     .collect()
                             })
                             .unwrap_or_default();
-                        ModelsResponse { provider: kind_str, models }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models,
+                        }
                     } else {
-                        ModelsResponse { provider: kind_str, models: vec![] }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to fetch Ollama models");
-                    ModelsResponse { provider: kind_str, models: vec![] }
+                    ModelsResponse {
+                        provider: kind_str,
+                        models: vec![],
+                    }
                 }
             }
         }
         LlmKind::Claude => {
             let models = vec![
-                AvailableModel { id: "claude-opus-4-20250514".into(), name: "Claude Opus 4".into(), size: None, modified_at: None },
-                AvailableModel { id: "claude-sonnet-4-20250514".into(), name: "Claude Sonnet 4".into(), size: None, modified_at: None },
-                AvailableModel { id: "claude-haiku-4-20250414".into(), name: "Claude Haiku 4".into(), size: None, modified_at: None },
-                AvailableModel { id: "claude-3-5-sonnet-20241022".into(), name: "Claude 3.5 Sonnet".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "claude-opus-4-20250514".into(),
+                    name: "Claude Opus 4".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "claude-sonnet-4-20250514".into(),
+                    name: "Claude Sonnet 4".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "claude-haiku-4-20250414".into(),
+                    name: "Claude Haiku 4".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "claude-3-5-sonnet-20241022".into(),
+                    name: "Claude 3.5 Sonnet".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
         LlmKind::OpenAi => {
             if api_key.is_empty() {
-                return ModelsResponse { provider: kind_str, models: vec![] };
+                return ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                };
             }
             match client
                 .get("https://api.openai.com/v1/models")
@@ -554,7 +628,10 @@ async fn fetch_models_for_provider(
                                 arr.iter()
                                     .filter(|m| {
                                         let id = m["id"].as_str().unwrap_or("");
-                                        id.starts_with("gpt-") || id.starts_with("o1") || id.starts_with("o3") || id.starts_with("o4")
+                                        id.starts_with("gpt-")
+                                            || id.starts_with("o1")
+                                            || id.starts_with("o3")
+                                            || id.starts_with("o4")
                                     })
                                     .map(|m| AvailableModel {
                                         id: m["id"].as_str().unwrap_or("").to_string(),
@@ -565,17 +642,29 @@ async fn fetch_models_for_provider(
                                     .collect()
                             })
                             .unwrap_or_default();
-                        ModelsResponse { provider: kind_str, models }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models,
+                        }
                     } else {
-                        ModelsResponse { provider: kind_str, models: vec![] }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        }
                     }
                 }
-                Err(_) => ModelsResponse { provider: kind_str, models: vec![] },
+                Err(_) => ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                },
             }
         }
         LlmKind::OpenAiCompatible => {
             if api_key.is_empty() || base_url.is_empty() {
-                return ModelsResponse { provider: kind_str, models: vec![] };
+                return ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                };
             }
             let base = base_url.trim_end_matches('/');
             match client
@@ -600,19 +689,30 @@ async fn fetch_models_for_provider(
                                     .collect()
                             })
                             .unwrap_or_default();
-                        ModelsResponse { provider: kind_str, models }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models,
+                        }
                     } else {
-                        ModelsResponse { provider: kind_str, models: vec![] }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        }
                     }
                 }
-                Err(_) => ModelsResponse { provider: kind_str, models: vec![] },
+                Err(_) => ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                },
             }
         }
         LlmKind::Gemini => {
             if !api_key.is_empty() {
                 // Try fetching from Gemini API
                 match client
-                    .get(format!("https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"))
+                    .get(format!(
+                        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+                    ))
                     .timeout(std::time::Duration::from_secs(10))
                     .send()
                     .await
@@ -625,15 +725,19 @@ async fn fetch_models_for_provider(
                                     arr.iter()
                                         .filter(|m| {
                                             // Only show generateContent-capable models
-                                            m["supportedGenerationMethods"]
-                                                .as_array()
-                                                .is_some_and(|methods| {
-                                                    methods.iter().any(|v| v.as_str() == Some("generateContent"))
-                                                })
+                                            m["supportedGenerationMethods"].as_array().is_some_and(
+                                                |methods| {
+                                                    methods.iter().any(|v| {
+                                                        v.as_str() == Some("generateContent")
+                                                    })
+                                                },
+                                            )
                                         })
                                         .map(|m| {
                                             let full_name = m["name"].as_str().unwrap_or("");
-                                            let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+                                            let id = full_name
+                                                .strip_prefix("models/")
+                                                .unwrap_or(full_name);
                                             let display = m["displayName"].as_str().unwrap_or(id);
                                             AvailableModel {
                                                 id: id.to_string(),
@@ -646,7 +750,10 @@ async fn fetch_models_for_provider(
                                 })
                                 .unwrap_or_default();
                             if !models.is_empty() {
-                                return ModelsResponse { provider: kind_str, models };
+                                return ModelsResponse {
+                                    provider: kind_str,
+                                    models,
+                                };
                             }
                         }
                     }
@@ -657,13 +764,41 @@ async fn fetch_models_for_provider(
             }
             // Fallback to static list
             let models = vec![
-                AvailableModel { id: "gemini-2.5-pro".into(), name: "Gemini 2.5 Pro".into(), size: None, modified_at: None },
-                AvailableModel { id: "gemini-2.5-flash".into(), name: "Gemini 2.5 Flash".into(), size: None, modified_at: None },
-                AvailableModel { id: "gemini-2.0-flash".into(), name: "Gemini 2.0 Flash".into(), size: None, modified_at: None },
-                AvailableModel { id: "gemini-1.5-pro".into(), name: "Gemini 1.5 Pro".into(), size: None, modified_at: None },
-                AvailableModel { id: "gemini-1.5-flash".into(), name: "Gemini 1.5 Flash".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "gemini-2.5-pro".into(),
+                    name: "Gemini 2.5 Pro".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "gemini-2.5-flash".into(),
+                    name: "Gemini 2.5 Flash".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "gemini-2.0-flash".into(),
+                    name: "Gemini 2.0 Flash".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "gemini-1.5-pro".into(),
+                    name: "Gemini 1.5 Pro".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "gemini-1.5-flash".into(),
+                    name: "Gemini 1.5 Flash".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
     }
 }
@@ -675,7 +810,9 @@ pub async fn list_available_models(
     require_super_admin(&claims, &state)?;
 
     let pc = state.providers().providers_config;
-    Ok(Json(fetch_models_for_provider(&pc.llm.kind, &pc.llm.base_url, &pc.llm.api_key).await))
+    Ok(Json(
+        fetch_models_for_provider(&pc.llm.kind, &pc.llm.base_url, &pc.llm.api_key).await,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -697,8 +834,7 @@ pub async fn sync_models(
 ) -> Result<Json<ModelsResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
 
-    let kind = parse_llm_kind(&req.kind)
-        .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+    let kind = parse_llm_kind(&req.kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
 
     // Use saved credentials as fallback when the user hasn't entered new ones
     let pc = state.providers().providers_config;
@@ -713,7 +849,9 @@ pub async fn sync_models(
         req.base_url
     };
 
-    Ok(Json(fetch_models_for_provider(&kind, &base_url, &api_key).await))
+    Ok(Json(
+        fetch_models_for_provider(&kind, &base_url, &api_key).await,
+    ))
 }
 
 // ── Embedding model sync ────────────────────────────────────────────
@@ -732,21 +870,68 @@ async fn fetch_models_for_embedding_provider(
         EmbeddingKind::Fastembed => {
             // Static list of popular fastembed models
             let models = vec![
-                AvailableModel { id: "BAAI/bge-small-en-v1.5".into(), name: "BGE Small EN v1.5 (dim=384)".into(), size: None, modified_at: None },
-                AvailableModel { id: "BAAI/bge-base-en-v1.5".into(), name: "BGE Base EN v1.5 (dim=768)".into(), size: None, modified_at: None },
-                AvailableModel { id: "BAAI/bge-large-en-v1.5".into(), name: "BGE Large EN v1.5 (dim=1024)".into(), size: None, modified_at: None },
-                AvailableModel { id: "sentence-transformers/all-MiniLM-L6-v2".into(), name: "All-MiniLM-L6-v2 (dim=384)".into(), size: None, modified_at: None },
-                AvailableModel { id: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".into(), name: "Multilingual MiniLM L12 v2 (dim=384)".into(), size: None, modified_at: None },
-                AvailableModel { id: "jinaai/jina-embeddings-v2-small-en".into(), name: "Jina Embeddings v2 Small EN (dim=512)".into(), size: None, modified_at: None },
-                AvailableModel { id: "jinaai/jina-embeddings-v2-base-en".into(), name: "Jina Embeddings v2 Base EN (dim=768)".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "BAAI/bge-small-en-v1.5".into(),
+                    name: "BGE Small EN v1.5 (dim=384)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "BAAI/bge-base-en-v1.5".into(),
+                    name: "BGE Base EN v1.5 (dim=768)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "BAAI/bge-large-en-v1.5".into(),
+                    name: "BGE Large EN v1.5 (dim=1024)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "sentence-transformers/all-MiniLM-L6-v2".into(),
+                    name: "All-MiniLM-L6-v2 (dim=384)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".into(),
+                    name: "Multilingual MiniLM L12 v2 (dim=384)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "jinaai/jina-embeddings-v2-small-en".into(),
+                    name: "Jina Embeddings v2 Small EN (dim=512)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "jinaai/jina-embeddings-v2-base-en".into(),
+                    name: "Jina Embeddings v2 Base EN (dim=768)".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
         EmbeddingKind::Ollama => {
             // Query Ollama /api/tags and filter for embedding models
-            let effective_url = if base_url.is_empty() { "http://localhost:11434" } else { base_url };
+            let effective_url = if base_url.is_empty() {
+                "http://localhost:11434"
+            } else {
+                base_url
+            };
             let url = format!("{}/api/tags", effective_url.trim_end_matches('/'));
-            match client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await {
+            match client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
                 Ok(resp) => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         let models = body["models"]
@@ -757,26 +942,40 @@ async fn fetch_models_for_embedding_provider(
                                         id: m["name"].as_str().unwrap_or("").to_string(),
                                         name: m["name"].as_str().unwrap_or("").to_string(),
                                         size: m["size"].as_u64(),
-                                        modified_at: m["modified_at"].as_str().map(|s| s.to_string()),
+                                        modified_at: m["modified_at"]
+                                            .as_str()
+                                            .map(|s| s.to_string()),
                                     })
                                     .collect()
                             })
                             .unwrap_or_default();
-                        ModelsResponse { provider: kind_str, models }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models,
+                        }
                     } else {
-                        ModelsResponse { provider: kind_str, models: vec![] }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to fetch Ollama models for embedding");
-                    ModelsResponse { provider: kind_str, models: vec![] }
+                    ModelsResponse {
+                        provider: kind_str,
+                        models: vec![],
+                    }
                 }
             }
         }
         EmbeddingKind::OpenAi => {
             // Query OpenAI /v1/models and filter to embedding models
             if api_key.is_empty() {
-                return ModelsResponse { provider: kind_str, models: vec![] };
+                return ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                };
             }
             let base = if base_url.is_empty() {
                 "https://api.openai.com"
@@ -809,24 +1008,61 @@ async fn fetch_models_for_embedding_provider(
                                     .collect()
                             })
                             .unwrap_or_default();
-                        ModelsResponse { provider: kind_str, models }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models,
+                        }
                     } else {
-                        ModelsResponse { provider: kind_str, models: vec![] }
+                        ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        }
                     }
                 }
-                Err(_) => ModelsResponse { provider: kind_str, models: vec![] },
+                Err(_) => ModelsResponse {
+                    provider: kind_str,
+                    models: vec![],
+                },
             }
         }
         EmbeddingKind::Cohere => {
             // Static list of Cohere embedding models
             let models = vec![
-                AvailableModel { id: "embed-v4.0".into(), name: "Embed v4.0 (dim=1024)".into(), size: None, modified_at: None },
-                AvailableModel { id: "embed-english-v3.0".into(), name: "Embed English v3.0 (dim=1024)".into(), size: None, modified_at: None },
-                AvailableModel { id: "embed-multilingual-v3.0".into(), name: "Embed Multilingual v3.0 (dim=1024)".into(), size: None, modified_at: None },
-                AvailableModel { id: "embed-english-light-v3.0".into(), name: "Embed English Light v3.0 (dim=384)".into(), size: None, modified_at: None },
-                AvailableModel { id: "embed-multilingual-light-v3.0".into(), name: "Embed Multilingual Light v3.0 (dim=384)".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "embed-v4.0".into(),
+                    name: "Embed v4.0 (dim=1024)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "embed-english-v3.0".into(),
+                    name: "Embed English v3.0 (dim=1024)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "embed-multilingual-v3.0".into(),
+                    name: "Embed Multilingual v3.0 (dim=1024)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "embed-english-light-v3.0".into(),
+                    name: "Embed English Light v3.0 (dim=384)".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "embed-multilingual-light-v3.0".into(),
+                    name: "Embed Multilingual Light v3.0 (dim=384)".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
     }
 }
@@ -847,8 +1083,8 @@ pub async fn sync_embedding_models(
 ) -> Result<Json<ModelsResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
 
-    let kind = parse_embedding_kind(&req.kind)
-        .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+    let kind =
+        parse_embedding_kind(&req.kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
 
     let pc = state.providers().providers_config;
     let api_key = if req.api_key.is_empty() && kind == pc.embedding.kind {
@@ -862,7 +1098,9 @@ pub async fn sync_embedding_models(
         req.base_url
     };
 
-    Ok(Json(fetch_models_for_embedding_provider(&kind, &base_url, &api_key).await))
+    Ok(Json(
+        fetch_models_for_embedding_provider(&kind, &base_url, &api_key).await,
+    ))
 }
 
 // ── Reranker model sync ─────────────────────────────────────────────
@@ -872,24 +1110,73 @@ fn reranker_static_models(kind: &thairag_core::types::RerankerKind) -> ModelsRes
 
     let kind_str = kind_str(kind);
     match kind {
-        RerankerKind::Passthrough => ModelsResponse { provider: kind_str, models: vec![] },
+        RerankerKind::Passthrough => ModelsResponse {
+            provider: kind_str,
+            models: vec![],
+        },
         RerankerKind::Cohere => {
             let models = vec![
-                AvailableModel { id: "rerank-v3.5".into(), name: "Rerank v3.5".into(), size: None, modified_at: None },
-                AvailableModel { id: "rerank-english-v3.0".into(), name: "Rerank English v3.0".into(), size: None, modified_at: None },
-                AvailableModel { id: "rerank-multilingual-v3.0".into(), name: "Rerank Multilingual v3.0".into(), size: None, modified_at: None },
-                AvailableModel { id: "rerank-english-v2.0".into(), name: "Rerank English v2.0".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "rerank-v3.5".into(),
+                    name: "Rerank v3.5".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "rerank-english-v3.0".into(),
+                    name: "Rerank English v3.0".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "rerank-multilingual-v3.0".into(),
+                    name: "Rerank Multilingual v3.0".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "rerank-english-v2.0".into(),
+                    name: "Rerank English v2.0".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
         RerankerKind::Jina => {
             let models = vec![
-                AvailableModel { id: "jina-reranker-v2-base-multilingual".into(), name: "Jina Reranker v2 Base Multilingual".into(), size: None, modified_at: None },
-                AvailableModel { id: "jina-reranker-v1-base-en".into(), name: "Jina Reranker v1 Base EN".into(), size: None, modified_at: None },
-                AvailableModel { id: "jina-reranker-v1-turbo-en".into(), name: "Jina Reranker v1 Turbo EN".into(), size: None, modified_at: None },
-                AvailableModel { id: "jina-reranker-v1-tiny-en".into(), name: "Jina Reranker v1 Tiny EN".into(), size: None, modified_at: None },
+                AvailableModel {
+                    id: "jina-reranker-v2-base-multilingual".into(),
+                    name: "Jina Reranker v2 Base Multilingual".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "jina-reranker-v1-base-en".into(),
+                    name: "Jina Reranker v1 Base EN".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "jina-reranker-v1-turbo-en".into(),
+                    name: "Jina Reranker v1 Turbo EN".into(),
+                    size: None,
+                    modified_at: None,
+                },
+                AvailableModel {
+                    id: "jina-reranker-v1-tiny-en".into(),
+                    name: "Jina Reranker v1 Tiny EN".into(),
+                    size: None,
+                    modified_at: None,
+                },
             ];
-            ModelsResponse { provider: kind_str, models }
+            ModelsResponse {
+                provider: kind_str,
+                models,
+            }
         }
     }
 }
@@ -1018,7 +1305,11 @@ pub struct UpdateAiPreprocessing {
 
 fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInfo {
     let non_empty = |s: &str| -> Option<String> {
-        if s.is_empty() { None } else { Some(s.to_string()) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
     };
     LlmProviderInfo {
         kind: kind_str(&llm.kind),
@@ -1035,23 +1326,31 @@ fn is_vision_model(kind: &thairag_core::types::LlmKind, model: &str) -> bool {
     use thairag_core::types::LlmKind;
     match kind {
         LlmKind::Claude => {
-            model.contains("claude-3") || model.contains("claude-opus-4")
-                || model.contains("claude-sonnet-4") || model.contains("claude-haiku-4")
+            model.contains("claude-3")
+                || model.contains("claude-opus-4")
+                || model.contains("claude-sonnet-4")
+                || model.contains("claude-haiku-4")
         }
         LlmKind::OpenAi | LlmKind::OpenAiCompatible => {
-            model.contains("gpt-4o") || model.contains("gpt-4.1")
+            model.contains("gpt-4o")
+                || model.contains("gpt-4.1")
                 || model.contains("gpt-4-vision")
-                || model.starts_with("o3") || model.starts_with("o4")
+                || model.starts_with("o3")
+                || model.starts_with("o4")
         }
-        LlmKind::Gemini => {
-            model.contains("gemini-1.5") || model.contains("gemini-2")
-        }
+        LlmKind::Gemini => model.contains("gemini-1.5") || model.contains("gemini-2"),
         LlmKind::Ollama => {
             let m = model.to_lowercase();
-            m.contains("llava") || m.contains("llama3.2-vision") || m.contains("minicpm-v")
-                || m.contains("bakllava") || m.contains("moondream")
-                || m.contains("cogvlm") || m.contains("internvl")
-                || m.contains("qwen2.5vl") || m.contains("qwen2-vl") || m.contains("qwenvl")
+            m.contains("llava")
+                || m.contains("llama3.2-vision")
+                || m.contains("minicpm-v")
+                || m.contains("bakllava")
+                || m.contains("moondream")
+                || m.contains("cogvlm")
+                || m.contains("internvl")
+                || m.contains("qwen2.5vl")
+                || m.contains("qwen2-vl")
+                || m.contains("qwenvl")
                 || m.contains("gemma3")
         }
     }
@@ -1059,15 +1358,22 @@ fn is_vision_model(kind: &thairag_core::types::LlmKind, model: &str) -> bool {
 
 /// Read effective preprocessing LLM config from KM store, falling back to file config.
 fn get_effective_preprocessing_llm(state: &AppState) -> Option<thairag_config::schema::LlmConfig> {
-    state.km_store.get_setting("ai_preprocessing.llm")
+    state
+        .km_store
+        .get_setting("ai_preprocessing.llm")
         .and_then(|json| serde_json::from_str(&json).ok())
         .or_else(|| state.config.document.ai_preprocessing.llm.clone())
 }
 
 /// Read effective per-agent LLM config from KM store, falling back to file config.
-fn get_effective_agent_llm(state: &AppState, agent: &str) -> Option<thairag_config::schema::LlmConfig> {
+fn get_effective_agent_llm(
+    state: &AppState,
+    agent: &str,
+) -> Option<thairag_config::schema::LlmConfig> {
     let key = format!("ai_preprocessing.{agent}_llm");
-    state.km_store.get_setting(&key)
+    state
+        .km_store
+        .get_setting(&key)
         .and_then(|json| serde_json::from_str(&json).ok())
         .or_else(|| {
             let ai = &state.config.document.ai_preprocessing;
@@ -1105,36 +1411,81 @@ struct EffectiveAiConfig {
 fn get_effective_ai_config(state: &AppState) -> EffectiveAiConfig {
     let ai = &state.config.document.ai_preprocessing;
     EffectiveAiConfig {
-        enabled: state.km_store.get_setting("ai_preprocessing.enabled")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.enabled),
-        auto_params: state.km_store.get_setting("ai_preprocessing.auto_params")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.auto_params),
-        quality_threshold: state.km_store.get_setting("ai_preprocessing.quality_threshold")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.quality_threshold),
-        max_llm_input_chars: state.km_store.get_setting("ai_preprocessing.max_llm_input_chars")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.max_llm_input_chars),
-        agent_max_tokens: state.km_store.get_setting("ai_preprocessing.agent_max_tokens")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.agent_max_tokens),
-        min_ai_size_bytes: state.km_store.get_setting("ai_preprocessing.min_ai_size_bytes")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.min_ai_size_bytes),
-        retry_enabled: state.km_store.get_setting("ai_preprocessing.retry.enabled")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.retry.enabled),
-        converter_max_retries: state.km_store.get_setting("ai_preprocessing.retry.converter_max_retries")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.retry.converter_max_retries),
-        chunker_max_retries: state.km_store.get_setting("ai_preprocessing.retry.chunker_max_retries")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.retry.chunker_max_retries),
-        analyzer_max_retries: state.km_store.get_setting("ai_preprocessing.retry.analyzer_max_retries")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.retry.analyzer_max_retries),
-        analyzer_retry_below_confidence: state.km_store.get_setting("ai_preprocessing.retry.analyzer_retry_below_confidence")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.retry.analyzer_retry_below_confidence),
-        orchestrator_enabled: state.km_store.get_setting("ai_preprocessing.orchestrator_enabled")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.orchestrator_enabled),
-        auto_orchestrator_budget: state.km_store.get_setting("ai_preprocessing.auto_orchestrator_budget")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.auto_orchestrator_budget),
-        max_orchestrator_calls: state.km_store.get_setting("ai_preprocessing.max_orchestrator_calls")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.max_orchestrator_calls),
-        enricher_enabled: state.km_store.get_setting("ai_preprocessing.enricher_enabled")
-            .and_then(|v| v.parse().ok()).unwrap_or(ai.enricher_enabled),
+        enabled: state
+            .km_store
+            .get_setting("ai_preprocessing.enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.enabled),
+        auto_params: state
+            .km_store
+            .get_setting("ai_preprocessing.auto_params")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.auto_params),
+        quality_threshold: state
+            .km_store
+            .get_setting("ai_preprocessing.quality_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.quality_threshold),
+        max_llm_input_chars: state
+            .km_store
+            .get_setting("ai_preprocessing.max_llm_input_chars")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.max_llm_input_chars),
+        agent_max_tokens: state
+            .km_store
+            .get_setting("ai_preprocessing.agent_max_tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.agent_max_tokens),
+        min_ai_size_bytes: state
+            .km_store
+            .get_setting("ai_preprocessing.min_ai_size_bytes")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.min_ai_size_bytes),
+        retry_enabled: state
+            .km_store
+            .get_setting("ai_preprocessing.retry.enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.enabled),
+        converter_max_retries: state
+            .km_store
+            .get_setting("ai_preprocessing.retry.converter_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.converter_max_retries),
+        chunker_max_retries: state
+            .km_store
+            .get_setting("ai_preprocessing.retry.chunker_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.chunker_max_retries),
+        analyzer_max_retries: state
+            .km_store
+            .get_setting("ai_preprocessing.retry.analyzer_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.analyzer_max_retries),
+        analyzer_retry_below_confidence: state
+            .km_store
+            .get_setting("ai_preprocessing.retry.analyzer_retry_below_confidence")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.analyzer_retry_below_confidence),
+        orchestrator_enabled: state
+            .km_store
+            .get_setting("ai_preprocessing.orchestrator_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.orchestrator_enabled),
+        auto_orchestrator_budget: state
+            .km_store
+            .get_setting("ai_preprocessing.auto_orchestrator_budget")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.auto_orchestrator_budget),
+        max_orchestrator_calls: state
+            .km_store
+            .get_setting("ai_preprocessing.max_orchestrator_calls")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.max_orchestrator_calls),
+        enricher_enabled: state
+            .km_store
+            .get_setting("ai_preprocessing.enricher_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.enricher_enabled),
     }
 }
 
@@ -1147,11 +1498,21 @@ fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse 
         max_llm_input_chars: effective_ai.max_llm_input_chars,
         agent_max_tokens: effective_ai.agent_max_tokens,
         min_ai_size_bytes: effective_ai.min_ai_size_bytes,
-        llm: get_effective_preprocessing_llm(state).as_ref().map(llm_config_to_info),
-        analyzer_llm: get_effective_agent_llm(state, "analyzer").as_ref().map(llm_config_to_info),
-        converter_llm: get_effective_agent_llm(state, "converter").as_ref().map(llm_config_to_info),
-        quality_llm: get_effective_agent_llm(state, "quality").as_ref().map(llm_config_to_info),
-        chunker_llm: get_effective_agent_llm(state, "chunker").as_ref().map(llm_config_to_info),
+        llm: get_effective_preprocessing_llm(state)
+            .as_ref()
+            .map(llm_config_to_info),
+        analyzer_llm: get_effective_agent_llm(state, "analyzer")
+            .as_ref()
+            .map(llm_config_to_info),
+        converter_llm: get_effective_agent_llm(state, "converter")
+            .as_ref()
+            .map(llm_config_to_info),
+        quality_llm: get_effective_agent_llm(state, "quality")
+            .as_ref()
+            .map(llm_config_to_info),
+        chunker_llm: get_effective_agent_llm(state, "chunker")
+            .as_ref()
+            .map(llm_config_to_info),
         retry: AiRetryResponse {
             enabled: effective_ai.retry_enabled,
             converter_max_retries: effective_ai.converter_max_retries,
@@ -1162,9 +1523,13 @@ fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse 
         orchestrator_enabled: effective_ai.orchestrator_enabled,
         auto_orchestrator_budget: effective_ai.auto_orchestrator_budget,
         max_orchestrator_calls: effective_ai.max_orchestrator_calls,
-        orchestrator_llm: get_effective_agent_llm(state, "orchestrator").as_ref().map(llm_config_to_info),
+        orchestrator_llm: get_effective_agent_llm(state, "orchestrator")
+            .as_ref()
+            .map(llm_config_to_info),
         enricher_enabled: effective_ai.enricher_enabled,
-        enricher_llm: get_effective_agent_llm(state, "enricher").as_ref().map(llm_config_to_info),
+        enricher_llm: get_effective_agent_llm(state, "enricher")
+            .as_ref()
+            .map(llm_config_to_info),
     }
 }
 
@@ -1175,12 +1540,21 @@ pub async fn get_document_config(
     require_super_admin(&claims, &state)?;
     let doc = &state.config.document;
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: state.km_store.get_setting("document.max_chunk_size")
-            .and_then(|v| v.parse().ok()).unwrap_or(doc.max_chunk_size),
-        chunk_overlap: state.km_store.get_setting("document.chunk_overlap")
-            .and_then(|v| v.parse().ok()).unwrap_or(doc.chunk_overlap),
-        max_upload_size_mb: state.km_store.get_setting("document.max_upload_size_mb")
-            .and_then(|v| v.parse().ok()).unwrap_or(doc.max_upload_size_mb),
+        max_chunk_size: state
+            .km_store
+            .get_setting("document.max_chunk_size")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.max_chunk_size),
+        chunk_overlap: state
+            .km_store
+            .get_setting("document.chunk_overlap")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.chunk_overlap),
+        max_upload_size_mb: state
+            .km_store
+            .get_setting("document.max_upload_size_mb")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.max_upload_size_mb),
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }
@@ -1195,70 +1569,113 @@ pub async fn update_document_config(
     // Persist pipeline settings
     if let Some(v) = req.max_chunk_size {
         if v < 64 || v > 100_000 {
-            return Err(ApiError(ThaiRagError::Validation("max_chunk_size must be between 64 and 100000".into())));
+            return Err(ApiError(ThaiRagError::Validation(
+                "max_chunk_size must be between 64 and 100000".into(),
+            )));
         }
-        state.km_store.set_setting("document.max_chunk_size", &v.to_string());
+        state
+            .km_store
+            .set_setting("document.max_chunk_size", &v.to_string());
     }
     if let Some(v) = req.chunk_overlap {
         if v > 10_000 {
-            return Err(ApiError(ThaiRagError::Validation("chunk_overlap must be at most 10000".into())));
+            return Err(ApiError(ThaiRagError::Validation(
+                "chunk_overlap must be at most 10000".into(),
+            )));
         }
-        state.km_store.set_setting("document.chunk_overlap", &v.to_string());
+        state
+            .km_store
+            .set_setting("document.chunk_overlap", &v.to_string());
     }
     if let Some(v) = req.max_upload_size_mb {
         if v < 1 || v > 1024 {
-            return Err(ApiError(ThaiRagError::Validation("max_upload_size_mb must be between 1 and 1024".into())));
+            return Err(ApiError(ThaiRagError::Validation(
+                "max_upload_size_mb must be between 1 and 1024".into(),
+            )));
         }
-        state.km_store.set_setting("document.max_upload_size_mb", &v.to_string());
+        state
+            .km_store
+            .set_setting("document.max_upload_size_mb", &v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
         // Persist scalar AI settings
         if let Some(enabled) = ai_update.enabled {
-            state.km_store.set_setting("ai_preprocessing.enabled", &enabled.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.enabled", &enabled.to_string());
         }
         if let Some(auto_params) = ai_update.auto_params {
-            state.km_store.set_setting("ai_preprocessing.auto_params", &auto_params.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.auto_params", &auto_params.to_string());
         }
         if let Some(threshold) = ai_update.quality_threshold {
-            state.km_store.set_setting("ai_preprocessing.quality_threshold", &threshold.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.quality_threshold", &threshold.to_string());
         }
         if let Some(chars) = ai_update.max_llm_input_chars {
-            state.km_store.set_setting("ai_preprocessing.max_llm_input_chars", &chars.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.max_llm_input_chars", &chars.to_string());
         }
         if let Some(tokens) = ai_update.agent_max_tokens {
-            state.km_store.set_setting("ai_preprocessing.agent_max_tokens", &tokens.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.agent_max_tokens", &tokens.to_string());
         }
         if let Some(size) = ai_update.min_ai_size_bytes {
-            state.km_store.set_setting("ai_preprocessing.min_ai_size_bytes", &size.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.min_ai_size_bytes", &size.to_string());
         }
 
         // Persist retry-with-feedback settings
         if let Some(v) = ai_update.retry_enabled {
-            state.km_store.set_setting("ai_preprocessing.retry.enabled", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.retry.enabled", &v.to_string());
         }
         if let Some(v) = ai_update.converter_max_retries {
-            state.km_store.set_setting("ai_preprocessing.retry.converter_max_retries", &v.to_string());
+            state.km_store.set_setting(
+                "ai_preprocessing.retry.converter_max_retries",
+                &v.to_string(),
+            );
         }
         if let Some(v) = ai_update.chunker_max_retries {
-            state.km_store.set_setting("ai_preprocessing.retry.chunker_max_retries", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.retry.chunker_max_retries", &v.to_string());
         }
         if let Some(v) = ai_update.analyzer_max_retries {
-            state.km_store.set_setting("ai_preprocessing.retry.analyzer_max_retries", &v.to_string());
+            state.km_store.set_setting(
+                "ai_preprocessing.retry.analyzer_max_retries",
+                &v.to_string(),
+            );
         }
         if let Some(v) = ai_update.analyzer_retry_below_confidence {
-            state.km_store.set_setting("ai_preprocessing.retry.analyzer_retry_below_confidence", &v.to_string());
+            state.km_store.set_setting(
+                "ai_preprocessing.retry.analyzer_retry_below_confidence",
+                &v.to_string(),
+            );
         }
 
         // Persist orchestrator settings
         if let Some(v) = ai_update.orchestrator_enabled {
-            state.km_store.set_setting("ai_preprocessing.orchestrator_enabled", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.orchestrator_enabled", &v.to_string());
         }
         if let Some(v) = ai_update.auto_orchestrator_budget {
-            state.km_store.set_setting("ai_preprocessing.auto_orchestrator_budget", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.auto_orchestrator_budget", &v.to_string());
         }
         if let Some(v) = ai_update.max_orchestrator_calls {
-            state.km_store.set_setting("ai_preprocessing.max_orchestrator_calls", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.max_orchestrator_calls", &v.to_string());
         }
 
         // Helper: persist an LLM config update to a given KM store key
@@ -1270,19 +1687,26 @@ pub async fn update_document_config(
         ) -> Result<(), ApiError> {
             let mut llm_config = current.unwrap_or_else(|| state.config.providers.llm.clone());
             if let Some(kind) = &llm_update.kind {
-                llm_config.kind = parse_llm_kind(kind)
-                    .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+                llm_config.kind =
+                    parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
             }
-            if let Some(model) = &llm_update.model { llm_config.model = model.clone(); }
-            if let Some(base_url) = &llm_update.base_url { llm_config.base_url = base_url.clone(); }
+            if let Some(model) = &llm_update.model {
+                llm_config.model = model.clone();
+            }
+            if let Some(base_url) = &llm_update.base_url {
+                llm_config.base_url = base_url.clone();
+            }
             if let Some(api_key) = &llm_update.api_key {
-                if !api_key.is_empty() { llm_config.api_key = api_key.clone(); }
+                if !api_key.is_empty() {
+                    llm_config.api_key = api_key.clone();
+                }
             }
             if let Some(max_tokens) = llm_update.max_tokens {
                 llm_config.max_tokens = Some(max_tokens);
             }
-            let json = serde_json::to_string(&llm_config)
-                .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize LLM config: {e}"))))?;
+            let json = serde_json::to_string(&llm_config).map_err(|e| {
+                ApiError(ThaiRagError::Internal(format!("Serialize LLM config: {e}")))
+            })?;
             state.km_store.set_setting(key, &json);
             Ok(())
         }
@@ -1295,27 +1719,59 @@ pub async fn update_document_config(
 
         // Persist per-agent LLM configs
         if let Some(ref u) = ai_update.analyzer_llm {
-            persist_llm_update(&state, "ai_preprocessing.analyzer_llm", u, get_effective_agent_llm(&state, "analyzer"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.analyzer_llm",
+                u,
+                get_effective_agent_llm(&state, "analyzer"),
+            )?;
         }
         if let Some(ref u) = ai_update.converter_llm {
-            persist_llm_update(&state, "ai_preprocessing.converter_llm", u, get_effective_agent_llm(&state, "converter"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.converter_llm",
+                u,
+                get_effective_agent_llm(&state, "converter"),
+            )?;
         }
         if let Some(ref u) = ai_update.quality_llm {
-            persist_llm_update(&state, "ai_preprocessing.quality_llm", u, get_effective_agent_llm(&state, "quality"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.quality_llm",
+                u,
+                get_effective_agent_llm(&state, "quality"),
+            )?;
         }
         if let Some(ref u) = ai_update.chunker_llm {
-            persist_llm_update(&state, "ai_preprocessing.chunker_llm", u, get_effective_agent_llm(&state, "chunker"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.chunker_llm",
+                u,
+                get_effective_agent_llm(&state, "chunker"),
+            )?;
         }
         if let Some(ref u) = ai_update.orchestrator_llm {
-            persist_llm_update(&state, "ai_preprocessing.orchestrator_llm", u, get_effective_agent_llm(&state, "orchestrator"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.orchestrator_llm",
+                u,
+                get_effective_agent_llm(&state, "orchestrator"),
+            )?;
         }
 
         // Persist enricher settings
         if let Some(v) = ai_update.enricher_enabled {
-            state.km_store.set_setting("ai_preprocessing.enricher_enabled", &v.to_string());
+            state
+                .km_store
+                .set_setting("ai_preprocessing.enricher_enabled", &v.to_string());
         }
         if let Some(ref u) = ai_update.enricher_llm {
-            persist_llm_update(&state, "ai_preprocessing.enricher_llm", u, get_effective_agent_llm(&state, "enricher"))?;
+            persist_llm_update(
+                &state,
+                "ai_preprocessing.enricher_llm",
+                u,
+                get_effective_agent_llm(&state, "enricher"),
+            )?;
         }
     }
 
@@ -1325,22 +1781,36 @@ pub async fn update_document_config(
             state.km_store.delete_setting("ai_preprocessing.llm");
         }
         if ai_update.analyzer_llm.is_none() && ai_update.remove_analyzer_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.analyzer_llm");
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.analyzer_llm");
         }
         if ai_update.converter_llm.is_none() && ai_update.remove_converter_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.converter_llm");
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.converter_llm");
         }
         if ai_update.quality_llm.is_none() && ai_update.remove_quality_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.quality_llm");
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.quality_llm");
         }
         if ai_update.chunker_llm.is_none() && ai_update.remove_chunker_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.chunker_llm");
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.chunker_llm");
         }
-        if ai_update.orchestrator_llm.is_none() && ai_update.remove_orchestrator_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.orchestrator_llm");
+        if ai_update.orchestrator_llm.is_none()
+            && ai_update.remove_orchestrator_llm.unwrap_or(false)
+        {
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.orchestrator_llm");
         }
         if ai_update.enricher_llm.is_none() && ai_update.remove_enricher_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.enricher_llm");
+            state
+                .km_store
+                .delete_setting("ai_preprocessing.enricher_llm");
         }
     }
 
@@ -1349,12 +1819,21 @@ pub async fn update_document_config(
     let effective_ai = get_effective_ai_config(&state);
 
     // Effective pipeline settings (overrides from KM store, fallback to config)
-    let eff_max_chunk_size = state.km_store.get_setting("document.max_chunk_size")
-        .and_then(|v| v.parse().ok()).unwrap_or(doc.max_chunk_size);
-    let eff_chunk_overlap = state.km_store.get_setting("document.chunk_overlap")
-        .and_then(|v| v.parse().ok()).unwrap_or(doc.chunk_overlap);
-    let eff_max_upload_size_mb = state.km_store.get_setting("document.max_upload_size_mb")
-        .and_then(|v| v.parse().ok()).unwrap_or(doc.max_upload_size_mb);
+    let eff_max_chunk_size = state
+        .km_store
+        .get_setting("document.max_chunk_size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_chunk_size);
+    let eff_chunk_overlap = state
+        .km_store
+        .get_setting("document.chunk_overlap")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.chunk_overlap);
+    let eff_max_upload_size_mb = state
+        .km_store
+        .get_setting("document.max_upload_size_mb")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_upload_size_mb);
 
     // Hot-reload the document pipeline with updated config
     let mut effective_doc = doc.clone();
@@ -1376,11 +1855,15 @@ pub async fn update_document_config(
     effective_doc.ai_preprocessing.retry.converter_max_retries = effective_ai.converter_max_retries;
     effective_doc.ai_preprocessing.retry.chunker_max_retries = effective_ai.chunker_max_retries;
     effective_doc.ai_preprocessing.retry.analyzer_max_retries = effective_ai.analyzer_max_retries;
-    effective_doc.ai_preprocessing.retry.analyzer_retry_below_confidence = effective_ai.analyzer_retry_below_confidence;
+    effective_doc
+        .ai_preprocessing
+        .retry
+        .analyzer_retry_below_confidence = effective_ai.analyzer_retry_below_confidence;
     effective_doc.ai_preprocessing.orchestrator_enabled = effective_ai.orchestrator_enabled;
     effective_doc.ai_preprocessing.auto_orchestrator_budget = effective_ai.auto_orchestrator_budget;
     effective_doc.ai_preprocessing.max_orchestrator_calls = effective_ai.max_orchestrator_calls;
-    effective_doc.ai_preprocessing.orchestrator_llm = get_effective_agent_llm(&state, "orchestrator");
+    effective_doc.ai_preprocessing.orchestrator_llm =
+        get_effective_agent_llm(&state, "orchestrator");
     effective_doc.ai_preprocessing.enricher_enabled = effective_ai.enricher_enabled;
     effective_doc.ai_preprocessing.enricher_llm = get_effective_agent_llm(&state, "enricher");
 
@@ -1398,7 +1881,10 @@ pub async fn update_document_config(
             tracing::info!("Document processing config updated and hot-reloaded by super admin");
         }
         Err(e) => {
-            tracing::warn!("Hot-reload failed after document config save: {:?}. Config is saved but will take effect on restart.", e);
+            tracing::warn!(
+                "Hot-reload failed after document config save: {:?}. Config is saved but will take effect on restart.",
+                e
+            );
         }
     }
 
@@ -1611,97 +2097,236 @@ fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::Chat
     let s = |key: &str| state.km_store.get_setting(key);
 
     thairag_config::schema::ChatPipelineConfig {
-        enabled: s("chat_pipeline.enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.enabled),
-        llm: s("chat_pipeline.llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.llm.clone()),
-        query_analyzer_enabled: s("chat_pipeline.query_analyzer_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.query_analyzer_enabled),
-        query_analyzer_llm: s("chat_pipeline.query_analyzer_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.query_analyzer_llm.clone()),
-        query_rewriter_enabled: s("chat_pipeline.query_rewriter_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.query_rewriter_enabled),
-        query_rewriter_llm: s("chat_pipeline.query_rewriter_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.query_rewriter_llm.clone()),
-        context_curator_enabled: s("chat_pipeline.context_curator_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.context_curator_enabled),
-        context_curator_llm: s("chat_pipeline.context_curator_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.context_curator_llm.clone()),
-        response_generator_llm: s("chat_pipeline.response_generator_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.response_generator_llm.clone()),
-        quality_guard_enabled: s("chat_pipeline.quality_guard_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.quality_guard_enabled),
-        quality_guard_llm: s("chat_pipeline.quality_guard_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.quality_guard_llm.clone()),
-        quality_guard_max_retries: s("chat_pipeline.quality_guard_max_retries").and_then(|v| v.parse().ok()).unwrap_or(cp.quality_guard_max_retries),
-        quality_guard_threshold: s("chat_pipeline.quality_guard_threshold").and_then(|v| v.parse().ok()).unwrap_or(cp.quality_guard_threshold),
-        language_adapter_enabled: s("chat_pipeline.language_adapter_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.language_adapter_enabled),
-        language_adapter_llm: s("chat_pipeline.language_adapter_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.language_adapter_llm.clone()),
-        orchestrator_enabled: s("chat_pipeline.orchestrator_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.orchestrator_enabled),
-        max_orchestrator_calls: s("chat_pipeline.max_orchestrator_calls").and_then(|v| v.parse().ok()).unwrap_or(cp.max_orchestrator_calls),
-        orchestrator_llm: s("chat_pipeline.orchestrator_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.orchestrator_llm.clone()),
-        max_context_tokens: s("chat_pipeline.max_context_tokens").and_then(|v| v.parse().ok()).unwrap_or(cp.max_context_tokens),
-        agent_max_tokens: s("chat_pipeline.agent_max_tokens").and_then(|v| v.parse().ok()).unwrap_or(cp.agent_max_tokens),
+        enabled: s("chat_pipeline.enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.enabled),
+        llm: s("chat_pipeline.llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.llm.clone()),
+        query_analyzer_enabled: s("chat_pipeline.query_analyzer_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.query_analyzer_enabled),
+        query_analyzer_llm: s("chat_pipeline.query_analyzer_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.query_analyzer_llm.clone()),
+        query_rewriter_enabled: s("chat_pipeline.query_rewriter_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.query_rewriter_enabled),
+        query_rewriter_llm: s("chat_pipeline.query_rewriter_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.query_rewriter_llm.clone()),
+        context_curator_enabled: s("chat_pipeline.context_curator_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.context_curator_enabled),
+        context_curator_llm: s("chat_pipeline.context_curator_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.context_curator_llm.clone()),
+        response_generator_llm: s("chat_pipeline.response_generator_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.response_generator_llm.clone()),
+        quality_guard_enabled: s("chat_pipeline.quality_guard_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.quality_guard_enabled),
+        quality_guard_llm: s("chat_pipeline.quality_guard_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.quality_guard_llm.clone()),
+        quality_guard_max_retries: s("chat_pipeline.quality_guard_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.quality_guard_max_retries),
+        quality_guard_threshold: s("chat_pipeline.quality_guard_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.quality_guard_threshold),
+        language_adapter_enabled: s("chat_pipeline.language_adapter_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.language_adapter_enabled),
+        language_adapter_llm: s("chat_pipeline.language_adapter_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.language_adapter_llm.clone()),
+        orchestrator_enabled: s("chat_pipeline.orchestrator_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.orchestrator_enabled),
+        max_orchestrator_calls: s("chat_pipeline.max_orchestrator_calls")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.max_orchestrator_calls),
+        orchestrator_llm: s("chat_pipeline.orchestrator_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.orchestrator_llm.clone()),
+        max_context_tokens: s("chat_pipeline.max_context_tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.max_context_tokens),
+        agent_max_tokens: s("chat_pipeline.agent_max_tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.agent_max_tokens),
         // Feature: Conversation Memory
-        conversation_memory_enabled: s("chat_pipeline.conversation_memory_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.conversation_memory_enabled),
-        memory_max_summaries: s("chat_pipeline.memory_max_summaries").and_then(|v| v.parse().ok()).unwrap_or(cp.memory_max_summaries),
-        memory_summary_max_tokens: s("chat_pipeline.memory_summary_max_tokens").and_then(|v| v.parse().ok()).unwrap_or(cp.memory_summary_max_tokens),
-        memory_llm: s("chat_pipeline.memory_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.memory_llm.clone()),
+        conversation_memory_enabled: s("chat_pipeline.conversation_memory_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.conversation_memory_enabled),
+        memory_max_summaries: s("chat_pipeline.memory_max_summaries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.memory_max_summaries),
+        memory_summary_max_tokens: s("chat_pipeline.memory_summary_max_tokens")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.memory_summary_max_tokens),
+        memory_llm: s("chat_pipeline.memory_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.memory_llm.clone()),
         // Feature: Multi-turn Retrieval Refinement
-        retrieval_refinement_enabled: s("chat_pipeline.retrieval_refinement_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.retrieval_refinement_enabled),
-        refinement_min_relevance: s("chat_pipeline.refinement_min_relevance").and_then(|v| v.parse().ok()).unwrap_or(cp.refinement_min_relevance),
-        refinement_max_retries: s("chat_pipeline.refinement_max_retries").and_then(|v| v.parse().ok()).unwrap_or(cp.refinement_max_retries),
+        retrieval_refinement_enabled: s("chat_pipeline.retrieval_refinement_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.retrieval_refinement_enabled),
+        refinement_min_relevance: s("chat_pipeline.refinement_min_relevance")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.refinement_min_relevance),
+        refinement_max_retries: s("chat_pipeline.refinement_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.refinement_max_retries),
         // Feature: Agentic Tool Use
-        tool_use_enabled: s("chat_pipeline.tool_use_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.tool_use_enabled),
-        tool_use_max_calls: s("chat_pipeline.tool_use_max_calls").and_then(|v| v.parse().ok()).unwrap_or(cp.tool_use_max_calls),
-        tool_use_llm: s("chat_pipeline.tool_use_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.tool_use_llm.clone()),
+        tool_use_enabled: s("chat_pipeline.tool_use_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.tool_use_enabled),
+        tool_use_max_calls: s("chat_pipeline.tool_use_max_calls")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.tool_use_max_calls),
+        tool_use_llm: s("chat_pipeline.tool_use_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.tool_use_llm.clone()),
         // Feature: Adaptive Quality Thresholds
-        adaptive_threshold_enabled: s("chat_pipeline.adaptive_threshold_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.adaptive_threshold_enabled),
-        feedback_decay_days: s("chat_pipeline.feedback_decay_days").and_then(|v| v.parse().ok()).unwrap_or(cp.feedback_decay_days),
-        adaptive_min_samples: s("chat_pipeline.adaptive_min_samples").and_then(|v| v.parse().ok()).unwrap_or(cp.adaptive_min_samples),
+        adaptive_threshold_enabled: s("chat_pipeline.adaptive_threshold_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.adaptive_threshold_enabled),
+        feedback_decay_days: s("chat_pipeline.feedback_decay_days")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.feedback_decay_days),
+        adaptive_min_samples: s("chat_pipeline.adaptive_min_samples")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.adaptive_min_samples),
         // Self-RAG
-        self_rag_enabled: s("chat_pipeline.self_rag_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.self_rag_enabled),
-        self_rag_threshold: s("chat_pipeline.self_rag_threshold").and_then(|v| v.parse().ok()).unwrap_or(cp.self_rag_threshold),
-        self_rag_llm: s("chat_pipeline.self_rag_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.self_rag_llm.clone()),
+        self_rag_enabled: s("chat_pipeline.self_rag_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.self_rag_enabled),
+        self_rag_threshold: s("chat_pipeline.self_rag_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.self_rag_threshold),
+        self_rag_llm: s("chat_pipeline.self_rag_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.self_rag_llm.clone()),
         // Graph RAG
-        graph_rag_enabled: s("chat_pipeline.graph_rag_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.graph_rag_enabled),
-        graph_rag_max_entities: s("chat_pipeline.graph_rag_max_entities").and_then(|v| v.parse().ok()).unwrap_or(cp.graph_rag_max_entities),
-        graph_rag_max_depth: s("chat_pipeline.graph_rag_max_depth").and_then(|v| v.parse().ok()).unwrap_or(cp.graph_rag_max_depth),
-        graph_rag_llm: s("chat_pipeline.graph_rag_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.graph_rag_llm.clone()),
+        graph_rag_enabled: s("chat_pipeline.graph_rag_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.graph_rag_enabled),
+        graph_rag_max_entities: s("chat_pipeline.graph_rag_max_entities")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.graph_rag_max_entities),
+        graph_rag_max_depth: s("chat_pipeline.graph_rag_max_depth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.graph_rag_max_depth),
+        graph_rag_llm: s("chat_pipeline.graph_rag_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.graph_rag_llm.clone()),
         // CRAG
-        crag_enabled: s("chat_pipeline.crag_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.crag_enabled),
-        crag_relevance_threshold: s("chat_pipeline.crag_relevance_threshold").and_then(|v| v.parse().ok()).unwrap_or(cp.crag_relevance_threshold),
-        crag_web_search_url: s("chat_pipeline.crag_web_search_url").unwrap_or_else(|| cp.crag_web_search_url.clone()),
-        crag_max_web_results: s("chat_pipeline.crag_max_web_results").and_then(|v| v.parse().ok()).unwrap_or(cp.crag_max_web_results),
+        crag_enabled: s("chat_pipeline.crag_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.crag_enabled),
+        crag_relevance_threshold: s("chat_pipeline.crag_relevance_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.crag_relevance_threshold),
+        crag_web_search_url: s("chat_pipeline.crag_web_search_url")
+            .unwrap_or_else(|| cp.crag_web_search_url.clone()),
+        crag_max_web_results: s("chat_pipeline.crag_max_web_results")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.crag_max_web_results),
         // Speculative RAG
-        speculative_rag_enabled: s("chat_pipeline.speculative_rag_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.speculative_rag_enabled),
-        speculative_candidates: s("chat_pipeline.speculative_candidates").and_then(|v| v.parse().ok()).unwrap_or(cp.speculative_candidates),
+        speculative_rag_enabled: s("chat_pipeline.speculative_rag_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.speculative_rag_enabled),
+        speculative_candidates: s("chat_pipeline.speculative_candidates")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.speculative_candidates),
         // Map-Reduce RAG
-        map_reduce_enabled: s("chat_pipeline.map_reduce_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.map_reduce_enabled),
-        map_reduce_max_chunks: s("chat_pipeline.map_reduce_max_chunks").and_then(|v| v.parse().ok()).unwrap_or(cp.map_reduce_max_chunks),
-        map_reduce_llm: s("chat_pipeline.map_reduce_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.map_reduce_llm.clone()),
+        map_reduce_enabled: s("chat_pipeline.map_reduce_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.map_reduce_enabled),
+        map_reduce_max_chunks: s("chat_pipeline.map_reduce_max_chunks")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.map_reduce_max_chunks),
+        map_reduce_llm: s("chat_pipeline.map_reduce_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.map_reduce_llm.clone()),
         // RAGAS
-        ragas_enabled: s("chat_pipeline.ragas_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.ragas_enabled),
-        ragas_sample_rate: s("chat_pipeline.ragas_sample_rate").and_then(|v| v.parse().ok()).unwrap_or(cp.ragas_sample_rate),
-        ragas_llm: s("chat_pipeline.ragas_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.ragas_llm.clone()),
+        ragas_enabled: s("chat_pipeline.ragas_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.ragas_enabled),
+        ragas_sample_rate: s("chat_pipeline.ragas_sample_rate")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.ragas_sample_rate),
+        ragas_llm: s("chat_pipeline.ragas_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.ragas_llm.clone()),
         // Contextual Compression
-        compression_enabled: s("chat_pipeline.compression_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.compression_enabled),
-        compression_target_ratio: s("chat_pipeline.compression_target_ratio").and_then(|v| v.parse().ok()).unwrap_or(cp.compression_target_ratio),
-        compression_llm: s("chat_pipeline.compression_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.compression_llm.clone()),
+        compression_enabled: s("chat_pipeline.compression_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.compression_enabled),
+        compression_target_ratio: s("chat_pipeline.compression_target_ratio")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.compression_target_ratio),
+        compression_llm: s("chat_pipeline.compression_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.compression_llm.clone()),
         // Multi-modal RAG
-        multimodal_enabled: s("chat_pipeline.multimodal_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.multimodal_enabled),
-        multimodal_max_images: s("chat_pipeline.multimodal_max_images").and_then(|v| v.parse().ok()).unwrap_or(cp.multimodal_max_images),
-        multimodal_llm: s("chat_pipeline.multimodal_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.multimodal_llm.clone()),
+        multimodal_enabled: s("chat_pipeline.multimodal_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.multimodal_enabled),
+        multimodal_max_images: s("chat_pipeline.multimodal_max_images")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.multimodal_max_images),
+        multimodal_llm: s("chat_pipeline.multimodal_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.multimodal_llm.clone()),
         // RAPTOR
-        raptor_enabled: s("chat_pipeline.raptor_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.raptor_enabled),
-        raptor_max_depth: s("chat_pipeline.raptor_max_depth").and_then(|v| v.parse().ok()).unwrap_or(cp.raptor_max_depth),
-        raptor_group_size: s("chat_pipeline.raptor_group_size").and_then(|v| v.parse().ok()).unwrap_or(cp.raptor_group_size),
-        raptor_llm: s("chat_pipeline.raptor_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.raptor_llm.clone()),
+        raptor_enabled: s("chat_pipeline.raptor_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.raptor_enabled),
+        raptor_max_depth: s("chat_pipeline.raptor_max_depth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.raptor_max_depth),
+        raptor_group_size: s("chat_pipeline.raptor_group_size")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.raptor_group_size),
+        raptor_llm: s("chat_pipeline.raptor_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.raptor_llm.clone()),
         // ColBERT
-        colbert_enabled: s("chat_pipeline.colbert_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.colbert_enabled),
-        colbert_top_n: s("chat_pipeline.colbert_top_n").and_then(|v| v.parse().ok()).unwrap_or(cp.colbert_top_n),
-        colbert_llm: s("chat_pipeline.colbert_llm").and_then(|v| serde_json::from_str(&v).ok()).or_else(|| cp.colbert_llm.clone()),
+        colbert_enabled: s("chat_pipeline.colbert_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.colbert_enabled),
+        colbert_top_n: s("chat_pipeline.colbert_top_n")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.colbert_top_n),
+        colbert_llm: s("chat_pipeline.colbert_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.colbert_llm.clone()),
         // Active Learning
-        active_learning_enabled: s("chat_pipeline.active_learning_enabled").and_then(|v| v.parse().ok()).unwrap_or(cp.active_learning_enabled),
-        active_learning_min_interactions: s("chat_pipeline.active_learning_min_interactions").and_then(|v| v.parse().ok()).unwrap_or(cp.active_learning_min_interactions),
-        active_learning_max_low_confidence: s("chat_pipeline.active_learning_max_low_confidence").and_then(|v| v.parse().ok()).unwrap_or(cp.active_learning_max_low_confidence),
+        active_learning_enabled: s("chat_pipeline.active_learning_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.active_learning_enabled),
+        active_learning_min_interactions: s("chat_pipeline.active_learning_min_interactions")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.active_learning_min_interactions),
+        active_learning_max_low_confidence: s("chat_pipeline.active_learning_max_low_confidence")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.active_learning_max_low_confidence),
         // LLM10: Budget cap
-        max_llm_calls_per_request: s("chat_pipeline.max_llm_calls_per_request").and_then(|v| v.parse().ok()).unwrap_or(cp.max_llm_calls_per_request),
+        max_llm_calls_per_request: s("chat_pipeline.max_llm_calls_per_request")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.max_llm_calls_per_request),
     }
 }
 
 fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse {
     let eff = get_effective_chat_pipeline(state);
-    let llm_mode = state.km_store.get_setting("chat_pipeline.llm_mode")
+    let llm_mode = state
+        .km_store
+        .get_setting("chat_pipeline.llm_mode")
         .unwrap_or_else(|| "chat".to_string());
     ChatPipelineConfigResponse {
         enabled: eff.enabled,
@@ -1826,30 +2451,69 @@ pub async fn update_chat_pipeline_config(
         state.km_store.set_setting("chat_pipeline.llm_mode", mode);
     }
     persist_bool!(enabled, "chat_pipeline.enabled");
-    persist_bool!(query_analyzer_enabled, "chat_pipeline.query_analyzer_enabled");
-    persist_bool!(query_rewriter_enabled, "chat_pipeline.query_rewriter_enabled");
-    persist_bool!(context_curator_enabled, "chat_pipeline.context_curator_enabled");
+    persist_bool!(
+        query_analyzer_enabled,
+        "chat_pipeline.query_analyzer_enabled"
+    );
+    persist_bool!(
+        query_rewriter_enabled,
+        "chat_pipeline.query_rewriter_enabled"
+    );
+    persist_bool!(
+        context_curator_enabled,
+        "chat_pipeline.context_curator_enabled"
+    );
     persist_bool!(quality_guard_enabled, "chat_pipeline.quality_guard_enabled");
-    persist_bool!(language_adapter_enabled, "chat_pipeline.language_adapter_enabled");
+    persist_bool!(
+        language_adapter_enabled,
+        "chat_pipeline.language_adapter_enabled"
+    );
     persist_bool!(orchestrator_enabled, "chat_pipeline.orchestrator_enabled");
-    persist_num!(max_orchestrator_calls, "chat_pipeline.max_orchestrator_calls");
-    persist_num!(quality_guard_max_retries, "chat_pipeline.quality_guard_max_retries");
-    persist_num!(quality_guard_threshold, "chat_pipeline.quality_guard_threshold");
+    persist_num!(
+        max_orchestrator_calls,
+        "chat_pipeline.max_orchestrator_calls"
+    );
+    persist_num!(
+        quality_guard_max_retries,
+        "chat_pipeline.quality_guard_max_retries"
+    );
+    persist_num!(
+        quality_guard_threshold,
+        "chat_pipeline.quality_guard_threshold"
+    );
     persist_num!(max_context_tokens, "chat_pipeline.max_context_tokens");
     persist_num!(agent_max_tokens, "chat_pipeline.agent_max_tokens");
     // Feature: Conversation Memory
-    persist_bool!(conversation_memory_enabled, "chat_pipeline.conversation_memory_enabled");
+    persist_bool!(
+        conversation_memory_enabled,
+        "chat_pipeline.conversation_memory_enabled"
+    );
     persist_num!(memory_max_summaries, "chat_pipeline.memory_max_summaries");
-    persist_num!(memory_summary_max_tokens, "chat_pipeline.memory_summary_max_tokens");
+    persist_num!(
+        memory_summary_max_tokens,
+        "chat_pipeline.memory_summary_max_tokens"
+    );
     // Feature: Multi-turn Retrieval Refinement
-    persist_bool!(retrieval_refinement_enabled, "chat_pipeline.retrieval_refinement_enabled");
-    persist_num!(refinement_min_relevance, "chat_pipeline.refinement_min_relevance");
-    persist_num!(refinement_max_retries, "chat_pipeline.refinement_max_retries");
+    persist_bool!(
+        retrieval_refinement_enabled,
+        "chat_pipeline.retrieval_refinement_enabled"
+    );
+    persist_num!(
+        refinement_min_relevance,
+        "chat_pipeline.refinement_min_relevance"
+    );
+    persist_num!(
+        refinement_max_retries,
+        "chat_pipeline.refinement_max_retries"
+    );
     // Feature: Agentic Tool Use
     persist_bool!(tool_use_enabled, "chat_pipeline.tool_use_enabled");
     persist_num!(tool_use_max_calls, "chat_pipeline.tool_use_max_calls");
     // Feature: Adaptive Quality Thresholds
-    persist_bool!(adaptive_threshold_enabled, "chat_pipeline.adaptive_threshold_enabled");
+    persist_bool!(
+        adaptive_threshold_enabled,
+        "chat_pipeline.adaptive_threshold_enabled"
+    );
     persist_num!(feedback_decay_days, "chat_pipeline.feedback_decay_days");
     persist_num!(adaptive_min_samples, "chat_pipeline.adaptive_min_samples");
     // Self-RAG
@@ -1857,18 +2521,32 @@ pub async fn update_chat_pipeline_config(
     persist_num!(self_rag_threshold, "chat_pipeline.self_rag_threshold");
     // Graph RAG
     persist_bool!(graph_rag_enabled, "chat_pipeline.graph_rag_enabled");
-    persist_num!(graph_rag_max_entities, "chat_pipeline.graph_rag_max_entities");
+    persist_num!(
+        graph_rag_max_entities,
+        "chat_pipeline.graph_rag_max_entities"
+    );
     persist_num!(graph_rag_max_depth, "chat_pipeline.graph_rag_max_depth");
     // CRAG
     persist_bool!(crag_enabled, "chat_pipeline.crag_enabled");
-    persist_num!(crag_relevance_threshold, "chat_pipeline.crag_relevance_threshold");
+    persist_num!(
+        crag_relevance_threshold,
+        "chat_pipeline.crag_relevance_threshold"
+    );
     persist_num!(crag_max_web_results, "chat_pipeline.crag_max_web_results");
     if let Some(ref url) = req.crag_web_search_url {
-        state.km_store.set_setting("chat_pipeline.crag_web_search_url", url);
+        state
+            .km_store
+            .set_setting("chat_pipeline.crag_web_search_url", url);
     }
     // Speculative RAG
-    persist_bool!(speculative_rag_enabled, "chat_pipeline.speculative_rag_enabled");
-    persist_num!(speculative_candidates, "chat_pipeline.speculative_candidates");
+    persist_bool!(
+        speculative_rag_enabled,
+        "chat_pipeline.speculative_rag_enabled"
+    );
+    persist_num!(
+        speculative_candidates,
+        "chat_pipeline.speculative_candidates"
+    );
     // Map-Reduce RAG
     persist_bool!(map_reduce_enabled, "chat_pipeline.map_reduce_enabled");
     persist_num!(map_reduce_max_chunks, "chat_pipeline.map_reduce_max_chunks");
@@ -1877,7 +2555,10 @@ pub async fn update_chat_pipeline_config(
     persist_num!(ragas_sample_rate, "chat_pipeline.ragas_sample_rate");
     // Contextual Compression
     persist_bool!(compression_enabled, "chat_pipeline.compression_enabled");
-    persist_num!(compression_target_ratio, "chat_pipeline.compression_target_ratio");
+    persist_num!(
+        compression_target_ratio,
+        "chat_pipeline.compression_target_ratio"
+    );
     // Multi-modal RAG
     persist_bool!(multimodal_enabled, "chat_pipeline.multimodal_enabled");
     persist_num!(multimodal_max_images, "chat_pipeline.multimodal_max_images");
@@ -1889,9 +2570,18 @@ pub async fn update_chat_pipeline_config(
     persist_bool!(colbert_enabled, "chat_pipeline.colbert_enabled");
     persist_num!(colbert_top_n, "chat_pipeline.colbert_top_n");
     // Active Learning
-    persist_bool!(active_learning_enabled, "chat_pipeline.active_learning_enabled");
-    persist_num!(active_learning_min_interactions, "chat_pipeline.active_learning_min_interactions");
-    persist_num!(active_learning_max_low_confidence, "chat_pipeline.active_learning_max_low_confidence");
+    persist_bool!(
+        active_learning_enabled,
+        "chat_pipeline.active_learning_enabled"
+    );
+    persist_num!(
+        active_learning_min_interactions,
+        "chat_pipeline.active_learning_min_interactions"
+    );
+    persist_num!(
+        active_learning_max_low_confidence,
+        "chat_pipeline.active_learning_max_low_confidence"
+    );
 
     // Helper: persist LLM config
     fn persist_chat_llm(
@@ -1904,12 +2594,20 @@ pub async fn update_chat_pipeline_config(
         if let Some(kind) = &update.kind {
             cfg.kind = parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         }
-        if let Some(model) = &update.model { cfg.model = model.clone(); }
-        if let Some(base_url) = &update.base_url { cfg.base_url = base_url.clone(); }
-        if let Some(api_key) = &update.api_key {
-            if !api_key.is_empty() { cfg.api_key = api_key.clone(); }
+        if let Some(model) = &update.model {
+            cfg.model = model.clone();
         }
-        if let Some(max_tokens) = update.max_tokens { cfg.max_tokens = Some(max_tokens); }
+        if let Some(base_url) = &update.base_url {
+            cfg.base_url = base_url.clone();
+        }
+        if let Some(api_key) = &update.api_key {
+            if !api_key.is_empty() {
+                cfg.api_key = api_key.clone();
+            }
+        }
+        if let Some(max_tokens) = update.max_tokens {
+            cfg.max_tokens = Some(max_tokens);
+        }
         let json = serde_json::to_string(&cfg)
             .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize: {e}"))))?;
         state.km_store.set_setting(key, &json);
@@ -1922,55 +2620,135 @@ pub async fn update_chat_pipeline_config(
         persist_chat_llm(&state, "chat_pipeline.llm", u, eff.llm.clone())?;
     }
     if let Some(ref u) = req.query_analyzer_llm {
-        persist_chat_llm(&state, "chat_pipeline.query_analyzer_llm", u, eff.query_analyzer_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.query_analyzer_llm",
+            u,
+            eff.query_analyzer_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.query_rewriter_llm {
-        persist_chat_llm(&state, "chat_pipeline.query_rewriter_llm", u, eff.query_rewriter_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.query_rewriter_llm",
+            u,
+            eff.query_rewriter_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.context_curator_llm {
-        persist_chat_llm(&state, "chat_pipeline.context_curator_llm", u, eff.context_curator_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.context_curator_llm",
+            u,
+            eff.context_curator_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.response_generator_llm {
-        persist_chat_llm(&state, "chat_pipeline.response_generator_llm", u, eff.response_generator_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.response_generator_llm",
+            u,
+            eff.response_generator_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.quality_guard_llm {
-        persist_chat_llm(&state, "chat_pipeline.quality_guard_llm", u, eff.quality_guard_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.quality_guard_llm",
+            u,
+            eff.quality_guard_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.language_adapter_llm {
-        persist_chat_llm(&state, "chat_pipeline.language_adapter_llm", u, eff.language_adapter_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.language_adapter_llm",
+            u,
+            eff.language_adapter_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.orchestrator_llm {
-        persist_chat_llm(&state, "chat_pipeline.orchestrator_llm", u, eff.orchestrator_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.orchestrator_llm",
+            u,
+            eff.orchestrator_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.memory_llm {
-        persist_chat_llm(&state, "chat_pipeline.memory_llm", u, eff.memory_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.memory_llm",
+            u,
+            eff.memory_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.tool_use_llm {
-        persist_chat_llm(&state, "chat_pipeline.tool_use_llm", u, eff.tool_use_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.tool_use_llm",
+            u,
+            eff.tool_use_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.self_rag_llm {
-        persist_chat_llm(&state, "chat_pipeline.self_rag_llm", u, eff.self_rag_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.self_rag_llm",
+            u,
+            eff.self_rag_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.graph_rag_llm {
-        persist_chat_llm(&state, "chat_pipeline.graph_rag_llm", u, eff.graph_rag_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.graph_rag_llm",
+            u,
+            eff.graph_rag_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.map_reduce_llm {
-        persist_chat_llm(&state, "chat_pipeline.map_reduce_llm", u, eff.map_reduce_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.map_reduce_llm",
+            u,
+            eff.map_reduce_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.ragas_llm {
         persist_chat_llm(&state, "chat_pipeline.ragas_llm", u, eff.ragas_llm.clone())?;
     }
     if let Some(ref u) = req.compression_llm {
-        persist_chat_llm(&state, "chat_pipeline.compression_llm", u, eff.compression_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.compression_llm",
+            u,
+            eff.compression_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.multimodal_llm {
-        persist_chat_llm(&state, "chat_pipeline.multimodal_llm", u, eff.multimodal_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.multimodal_llm",
+            u,
+            eff.multimodal_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.raptor_llm {
-        persist_chat_llm(&state, "chat_pipeline.raptor_llm", u, eff.raptor_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.raptor_llm",
+            u,
+            eff.raptor_llm.clone(),
+        )?;
     }
     if let Some(ref u) = req.colbert_llm {
-        persist_chat_llm(&state, "chat_pipeline.colbert_llm", u, eff.colbert_llm.clone())?;
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.colbert_llm",
+            u,
+            eff.colbert_llm.clone(),
+        )?;
     }
 
     // Handle removal of LLM overrides
@@ -1982,21 +2760,73 @@ pub async fn update_chat_pipeline_config(
         };
     }
     remove_llm!(llm, remove_llm, "chat_pipeline.llm");
-    remove_llm!(query_analyzer_llm, remove_query_analyzer_llm, "chat_pipeline.query_analyzer_llm");
-    remove_llm!(query_rewriter_llm, remove_query_rewriter_llm, "chat_pipeline.query_rewriter_llm");
-    remove_llm!(context_curator_llm, remove_context_curator_llm, "chat_pipeline.context_curator_llm");
-    remove_llm!(response_generator_llm, remove_response_generator_llm, "chat_pipeline.response_generator_llm");
-    remove_llm!(quality_guard_llm, remove_quality_guard_llm, "chat_pipeline.quality_guard_llm");
-    remove_llm!(language_adapter_llm, remove_language_adapter_llm, "chat_pipeline.language_adapter_llm");
-    remove_llm!(orchestrator_llm, remove_orchestrator_llm, "chat_pipeline.orchestrator_llm");
+    remove_llm!(
+        query_analyzer_llm,
+        remove_query_analyzer_llm,
+        "chat_pipeline.query_analyzer_llm"
+    );
+    remove_llm!(
+        query_rewriter_llm,
+        remove_query_rewriter_llm,
+        "chat_pipeline.query_rewriter_llm"
+    );
+    remove_llm!(
+        context_curator_llm,
+        remove_context_curator_llm,
+        "chat_pipeline.context_curator_llm"
+    );
+    remove_llm!(
+        response_generator_llm,
+        remove_response_generator_llm,
+        "chat_pipeline.response_generator_llm"
+    );
+    remove_llm!(
+        quality_guard_llm,
+        remove_quality_guard_llm,
+        "chat_pipeline.quality_guard_llm"
+    );
+    remove_llm!(
+        language_adapter_llm,
+        remove_language_adapter_llm,
+        "chat_pipeline.language_adapter_llm"
+    );
+    remove_llm!(
+        orchestrator_llm,
+        remove_orchestrator_llm,
+        "chat_pipeline.orchestrator_llm"
+    );
     remove_llm!(memory_llm, remove_memory_llm, "chat_pipeline.memory_llm");
-    remove_llm!(tool_use_llm, remove_tool_use_llm, "chat_pipeline.tool_use_llm");
-    remove_llm!(self_rag_llm, remove_self_rag_llm, "chat_pipeline.self_rag_llm");
-    remove_llm!(graph_rag_llm, remove_graph_rag_llm, "chat_pipeline.graph_rag_llm");
-    remove_llm!(map_reduce_llm, remove_map_reduce_llm, "chat_pipeline.map_reduce_llm");
+    remove_llm!(
+        tool_use_llm,
+        remove_tool_use_llm,
+        "chat_pipeline.tool_use_llm"
+    );
+    remove_llm!(
+        self_rag_llm,
+        remove_self_rag_llm,
+        "chat_pipeline.self_rag_llm"
+    );
+    remove_llm!(
+        graph_rag_llm,
+        remove_graph_rag_llm,
+        "chat_pipeline.graph_rag_llm"
+    );
+    remove_llm!(
+        map_reduce_llm,
+        remove_map_reduce_llm,
+        "chat_pipeline.map_reduce_llm"
+    );
     remove_llm!(ragas_llm, remove_ragas_llm, "chat_pipeline.ragas_llm");
-    remove_llm!(compression_llm, remove_compression_llm, "chat_pipeline.compression_llm");
-    remove_llm!(multimodal_llm, remove_multimodal_llm, "chat_pipeline.multimodal_llm");
+    remove_llm!(
+        compression_llm,
+        remove_compression_llm,
+        "chat_pipeline.compression_llm"
+    );
+    remove_llm!(
+        multimodal_llm,
+        remove_multimodal_llm,
+        "chat_pipeline.multimodal_llm"
+    );
     remove_llm!(raptor_llm, remove_raptor_llm, "chat_pipeline.raptor_llm");
     remove_llm!(colbert_llm, remove_colbert_llm, "chat_pipeline.colbert_llm");
 
@@ -2064,7 +2894,10 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
     // Thai support: Qwen3 (119 languages), Chinda (Thai-optimized Qwen3-4B),
     //   Llama4 Scout (Thai in supported languages), qwen3-embedding (100+ languages)
     fn s(label: &str, value: &str) -> SettingsSummaryItem {
-        SettingsSummaryItem { label: label.into(), value: value.into() }
+        SettingsSummaryItem {
+            label: label.into(),
+            value: value.into(),
+        }
     }
 
     vec![
@@ -2203,7 +3036,8 @@ pub async fn apply_preset(
             "model": model,
             "base_url": url,
             "api_key": ""
-        }).to_string()
+        })
+        .to_string()
     }
 
     match req.preset_id.as_str() {
@@ -2211,7 +3045,10 @@ pub async fn apply_preset(
             // ── LLM: shared mode with Chinda (Thai-optimized 4B) ──
             store.set_setting("chat_pipeline.enabled", "true");
             store.set_setting("chat_pipeline.llm_mode", "shared");
-            store.set_setting("chat_pipeline.llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
+            store.set_setting(
+                "chat_pipeline.llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
             // ── Agents ──
             store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
             store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
@@ -2232,10 +3069,23 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.quality_guard_threshold", "0.5");
             store.set_setting("chat_pipeline.quality_guard_max_retries", "0");
             // ── Disable all advanced features ──
-            for feat in &["conversation_memory", "retrieval_refinement", "tool_use",
-                         "adaptive_threshold", "self_rag", "graph_rag", "crag",
-                         "speculative_rag", "map_reduce", "ragas", "compression",
-                         "multimodal", "raptor", "colbert", "active_learning"] {
+            for feat in &[
+                "conversation_memory",
+                "retrieval_refinement",
+                "tool_use",
+                "adaptive_threshold",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "speculative_rag",
+                "map_reduce",
+                "ragas",
+                "compression",
+                "multimodal",
+                "raptor",
+                "colbert",
+                "active_learning",
+            ] {
                 store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "false");
             }
         }
@@ -2272,9 +3122,20 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.colbert_enabled", "true");
             store.set_setting("chat_pipeline.colbert_top_n", "5");
             // ── Disable heavy features ──
-            for feat in &["retrieval_refinement", "tool_use", "adaptive_threshold",
-                         "self_rag", "graph_rag", "crag", "speculative_rag",
-                         "map_reduce", "ragas", "compression", "multimodal", "raptor"] {
+            for feat in &[
+                "retrieval_refinement",
+                "tool_use",
+                "adaptive_threshold",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "speculative_rag",
+                "map_reduce",
+                "ragas",
+                "compression",
+                "multimodal",
+                "raptor",
+            ] {
                 store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "false");
             }
         }
@@ -2283,27 +3144,60 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.enabled", "true");
             store.set_setting("chat_pipeline.llm_mode", "per-agent");
             // Heavy tasks: qwen3:32b
-            store.set_setting("chat_pipeline.response_generator_llm", &ollama_llm("qwen3:32b", &url));
-            store.set_setting("chat_pipeline.quality_guard_llm", &ollama_llm("qwen3:32b", &url));
-            store.set_setting("chat_pipeline.context_curator_llm", &ollama_llm("qwen3:32b", &url));
+            store.set_setting(
+                "chat_pipeline.response_generator_llm",
+                &ollama_llm("qwen3:32b", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.quality_guard_llm",
+                &ollama_llm("qwen3:32b", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.context_curator_llm",
+                &ollama_llm("qwen3:32b", &url),
+            );
             // Medium tasks: qwen3:14b
-            store.set_setting("chat_pipeline.orchestrator_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("chat_pipeline.graph_rag_llm", &ollama_llm("qwen3:14b", &url));
+            store.set_setting(
+                "chat_pipeline.orchestrator_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.graph_rag_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
             store.set_setting("chat_pipeline.crag_llm", &ollama_llm("qwen3:14b", &url));
             store.set_setting("chat_pipeline.raptor_llm", &ollama_llm("qwen3:14b", &url));
             store.set_setting("chat_pipeline.colbert_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("chat_pipeline.compression_llm", &ollama_llm("qwen3:14b", &url));
+            store.set_setting(
+                "chat_pipeline.compression_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
             store.set_setting("chat_pipeline.self_rag_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("chat_pipeline.map_reduce_llm", &ollama_llm("qwen3:14b", &url));
+            store.set_setting(
+                "chat_pipeline.map_reduce_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
             store.set_setting("chat_pipeline.memory_llm", &ollama_llm("qwen3:14b", &url));
             store.set_setting("chat_pipeline.ragas_llm", &ollama_llm("qwen3:14b", &url));
             store.set_setting("chat_pipeline.tool_use_llm", &ollama_llm("qwen3:14b", &url));
             // Light tasks: Chinda
-            store.set_setting("chat_pipeline.query_analyzer_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("chat_pipeline.query_rewriter_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("chat_pipeline.language_adapter_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
+            store.set_setting(
+                "chat_pipeline.query_analyzer_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.query_rewriter_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.language_adapter_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
             // Vision: Llama4 Scout
-            store.set_setting("chat_pipeline.multimodal_llm", &ollama_llm("llama4:scout", &url));
+            store.set_setting(
+                "chat_pipeline.multimodal_llm",
+                &ollama_llm("llama4:scout", &url),
+            );
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
             store.set_setting("providers.embedding.model", "qwen3-embedding:8b");
@@ -2340,14 +3234,32 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.active_learning_min_interactions", "50");
             store.set_setting("chat_pipeline.active_learning_max_low_confidence", "10");
             // ── Enable all agents and features ──
-            for agent in &["query_analyzer", "query_rewriter", "context_curator",
-                          "quality_guard", "language_adapter", "orchestrator"] {
+            for agent in &[
+                "query_analyzer",
+                "query_rewriter",
+                "context_curator",
+                "quality_guard",
+                "language_adapter",
+                "orchestrator",
+            ] {
                 store.set_setting(&format!("chat_pipeline.{agent}_enabled"), "true");
             }
-            for feat in &["conversation_memory", "retrieval_refinement", "tool_use",
-                         "adaptive_threshold", "self_rag", "graph_rag", "crag",
-                         "compression", "multimodal", "raptor", "colbert", "active_learning",
-                         "map_reduce", "ragas"] {
+            for feat in &[
+                "conversation_memory",
+                "retrieval_refinement",
+                "tool_use",
+                "adaptive_threshold",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "compression",
+                "multimodal",
+                "raptor",
+                "colbert",
+                "active_learning",
+                "map_reduce",
+                "ragas",
+            ] {
                 store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "true");
             }
             store.set_setting("chat_pipeline.speculative_rag_enabled", "false"); // experimental
@@ -2356,13 +3268,34 @@ pub async fn apply_preset(
             // ── AI Preprocessing: all Chinda ──
             store.set_setting("ai_preprocessing.enabled", "true");
             store.set_setting("ai_preprocessing.auto_params", "true");
-            store.set_setting("ai_preprocessing.llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.analyzer_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.converter_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.quality_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.chunker_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.enricher_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.orchestrator_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
+            store.set_setting(
+                "ai_preprocessing.llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.analyzer_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.converter_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.quality_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.chunker_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.enricher_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.orchestrator_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
             store.set_setting("ai_preprocessing.enricher_enabled", "true");
             store.set_setting("ai_preprocessing.orchestrator_enabled", "false");
             // ── Tuning: conservative for 4B ──
@@ -2383,12 +3316,30 @@ pub async fn apply_preset(
             store.set_setting("ai_preprocessing.enabled", "true");
             store.set_setting("ai_preprocessing.auto_params", "true");
             store.set_setting("ai_preprocessing.llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("ai_preprocessing.analyzer_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("ai_preprocessing.converter_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("ai_preprocessing.quality_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("ai_preprocessing.chunker_llm", &ollama_llm("qwen3:14b", &url));
-            store.set_setting("ai_preprocessing.enricher_llm", &ollama_llm("iapp/chinda-qwen3-4b", &url));
-            store.set_setting("ai_preprocessing.orchestrator_llm", &ollama_llm("qwen3:14b", &url));
+            store.set_setting(
+                "ai_preprocessing.analyzer_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.converter_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.quality_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.chunker_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.enricher_llm",
+                &ollama_llm("iapp/chinda-qwen3-4b", &url),
+            );
+            store.set_setting(
+                "ai_preprocessing.orchestrator_llm",
+                &ollama_llm("qwen3:14b", &url),
+            );
             store.set_setting("ai_preprocessing.enricher_enabled", "true");
             store.set_setting("ai_preprocessing.orchestrator_enabled", "true");
             // ── Tuning: quality for 14B ──
@@ -2563,9 +3514,7 @@ pub async fn list_ollama_models(
 
 // ── Public endpoint (no auth required) ──────────────────────────────
 
-pub async fn list_enabled_providers(
-    State(state): State<AppState>,
-) -> Json<Vec<PublicIdpInfo>> {
+pub async fn list_enabled_providers(State(state): State<AppState>) -> Json<Vec<PublicIdpInfo>> {
     let providers = state.km_store.list_enabled_identity_providers();
     Json(
         providers
@@ -2702,9 +3651,7 @@ pub async fn delete_prompt_override(
 
     // If no file version, remove entirely
     if state.prompt_registry.get(&key).is_none() {
-        Ok(Json(
-            serde_json::json!({ "status": "deleted", "key": key }),
-        ))
+        Ok(Json(serde_json::json!({ "status": "deleted", "key": key })))
     } else {
         // File version was reloaded
         state.prompt_registry.delete_override(&key);
@@ -2725,9 +3672,7 @@ fn update_prompt_index(state: &AppState) {
         .filter(|(_, e)| e.source == PromptSource::Override)
         .map(|(k, _)| k)
         .collect();
-    state
-        .km_store
-        .set_setting("prompt._index", &keys.join(","));
+    state.km_store.set_setting("prompt._index", &keys.join(","));
 }
 
 // ── Audit Log ───────────────────────────────────────────────────────
@@ -2831,10 +3776,6 @@ pub async fn get_audit_log(
 ) -> Result<Json<Vec<AuditEntry>>, ApiError> {
     require_super_admin(&claims, &state)?;
     let limit = params.limit.min(1000);
-    let entries = audit::get_audit_log(
-        &state.km_store,
-        params.action.as_deref(),
-        limit,
-    );
+    let entries = audit::get_audit_log(&state.km_store, params.action.as_deref(), limit);
     Ok(Json(entries))
 }

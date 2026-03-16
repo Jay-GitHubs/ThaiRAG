@@ -1,11 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, middleware::Next, response::Response};
 use thairag_core::ThaiRagError;
 
 use crate::claims::AuthClaims;
@@ -37,11 +33,13 @@ pub async fn auth_layer(
                 .headers()
                 .get("authorization")
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| AuthError(ThaiRagError::Auth("Missing authorization header".into())))?;
+                .ok_or_else(|| {
+                    AuthError(ThaiRagError::Auth("Missing authorization header".into()))
+                })?;
 
-            let token = auth_header
-                .strip_prefix("Bearer ")
-                .ok_or_else(|| AuthError(ThaiRagError::Auth("Invalid authorization format".into())))?;
+            let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+                AuthError(ThaiRagError::Auth("Invalid authorization format".into()))
+            })?;
 
             // Check static API keys first
             if !api_keys.is_empty() && api_keys.contains(token) {
@@ -52,9 +50,7 @@ pub async fn auth_layer(
                     iat: 0,
                 }
             } else {
-                jwt_service
-                    .decode(token)
-                    .map_err(AuthError)?
+                jwt_service.decode(token).map_err(AuthError)?
             }
         }
     };
@@ -74,10 +70,6 @@ impl axum::response::IntoResponse for AuthError {
                 "type": "authentication_error",
             }
         });
-        (
-            axum::http::StatusCode::UNAUTHORIZED,
-            axum::Json(body),
-        )
-            .into_response()
+        (axum::http::StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
     }
 }

@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, Organization, PermissionScope, User, UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, OrgId, UserId, WorkspaceId};
-use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::audit::{AuditAction, audit_log};
@@ -58,7 +58,11 @@ pub struct PaginationParams {
 
 pub fn paginate<T>(items: Vec<T>, params: &PaginationParams) -> (Vec<T>, usize) {
     let total = items.len();
-    let data = items.into_iter().skip(params.offset).take(params.limit).collect();
+    let data = items
+        .into_iter()
+        .skip(params.offset)
+        .take(params.limit)
+        .collect();
     (data, total)
 }
 
@@ -215,9 +219,9 @@ fn require(perm: &PermCheck, check: fn(&Role) -> bool, action: &str) -> Result<(
     match perm {
         PermCheck::AuthDisabled | PermCheck::SuperAdmin => Ok(()),
         PermCheck::Role(role) if check(role) => Ok(()),
-        PermCheck::Role(_) | PermCheck::NoPermission => Err(ApiError(
-            ThaiRagError::Authorization(format!("Insufficient permission: {action}")),
-        )),
+        PermCheck::Role(_) | PermCheck::NoPermission => Err(ApiError(ThaiRagError::Authorization(
+            format!("Insufficient permission: {action}"),
+        ))),
     }
 }
 
@@ -341,9 +345,9 @@ pub async fn list_depts(
     } else if let Some(user_id) = user_id_from_claims(&claims) {
         let perms = state.km_store.list_user_permissions(user_id);
         // Org-level perm → see all depts
-        let has_org_perm = perms.iter().any(|p| {
-            matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id)
-        });
+        let has_org_perm = perms
+            .iter()
+            .any(|p| matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id));
         if has_org_perm {
             all_depts
         } else {
@@ -446,9 +450,9 @@ pub async fn list_workspaces(
         all_ws
     } else if let Some(user_id) = user_id_from_claims(&claims) {
         let perms = state.km_store.list_user_permissions(user_id);
-        let has_org_perm = perms.iter().any(|p| {
-            matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id)
-        });
+        let has_org_perm = perms
+            .iter()
+            .any(|p| matches!(&p.scope, PermissionScope::Org { org_id: oid } if *oid == org_id));
         let has_dept_perm = perms.iter().any(|p| {
             matches!(&p.scope, PermissionScope::Dept { org_id: oid, dept_id: did } if *oid == org_id && *did == dept_id)
         });
@@ -544,8 +548,12 @@ pub async fn grant_permission(
         role: body.role,
     });
     audit_log(
-        &state.km_store, &claims.sub, AuditAction::PermissionGranted,
-        &body.email, true, Some(&format!("role={:?} scope={scope:?}", body.role)),
+        &state.km_store,
+        &claims.sub,
+        AuditAction::PermissionGranted,
+        &body.email,
+        true,
+        Some(&format!("role={:?} scope={scope:?}", body.role)),
     );
 
     Ok(StatusCode::NO_CONTENT)
@@ -625,8 +633,12 @@ pub async fn revoke_permission(
 
     state.km_store.remove_permission(target.user.id, &scope)?;
     audit_log(
-        &state.km_store, &claims.sub, AuditAction::PermissionRevoked,
-        &body.email, true, Some(&format!("scope={scope:?}")),
+        &state.km_store,
+        &claims.sub,
+        AuditAction::PermissionRevoked,
+        &body.email,
+        true,
+        Some(&format!("scope={scope:?}")),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -659,8 +671,12 @@ fn grant_permission_inner(
         role,
     });
     audit_log(
-        &state.km_store, "admin", AuditAction::PermissionGranted,
-        email, true, Some(&format!("role={role:?} scope={scope:?}")),
+        &state.km_store,
+        "admin",
+        AuditAction::PermissionGranted,
+        email,
+        true,
+        Some(&format!("role={role:?} scope={scope:?}")),
     );
 
     Ok(StatusCode::NO_CONTENT)
@@ -697,8 +713,12 @@ fn revoke_permission_inner(
 
     state.km_store.remove_permission(target.user.id, &scope)?;
     audit_log(
-        &state.km_store, "admin", AuditAction::PermissionRevoked,
-        email, true, Some(&format!("scope={scope:?}")),
+        &state.km_store,
+        "admin",
+        AuditAction::PermissionRevoked,
+        email,
+        true,
+        Some(&format!("scope={scope:?}")),
     );
     Ok(StatusCode::NO_CONTENT)
 }
@@ -785,9 +805,7 @@ pub async fn list_workspace_permissions(
     list_permissions_inner(
         &state,
         all_perms,
-        |s| {
-            matches!(s, PermissionScope::Workspace { workspace_id, .. } if *workspace_id == ws_id_typed)
-        },
+        |s| matches!(s, PermissionScope::Workspace { workspace_id, .. } if *workspace_id == ws_id_typed),
         &params,
     )
 }
@@ -834,8 +852,12 @@ pub async fn delete_user(
     }
     state.km_store.delete_user(UserId(user_id))?;
     audit_log(
-        &state.km_store, &_claims.sub, AuditAction::UserDeleted,
-        &user.email, true, None,
+        &state.km_store,
+        &_claims.sub,
+        AuditAction::UserDeleted,
+        &user.email,
+        true,
+        None,
     );
     tracing::info!(%user_id, "User deleted");
     Ok(StatusCode::NO_CONTENT)

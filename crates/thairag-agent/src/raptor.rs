@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::context_curator::{CuratedChunk, CuratedContext};
@@ -24,7 +24,12 @@ pub struct Raptor {
 }
 
 impl Raptor {
-    pub fn new(llm: Arc<dyn LlmProvider>, max_depth: u32, group_size: usize, max_tokens: u32) -> Self {
+    pub fn new(
+        llm: Arc<dyn LlmProvider>,
+        max_depth: u32,
+        group_size: usize,
+        max_tokens: u32,
+    ) -> Self {
         Self {
             llm,
             max_depth: max_depth.max(1),
@@ -34,7 +39,13 @@ impl Raptor {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_depth: u32, group_size: usize, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_depth: u32,
+        group_size: usize,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_depth: max_depth.max(1),
@@ -56,9 +67,8 @@ impl Raptor {
         }
 
         let mut enriched = context.clone();
-        let mut current_level: Vec<String> = context.chunks.iter()
-            .map(|c| c.content.clone())
-            .collect();
+        let mut current_level: Vec<String> =
+            context.chunks.iter().map(|c| c.content.clone()).collect();
 
         let mut level = 0u32;
         while level < self.max_depth && current_level.len() > 1 {
@@ -125,7 +135,9 @@ impl Raptor {
         }
 
         // Update token estimate
-        let new_tokens: usize = enriched.chunks.iter()
+        let new_tokens: usize = enriched
+            .chunks
+            .iter()
             .map(|c| c.content.len() / 4) // rough estimate
             .sum();
         enriched.total_tokens_est = new_tokens;
@@ -163,7 +175,9 @@ async fn summarize_group(
     max_tokens: u32,
     prompts: &PromptRegistry,
 ) -> Result<String> {
-    let combined: String = texts.iter().enumerate()
+    let combined: String = texts
+        .iter()
+        .enumerate()
         .map(|(i, t)| format!("--- Section {} ---\n{}", i + 1, truncate(t, 1000)))
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -176,7 +190,11 @@ async fn summarize_group(
 
     let system = ChatMessage {
         role: "system".into(),
-        content: prompts.render_or_default("chat.raptor", DEFAULT_RAPTOR, &[("abstraction", abstraction)]),
+        content: prompts.render_or_default(
+            "chat.raptor",
+            DEFAULT_RAPTOR,
+            &[("abstraction", abstraction)],
+        ),
     };
 
     let user = ChatMessage {
@@ -189,5 +207,9 @@ async fn summarize_group(
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

@@ -4,8 +4,8 @@ use std::time::Duration;
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
-use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHasher};
 
 use thairag_api::app_state::AppState;
@@ -25,9 +25,7 @@ async fn main() {
             .with_env_filter(filter)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 
     // Load and validate config
@@ -70,10 +68,13 @@ async fn main() {
 
     // Create rate limiter (if enabled) and spawn background cleanup
     let rate_limiter = if config.server.rate_limit.enabled {
-        Some(RateLimiter::new(
-            config.server.rate_limit.requests_per_second,
-            config.server.rate_limit.burst_size,
-        ).with_trust_proxy(config.server.trust_proxy))
+        Some(
+            RateLimiter::new(
+                config.server.rate_limit.requests_per_second,
+                config.server.rate_limit.burst_size,
+            )
+            .with_trust_proxy(config.server.trust_proxy),
+        )
     } else {
         None
     };
@@ -152,7 +153,13 @@ fn seed_super_admin(store: &dyn KmStoreTrait) {
         }
     };
 
-    match store.upsert_user_by_email(email.clone(), "Super Admin".into(), password_hash, true, "super_admin".into()) {
+    match store.upsert_user_by_email(
+        email.clone(),
+        "Super Admin".into(),
+        password_hash,
+        true,
+        "super_admin".into(),
+    ) {
         Ok(user) => {
             tracing::info!(email = %email, user_id = %user.id, "Super admin seeded");
         }

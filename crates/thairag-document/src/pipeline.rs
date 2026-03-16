@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use thairag_config::schema::AiPreprocessingConfig;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, DocumentProcessor, LlmProvider};
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, WorkspaceId};
-use thairag_core::PromptRegistry;
 
 use crate::ai::pipeline::AiDocumentPipeline;
 use crate::chunker::MarkdownChunker;
@@ -79,9 +79,15 @@ impl DocumentPipeline {
         ai_config: &AiPreprocessingConfig,
     ) -> Self {
         Self::new_with_per_agent_ai_and_prompts(
-            max_chunk_size, chunk_overlap,
-            analyzer_llm, converter_llm, quality_llm, chunker_llm,
-            enricher_llm, orchestrator_llm, ai_config,
+            max_chunk_size,
+            chunk_overlap,
+            analyzer_llm,
+            converter_llm,
+            quality_llm,
+            chunker_llm,
+            enricher_llm,
+            orchestrator_llm,
+            ai_config,
             Arc::new(PromptRegistry::new()),
         )
     }
@@ -251,7 +257,13 @@ mod tests {
     async fn process_async_without_ai_uses_mechanical() {
         let pipeline = DocumentPipeline::new(1000, 0);
         let chunks = pipeline
-            .process(b"Hello async", "text/plain", DocId::new(), WorkspaceId::new(), None)
+            .process(
+                b"Hello async",
+                "text/plain",
+                DocId::new(),
+                WorkspaceId::new(),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(chunks.len(), 1);

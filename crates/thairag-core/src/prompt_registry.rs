@@ -75,22 +75,14 @@ impl PromptRegistry {
             let path = entry.path();
 
             if path.is_dir() {
-                let category = path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
+                let category = path.file_name().unwrap().to_string_lossy().to_string();
 
                 for sub_entry in std::fs::read_dir(&path)? {
                     let sub_entry = sub_entry?;
                     let sub_path = sub_entry.path();
 
                     if sub_path.extension().is_some_and(|e| e == "md") {
-                        let stem = sub_path
-                            .file_stem()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string();
+                        let stem = sub_path.file_stem().unwrap().to_string_lossy().to_string();
                         let key = format!("{category}.{stem}");
                         let content = std::fs::read_to_string(&sub_path)?;
 
@@ -182,12 +174,7 @@ impl PromptRegistry {
     ///     &[("context", &context_text)],
     /// );
     /// ```
-    pub fn render_or_default(
-        &self,
-        key: &str,
-        default: &str,
-        vars: &[(&str, &str)],
-    ) -> String {
+    pub fn render_or_default(&self, key: &str, default: &str, vars: &[(&str, &str)]) -> String {
         let template = self
             .get_template(key)
             .unwrap_or_else(|| default.to_string());

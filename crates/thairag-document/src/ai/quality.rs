@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{LlmProvider, QualityChecker};
-use thairag_core::types::{ChatMessage, ConvertedDocument, ImageContent, QualityReport, VisionMessage};
+use thairag_core::types::{
+    ChatMessage, ConvertedDocument, ImageContent, QualityReport, VisionMessage,
+};
 use tracing::warn;
 
 use super::analyzer::strip_json_fences;
@@ -33,7 +35,12 @@ impl LlmQualityChecker {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, quality_threshold: f32, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        quality_threshold: f32,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             quality_threshold,
@@ -61,7 +68,8 @@ impl LlmQualityChecker {
         let media_type = mime_type.to_string();
 
         let converted_sample = sample_head_tail(&converted.markdown, self.sample_chars);
-        let prompt = prompts::quality_checker_vision_prompt(&self.prompts, &converted_sample, original_text);
+        let prompt =
+            prompts::quality_checker_vision_prompt(&self.prompts, &converted_sample, original_text);
         let messages = vec![VisionMessage {
             role: "user".into(),
             text: prompt,
@@ -71,7 +79,10 @@ impl LlmQualityChecker {
             }],
         }];
 
-        let response = self.llm.generate_vision(&messages, Some(self.max_tokens)).await?;
+        let response = self
+            .llm
+            .generate_vision(&messages, Some(self.max_tokens))
+            .await?;
         let json_str = super::analyzer::strip_json_fences(response.content.trim());
 
         match serde_json::from_str::<RawQualityScores>(json_str) {
@@ -114,7 +125,8 @@ impl QualityChecker for LlmQualityChecker {
         let original_sample = sample_head_tail(original_text, self.sample_chars);
         let converted_sample = sample_head_tail(&converted.markdown, self.sample_chars);
 
-        let prompt = prompts::quality_checker_prompt(&self.prompts, &original_sample, &converted_sample);
+        let prompt =
+            prompts::quality_checker_prompt(&self.prompts, &original_sample, &converted_sample);
         let messages = vec![ChatMessage {
             role: "user".into(),
             content: prompt,

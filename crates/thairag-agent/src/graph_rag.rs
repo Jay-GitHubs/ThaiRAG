@@ -37,7 +37,9 @@ impl KnowledgeGraph {
     pub fn add_entity(&mut self, entity: Entity) {
         let key = entity.name.to_lowercase();
         for alias in &entity.aliases {
-            self.entities.entry(alias.to_lowercase()).or_insert_with(|| entity.clone());
+            self.entities
+                .entry(alias.to_lowercase())
+                .or_insert_with(|| entity.clone());
         }
         self.entities.entry(key).or_insert(entity);
     }
@@ -113,7 +115,13 @@ impl GraphRag {
         max_depth: u32,
         max_tokens: u32,
     ) -> Self {
-        Self { llm, max_entities, max_depth, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            max_entities,
+            max_depth,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
     pub fn new_with_prompts(
@@ -123,7 +131,13 @@ impl GraphRag {
         max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, max_entities, max_depth, max_tokens, prompts }
+        Self {
+            llm,
+            max_entities,
+            max_depth,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Extract entities and relationships from a text chunk.
@@ -152,7 +166,11 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
             content: format!("Text:\n{}", truncate(text, 2000)),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<ExtractionResult>(json_str) {
@@ -193,7 +211,9 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 #[derive(Deserialize)]
-                struct QE { entities: Vec<String> }
+                struct QE {
+                    entities: Vec<String>,
+                }
                 match serde_json::from_str::<QE>(json_str) {
                     Ok(qe) => Ok(qe.entities),
                     Err(_) => Ok(Vec::new()),
@@ -227,17 +247,26 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
             "Graph RAG: traversal complete"
         );
 
-        let mut enhanced: Vec<SearchResult> = results.iter().map(|r| {
-            let mut result = r.clone();
-            let content_lower = r.chunk.content.to_lowercase();
-            let entity_boost: f32 = related_set.iter()
-                .filter(|e| content_lower.contains(e.as_str()))
-                .count() as f32 * 0.05;
-            result.score = (result.score + entity_boost).min(1.0);
-            result
-        }).collect();
+        let mut enhanced: Vec<SearchResult> = results
+            .iter()
+            .map(|r| {
+                let mut result = r.clone();
+                let content_lower = r.chunk.content.to_lowercase();
+                let entity_boost: f32 = related_set
+                    .iter()
+                    .filter(|e| content_lower.contains(e.as_str()))
+                    .count() as f32
+                    * 0.05;
+                result.score = (result.score + entity_boost).min(1.0);
+                result
+            })
+            .collect();
 
-        enhanced.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        enhanced.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(enhanced)
     }
 }
@@ -260,5 +289,9 @@ fn extract_json(s: &str) -> &str {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

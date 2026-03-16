@@ -1,12 +1,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct PgvectorStore {
@@ -178,9 +178,7 @@ impl VectorStore for PgvectorStore {
                 .bind(query.top_k as i64)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| {
-                    ThaiRagError::VectorStore(format!("pgvector search failed: {e}"))
-                })?;
+                .map_err(|e| ThaiRagError::VectorStore(format!("pgvector search failed: {e}")))?;
 
             Ok(rows
                 .into_iter()
@@ -206,9 +204,7 @@ impl VectorStore for PgvectorStore {
                 .bind(&workspace_strings)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| {
-                    ThaiRagError::VectorStore(format!("pgvector search failed: {e}"))
-                })?;
+                .map_err(|e| ThaiRagError::VectorStore(format!("pgvector search failed: {e}")))?;
 
             Ok(rows
                 .into_iter()

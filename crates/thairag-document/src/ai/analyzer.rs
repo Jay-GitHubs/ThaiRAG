@@ -29,7 +29,11 @@ impl LlmDocumentAnalyzer {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,
@@ -65,7 +69,8 @@ impl LlmDocumentAnalyzer {
             mime_type.to_string()
         };
 
-        let prompt = prompts::analyzer_vision_prompt(&self.prompts, mime_type, doc_size_bytes, raw_text);
+        let prompt =
+            prompts::analyzer_vision_prompt(&self.prompts, mime_type, doc_size_bytes, raw_text);
         let messages = vec![VisionMessage {
             role: "user".into(),
             text: prompt,
@@ -75,7 +80,10 @@ impl LlmDocumentAnalyzer {
             }],
         }];
 
-        let response = self.llm.generate_vision(&messages, Some(self.max_tokens)).await?;
+        let response = self
+            .llm
+            .generate_vision(&messages, Some(self.max_tokens))
+            .await?;
         let json_str = strip_json_fences(response.content.trim());
 
         match serde_json::from_str::<DocumentAnalysis>(json_str) {
@@ -123,7 +131,12 @@ impl LlmDocumentAnalyzer {
 
 #[async_trait]
 impl DocumentAnalyzer for LlmDocumentAnalyzer {
-    async fn analyze(&self, raw_text: &str, mime_type: &str, doc_size_bytes: usize) -> Result<DocumentAnalysis> {
+    async fn analyze(
+        &self,
+        raw_text: &str,
+        mime_type: &str,
+        doc_size_bytes: usize,
+    ) -> Result<DocumentAnalysis> {
         let excerpt = if raw_text.len() > self.excerpt_chars {
             &raw_text[..super::floor_char_boundary(raw_text, self.excerpt_chars)]
         } else {

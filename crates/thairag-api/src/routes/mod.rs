@@ -57,10 +57,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
     let km_routes = Router::new()
         // Organizations
         .route("/orgs", get(km::list_orgs).post(km::create_org))
-        .route(
-            "/orgs/{org_id}",
-            get(km::get_org).delete(km::delete_org),
-        )
+        .route("/orgs/{org_id}", get(km::get_org).delete(km::delete_org))
         // Departments
         .route(
             "/orgs/{org_id}/depts",
@@ -150,28 +147,13 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(settings::get_chat_pipeline_config).put(settings::update_chat_pipeline_config),
         )
         // Settings — presets
-        .route(
-            "/settings/presets",
-            get(settings::list_presets),
-        )
-        .route(
-            "/settings/presets/apply",
-            post(settings::apply_preset),
-        )
+        .route("/settings/presets", get(settings::list_presets))
+        .route("/settings/presets/apply", post(settings::apply_preset))
         // Settings — Ollama model management
-        .route(
-            "/settings/ollama/models",
-            get(settings::list_ollama_models),
-        )
-        .route(
-            "/settings/ollama/pull",
-            post(settings::ollama_pull_model),
-        )
+        .route("/settings/ollama/models", get(settings::list_ollama_models))
+        .route("/settings/ollama/pull", post(settings::ollama_pull_model))
         // Settings — prompt management
-        .route(
-            "/settings/prompts",
-            get(settings::list_prompts),
-        )
+        .route("/settings/prompts", get(settings::list_prompts))
         .route(
             "/settings/prompts/{key}",
             get(settings::get_prompt)
@@ -199,19 +181,12 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route(
             "/settings/feedback/retrieval-params",
-            get(feedback::get_retrieval_params)
-                .put(feedback::update_retrieval_params),
+            get(feedback::get_retrieval_params).put(feedback::update_retrieval_params),
         )
         // Settings — audit log (OWASP A09)
-        .route(
-            "/settings/audit-log",
-            get(settings::get_audit_log),
-        )
+        .route("/settings/audit-log", get(settings::get_audit_log))
         // Settings — usage stats
-        .route(
-            "/settings/usage",
-            get(settings::get_usage_stats),
-        )
+        .route("/settings/usage", get(settings::get_usage_stats))
         // Documents
         .route(
             "/workspaces/{workspace_id}/documents",
@@ -223,8 +198,9 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route(
             "/workspaces/{workspace_id}/documents/upload",
-            post(documents::upload_document)
-                .layer(DefaultBodyLimit::max(state.config.document.max_upload_size_mb * 1024 * 1024)),
+            post(documents::upload_document).layer(DefaultBodyLimit::max(
+                state.config.document.max_upload_size_mb * 1024 * 1024,
+            )),
         )
         .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/content",
@@ -262,9 +238,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
 
     // Merge public + protected, optionally with rate limiting
     let rate_limited = if let Some(limiter) = rate_limiter {
-        public
-            .merge(protected)
-            .layer(RateLimitLayer::new(limiter))
+        public.merge(protected).layer(RateLimitLayer::new(limiter))
     } else {
         public.merge(protected)
     };
@@ -312,13 +286,17 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                         request_id = %request_id,
                     )
                 })
-                .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
-                    tracing::info!(
-                        status = %response.status(),
-                        latency_ms = latency.as_millis(),
-                        "response"
-                    );
-                }),
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &Span| {
+                        tracing::info!(
+                            status = %response.status(),
+                            latency_ms = latency.as_millis(),
+                            "response"
+                        );
+                    },
+                ),
         )
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         // Security headers (OWASP A05)
@@ -350,7 +328,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                  connect-src 'self'; \
                  frame-ancestors 'none'; \
                  base-uri 'self'; \
-                 form-action 'self'"
+                 form-action 'self'",
             ),
         ))
         .layer(cors)

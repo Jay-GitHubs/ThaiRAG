@@ -31,7 +31,11 @@ impl LlmSmartChunker {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,
@@ -74,12 +78,20 @@ impl LlmSmartChunker {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to parse chunker feedback response, falling back");
-                return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+                return Ok(mechanical_fallback(
+                    markdown,
+                    max_chunk_size,
+                    &self.fallback_chunker,
+                ));
             }
         };
 
         if sections.is_empty() {
-            return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+            return Ok(mechanical_fallback(
+                markdown,
+                max_chunk_size,
+                &self.fallback_chunker,
+            ));
         }
 
         let page_map = build_page_map(&lines);
@@ -126,7 +138,11 @@ impl LlmSmartChunker {
         }
 
         if enriched.is_empty() {
-            return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+            return Ok(mechanical_fallback(
+                markdown,
+                max_chunk_size,
+                &self.fallback_chunker,
+            ));
         }
 
         Ok(enriched)
@@ -142,7 +158,10 @@ pub fn validate_chunks(
     let mut issues = Vec::new();
 
     // Check for empty chunks
-    let empty_count = chunks.iter().filter(|c| c.content.trim().is_empty()).count();
+    let empty_count = chunks
+        .iter()
+        .filter(|c| c.content.trim().is_empty())
+        .count();
     if empty_count > 0 {
         issues.push(format!("{empty_count} chunk(s) are empty"));
     }
@@ -177,7 +196,11 @@ pub fn validate_chunks(
     if !oversized.is_empty() {
         issues.push(format!(
             "Chunk(s) {} exceed max size of {} chars",
-            oversized.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+            oversized
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             max_chunk_size,
         ));
     }
@@ -220,12 +243,20 @@ impl SmartChunker for LlmSmartChunker {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to parse chunker response, falling back to mechanical");
-                return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+                return Ok(mechanical_fallback(
+                    markdown,
+                    max_chunk_size,
+                    &self.fallback_chunker,
+                ));
             }
         };
 
         if sections.is_empty() {
-            return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+            return Ok(mechanical_fallback(
+                markdown,
+                max_chunk_size,
+                &self.fallback_chunker,
+            ));
         }
 
         // Build a line_number → page_number map from page markers
@@ -277,7 +308,11 @@ impl SmartChunker for LlmSmartChunker {
         }
 
         if enriched.is_empty() {
-            return Ok(mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker));
+            return Ok(mechanical_fallback(
+                markdown,
+                max_chunk_size,
+                &self.fallback_chunker,
+            ));
         }
 
         Ok(enriched)
@@ -349,10 +384,7 @@ fn build_page_map(lines: &[&str]) -> Vec<Option<usize>> {
 
 /// Collect unique sorted page numbers for a line range.
 fn pages_for_range(page_map: &[Option<usize>], start: usize, end: usize) -> Option<Vec<usize>> {
-    let mut pages: Vec<usize> = page_map[start..end]
-        .iter()
-        .filter_map(|p| *p)
-        .collect();
+    let mut pages: Vec<usize> = page_map[start..end].iter().filter_map(|p| *p).collect();
     pages.sort_unstable();
     pages.dedup();
     if pages.is_empty() { None } else { Some(pages) }

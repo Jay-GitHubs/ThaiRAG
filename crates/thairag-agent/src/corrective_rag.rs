@@ -49,7 +49,14 @@ impl CorrectiveRag {
         max_web_results: u32,
         max_tokens: u32,
     ) -> Self {
-        Self { llm, relevance_threshold, web_search_url, max_web_results, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            relevance_threshold,
+            web_search_url,
+            max_web_results,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
     pub fn new_with_prompts(
@@ -60,7 +67,14 @@ impl CorrectiveRag {
         max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, relevance_threshold, web_search_url, max_web_results, max_tokens, prompts }
+        Self {
+            llm,
+            relevance_threshold,
+            web_search_url,
+            max_web_results,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Evaluate whether the retrieved context is sufficient for answering the query.
@@ -73,7 +87,11 @@ impl CorrectiveRag {
             return Ok(ContextAction::Incorrect);
         }
 
-        let avg_score = context.chunks.iter().map(|c| c.relevance_score).sum::<f32>()
+        let avg_score = context
+            .chunks
+            .iter()
+            .map(|c| c.relevance_score)
+            .sum::<f32>()
             / context.chunks.len() as f32;
 
         // Fast path: clearly good or clearly bad
@@ -85,7 +103,10 @@ impl CorrectiveRag {
         }
 
         // LLM-based assessment for ambiguous cases
-        let context_preview: String = context.chunks.iter().take(3)
+        let context_preview: String = context
+            .chunks
+            .iter()
+            .take(3)
             .map(|c| truncate(&c.content, 200))
             .collect::<Vec<_>>()
             .join("\n---\n");
@@ -99,15 +120,25 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
 
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.corrective_rag", DEFAULT_CORRECTIVE_RAG_PROMPT, &[]),
+            content: self.prompts.render_or_default(
+                "chat.corrective_rag",
+                DEFAULT_CORRECTIVE_RAG_PROMPT,
+                &[],
+            ),
         };
 
         let user = ChatMessage {
             role: "user".into(),
-            content: format!("Query: {query}\n\nRetrieved context (avg relevance: {avg_score:.2}):\n{context_preview}"),
+            content: format!(
+                "Query: {query}\n\nRetrieved context (avg relevance: {avg_score:.2}):\n{context_preview}"
+            ),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<CragOutput>(json_str) {
@@ -166,22 +197,27 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
             .await;
 
         match resp {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<WebSearchApiResponse>().await {
-                    Ok(api_resp) => {
-                        info!(results = api_resp.results.len(), "CRAG: web search completed");
-                        Ok(api_resp.results.into_iter().map(|r| WebSearchResult {
+            Ok(r) if r.status().is_success() => match r.json::<WebSearchApiResponse>().await {
+                Ok(api_resp) => {
+                    info!(
+                        results = api_resp.results.len(),
+                        "CRAG: web search completed"
+                    );
+                    Ok(api_resp
+                        .results
+                        .into_iter()
+                        .map(|r| WebSearchResult {
                             title: r.title,
                             url: r.url,
                             snippet: r.snippet,
-                        }).collect())
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "CRAG: failed to parse web search response");
-                        Ok(Vec::new())
-                    }
+                        })
+                        .collect())
                 }
-            }
+                Err(e) => {
+                    warn!(error = %e, "CRAG: failed to parse web search response");
+                    Ok(Vec::new())
+                }
+            },
             Ok(r) => {
                 warn!(status = %r.status(), "CRAG: web search returned error");
                 Ok(Vec::new())
@@ -203,7 +239,8 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
             return Ok(String::new());
         }
 
-        let snippets: String = web_results.iter()
+        let snippets: String = web_results
+            .iter()
             .map(|r| format!("- {} ({}): {}", r.title, r.url, r.snippet))
             .collect::<Vec<_>>()
             .join("\n");
@@ -266,5 +303,9 @@ fn extract_json(s: &str) -> &str {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex};
 
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, QueryIntent};
-use thairag_core::PromptRegistry;
 use thairag_thai::ThaiNormalizer;
 
 use crate::rag_engine::RagEngine;
@@ -85,8 +85,7 @@ fn heuristic_normalize(query: &str) -> String {
     let normalized = normalizer.normalize(query);
 
     // Strip trailing punctuation
-    let trimmed = normalized
-        .trim_end_matches(['?', '!', '.', '…']);
+    let trimmed = normalized.trim_end_matches(['?', '!', '.', '…']);
     let trimmed = trimmed.trim();
 
     // Remove one filler prefix (longest match first — lists are ordered long→short)
@@ -139,9 +138,23 @@ fn classify_intent(query: &str) -> QueryIntent {
 
     // Greeting patterns (English + Thai) — checked BEFORE length gate
     const GREETINGS: &[&str] = &[
-        "hi", "hello", "hey", "howdy", "good morning", "good afternoon",
-        "good evening", "yo", "sup", "what's up", "whats up",
-        "สวัสดี", "หวัดดี", "ดีครับ", "ดีค่ะ", "สวัสดีครับ", "สวัสดีค่ะ",
+        "hi",
+        "hello",
+        "hey",
+        "howdy",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "yo",
+        "sup",
+        "what's up",
+        "whats up",
+        "สวัสดี",
+        "หวัดดี",
+        "ดีครับ",
+        "ดีค่ะ",
+        "สวัสดีครับ",
+        "สวัสดีค่ะ",
     ];
 
     for pat in GREETINGS {
@@ -160,15 +173,15 @@ fn classify_intent(query: &str) -> QueryIntent {
     }
 
     // Thanks patterns
-    const THANKS: &[&str] = &[
-        "thank", "thanks", "thx", "ty",
-        "ขอบคุณ", "ขอบใจ",
-    ];
+    const THANKS: &[&str] = &["thank", "thanks", "thx", "ty", "ขอบคุณ", "ขอบใจ"];
 
     // Meta questions about the bot itself
     const META: &[&str] = &[
-        "who are you", "what are you", "what can you do",
-        "คุณเป็นใคร", "คุณทำอะไรได้",
+        "who are you",
+        "what are you",
+        "what can you do",
+        "คุณเป็นใคร",
+        "คุณทำอะไรได้",
     ];
 
     for pat in THANKS {
@@ -198,11 +211,23 @@ pub struct QueryOrchestrator {
 
 impl QueryOrchestrator {
     pub fn new(llm: Arc<dyn LlmProvider>, rag_engine: Arc<RagEngine>) -> Self {
-        Self { llm, rag_engine, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            rag_engine,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, rag_engine: Arc<RagEngine>, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, rag_engine, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        rag_engine: Arc<RagEngine>,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            rag_engine,
+            prompts,
+        }
     }
 
     /// Process a user query through the orchestration pipeline.
@@ -211,27 +236,20 @@ impl QueryOrchestrator {
         messages: &[ChatMessage],
         scope: &AccessScope,
     ) -> Result<LlmResponse> {
-        let user_query = messages
-            .last()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
+        let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
         let intent = classify_intent(user_query);
 
         match intent {
-            QueryIntent::DirectAnswer => {
-                self.llm.generate(messages, None).await
-            }
+            QueryIntent::DirectAnswer => self.llm.generate(messages, None).await,
             QueryIntent::Retrieval => {
                 let rewritten = self.rewrite_query(user_query).await;
                 self.rag_engine.answer(&rewritten, messages, scope).await
             }
-            QueryIntent::Clarification => {
-                Ok(LlmResponse {
-                    content: "Could you please provide more details about your question?".to_string(),
-                    usage: LlmUsage::default(),
-                })
-            }
+            QueryIntent::Clarification => Ok(LlmResponse {
+                content: "Could you please provide more details about your question?".to_string(),
+                usage: LlmUsage::default(),
+            }),
         }
     }
 
@@ -241,20 +259,17 @@ impl QueryOrchestrator {
         messages: &[ChatMessage],
         scope: &AccessScope,
     ) -> Result<LlmStreamResponse> {
-        let user_query = messages
-            .last()
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
+        let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
         let intent = classify_intent(user_query);
 
         match intent {
-            QueryIntent::DirectAnswer => {
-                self.llm.generate_stream(messages, None).await
-            }
+            QueryIntent::DirectAnswer => self.llm.generate_stream(messages, None).await,
             QueryIntent::Retrieval => {
                 let rewritten = self.rewrite_query(user_query).await;
-                self.rag_engine.answer_stream(&rewritten, messages, scope).await
+                self.rag_engine
+                    .answer_stream(&rewritten, messages, scope)
+                    .await
             }
             QueryIntent::Clarification => {
                 let msg = "Could you please provide more details about your question?".to_string();
@@ -283,7 +298,11 @@ Preserve the original language (Thai or English).";
 
         let system = ChatMessage {
             role: "system".to_string(),
-            content: self.prompts.render_or_default("chat.orchestrator_query_rewriter", DEFAULT_REWRITER, &[]),
+            content: self.prompts.render_or_default(
+                "chat.orchestrator_query_rewriter",
+                DEFAULT_REWRITER,
+                &[],
+            ),
         };
         let user = ChatMessage {
             role: "user".to_string(),
@@ -362,14 +381,20 @@ mod tests {
     #[test]
     fn classify_thanks() {
         assert_eq!(classify_intent("thanks"), QueryIntent::DirectAnswer);
-        assert_eq!(classify_intent("Thank you so much"), QueryIntent::DirectAnswer);
+        assert_eq!(
+            classify_intent("Thank you so much"),
+            QueryIntent::DirectAnswer
+        );
         assert_eq!(classify_intent("ขอบคุณครับ"), QueryIntent::DirectAnswer);
     }
 
     #[test]
     fn classify_meta() {
         assert_eq!(classify_intent("who are you?"), QueryIntent::DirectAnswer);
-        assert_eq!(classify_intent("What can you do"), QueryIntent::DirectAnswer);
+        assert_eq!(
+            classify_intent("What can you do"),
+            QueryIntent::DirectAnswer
+        );
         assert_eq!(classify_intent("คุณเป็นใคร"), QueryIntent::DirectAnswer);
     }
 
@@ -423,10 +448,7 @@ mod tests {
     fn normalize_removes_en_filler() {
         assert_eq!(heuristic_normalize("please tell me about Rust"), "Rust");
         assert_eq!(heuristic_normalize("Can you explain tokio?"), "tokio");
-        assert_eq!(
-            heuristic_normalize("I want to know about async"),
-            "async"
-        );
+        assert_eq!(heuristic_normalize("I want to know about async"), "async");
     }
 
     #[test]
@@ -437,15 +459,15 @@ mod tests {
 
     #[test]
     fn normalize_collapses_whitespace() {
-        assert_eq!(
-            heuristic_normalize("  hello   world  "),
-            "hello world"
-        );
+        assert_eq!(heuristic_normalize("  hello   world  "), "hello world");
     }
 
     #[test]
     fn normalize_preserves_meaningful_query() {
-        assert_eq!(heuristic_normalize("Rust async runtime"), "Rust async runtime");
+        assert_eq!(
+            heuristic_normalize("Rust async runtime"),
+            "Rust async runtime"
+        );
     }
 
     #[test]
@@ -496,9 +518,9 @@ mod tests {
 
     // ── Full rewrite_query Tests (async, with mock LLM) ──────────────
 
+    use thairag_config::schema::SearchConfig;
     use thairag_core::traits::{EmbeddingModel, Reranker, TextSearch, VectorStore};
     use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
-    use thairag_config::schema::SearchConfig;
 
     struct MockEmbedding;
     #[async_trait]

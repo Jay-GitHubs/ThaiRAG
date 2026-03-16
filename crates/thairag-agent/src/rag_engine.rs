@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, SearchQuery};
-use thairag_core::PromptRegistry;
 use thairag_search::HybridSearchEngine;
 
 /// Default hardcoded template.
@@ -38,15 +38,16 @@ impl RagEngine {
         search: Arc<HybridSearchEngine>,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, search, prompts }
+        Self {
+            llm,
+            search,
+            prompts,
+        }
     }
 
     fn build_system_prompt(&self, context: &str) -> String {
-        self.prompts.render_or_default(
-            "chat.rag_engine",
-            DEFAULT_TEMPLATE,
-            &[("context", context)],
-        )
+        self.prompts
+            .render_or_default("chat.rag_engine", DEFAULT_TEMPLATE, &[("context", context)])
     }
 
     pub async fn answer(

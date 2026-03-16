@@ -53,9 +53,15 @@ impl AppConfig {
         // Vector store
         match p.vector_store.kind {
             VectorStoreKind::InMemory => {}
-            VectorStoreKind::Qdrant | VectorStoreKind::ChromaDb | VectorStoreKind::Milvus | VectorStoreKind::Weaviate => {
+            VectorStoreKind::Qdrant
+            | VectorStoreKind::ChromaDb
+            | VectorStoreKind::Milvus
+            | VectorStoreKind::Weaviate => {
                 require("providers.vector_store.url", &p.vector_store.url)?;
-                require("providers.vector_store.collection", &p.vector_store.collection)?;
+                require(
+                    "providers.vector_store.collection",
+                    &p.vector_store.collection,
+                )?;
             }
             VectorStoreKind::Pgvector => {
                 require("providers.vector_store.url", &p.vector_store.url)?;
@@ -377,11 +383,21 @@ impl Default for AiRetryConfig {
     }
 }
 
-fn default_converter_max_retries() -> u32 { 2 }
-fn default_chunker_max_retries() -> u32 { 1 }
-fn default_analyzer_max_retries() -> u32 { 1 }
-fn default_analyzer_retry_confidence() -> f32 { 0.5 }
-fn default_max_orchestrator_calls() -> u32 { 10 }
+fn default_converter_max_retries() -> u32 {
+    2
+}
+fn default_chunker_max_retries() -> u32 {
+    1
+}
+fn default_analyzer_max_retries() -> u32 {
+    1
+}
+fn default_analyzer_retry_confidence() -> f32 {
+    0.5
+}
+fn default_max_orchestrator_calls() -> u32 {
+    10
+}
 
 impl Default for AiPreprocessingConfig {
     fn default() -> Self {
@@ -595,34 +611,90 @@ pub struct ChatPipelineConfig {
     pub active_learning_max_low_confidence: usize,
 }
 
-fn default_max_chat_orchestrator_calls() -> u32 { 3 }
-fn default_quality_guard_max_retries() -> u32 { 1 }
-fn default_quality_guard_threshold() -> f32 { 0.6 }
-fn default_max_context_tokens() -> usize { 4096 }
-fn default_chat_agent_max_tokens() -> u32 { 2048 }
-fn default_max_llm_calls_per_request() -> u32 { 25 }
-fn default_memory_max_summaries() -> usize { 10 }
-fn default_memory_summary_max_tokens() -> u32 { 256 }
-fn default_refinement_min_relevance() -> f32 { 0.3 }
-fn default_refinement_max_retries() -> u32 { 1 }
-fn default_tool_use_max_calls() -> u32 { 3 }
-fn default_feedback_decay_days() -> u32 { 30 }
-fn default_adaptive_min_samples() -> u32 { 20 }
-fn default_self_rag_threshold() -> f32 { 0.7 }
-fn default_graph_rag_max_entities() -> u32 { 10 }
-fn default_graph_rag_max_depth() -> u32 { 2 }
-fn default_crag_relevance_threshold() -> f32 { 0.3 }
-fn default_crag_max_web_results() -> u32 { 5 }
-fn default_speculative_candidates() -> u32 { 3 }
-fn default_map_reduce_max_chunks() -> usize { 15 }
-fn default_ragas_sample_rate() -> f32 { 0.1 }
-fn default_compression_target_ratio() -> f32 { 0.5 }
-fn default_multimodal_max_images() -> u32 { 5 }
-fn default_raptor_max_depth() -> u32 { 2 }
-fn default_raptor_group_size() -> usize { 3 }
-fn default_colbert_top_n() -> usize { 10 }
-fn default_active_learning_min_interactions() -> u32 { 5 }
-fn default_active_learning_max_low_confidence() -> usize { 100 }
+fn default_max_chat_orchestrator_calls() -> u32 {
+    3
+}
+fn default_quality_guard_max_retries() -> u32 {
+    1
+}
+fn default_quality_guard_threshold() -> f32 {
+    0.6
+}
+fn default_max_context_tokens() -> usize {
+    4096
+}
+fn default_chat_agent_max_tokens() -> u32 {
+    2048
+}
+fn default_max_llm_calls_per_request() -> u32 {
+    25
+}
+fn default_memory_max_summaries() -> usize {
+    10
+}
+fn default_memory_summary_max_tokens() -> u32 {
+    256
+}
+fn default_refinement_min_relevance() -> f32 {
+    0.3
+}
+fn default_refinement_max_retries() -> u32 {
+    1
+}
+fn default_tool_use_max_calls() -> u32 {
+    3
+}
+fn default_feedback_decay_days() -> u32 {
+    30
+}
+fn default_adaptive_min_samples() -> u32 {
+    20
+}
+fn default_self_rag_threshold() -> f32 {
+    0.7
+}
+fn default_graph_rag_max_entities() -> u32 {
+    10
+}
+fn default_graph_rag_max_depth() -> u32 {
+    2
+}
+fn default_crag_relevance_threshold() -> f32 {
+    0.3
+}
+fn default_crag_max_web_results() -> u32 {
+    5
+}
+fn default_speculative_candidates() -> u32 {
+    3
+}
+fn default_map_reduce_max_chunks() -> usize {
+    15
+}
+fn default_ragas_sample_rate() -> f32 {
+    0.1
+}
+fn default_compression_target_ratio() -> f32 {
+    0.5
+}
+fn default_multimodal_max_images() -> u32 {
+    5
+}
+fn default_raptor_max_depth() -> u32 {
+    2
+}
+fn default_raptor_group_size() -> usize {
+    3
+}
+fn default_colbert_top_n() -> usize {
+    10
+}
+fn default_active_learning_min_interactions() -> u32 {
+    5
+}
+fn default_active_learning_max_low_confidence() -> usize {
+    100
+}
 
 impl Default for ChatPipelineConfig {
     fn default() -> Self {
@@ -711,12 +783,22 @@ impl Default for ChatPipelineConfig {
     }
 }
 
-fn default_true_val() -> bool { true }
+fn default_true_val() -> bool {
+    true
+}
 
-fn default_quality_threshold() -> f32 { 0.7 }
-fn default_max_llm_input_chars() -> usize { 30_000 }
-fn default_agent_max_tokens() -> u32 { 4096 }
-fn default_min_ai_size_bytes() -> usize { 500 }
+fn default_quality_threshold() -> f32 {
+    0.7
+}
+fn default_max_llm_input_chars() -> usize {
+    30_000
+}
+fn default_agent_max_tokens() -> u32 {
+    4096
+}
+fn default_min_ai_size_bytes() -> usize {
+    500
+}
 
 #[cfg(test)]
 mod tests {

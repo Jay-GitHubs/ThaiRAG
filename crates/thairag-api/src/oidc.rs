@@ -89,9 +89,7 @@ impl OidcProviderConfig {
         let scopes = scopes_str.split_whitespace().map(String::from).collect();
         let redirect_uri = config["redirect_uri"]
             .as_str()
-            .ok_or_else(|| {
-                ThaiRagError::Validation("Missing redirect_uri in OIDC config".into())
-            })?
+            .ok_or_else(|| ThaiRagError::Validation("Missing redirect_uri in OIDC config".into()))?
             .to_string();
 
         let role_mapping: std::collections::HashMap<String, String> = config

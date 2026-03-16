@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::context_curator::CuratedContext;
@@ -54,11 +54,7 @@ impl ContextualCompression {
     }
 
     /// Compress a curated context by removing low-importance content.
-    pub async fn compress(
-        &self,
-        query: &str,
-        context: &CuratedContext,
-    ) -> Result<CuratedContext> {
+    pub async fn compress(&self, query: &str, context: &CuratedContext) -> Result<CuratedContext> {
         if context.chunks.is_empty() {
             return Ok(context.clone());
         }
@@ -157,5 +153,9 @@ async fn compress_chunk(
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

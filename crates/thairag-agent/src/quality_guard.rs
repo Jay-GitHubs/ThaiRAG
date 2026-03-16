@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::context_curator::CuratedContext;
@@ -50,9 +50,15 @@ struct LlmVerdict {
     feedback: Option<String>,
 }
 
-fn default_true() -> bool { true }
-fn default_high() -> f32 { 0.8 }
-fn default_low() -> f32 { 0.1 }
+fn default_true() -> bool {
+    true
+}
+fn default_high() -> f32 {
+    0.8
+}
+fn default_low() -> f32 {
+    0.1
+}
 
 pub struct QualityGuard {
     llm: Arc<dyn LlmProvider>,
@@ -77,7 +83,12 @@ impl QualityGuard {
         max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, threshold, max_tokens, prompts }
+        Self {
+            llm,
+            threshold,
+            max_tokens,
+            prompts,
+        }
     }
 
     pub async fn check(
@@ -86,7 +97,8 @@ impl QualityGuard {
         response: &str,
         context: &CuratedContext,
     ) -> Result<QualityVerdict> {
-        self.check_with_threshold(query, response, context, self.threshold).await
+        self.check_with_threshold(query, response, context, self.threshold)
+            .await
     }
 
     /// Check quality with an externally-provided threshold (for adaptive quality).
@@ -97,9 +109,12 @@ impl QualityGuard {
         context: &CuratedContext,
         threshold: f32,
     ) -> Result<QualityVerdict> {
-        let context_text: String = context.chunks.iter().map(|c| {
-            format!("[{}] {}", c.index, c.content)
-        }).collect::<Vec<_>>().join("\n\n");
+        let context_text: String = context
+            .chunks
+            .iter()
+            .map(|c| format!("[{}] {}", c.index, c.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
         let hallucination_threshold = 1.0 - self.threshold;
 
@@ -110,25 +125,32 @@ impl QualityGuard {
                 DEFAULT_QUALITY_PROMPT,
                 &[
                     ("threshold", &threshold.to_string()),
-                    ("hallucination_threshold", &hallucination_threshold.to_string()),
+                    (
+                        "hallucination_threshold",
+                        &hallucination_threshold.to_string(),
+                    ),
                 ],
             ),
         };
         let user = ChatMessage {
             role: "user".into(),
-            content: format!(
-                "Query: {query}\n\nContext:\n{context_text}\n\nResponse:\n{response}"
-            ),
+            content: format!("Query: {query}\n\nContext:\n{context_text}\n\nResponse:\n{response}"),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmVerdict>(json_str) {
                     Ok(v) => {
                         debug!(
-                            pass = v.pass, relevance = v.relevance,
-                            hallucination = v.hallucination, completeness = v.completeness,
+                            pass = v.pass,
+                            relevance = v.relevance,
+                            hallucination = v.hallucination,
+                            completeness = v.completeness,
                             "Quality guard verdict"
                         );
                         Ok(QualityVerdict {

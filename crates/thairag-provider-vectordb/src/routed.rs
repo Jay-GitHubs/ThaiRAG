@@ -186,9 +186,7 @@ impl VectorStore for RoutedVectorStore {
             let store = self.get_or_create_store(&col);
             let emb = embedding.to_vec();
             let q = query.clone();
-            handles.push(tokio::spawn(async move {
-                store.search(&emb, &q).await
-            }));
+            handles.push(tokio::spawn(async move { store.search(&emb, &q).await }));
         }
 
         let mut all_results = Vec::new();
@@ -205,7 +203,11 @@ impl VectorStore for RoutedVectorStore {
         }
 
         // Sort by score descending and truncate to top_k
-        all_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_results.truncate(query.top_k);
         Ok(all_results)
     }

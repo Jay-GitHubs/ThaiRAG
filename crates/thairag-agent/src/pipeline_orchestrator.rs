@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::query_analyzer::{Complexity, QueryAnalysis};
@@ -65,7 +65,12 @@ impl PipelineOrchestrator {
         }
     }
 
-    pub fn new_with_prompts(llm: Option<Arc<dyn LlmProvider>>, max_tokens: u32, budget: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Option<Arc<dyn LlmProvider>>,
+        max_tokens: u32,
+        budget: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,
@@ -99,14 +104,21 @@ impl PipelineOrchestrator {
     ) -> Result<PipelineRoute> {
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.pipeline_orchestrator", DEFAULT_TEMPLATE, &[]),
+            content: self.prompts.render_or_default(
+                "chat.pipeline_orchestrator",
+                DEFAULT_TEMPLATE,
+                &[],
+            ),
         };
         let user = ChatMessage {
             role: "user".into(),
             content: format!(
                 "Query analysis:\n- language: {:?}\n- intent: {:?}\n- complexity: {:?}\n- topics: {:?}\n- needs_context: {}",
-                analysis.language, analysis.intent, analysis.complexity,
-                analysis.topics, analysis.needs_context,
+                analysis.language,
+                analysis.intent,
+                analysis.complexity,
+                analysis.topics,
+                analysis.needs_context,
             ),
         };
 

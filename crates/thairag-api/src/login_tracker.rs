@@ -49,11 +49,15 @@ impl LoginTracker {
     /// Record a failed login attempt. Returns `true` if the account is now locked.
     pub fn record_failure(&self, email: &str) -> bool {
         let key = email.to_lowercase();
-        let mut entry = self.inner.attempts.entry(key).or_insert_with(|| LoginAttemptState {
-            count: 0,
-            first_attempt: Instant::now(),
-            locked_until: None,
-        });
+        let mut entry = self
+            .inner
+            .attempts
+            .entry(key)
+            .or_insert_with(|| LoginAttemptState {
+                count: 0,
+                first_attempt: Instant::now(),
+                locked_until: None,
+            });
 
         // Reset if the lockout window has expired
         if let Some(locked_until) = entry.locked_until {

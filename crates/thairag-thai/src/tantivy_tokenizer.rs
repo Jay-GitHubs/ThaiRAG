@@ -222,11 +222,7 @@ mod tests {
             } else {
                 slice.trim().to_lowercase()
             };
-            assert_eq!(
-                expected, t.text,
-                "Offset mismatch for token '{}'",
-                t.text
-            );
+            assert_eq!(expected, t.text, "Offset mismatch for token '{}'", t.text);
         }
     }
 }

@@ -20,11 +20,7 @@ impl LanguageAdapter {
     }
 
     /// Check if the response matches the expected language; if not, adapt it.
-    pub async fn adapt(
-        &self,
-        response: &str,
-        expected_language: &QueryLanguage,
-    ) -> Result<String> {
+    pub async fn adapt(&self, response: &str, expected_language: &QueryLanguage) -> Result<String> {
         // Quick heuristic: check if the response is already in the right language
         if matches_language(response, expected_language) {
             return Ok(response.to_string());
@@ -57,7 +53,11 @@ impl LanguageAdapter {
             content: response.to_string(),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let adapted = resp.content.trim().to_string();
                 if adapted.is_empty() {
@@ -76,7 +76,10 @@ impl LanguageAdapter {
 
 /// Heuristic check: does the response match the expected language?
 fn matches_language(text: &str, expected: &QueryLanguage) -> bool {
-    let thai_chars = text.chars().filter(|c| ('\u{0E01}'..='\u{0E5B}').contains(c)).count();
+    let thai_chars = text
+        .chars()
+        .filter(|c| ('\u{0E01}'..='\u{0E5B}').contains(c))
+        .count();
     let total_alpha: usize = text.chars().filter(|c| c.is_alphabetic()).count();
 
     if total_alpha == 0 {
@@ -88,6 +91,6 @@ fn matches_language(text: &str, expected: &QueryLanguage) -> bool {
     match expected {
         QueryLanguage::Thai => thai_ratio > 0.3, // At least 30% Thai
         QueryLanguage::English => thai_ratio < 0.1, // Less than 10% Thai
-        QueryLanguage::Mixed => true, // Mixed is always acceptable
+        QueryLanguage::Mixed => true,            // Mixed is always acceptable
     }
 }

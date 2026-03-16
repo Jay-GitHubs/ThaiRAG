@@ -148,7 +148,8 @@ Output clean Markdown only, no explanation:"#;
     ];
 
     if needs_ocr_correction {
-        instructions.push("- Fix obvious OCR errors, especially broken Thai characters and garbled text");
+        instructions
+            .push("- Fix obvious OCR errors, especially broken Thai characters and garbled text");
     }
     if has_headers_footers {
         instructions.push("- Remove repeated headers and footers (page numbers, document titles repeated on every page)");
@@ -221,7 +222,8 @@ Output improved Markdown only, no explanation:"#;
     ];
 
     if needs_ocr_correction {
-        instructions.push("- Fix obvious OCR errors, especially broken Thai characters and garbled text");
+        instructions
+            .push("- Fix obvious OCR errors, especially broken Thai characters and garbled text");
     }
     if has_headers_footers {
         instructions.push("- Remove repeated headers and footers (page numbers, document titles repeated on every page)");
@@ -464,10 +466,7 @@ Return ONLY valid JSON, no explanation or markdown fences:
     prompts.render_or_default(
         "document.quality_checker_vision",
         DEFAULT_TEMPLATE,
-        &[
-            ("converted_ref", &converted_ref),
-            ("ocr_ref", &ocr_ref),
-        ],
+        &[("converted_ref", &converted_ref), ("ocr_ref", &ocr_ref)],
     )
 }
 

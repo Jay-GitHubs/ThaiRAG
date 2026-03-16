@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use thairag_config::schema::{AiPreprocessingConfig, AiRetryConfig};
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, LlmProvider, QualityChecker, SmartChunker};
 use thairag_core::types::{
     ChunkId, ChunkMetadata, ContentType, DocId, DocumentAnalysis, DocumentChunk,
     OrchestratorAction, PipelineSnapshot, StructureLevel, WorkspaceId,
 };
-use thairag_core::PromptRegistry;
 use tracing::{info, warn};
 
 use crate::pipeline::StepCallback;
@@ -16,7 +16,7 @@ use crate::chunker::MarkdownChunker;
 use crate::converter::MarkdownConverter;
 
 use super::analyzer::LlmDocumentAnalyzer;
-use super::chunker::{validate_chunks, LlmSmartChunker};
+use super::chunker::{LlmSmartChunker, validate_chunks};
 use super::converter::LlmDocumentConverter;
 use super::enricher::LlmChunkEnricher;
 use super::orchestrator::LlmOrchestrator;
@@ -108,8 +108,15 @@ impl AiDocumentPipeline {
         chunk_overlap: usize,
     ) -> Self {
         Self::new_per_agent_with_prompts(
-            analyzer_llm, converter_llm, quality_llm, chunker_llm,
-            enricher_llm, orchestrator_llm, config, max_chunk_size, chunk_overlap,
+            analyzer_llm,
+            converter_llm,
+            quality_llm,
+            chunker_llm,
+            enricher_llm,
+            orchestrator_llm,
+            config,
+            max_chunk_size,
+            chunk_overlap,
             Arc::new(PromptRegistry::new()),
         )
     }
@@ -141,7 +148,8 @@ impl AiDocumentPipeline {
 
         // Resolve per-agent max_tokens: agent LLM config → shared LLM config → global
         let resolve_mt = |agent_llm: &Option<thairag_config::schema::LlmConfig>| -> u32 {
-            agent_llm.as_ref()
+            agent_llm
+                .as_ref()
                 .and_then(|c| c.max_tokens)
                 .or_else(|| config.llm.as_ref().and_then(|c| c.max_tokens))
                 .unwrap_or(config.agent_max_tokens)
@@ -154,7 +162,11 @@ impl AiDocumentPipeline {
         let orchestrator_mt = resolve_mt(&config.orchestrator_llm);
 
         Self {
-            analyzer: LlmDocumentAnalyzer::new_with_prompts(analyzer_llm, analyzer_mt, Arc::clone(&prompts)),
+            analyzer: LlmDocumentAnalyzer::new_with_prompts(
+                analyzer_llm,
+                analyzer_mt,
+                Arc::clone(&prompts),
+            ),
             converter: LlmDocumentConverter::new_with_prompts(
                 converter_llm,
                 config.max_llm_input_chars,
@@ -167,10 +179,17 @@ impl AiDocumentPipeline {
                 quality_mt,
                 Arc::clone(&prompts),
             ),
-            smart_chunker: LlmSmartChunker::new_with_prompts(chunker_llm, chunker_mt, Arc::clone(&prompts)),
-            enricher: enricher_llm.map(|llm| LlmChunkEnricher::new_with_prompts(llm, enricher_mt, Arc::clone(&prompts))),
-            orchestrator: orchestrator_llm
-                .map(|llm| LlmOrchestrator::new_with_prompts(llm, orchestrator_mt, Arc::clone(&prompts))),
+            smart_chunker: LlmSmartChunker::new_with_prompts(
+                chunker_llm,
+                chunker_mt,
+                Arc::clone(&prompts),
+            ),
+            enricher: enricher_llm.map(|llm| {
+                LlmChunkEnricher::new_with_prompts(llm, enricher_mt, Arc::clone(&prompts))
+            }),
+            orchestrator: orchestrator_llm.map(|llm| {
+                LlmOrchestrator::new_with_prompts(llm, orchestrator_mt, Arc::clone(&prompts))
+            }),
             mechanical_converter: MarkdownConverter::new(),
             mechanical_chunker: MarkdownChunker::new(),
             min_ai_size_bytes: config.min_ai_size_bytes,
@@ -233,16 +252,28 @@ impl AiDocumentPipeline {
 
         if self.orchestrator.is_some() {
             self.process_orchestrated(
-                &pages, &raw_text, total_size, mime_type, is_multipage,
+                &pages,
+                &raw_text,
+                total_size,
+                mime_type,
+                is_multipage,
                 if use_vision { Some(raw) } else { None },
-                doc_id, workspace_id, &on_step,
+                doc_id,
+                workspace_id,
+                &on_step,
             )
             .await
         } else {
             self.process_retry_based(
-                &pages, &raw_text, total_size, mime_type, is_multipage,
+                &pages,
+                &raw_text,
+                total_size,
+                mime_type,
+                is_multipage,
                 if use_vision { Some(raw) } else { None },
-                doc_id, workspace_id, &on_step,
+                doc_id,
+                workspace_id,
+                &on_step,
             )
             .await
         }
@@ -264,12 +295,8 @@ impl AiDocumentPipeline {
     ) -> Result<Vec<DocumentChunk>> {
         let orchestrator = self.orchestrator.as_ref().unwrap();
 
-        let effective_quality_threshold = self
-            .quality_threshold_override
-            .unwrap_or(0.7);
-        let effective_max_chunk_size = self
-            .max_chunk_size_override
-            .unwrap_or(self.max_chunk_size);
+        let effective_quality_threshold = self.quality_threshold_override.unwrap_or(0.7);
+        let effective_max_chunk_size = self.max_chunk_size_override.unwrap_or(self.max_chunk_size);
 
         let mut state = PipelineState {
             orchestrator_calls: 0,
@@ -301,7 +328,16 @@ impl AiDocumentPipeline {
                     Ok(a) => a,
                     Err(e) => {
                         warn!(%doc_id, error = %e, "Vision analysis failed, falling back to text");
-                        match self.analyzer.analyze_with_excerpt_size(raw_text, mime_type, total_size, excerpt_size).await {
+                        match self
+                            .analyzer
+                            .analyze_with_excerpt_size(
+                                raw_text,
+                                mime_type,
+                                total_size,
+                                excerpt_size,
+                            )
+                            .await
+                        {
                             Ok(a) => a,
                             Err(e2) => {
                                 warn!(%doc_id, error = %e2, "Text analysis also failed, falling back to mechanical");
@@ -368,7 +404,11 @@ impl AiDocumentPipeline {
                 }
             };
 
-            let decision_summary = format!("analyzer: {} ({})", action_name(&decision.action), decision.reasoning);
+            let decision_summary = format!(
+                "analyzer: {} ({})",
+                action_name(&decision.action),
+                decision.reasoning
+            );
             info!(%doc_id, decision = %decision_summary, "Orchestrator decision");
             state.decisions.push(decision_summary);
 
@@ -447,15 +487,20 @@ impl AiDocumentPipeline {
             // Vision path: send actual document to vision model
             Self::report_step(on_step, "converting_with_vision");
             info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
-            match self.do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id).await {
+            match self
+                .do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id)
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(%doc_id, error = %e, "Vision conversion failed, falling back to text");
-                    self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id).await?
+                    self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id)
+                        .await?
                 }
             }
         } else {
-            self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id).await?
+            self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id)
+                .await?
         };
 
         let use_vision_quality = raw_bytes.is_some() && self.quality_checker.supports_vision();
@@ -464,7 +509,11 @@ impl AiDocumentPipeline {
 
             let mut q = if use_vision_quality {
                 info!(%doc_id, "AI Agent: checking quality with vision");
-                match self.quality_checker.check_with_vision(raw_bytes.unwrap(), mime_type, raw_text, &converted).await {
+                match self
+                    .quality_checker
+                    .check_with_vision(raw_bytes.unwrap(), mime_type, raw_text, &converted)
+                    .await
+                {
                     Ok(q) => q,
                     Err(e) => {
                         warn!(%doc_id, error = %e, "Vision quality check failed, trying text-only");
@@ -529,7 +578,9 @@ impl AiDocumentPipeline {
 
             let decision_summary = format!(
                 "quality(score={:.2}): {} ({})",
-                q.overall_score, action_name(&decision.action), decision.reasoning
+                q.overall_score,
+                action_name(&decision.action),
+                decision.reasoning
             );
             info!(%doc_id, decision = %decision_summary, "Orchestrator decision");
             state.decisions.push(decision_summary);
@@ -655,8 +706,12 @@ impl AiDocumentPipeline {
                             .await
                         {
                             Ok(c) if !c.is_empty() => chunks = c,
-                            Ok(_) => warn!(%doc_id, "Chunker retry returned empty, keeping previous"),
-                            Err(e) => warn!(%doc_id, error = %e, "Chunker retry failed, keeping previous"),
+                            Ok(_) => {
+                                warn!(%doc_id, "Chunker retry returned empty, keeping previous")
+                            }
+                            Err(e) => {
+                                warn!(%doc_id, error = %e, "Chunker retry failed, keeping previous")
+                            }
                         }
                     }
                     OrchestratorAction::FlagForReview { reason } => {
@@ -756,15 +811,28 @@ impl AiDocumentPipeline {
             for attempt in 0..=max_retries {
                 let analyze_result = if use_vision_analyzer && !tried_vision {
                     tried_vision = true;
-                    match self.analyzer.analyze_with_vision(raw_bytes.unwrap(), mime_type, raw_text, total_size).await {
+                    match self
+                        .analyzer
+                        .analyze_with_vision(raw_bytes.unwrap(), mime_type, raw_text, total_size)
+                        .await
+                    {
                         Ok(a) => Ok(a),
                         Err(e) => {
                             warn!(%doc_id, error = %e, "Vision analysis failed, falling back to text");
-                            self.analyzer.analyze_with_excerpt_size(raw_text, mime_type, total_size, excerpt_size).await
+                            self.analyzer
+                                .analyze_with_excerpt_size(
+                                    raw_text,
+                                    mime_type,
+                                    total_size,
+                                    excerpt_size,
+                                )
+                                .await
                         }
                     }
                 } else {
-                    self.analyzer.analyze_with_excerpt_size(raw_text, mime_type, total_size, excerpt_size).await
+                    self.analyzer
+                        .analyze_with_excerpt_size(raw_text, mime_type, total_size, excerpt_size)
+                        .await
                 };
 
                 match analyze_result {
@@ -790,10 +858,7 @@ impl AiDocumentPipeline {
                     }
                     Ok(a) if a.confidence > 0.3 && attempt < max_retries => {
                         excerpt_size *= 2;
-                        Self::report_step(
-                            on_step,
-                            &format!("retrying_analysis_{}", attempt + 1),
-                        );
+                        Self::report_step(on_step, &format!("retrying_analysis_{}", attempt + 1));
                         warn!(
                             %doc_id, confidence = a.confidence, attempt = attempt + 1,
                             max_retries, next_excerpt = excerpt_size,
@@ -848,15 +913,20 @@ impl AiDocumentPipeline {
             let mut converted = if analysis.needs_ocr_correction && raw_bytes.is_some() {
                 Self::report_step(on_step, "converting_with_vision");
                 info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
-                match self.do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id).await {
+                match self
+                    .do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id)
+                    .await
+                {
                     Ok(c) => c,
                     Err(e) => {
                         warn!(%doc_id, error = %e, "Vision conversion failed, falling back to text");
-                        self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id).await?
+                        self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id)
+                            .await?
                     }
                 }
             } else {
-                self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id).await?
+                self.do_convert(pages, raw_text, is_multipage, &analysis, doc_id)
+                    .await?
             };
 
             let converter_max_retries = if self.retry.enabled {
@@ -876,7 +946,8 @@ impl AiDocumentPipeline {
                         "rechecking_quality"
                     },
                 );
-                let use_vision_quality = raw_bytes.is_some() && self.quality_checker.supports_vision();
+                let use_vision_quality =
+                    raw_bytes.is_some() && self.quality_checker.supports_vision();
                 if use_vision_quality {
                     info!(%doc_id, attempt = converter_attempt, "AI Agent: checking quality with vision");
                 } else {
@@ -884,7 +955,11 @@ impl AiDocumentPipeline {
                 }
 
                 quality = if use_vision_quality {
-                    match self.quality_checker.check_with_vision(raw_bytes.unwrap(), mime_type, raw_text, &converted).await {
+                    match self
+                        .quality_checker
+                        .check_with_vision(raw_bytes.unwrap(), mime_type, raw_text, &converted)
+                        .await
+                    {
                         Ok(mut q) => {
                             q.passed = q.overall_score >= effective_quality_threshold;
                             q
@@ -898,7 +973,11 @@ impl AiDocumentPipeline {
                                 }
                                 Err(e2) => {
                                     warn!(%doc_id, error = %e2, "Quality check failed, falling back");
-                                    return self.mechanical_fallback(raw_text, doc_id, workspace_id);
+                                    return self.mechanical_fallback(
+                                        raw_text,
+                                        doc_id,
+                                        workspace_id,
+                                    );
                                 }
                             }
                         }
@@ -937,10 +1016,7 @@ impl AiDocumentPipeline {
                 }
 
                 converter_attempt += 1;
-                Self::report_step(
-                    on_step,
-                    &format!("retrying_conversion_{converter_attempt}"),
-                );
+                Self::report_step(on_step, &format!("retrying_conversion_{converter_attempt}"));
                 warn!(
                     %doc_id, overall = quality.overall_score,
                     threshold = effective_quality_threshold,
@@ -1209,10 +1285,7 @@ impl AiDocumentPipeline {
 /// - Multipage: +1
 ///
 /// Result is clamped to [2, 15].
-fn compute_orchestrator_budget(
-    analysis: &DocumentAnalysis,
-    is_multipage: bool,
-) -> u32 {
+fn compute_orchestrator_budget(analysis: &DocumentAnalysis, is_multipage: bool) -> u32 {
     let mut budget: i32 = 3; // base: analyze + quality + chunk reviews
 
     // OCR is messy — more retries likely

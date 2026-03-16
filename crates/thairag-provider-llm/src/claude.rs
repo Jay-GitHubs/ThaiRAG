@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct ClaudeProvider {
@@ -77,7 +77,11 @@ impl ClaudeProvider {
 #[async_trait]
 impl LlmProvider for ClaudeProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
         let body = self.build_request_body(messages, max_tokens, false);
 
         let resp = self
@@ -99,14 +103,15 @@ impl LlmProvider for ClaudeProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Claude response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Claude response: {e}"))
+        })?;
 
         let content = json["content"]
             .as_array()
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content array in Claude response".into()))?
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content array in Claude response".into())
+            })?
             .iter()
             .filter(|block| block["type"].as_str() == Some("text"))
             .filter_map(|block| block["text"].as_str())
@@ -114,7 +119,9 @@ impl LlmProvider for ClaudeProvider {
             .join("");
 
         if content.is_empty() {
-            return Err(ThaiRagError::LlmProvider("No text content in Claude response".into()));
+            return Err(ThaiRagError::LlmProvider(
+                "No text content in Claude response".into(),
+            ));
         }
 
         let usage = LlmUsage {
@@ -234,7 +241,9 @@ impl LlmProvider for ClaudeProvider {
     fn supports_vision(&self) -> bool {
         // All Claude 3+ models support vision
         let m = &self.model;
-        m.contains("claude-3") || m.contains("claude-opus-4") || m.contains("claude-sonnet-4")
+        m.contains("claude-3")
+            || m.contains("claude-opus-4")
+            || m.contains("claude-sonnet-4")
             || m.contains("claude-haiku-4")
     }
 
@@ -247,7 +256,11 @@ impl LlmProvider for ClaudeProvider {
             .iter()
             .filter(|m| m.role == "system")
             .map(|m| m.text.clone())
-            .reduce(|mut acc, s| { acc.push('\n'); acc.push_str(&s); acc });
+            .reduce(|mut acc, s| {
+                acc.push('\n');
+                acc.push_str(&s);
+                acc
+            });
 
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
@@ -289,7 +302,8 @@ impl LlmProvider for ClaudeProvider {
             body["system"] = serde_json::Value::String(system);
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -307,12 +321,15 @@ impl LlmProvider for ClaudeProvider {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Claude response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Claude response: {e}"))
+        })?;
 
         let content = json["content"]
             .as_array()
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content array in Claude response".into()))?
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content array in Claude response".into())
+            })?
             .iter()
             .filter(|block| block["type"].as_str() == Some("text"))
             .filter_map(|block| block["text"].as_str())
@@ -320,7 +337,9 @@ impl LlmProvider for ClaudeProvider {
             .join("");
 
         if content.is_empty() {
-            return Err(ThaiRagError::LlmProvider("No text content in Claude vision response".into()));
+            return Err(ThaiRagError::LlmProvider(
+                "No text content in Claude vision response".into(),
+            ));
         }
 
         let usage = LlmUsage {

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, ChunkId, DocId, SearchResult};
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 /// A curated chunk with relevance scoring and optional trimming.
@@ -51,27 +51,46 @@ pub struct ContextCurator {
 
 impl ContextCurator {
     pub fn new(llm: Arc<dyn LlmProvider>, max_context_tokens: usize, max_tokens: u32) -> Self {
-        Self { llm, max_context_tokens, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            max_context_tokens,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_context_tokens: usize, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, max_context_tokens, max_tokens, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_context_tokens: usize,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            max_context_tokens,
+            max_tokens,
+            prompts,
+        }
     }
 
-    pub async fn curate(
-        &self,
-        query: &str,
-        results: &[SearchResult],
-    ) -> Result<CuratedContext> {
+    pub async fn curate(&self, query: &str, results: &[SearchResult]) -> Result<CuratedContext> {
         if results.is_empty() {
-            return Ok(CuratedContext { chunks: vec![], total_tokens_est: 0 });
+            return Ok(CuratedContext {
+                chunks: vec![],
+                total_tokens_est: 0,
+            });
         }
 
         // Build chunk list for LLM
-        let chunk_list: String = results.iter().enumerate().map(|(i, r)| {
-            let preview: String = r.chunk.content.chars().take(300).collect();
-            format!("[{}] (score: {:.2}) {}", i + 1, r.score, preview)
-        }).collect::<Vec<_>>().join("\n");
+        let chunk_list: String = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let preview: String = r.chunk.content.chars().take(300).collect();
+                format!("[{}] (score: {:.2}) {}", i + 1, r.score, preview)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let max_ctx = self.max_context_tokens.to_string();
         let system = ChatMessage {
@@ -87,7 +106,11 @@ impl ContextCurator {
             content: format!("Query: {query}\n\nChunks:\n{chunk_list}"),
         };
 
-        let selected_indices = match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        let selected_indices = match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmCuration>(json_str) {
@@ -122,7 +145,10 @@ fn extract_json(s: &str) -> &str {
 
 /// Estimate token count (rough: 4 chars/token English, 2 chars/token Thai).
 fn estimate_tokens(text: &str) -> usize {
-    let thai_chars = text.chars().filter(|c| ('\u{0E01}'..='\u{0E5B}').contains(c)).count();
+    let thai_chars = text
+        .chars()
+        .filter(|c| ('\u{0E01}'..='\u{0E5B}').contains(c))
+        .count();
     let other_chars = text.len() - thai_chars;
     (thai_chars / 2) + (other_chars / 4) + 1
 }
@@ -137,7 +163,9 @@ fn build_curated_context(
 
     for (rank, &idx) in selected.iter().enumerate() {
         let i = idx.saturating_sub(1); // Convert 1-based to 0-based
-        if i >= results.len() { continue; }
+        if i >= results.len() {
+            continue;
+        }
 
         let r = &results[i];
         let tokens = estimate_tokens(&r.chunk.content);
@@ -156,7 +184,10 @@ fn build_curated_context(
         total_tokens += tokens;
     }
 
-    Ok(CuratedContext { chunks, total_tokens_est: total_tokens })
+    Ok(CuratedContext {
+        chunks,
+        total_tokens_est: total_tokens,
+    })
 }
 
 /// Fallback: take top-K chunks directly without LLM curation.

@@ -138,7 +138,16 @@ pub struct UserPermission {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "level")]
 pub enum PermissionScope {
-    Org { org_id: OrgId },
-    Dept { org_id: OrgId, dept_id: DeptId },
-    Workspace { org_id: OrgId, dept_id: DeptId, workspace_id: WorkspaceId },
+    Org {
+        org_id: OrgId,
+    },
+    Dept {
+        org_id: OrgId,
+        dept_id: DeptId,
+    },
+    Workspace {
+        org_id: OrgId,
+        dept_id: DeptId,
+        workspace_id: WorkspaceId,
+    },
 }
