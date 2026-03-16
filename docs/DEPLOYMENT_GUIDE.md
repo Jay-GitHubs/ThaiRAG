@@ -1,6 +1,46 @@
 # Deployment Guide
 
-## Docker Compose (Recommended)
+## Quick Start (Pre-built Images)
+
+The fastest way to run ThaiRAG — no source code or build tools needed.
+
+```bash
+# 1. Download the two files you need
+curl -O https://raw.githubusercontent.com/Jay-GitHubs/ThaiRAG/main/docker-compose.registry.yml
+curl -O https://raw.githubusercontent.com/Jay-GitHubs/ThaiRAG/main/.env.example
+
+# 2. Configure
+cp .env.example .env
+# Edit .env — at minimum set POSTGRES_PASSWORD and THAIRAG__AUTH__JWT_SECRET
+
+# 3. Start
+docker compose -f docker-compose.registry.yml up -d
+
+# 4. Verify
+curl http://localhost:8080/health        # API
+open http://localhost:8081               # Admin UI
+```
+
+Images are pulled from GitHub Container Registry by default:
+| Image | GHCR | Docker Hub |
+|-------|------|------------|
+| ThaiRAG API | `ghcr.io/jay-githubs/thairag` | `jdevspecialist/thairag` |
+| Admin UI | `ghcr.io/jay-githubs/thairag-admin` | `jdevspecialist/thairag-admin` |
+
+To use Docker Hub instead, set in `.env`:
+```bash
+THAIRAG_IMAGE=jdevspecialist/thairag
+THAIRAG_ADMIN_IMAGE=jdevspecialist/thairag-admin
+```
+
+To pin a specific version (Git SHA):
+```bash
+THAIRAG_TAG=abc1234
+```
+
+---
+
+## Docker Compose (Build from Source)
 
 ### Prerequisites
 - Docker Engine 24+
