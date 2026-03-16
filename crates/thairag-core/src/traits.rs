@@ -10,7 +10,11 @@ use crate::types::{
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse>;
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse>;
 
     async fn generate_stream(
         &self,
@@ -92,7 +96,12 @@ pub trait Chunker: Send + Sync {
 
 #[async_trait]
 pub trait DocumentAnalyzer: Send + Sync {
-    async fn analyze(&self, raw_text: &str, mime_type: &str, doc_size_bytes: usize) -> Result<DocumentAnalysis>;
+    async fn analyze(
+        &self,
+        raw_text: &str,
+        mime_type: &str,
+        doc_size_bytes: usize,
+    ) -> Result<DocumentAnalysis>;
 }
 
 #[async_trait]

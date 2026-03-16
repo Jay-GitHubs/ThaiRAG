@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
-    Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value, STORED, STRING,
+    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::TextSearch;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use thairag_thai::{DictionarySegmenter, ThaiTantivyTokenizer};
 use tracing::info;
 use uuid::Uuid;
@@ -33,7 +33,10 @@ struct TantivyFields {
 
 impl TantivySearch {
     pub fn new(index_path: &str) -> Self {
-        info!(index_path, "Creating Tantivy index (RamDirectory; index_path reserved for future disk persistence)");
+        info!(
+            index_path,
+            "Creating Tantivy index (RamDirectory; index_path reserved for future disk persistence)"
+        );
 
         let mut schema_builder = Schema::builder();
 
@@ -89,9 +92,10 @@ impl TantivySearch {
 #[async_trait]
 impl TextSearch for TantivySearch {
     async fn index(&self, chunks: &[DocumentChunk]) -> Result<()> {
-        let mut writer = self.writer.lock().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}"))
-        })?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}")))?;
 
         for chunk in chunks {
             let mut doc = TantivyDocument::new();
@@ -100,39 +104,40 @@ impl TextSearch for TantivySearch {
             doc.add_text(self.fields.workspace_id, chunk.workspace_id.to_string());
             doc.add_text(self.fields.content, &chunk.content);
             doc.add_u64(self.fields.chunk_index, chunk.chunk_index as u64);
-            writer.add_document(doc).map_err(|e| {
-                ThaiRagError::Internal(format!("Tantivy add_document error: {e}"))
-            })?;
+            writer
+                .add_document(doc)
+                .map_err(|e| ThaiRagError::Internal(format!("Tantivy add_document error: {e}")))?;
         }
 
-        writer.commit().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy commit error: {e}"))
-        })?;
+        writer
+            .commit()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy commit error: {e}")))?;
 
         // Reload reader so newly committed docs are immediately searchable.
-        self.reader.reload().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy reader reload error: {e}"))
-        })?;
+        self.reader
+            .reload()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy reader reload error: {e}")))?;
 
         info!(count = chunks.len(), "Indexed chunks in Tantivy");
         Ok(())
     }
 
     async fn delete_by_doc(&self, doc_id: thairag_core::types::DocId) -> Result<()> {
-        let mut writer = self.writer.lock().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}"))
-        })?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}")))?;
 
         let term = tantivy::Term::from_field_text(self.fields.doc_id, &doc_id.to_string());
         writer.delete_term(term);
 
-        writer.commit().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy commit error: {e}"))
-        })?;
+        writer
+            .commit()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy commit error: {e}")))?;
 
-        self.reader.reload().map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy reader reload error: {e}"))
-        })?;
+        self.reader
+            .reload()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy reader reload error: {e}")))?;
 
         info!(%doc_id, "Deleted documents from Tantivy index");
         Ok(())
@@ -148,9 +153,9 @@ impl TextSearch for TantivySearch {
 
         let query_parser = QueryParser::for_index(&self.index, vec![self.fields.content]);
 
-        let text_query = query_parser.parse_query(&query.text).map_err(|e| {
-            ThaiRagError::Internal(format!("Tantivy query parse error: {e}"))
-        })?;
+        let text_query = query_parser
+            .parse_query(&query.text)
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy query parse error: {e}")))?;
 
         // Build final query: text + workspace filter
         let final_query = if query.unrestricted || query.workspace_ids.is_empty() {
@@ -161,10 +166,8 @@ impl TextSearch for TantivySearch {
                 .workspace_ids
                 .iter()
                 .map(|ws| {
-                    let term = tantivy::Term::from_field_text(
-                        self.fields.workspace_id,
-                        &ws.to_string(),
-                    );
+                    let term =
+                        tantivy::Term::from_field_text(self.fields.workspace_id, &ws.to_string());
                     (
                         Occur::Should,
                         Box::new(TermQuery::new(term, IndexRecordOption::Basic))
@@ -186,9 +189,9 @@ impl TextSearch for TantivySearch {
 
         let mut results = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
-            let doc: TantivyDocument = searcher.doc(doc_address).map_err(|e| {
-                ThaiRagError::Internal(format!("Tantivy doc retrieval error: {e}"))
-            })?;
+            let doc: TantivyDocument = searcher
+                .doc(doc_address)
+                .map_err(|e| ThaiRagError::Internal(format!("Tantivy doc retrieval error: {e}")))?;
 
             let chunk_id_str: &str = doc
                 .get_first(self.fields.chunk_id)

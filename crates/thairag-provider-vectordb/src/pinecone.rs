@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct PineconeVectorStore {
@@ -71,7 +71,9 @@ impl VectorStore for PineconeVectorStore {
             .json(&json!({ "vectors": vectors }))
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("Pinecone upsert request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Pinecone upsert request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -114,7 +116,9 @@ impl VectorStore for PineconeVectorStore {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("Pinecone search request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Pinecone search request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -176,7 +180,9 @@ impl VectorStore for PineconeVectorStore {
             }))
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("Pinecone delete request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Pinecone delete request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

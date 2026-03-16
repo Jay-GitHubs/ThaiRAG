@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 /// Default hardcoded template for conversation summarization.
@@ -54,7 +54,11 @@ impl ConversationMemory {
         max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, max_tokens, prompts }
+        Self {
+            llm,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Summarize a conversation into a memory entry.
@@ -78,7 +82,11 @@ impl ConversationMemory {
             content: conversation,
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmMemory>(json_str) {
@@ -150,10 +158,10 @@ struct LlmMemory {
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }

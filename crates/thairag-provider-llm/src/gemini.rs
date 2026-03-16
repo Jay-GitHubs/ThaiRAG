@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct GeminiProvider {
@@ -53,7 +53,11 @@ impl GeminiProvider {
             .iter()
             .filter(|m| m.role != "system")
             .map(|m| {
-                let role = if m.role == "assistant" { "model" } else { &m.role };
+                let role = if m.role == "assistant" {
+                    "model"
+                } else {
+                    &m.role
+                };
                 serde_json::json!({
                     "role": role,
                     "parts": [{"text": &m.content}],
@@ -84,7 +88,11 @@ impl GeminiProvider {
 #[async_trait]
 impl LlmProvider for GeminiProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
         let body = self.build_request_body(messages, max_tokens);
 
         let url = format!(
@@ -108,10 +116,9 @@ impl LlmProvider for GeminiProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Gemini response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Gemini response: {e}"))
+        })?;
 
         let content = json["candidates"][0]["content"]["parts"]
             .as_array()
@@ -122,12 +129,18 @@ impl LlmProvider for GeminiProvider {
             .join("");
 
         if content.is_empty() {
-            return Err(ThaiRagError::LlmProvider("No text content in Gemini response".into()));
+            return Err(ThaiRagError::LlmProvider(
+                "No text content in Gemini response".into(),
+            ));
         }
 
         let usage = LlmUsage {
-            prompt_tokens: json["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: json["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
+            prompt_tokens: json["usageMetadata"]["promptTokenCount"]
+                .as_u64()
+                .unwrap_or(0) as u32,
+            completion_tokens: json["usageMetadata"]["candidatesTokenCount"]
+                .as_u64()
+                .unwrap_or(0) as u32,
         };
 
         Ok(LlmResponse { content, usage })
@@ -242,13 +255,21 @@ impl LlmProvider for GeminiProvider {
             .iter()
             .filter(|m| m.role == "system")
             .map(|m| m.text.clone())
-            .reduce(|mut acc, s| { acc.push('\n'); acc.push_str(&s); acc });
+            .reduce(|mut acc, s| {
+                acc.push('\n');
+                acc.push_str(&s);
+                acc
+            });
 
         let contents: Vec<serde_json::Value> = messages
             .iter()
             .filter(|m| m.role != "system")
             .map(|m| {
-                let role = if m.role == "assistant" { "model" } else { &m.role };
+                let role = if m.role == "assistant" {
+                    "model"
+                } else {
+                    &m.role
+                };
                 let mut parts: Vec<serde_json::Value> = Vec::new();
                 // Add images
                 for img in &m.images {
@@ -287,7 +308,8 @@ impl LlmProvider for GeminiProvider {
             self.model, self.api_key
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -302,8 +324,9 @@ impl LlmProvider for GeminiProvider {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Gemini response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Gemini response: {e}"))
+        })?;
 
         let content = json["candidates"][0]["content"]["parts"]
             .as_array()
@@ -314,12 +337,18 @@ impl LlmProvider for GeminiProvider {
             .join("");
 
         if content.is_empty() {
-            return Err(ThaiRagError::LlmProvider("No text content in Gemini vision response".into()));
+            return Err(ThaiRagError::LlmProvider(
+                "No text content in Gemini vision response".into(),
+            ));
         }
 
         let usage = LlmUsage {
-            prompt_tokens: json["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0) as u32,
-            completion_tokens: json["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
+            prompt_tokens: json["usageMetadata"]["promptTokenCount"]
+                .as_u64()
+                .unwrap_or(0) as u32,
+            completion_tokens: json["usageMetadata"]["candidatesTokenCount"]
+                .as_u64()
+                .unwrap_or(0) as u32,
         };
 
         Ok(LlmResponse { content, usage })

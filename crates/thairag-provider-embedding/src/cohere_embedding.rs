@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::EmbeddingModel;
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct CohereEmbeddingProvider {
@@ -55,7 +55,9 @@ impl EmbeddingModel for CohereEmbeddingProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::Embedding(format!("Cohere embedding request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::Embedding(format!("Cohere embedding request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -65,16 +67,13 @@ impl EmbeddingModel for CohereEmbeddingProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::Embedding(format!("Failed to parse Cohere embedding response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::Embedding(format!("Failed to parse Cohere embedding response: {e}"))
+        })?;
 
-        let float_embeddings = json["embeddings"]["float"]
-            .as_array()
-            .ok_or_else(|| {
-                ThaiRagError::Embedding("Missing embeddings.float array in Cohere response".into())
-            })?;
+        let float_embeddings = json["embeddings"]["float"].as_array().ok_or_else(|| {
+            ThaiRagError::Embedding("Missing embeddings.float array in Cohere response".into())
+        })?;
 
         let embeddings: Vec<Vec<f32>> = float_embeddings
             .iter()

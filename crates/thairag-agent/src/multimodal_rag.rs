@@ -24,11 +24,26 @@ pub struct MultimodalRag {
 
 impl MultimodalRag {
     pub fn new(llm: Arc<dyn LlmProvider>, max_tokens: u32, max_images_per_request: u32) -> Self {
-        Self { llm, max_tokens, max_images_per_request, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            max_tokens,
+            max_images_per_request,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, max_images_per_request: u32, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, max_tokens, max_images_per_request, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        max_images_per_request: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            max_tokens,
+            max_images_per_request,
+            prompts,
+        }
     }
 
     /// Scan curated context for image references in chunk metadata,
@@ -60,10 +75,9 @@ impl MultimodalRag {
 
                 match self.describe_image(query, &img_ref).await {
                     Ok(description) => {
-                        chunk.content.push_str(&format!(
-                            "\n\n[Image Description: {}]",
-                            description
-                        ));
+                        chunk
+                            .content
+                            .push_str(&format!("\n\n[Image Description: {}]", description));
                         images_processed += 1;
                     }
                     Err(e) => {
@@ -74,7 +88,10 @@ impl MultimodalRag {
         }
 
         if images_processed > 0 {
-            debug!(images_processed, "Multi-modal RAG: enriched context with image descriptions");
+            debug!(
+                images_processed,
+                "Multi-modal RAG: enriched context with image descriptions"
+            );
         }
 
         Ok(enriched)
@@ -87,7 +104,11 @@ Focus on details relevant to the query. Be concise (1-3 sentences).";
 
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.multimodal_rag", DEFAULT_MULTIMODAL_RAG_PROMPT, &[]),
+            content: self.prompts.render_or_default(
+                "chat.multimodal_rag",
+                DEFAULT_MULTIMODAL_RAG_PROMPT,
+                &[],
+            ),
         };
 
         let user_content = if let Some(ref alt) = image_ref.alt_text {
@@ -109,7 +130,10 @@ Focus on details relevant to the query. Be concise (1-3 sentences).";
             content: user_content,
         };
 
-        let resp = self.llm.generate(&[system, user], Some(self.max_tokens)).await?;
+        let resp = self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await?;
         Ok(resp.content.trim().to_string())
     }
 }
@@ -139,7 +163,11 @@ fn extract_image_refs(content: &str) -> Vec<ImageRef> {
                 let mime = guess_mime_from_url(url);
                 refs.push(ImageRef {
                     url: Some(url.to_string()),
-                    alt_text: if alt.is_empty() { None } else { Some(alt.to_string()) },
+                    alt_text: if alt.is_empty() {
+                        None
+                    } else {
+                        Some(alt.to_string())
+                    },
                     mime_type: mime,
                 });
                 remaining = &after_bracket[close_paren + 1..];

@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::Reranker;
 use thairag_core::types::SearchResult;
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct CohereReranker {
@@ -66,14 +66,13 @@ impl Reranker for CohereReranker {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::Internal(format!("Failed to parse Cohere rerank response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::Internal(format!("Failed to parse Cohere rerank response: {e}"))
+        })?;
 
-        let reranked = json["results"]
-            .as_array()
-            .ok_or_else(|| ThaiRagError::Internal("Missing results in Cohere rerank response".into()))?;
+        let reranked = json["results"].as_array().ok_or_else(|| {
+            ThaiRagError::Internal("Missing results in Cohere rerank response".into())
+        })?;
 
         let mut scored_results: Vec<SearchResult> = reranked
             .iter()
@@ -91,7 +90,11 @@ impl Reranker for CohereReranker {
             .collect();
 
         // Sort by relevance score descending
-        scored_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(scored_results)
     }

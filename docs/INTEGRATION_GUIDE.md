@@ -4,38 +4,53 @@
 
 [Open WebUI](https://github.com/open-webui/open-webui) is a self-hosted chat interface that supports OpenAI-compatible APIs. ThaiRAG exposes the standard `/v1/chat/completions` and `/v1/models` endpoints, making it a drop-in backend.
 
-### Setup with Docker Compose
+### Setup with Docker Compose (Recommended)
+
+Open WebUI is already configured in `docker-compose.test-idp.yml`. Start the full stack:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
+```
+
+This starts ThaiRAG API, Admin UI, PostgreSQL, Qdrant, Keycloak (OIDC), and Open WebUI.
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Admin UI | http://localhost:8081 | `admin@thairag.local` / `Admin123` |
+| Open WebUI | http://localhost:3000 | Login via Keycloak SSO |
+| Keycloak | http://localhost:9090 | `admin` / `admin` |
+
+### Authentication
+
+Open WebUI authenticates to ThaiRAG using a static API key (configured automatically via `THAIRAG_OPENWEBUI_API_KEY` in `.env`). No JWT token management needed.
+
+To use a custom API key, set in your `.env`:
+```bash
+THAIRAG_OPENWEBUI_API_KEY=sk-your-custom-key
+```
+
+### Manual Setup (without docker-compose.test-idp.yml)
 
 Add the Open WebUI service to `docker-compose.yml`:
 
 ```yaml
 open-webui:
-  image: ghcr.io/open-webui/open-webui:main
+  image: ghcr.io/open-webui/open-webui:v0.8.10
   ports:
     - "3000:8080"
   volumes:
     - open-webui-data:/app/backend/data
   environment:
     OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-    OPENAI_API_KEYS: "your-jwt-token"
+    OPENAI_API_KEYS: "sk-thairag-openwebui"
   depends_on:
     - thairag
 ```
 
-### Getting a JWT Token
-
-ThaiRAG requires authentication. Generate a long-lived token for Open WebUI:
-
-```bash
-# 1. Register or login to get a token
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com", "password": "YourPassword123"}'
-
-# Response includes: { "token": "eyJ..." }
+And add the matching API key to the thairag service environment:
+```yaml
+THAIRAG__AUTH__API_KEYS: "sk-thairag-openwebui"
 ```
-
-Use the returned JWT token as the `OPENAI_API_KEYS` value.
 
 ### Standalone Open WebUI
 

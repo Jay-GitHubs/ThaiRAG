@@ -1,24 +1,26 @@
 use std::time::Instant;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Redirect;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
+use thairag_core::ThaiRagError;
 use thairag_core::models::User;
 use thairag_core::types::IdpId;
-use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::audit::{AuditAction, audit_log};
 use crate::error::{ApiError, AppJson};
-use crate::oidc::{OidcPendingAuth, OidcProviderConfig, build_authorize_url, exchange_code_for_user, resolve_role};
+use crate::oidc::{
+    OidcPendingAuth, OidcProviderConfig, build_authorize_url, exchange_code_for_user, resolve_role,
+};
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -71,7 +73,11 @@ pub async fn register(
     let salt = SaltString::generate(&mut OsRng);
     let password_hash = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
-        .map_err(|e| ApiError(ThaiRagError::Internal(format!("Password hashing failed: {e}"))))?
+        .map_err(|e| {
+            ApiError(ThaiRagError::Internal(format!(
+                "Password hashing failed: {e}"
+            )))
+        })?
         .to_string();
 
     // First user auto-promoted to super_admin (bootstrap mechanism)
@@ -86,13 +92,22 @@ pub async fn register(
             "super_admin".into(),
         )?
     } else {
-        state.km_store.insert_user(body.email, body.name, password_hash)?
+        state
+            .km_store
+            .insert_user(body.email, body.name, password_hash)?
     };
 
     audit_log(
-        &state.km_store, &user.id.0.to_string(), AuditAction::Register,
-        &user.email, true,
-        if is_first_user { Some("first user — promoted to super_admin") } else { None },
+        &state.km_store,
+        &user.id.0.to_string(),
+        AuditAction::Register,
+        &user.email,
+        true,
+        if is_first_user {
+            Some("first user — promoted to super_admin")
+        } else {
+            None
+        },
     );
 
     Ok((StatusCode::CREATED, Json(user)))
@@ -104,9 +119,7 @@ pub async fn oauth_authorize(
     State(state): State<AppState>,
     Path(provider_id): Path<Uuid>,
 ) -> Result<Redirect, ApiError> {
-    let idp = state
-        .km_store
-        .get_identity_provider(IdpId(provider_id))?;
+    let idp = state.km_store.get_identity_provider(IdpId(provider_id))?;
 
     if !idp.enabled {
         return Err(ApiError(ThaiRagError::Validation(
@@ -156,14 +169,11 @@ pub async fn oauth_callback(
     State(state): State<AppState>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> Result<Redirect, ApiError> {
-    let pending = state
-        .oidc_state_cache
-        .take(&params.state)
-        .ok_or_else(|| {
-            ApiError(ThaiRagError::Auth(
-                "Invalid or expired OAuth state parameter".into(),
-            ))
-        })?;
+    let pending = state.oidc_state_cache.take(&params.state).ok_or_else(|| {
+        ApiError(ThaiRagError::Auth(
+            "Invalid or expired OAuth state parameter".into(),
+        ))
+    })?;
 
     // Check state age (10 min max)
     if pending.created_at.elapsed() > std::time::Duration::from_secs(600) {
@@ -172,13 +182,12 @@ pub async fn oauth_callback(
         )));
     }
 
-    let provider_id: Uuid = pending
-        .provider_id
-        .parse()
-        .map_err(|_| ApiError(ThaiRagError::Internal("Invalid provider_id in state".into())))?;
-    let idp = state
-        .km_store
-        .get_identity_provider(IdpId(provider_id))?;
+    let provider_id: Uuid = pending.provider_id.parse().map_err(|_| {
+        ApiError(ThaiRagError::Internal(
+            "Invalid provider_id in state".into(),
+        ))
+    })?;
+    let idp = state.km_store.get_identity_provider(IdpId(provider_id))?;
     let oidc_config = OidcProviderConfig::from_json(&idp.config)?;
 
     let user_info = exchange_code_for_user(
@@ -222,7 +231,11 @@ pub async fn oauth_callback(
 
     // Redirect to frontend with token as a fragment parameter
     // The frontend will pick this up and store it
-    let redirect_url = format!("/login#token={}&user={}", token, urlencoding::encode(&serde_json::to_string(&user).unwrap_or_default()));
+    let redirect_url = format!(
+        "/login#token={}&user={}",
+        token,
+        urlencoding::encode(&serde_json::to_string(&user).unwrap_or_default())
+    );
 
     Ok(Redirect::temporary(&redirect_url))
 }
@@ -256,20 +269,24 @@ pub async fn login(
         ))));
     }
 
-    let record = state
-        .km_store
-        .get_user_by_email(&body.email)
-        .map_err(|_| {
-            state.login_tracker.record_failure(&body.email);
-            audit_log(
-                &state.km_store, "unknown", AuditAction::LoginFailed,
-                &body.email, false, Some("user not found"),
-            );
-            ApiError(ThaiRagError::Auth("Invalid email or password".into()))
-        })?;
+    let record = state.km_store.get_user_by_email(&body.email).map_err(|_| {
+        state.login_tracker.record_failure(&body.email);
+        audit_log(
+            &state.km_store,
+            "unknown",
+            AuditAction::LoginFailed,
+            &body.email,
+            false,
+            Some("user not found"),
+        );
+        ApiError(ThaiRagError::Auth("Invalid email or password".into()))
+    })?;
 
-    let parsed_hash = PasswordHash::new(&record.password_hash)
-        .map_err(|e| ApiError(ThaiRagError::Internal(format!("Password hash parse error: {e}"))))?;
+    let parsed_hash = PasswordHash::new(&record.password_hash).map_err(|e| {
+        ApiError(ThaiRagError::Internal(format!(
+            "Password hash parse error: {e}"
+        )))
+    })?;
 
     if Argon2::default()
         .verify_password(body.password.as_bytes(), &parsed_hash)
@@ -277,8 +294,12 @@ pub async fn login(
     {
         state.login_tracker.record_failure(&body.email);
         audit_log(
-            &state.km_store, &record.user.id.0.to_string(), AuditAction::LoginFailed,
-            &body.email, false, Some("invalid password"),
+            &state.km_store,
+            &record.user.id.0.to_string(),
+            AuditAction::LoginFailed,
+            &body.email,
+            false,
+            Some("invalid password"),
         );
         return Err(ApiError(ThaiRagError::Auth(
             "Invalid email or password".into(),
@@ -288,8 +309,12 @@ pub async fn login(
     // Success — clear any tracked failures
     state.login_tracker.record_success(&body.email);
     audit_log(
-        &state.km_store, &record.user.id.0.to_string(), AuditAction::Login,
-        &body.email, true, None,
+        &state.km_store,
+        &record.user.id.0.to_string(),
+        AuditAction::Login,
+        &body.email,
+        true,
+        None,
     );
 
     let jwt = state

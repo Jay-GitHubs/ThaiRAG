@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, QueryIntent};
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 /// Detected language of the user query.
@@ -48,10 +48,18 @@ struct LlmAnalysis {
     needs_context: bool,
 }
 
-fn default_en() -> String { "en".into() }
-fn default_retrieval() -> String { "retrieval".into() }
-fn default_simple() -> String { "simple".into() }
-fn default_true() -> bool { true }
+fn default_en() -> String {
+    "en".into()
+}
+fn default_retrieval() -> String {
+    "retrieval".into()
+}
+fn default_simple() -> String {
+    "simple".into()
+}
+fn default_true() -> bool {
+    true
+}
 
 const DEFAULT_TEMPLATE: &str = "You are a query analyzer. Analyze the user's query and output JSON only.\n\
                 Output format:\n\
@@ -79,24 +87,42 @@ pub struct QueryAnalyzer {
 
 impl QueryAnalyzer {
     pub fn new(llm: Arc<dyn LlmProvider>, max_tokens: u32) -> Self {
-        Self { llm, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, max_tokens, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            max_tokens,
+            prompts,
+        }
     }
 
     pub async fn analyze(&self, query: &str, _history: &[ChatMessage]) -> Result<QueryAnalysis> {
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.query_analyzer", DEFAULT_TEMPLATE, &[]),
+            content: self
+                .prompts
+                .render_or_default("chat.query_analyzer", DEFAULT_TEMPLATE, &[]),
         };
         let user = ChatMessage {
             role: "user".into(),
             content: query.to_string(),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let content = resp.content.trim();
                 // Try to extract JSON from response (handle markdown code blocks)
@@ -122,10 +148,10 @@ impl QueryAnalyzer {
 
 fn extract_json(s: &str) -> &str {
     // Handle ```json ... ``` wrapping
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
@@ -167,7 +193,9 @@ pub fn fallback_analyze(query: &str) -> QueryAnalysis {
     let lower = trimmed.to_lowercase();
 
     // Language detection via Unicode ranges
-    let has_thai = trimmed.chars().any(|c| ('\u{0E01}'..='\u{0E5B}').contains(&c));
+    let has_thai = trimmed
+        .chars()
+        .any(|c| ('\u{0E01}'..='\u{0E5B}').contains(&c));
     let has_latin = trimmed.chars().any(|c| c.is_ascii_alphabetic());
     let language = match (has_thai, has_latin) {
         (true, true) => QueryLanguage::Mixed,
@@ -189,11 +217,7 @@ pub fn fallback_analyze(query: &str) -> QueryAnalysis {
     let needs_context = intent == QueryIntent::Retrieval;
 
     // Extract simple topics (just the normalized query as a single topic)
-    let topics = if needs_context {
-        vec![lower]
-    } else {
-        vec![]
-    };
+    let topics = if needs_context { vec![lower] } else { vec![] };
 
     QueryAnalysis {
         language,

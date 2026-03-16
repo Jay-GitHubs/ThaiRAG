@@ -11,7 +11,9 @@ use crate::error::Result;
 
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(pub Uuid);
 
@@ -383,21 +385,13 @@ pub enum OrchestratorAction {
         params: Option<OrchestratorParams>,
     },
     /// Skip this stage and proceed with current results.
-    Skip {
-        reason: String,
-    },
+    Skip { reason: String },
     /// Fall back to mechanical processing entirely.
-    FallbackMechanical {
-        reason: String,
-    },
+    FallbackMechanical { reason: String },
     /// Accept but flag for human review.
-    FlagForReview {
-        reason: String,
-    },
+    FlagForReview { reason: String },
     /// Adjust parameters for upcoming stages (and proceed).
-    AdjustParams {
-        params: OrchestratorParams,
-    },
+    AdjustParams { params: OrchestratorParams },
 }
 
 /// A single orchestrator decision with reasoning.

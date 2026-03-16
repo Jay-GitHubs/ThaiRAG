@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
 use thairag_core::types::{ChatMessage, SearchQuery, WorkspaceId};
-use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
@@ -105,22 +105,22 @@ pub async fn test_query(
         .map_err(|_| ApiError(ThaiRagError::NotFound("Workspace not found".into())))?;
 
     // Verify user has access (unless anonymous/unrestricted)
-    if claims.sub != "anonymous" {
-        if let Ok(user_id) = claims.sub.parse::<Uuid>() {
-            let user_ws_ids = state
+    if claims.sub != "anonymous"
+        && let Ok(user_id) = claims.sub.parse::<Uuid>()
+    {
+        let user_ws_ids = state
+            .km_store
+            .get_user_workspace_ids(thairag_core::types::UserId(user_id));
+        if !user_ws_ids.contains(&ws_id) {
+            let is_super = state
                 .km_store
-                .get_user_workspace_ids(thairag_core::types::UserId(user_id));
-            if !user_ws_ids.contains(&ws_id) {
-                let is_super = state
-                    .km_store
-                    .get_user(thairag_core::types::UserId(user_id))
-                    .map(|u| u.is_super_admin)
-                    .unwrap_or(false);
-                if !is_super {
-                    return Err(ApiError(ThaiRagError::Authorization(
-                        "No access to this workspace".into(),
-                    )));
-                }
+                .get_user(thairag_core::types::UserId(user_id))
+                .map(|u| u.is_super_admin)
+                .unwrap_or(false);
+            if !is_super {
+                return Err(ApiError(ThaiRagError::Authorization(
+                    "No access to this workspace".into(),
+                )));
             }
         }
     }
@@ -138,7 +138,11 @@ pub async fn test_query(
         workspace_ids: vec![ws_id],
         unrestricted: false,
     };
-    let mut search_results = p.search_engine.search(&search_query).await.map_err(ApiError::from)?;
+    let mut search_results = p
+        .search_engine
+        .search(&search_query)
+        .await
+        .map_err(ApiError::from)?;
     let search_ms = search_start.elapsed().as_millis() as u64;
 
     // Apply document boost/penalty from feedback
@@ -151,7 +155,11 @@ pub async fn test_query(
             }
         }
         // Re-sort by boosted scores
-        search_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        search_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     // Apply min score threshold from retrieval params
@@ -226,9 +234,10 @@ pub async fn test_query(
     let generation_ms = gen_start.elapsed().as_millis() as u64;
     let total_ms = total_start.elapsed().as_millis() as u64;
 
-    state
-        .metrics
-        .record_tokens(llm_resp.usage.prompt_tokens, llm_resp.usage.completion_tokens);
+    state.metrics.record_tokens(
+        llm_resp.usage.prompt_tokens,
+        llm_resp.usage.completion_tokens,
+    );
 
     // Persist usage to KV store for the Usage page
     persist_usage(

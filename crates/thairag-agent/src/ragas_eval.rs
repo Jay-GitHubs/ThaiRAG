@@ -75,7 +75,7 @@ impl RagasEvaluator {
             return true;
         }
         let interval = (1.0 / self.sample_rate) as u64;
-        count % interval == 0
+        count.is_multiple_of(interval)
     }
 
     /// Run full RAGAS evaluation on a query/context/response triple.
@@ -85,7 +85,10 @@ impl RagasEvaluator {
         context: &CuratedContext,
         response: &str,
     ) -> Result<RagasScores> {
-        let context_text: String = context.chunks.iter().take(5)
+        let context_text: String = context
+            .chunks
+            .iter()
+            .take(5)
             .map(|c| truncate(&c.content, 300))
             .collect::<Vec<_>>()
             .join("\n---\n");
@@ -128,7 +131,8 @@ Step 1: Extract factual claims from the response.
 Step 2: For each claim, check if it is supported by the context.
 Step 3: Calculate: faithfulness = supported_claims / total_claims
 
-Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}"#.into(),
+Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}"#
+                .into(),
         };
 
         let user = ChatMessage {
@@ -140,11 +144,17 @@ Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}
             ),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 #[derive(Deserialize)]
-                struct F { faithfulness: f32 }
+                struct F {
+                    faithfulness: f32,
+                }
                 match serde_json::from_str::<F>(json_str) {
                     Ok(f) => Ok(f.faithfulness.clamp(0.0, 1.0)),
                     Err(_) => Ok(0.5),
@@ -168,7 +178,8 @@ Consider:
 - Is it on-topic?
 - Does it provide the requested information?
 
-Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#.into(),
+Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#
+                .into(),
         };
 
         let user = ChatMessage {
@@ -179,11 +190,17 @@ Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#.into(),
             ),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 #[derive(Deserialize)]
-                struct R { relevancy: f32 }
+                struct R {
+                    relevancy: f32,
+                }
                 match serde_json::from_str::<R>(json_str) {
                     Ok(r) => Ok(r.relevancy.clamp(0.0, 1.0)),
                     Err(_) => Ok(0.5),
@@ -207,7 +224,8 @@ Consider:
 - Is the context focused or does it contain mostly irrelevant information?
 - Could the query be answered from this context alone?
 
-Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#.into(),
+Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
+                .into(),
         };
 
         let user = ChatMessage {
@@ -218,11 +236,17 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#.into(),
             ),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 #[derive(Deserialize)]
-                struct P { precision: f32 }
+                struct P {
+                    precision: f32,
+                }
                 match serde_json::from_str::<P>(json_str) {
                     Ok(p) => Ok(p.precision.clamp(0.0, 1.0)),
                     Err(_) => Ok(0.5),
@@ -242,14 +266,18 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#.into(),
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

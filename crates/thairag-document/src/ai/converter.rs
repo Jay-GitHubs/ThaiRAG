@@ -5,7 +5,9 @@ use base64::Engine;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{AiDocumentConverter, LlmProvider};
-use thairag_core::types::{ChatMessage, ConvertedDocument, DocumentAnalysis, ImageContent, VisionMessage};
+use thairag_core::types::{
+    ChatMessage, ConvertedDocument, DocumentAnalysis, ImageContent, VisionMessage,
+};
 use tracing::{info, warn};
 
 use super::prompts;
@@ -30,7 +32,12 @@ impl LlmDocumentConverter {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_input_chars: usize, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_input_chars: usize,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_input_chars,
@@ -80,7 +87,10 @@ impl LlmDocumentConverter {
             "Converting document with vision model"
         );
 
-        let response = self.llm.generate_vision(&messages, Some(self.max_tokens)).await?;
+        let response = self
+            .llm
+            .generate_vision(&messages, Some(self.max_tokens))
+            .await?;
 
         Ok(ConvertedDocument {
             markdown: response.content,
@@ -120,7 +130,10 @@ impl LlmDocumentConverter {
             }],
         }];
 
-        let response = self.llm.generate_vision(&messages, Some(self.max_tokens)).await?;
+        let response = self
+            .llm
+            .generate_vision(&messages, Some(self.max_tokens))
+            .await?;
         Ok(response.content)
     }
 }
@@ -138,7 +151,11 @@ impl LlmDocumentConverter {
         let segments = split_at_paragraphs(raw_text, self.max_input_chars);
         let total = segments.len();
 
-        info!(segments = total, retry = true, "Re-converting document with quality feedback");
+        info!(
+            segments = total,
+            retry = true,
+            "Re-converting document with quality feedback"
+        );
 
         let mut converted_parts = Vec::with_capacity(total);
 

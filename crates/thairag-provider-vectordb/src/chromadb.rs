@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct ChromaDbVectorStore {
@@ -49,7 +49,10 @@ impl ChromaDbVectorStore {
             })
         });
 
-        info!(url, collection, collection_id, "Initialized ChromaDB vector store");
+        info!(
+            url,
+            collection, collection_id, "Initialized ChromaDB vector store"
+        );
 
         Self {
             client,
@@ -106,7 +109,9 @@ impl VectorStore for ChromaDbVectorStore {
             }))
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("ChromaDB upsert request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("ChromaDB upsert request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -151,7 +156,9 @@ impl VectorStore for ChromaDbVectorStore {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("ChromaDB search request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("ChromaDB search request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -250,7 +257,9 @@ impl VectorStore for ChromaDbVectorStore {
             }))
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("ChromaDB delete request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("ChromaDB delete request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

@@ -36,12 +36,11 @@ impl LoginTracker {
     /// Returns `true` if the email is currently locked out.
     pub fn is_locked(&self, email: &str) -> bool {
         let key = email.to_lowercase();
-        if let Some(state) = self.inner.attempts.get(&key) {
-            if let Some(locked_until) = state.locked_until {
-                if Instant::now() < locked_until {
-                    return true;
-                }
-            }
+        if let Some(state) = self.inner.attempts.get(&key)
+            && let Some(locked_until) = state.locked_until
+            && Instant::now() < locked_until
+        {
+            return true;
         }
         false
     }
@@ -49,19 +48,23 @@ impl LoginTracker {
     /// Record a failed login attempt. Returns `true` if the account is now locked.
     pub fn record_failure(&self, email: &str) -> bool {
         let key = email.to_lowercase();
-        let mut entry = self.inner.attempts.entry(key).or_insert_with(|| LoginAttemptState {
-            count: 0,
-            first_attempt: Instant::now(),
-            locked_until: None,
-        });
+        let mut entry = self
+            .inner
+            .attempts
+            .entry(key)
+            .or_insert_with(|| LoginAttemptState {
+                count: 0,
+                first_attempt: Instant::now(),
+                locked_until: None,
+            });
 
         // Reset if the lockout window has expired
-        if let Some(locked_until) = entry.locked_until {
-            if Instant::now() >= locked_until {
-                entry.count = 0;
-                entry.locked_until = None;
-                entry.first_attempt = Instant::now();
-            }
+        if let Some(locked_until) = entry.locked_until
+            && Instant::now() >= locked_until
+        {
+            entry.count = 0;
+            entry.locked_until = None;
+            entry.first_attempt = Instant::now();
         }
 
         entry.count += 1;
@@ -88,11 +91,11 @@ impl LoginTracker {
     /// Remaining lockout seconds (for Retry-After header).
     pub fn lockout_remaining_secs(&self, email: &str) -> u64 {
         let key = email.to_lowercase();
-        if let Some(state) = self.inner.attempts.get(&key) {
-            if let Some(locked_until) = state.locked_until {
-                let remaining = locked_until.saturating_duration_since(Instant::now());
-                return remaining.as_secs();
-            }
+        if let Some(state) = self.inner.attempts.get(&key)
+            && let Some(locked_until) = state.locked_until
+        {
+            let remaining = locked_until.saturating_duration_since(Instant::now());
+            return remaining.as_secs();
         }
         0
     }

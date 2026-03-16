@@ -43,7 +43,11 @@ impl LlmChunkEnricher {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,
@@ -77,7 +81,12 @@ impl LlmChunkEnricher {
                 .collect();
 
             match self
-                .enrich_batch(&batch_items, document_title, &analysis.primary_language, &content_type)
+                .enrich_batch(
+                    &batch_items,
+                    document_title,
+                    &analysis.primary_language,
+                    &content_type,
+                )
                 .await
             {
                 Ok(results) => {
@@ -100,7 +109,10 @@ impl LlmChunkEnricher {
             }
         }
 
-        info!(enriched = enriched_count, total, "Chunk enrichment complete");
+        info!(
+            enriched = enriched_count,
+            total, "Chunk enrichment complete"
+        );
         Ok(())
     }
 
@@ -111,7 +123,13 @@ impl LlmChunkEnricher {
         primary_language: &str,
         content_type: &str,
     ) -> Result<Vec<EnrichmentResult>> {
-        let prompt = prompts::chunk_enricher_prompt(&self.prompts, batch, document_title, primary_language, content_type);
+        let prompt = prompts::chunk_enricher_prompt(
+            &self.prompts,
+            batch,
+            document_title,
+            primary_language,
+            content_type,
+        );
         let messages = vec![ChatMessage {
             role: "user".into(),
             content: prompt,
@@ -143,12 +161,12 @@ impl LlmChunkEnricher {
 
         enriched.push_str(&original_content);
 
-        if let Some(ref queries) = result.hypothetical_queries {
-            if !queries.is_empty() {
-                enriched.push_str("\n\n[Related questions: ");
-                enriched.push_str(&queries.join(" | "));
-                enriched.push(']');
-            }
+        if let Some(ref queries) = result.hypothetical_queries
+            && !queries.is_empty()
+        {
+            enriched.push_str("\n\n[Related questions: ");
+            enriched.push_str(&queries.join(" | "));
+            enriched.push(']');
         }
 
         chunk.content = enriched;

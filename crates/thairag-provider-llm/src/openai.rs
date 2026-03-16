@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct OpenAiLlmProvider {
@@ -44,7 +44,11 @@ impl OpenAiLlmProvider {
 #[async_trait]
 impl LlmProvider for OpenAiLlmProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -71,15 +75,16 @@ impl LlmProvider for OpenAiLlmProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}"))
+        })?;
 
         let content = json["choices"][0]["message"]["content"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in OpenAI response".into()))?;
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content in OpenAI response".into())
+            })?;
 
         let usage = LlmUsage {
             prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
@@ -184,8 +189,11 @@ impl LlmProvider for OpenAiLlmProvider {
 
     fn supports_vision(&self) -> bool {
         let m = &self.model;
-        m.contains("gpt-4o") || m.contains("gpt-4.1") || m.contains("gpt-4-vision")
-            || m.starts_with("o3") || m.starts_with("o4")
+        m.contains("gpt-4o")
+            || m.contains("gpt-4.1")
+            || m.contains("gpt-4-vision")
+            || m.starts_with("o3")
+            || m.starts_with("o4")
     }
 
     async fn generate_vision(
@@ -228,7 +236,8 @@ impl LlmProvider for OpenAiLlmProvider {
             body["max_tokens"] = serde_json::json!(max);
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
@@ -244,13 +253,16 @@ impl LlmProvider for OpenAiLlmProvider {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}"))
+        })?;
 
         let content = json["choices"][0]["message"]["content"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in OpenAI response".into()))?;
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content in OpenAI response".into())
+            })?;
 
         let usage = LlmUsage {
             prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,

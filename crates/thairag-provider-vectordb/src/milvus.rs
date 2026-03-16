@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct MilvusVectorStore {
@@ -196,10 +196,7 @@ impl VectorStore for MilvusVectorStore {
         }
 
         // Milvus returns data as array of arrays (one per query vector)
-        let data = body["data"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let data = body["data"].as_array().cloned().unwrap_or_default();
 
         let results = data
             .into_iter()

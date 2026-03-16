@@ -1,5 +1,5 @@
-use axum::extract::rejection::JsonRejection;
 use axum::extract::FromRequest;
+use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -46,9 +46,13 @@ impl IntoResponse for ApiError {
             ThaiRagError::Authorization(msg) => msg.clone(),
             ThaiRagError::NotFound(msg) => msg.clone(),
             // Internal errors: strip upstream details to prevent information disclosure
-            ThaiRagError::LlmProvider(_) => "An error occurred while processing your request with the language model.".into(),
+            ThaiRagError::LlmProvider(_) => {
+                "An error occurred while processing your request with the language model.".into()
+            }
             ThaiRagError::Embedding(_) => "An error occurred during embedding processing.".into(),
-            ThaiRagError::VectorStore(_) => "An error occurred accessing the knowledge base.".into(),
+            ThaiRagError::VectorStore(_) => {
+                "An error occurred accessing the knowledge base.".into()
+            }
             ThaiRagError::Database(_) => "A database error occurred.".into(),
             ThaiRagError::Config(_) => "A server configuration error occurred.".into(),
             ThaiRagError::Internal(_) => "An internal server error occurred.".into(),
@@ -76,10 +80,7 @@ where
 {
     type Rejection = ApiError;
 
-    async fn from_request(
-        req: axum::extract::Request,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
         let axum::Json(value) = axum::Json::<T>::from_request(req, state).await?;
         Ok(Self(value))
     }

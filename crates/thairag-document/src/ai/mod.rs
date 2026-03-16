@@ -1,11 +1,11 @@
 pub mod analyzer;
-pub mod converter;
-pub mod quality;
 pub mod chunker;
+pub mod converter;
 pub mod enricher;
 pub mod orchestrator;
 pub mod pipeline;
 mod prompts;
+pub mod quality;
 
 /// Stable replacement for `str::floor_char_boundary` (unstable as of Rust 1.88).
 /// Returns the largest byte index `<= i` that is a valid char boundary.

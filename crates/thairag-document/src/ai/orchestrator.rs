@@ -29,7 +29,11 @@ impl LlmOrchestrator {
         }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,

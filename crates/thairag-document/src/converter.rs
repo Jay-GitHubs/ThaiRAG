@@ -1,9 +1,9 @@
 use std::io::Cursor;
 
 use calamine::{Reader, open_workbook_auto_from_rs};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::DocumentProcessor;
-use thairag_core::ThaiRagError;
 
 /// Result of a document conversion including metadata.
 #[derive(Debug, Clone)]
@@ -40,10 +40,8 @@ fn count_image_refs(text: &str) -> i32 {
     // Markdown images: ![alt](url)
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '!' {
-            if chars.peek() == Some(&'[') {
-                count += 1;
-            }
+        if c == '!' && chars.peek() == Some(&'[') {
+            count += 1;
         }
     }
     // HTML images: <img
@@ -108,8 +106,7 @@ impl DocumentProcessor for MarkdownConverter {
     fn convert(&self, raw: &[u8], mime_type: &str) -> Result<String> {
         match mime_type {
             "text/markdown" | "text/plain" => {
-                String::from_utf8(raw.to_vec())
-                    .map_err(|e| ThaiRagError::Validation(e.to_string()))
+                String::from_utf8(raw.to_vec()).map_err(|e| ThaiRagError::Validation(e.to_string()))
             }
             "text/csv" => convert_csv(raw),
             "text/html" => convert_html(raw),
@@ -129,9 +126,7 @@ impl DocumentProcessor for MarkdownConverter {
 }
 
 fn convert_csv(raw: &[u8]) -> Result<String> {
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_reader(raw);
+    let mut reader = csv::ReaderBuilder::new().has_headers(true).from_reader(raw);
 
     let headers: Vec<String> = reader
         .headers()
@@ -153,13 +148,19 @@ fn convert_csv(raw: &[u8]) -> Result<String> {
 
     // Separator row
     output.push_str("| ");
-    output.push_str(&headers.iter().map(|_| "---").collect::<Vec<_>>().join(" | "));
+    output.push_str(
+        &headers
+            .iter()
+            .map(|_| "---")
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
     output.push_str(" |\n");
 
     // Data rows
     for result in reader.records() {
-        let record = result
-            .map_err(|e| ThaiRagError::Validation(format!("Failed to read CSV row: {e}")))?;
+        let record =
+            result.map_err(|e| ThaiRagError::Validation(format!("Failed to read CSV row: {e}")))?;
         let cells: Vec<&str> = record.iter().collect();
         output.push_str("| ");
         // Pad with empty cells if needed
@@ -192,14 +193,16 @@ fn convert_html(raw: &[u8]) -> Result<String> {
             let mut has_header = false;
 
             for tr in table.select(&tr_sel) {
-                let ths: Vec<String> = tr.select(&th_sel)
+                let ths: Vec<String> = tr
+                    .select(&th_sel)
                     .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
                     .collect();
                 if !ths.is_empty() {
                     has_header = true;
                     rows.push(ths);
                 } else {
-                    let tds: Vec<String> = tr.select(&td_sel)
+                    let tds: Vec<String> = tr
+                        .select(&td_sel)
                         .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
                         .collect();
                     if !tds.is_empty() {
@@ -513,15 +516,15 @@ mod tests {
         // Build a minimal DOCX in memory using docx-rs
         let docx = docx_rs::Docx::new()
             .add_paragraph(
-                docx_rs::Paragraph::new()
-                    .add_run(docx_rs::Run::new().add_text("Hello from DOCX")),
+                docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Hello from DOCX")),
             )
             .add_paragraph(
-                docx_rs::Paragraph::new()
-                    .add_run(docx_rs::Run::new().add_text("Second paragraph")),
+                docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Second paragraph")),
             );
         let mut buf = Vec::new();
-        docx.build().pack(&mut std::io::Cursor::new(&mut buf)).unwrap();
+        docx.build()
+            .pack(&mut std::io::Cursor::new(&mut buf))
+            .unwrap();
 
         let result = converter()
             .convert(
@@ -567,12 +570,15 @@ mod tests {
         assert!(SUPPORTED_MIME_TYPES.contains(&"text/csv"));
         assert!(SUPPORTED_MIME_TYPES.contains(&"text/html"));
         assert!(SUPPORTED_MIME_TYPES.contains(&"application/pdf"));
-        assert!(SUPPORTED_MIME_TYPES.contains(
-            &"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ));
-        assert!(SUPPORTED_MIME_TYPES.contains(
-            &"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ));
+        assert!(
+            SUPPORTED_MIME_TYPES.contains(
+                &"application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        );
+        assert!(
+            SUPPORTED_MIME_TYPES
+                .contains(&"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        );
     }
 
     // ── HTML ────────────────────────────────────────────────────────
@@ -649,34 +655,35 @@ mod tests {
 
     #[test]
     fn docx_table_to_markdown() {
-        let docx = docx_rs::Docx::new()
-            .add_table(
-                docx_rs::Table::new(vec![
-                    docx_rs::TableRow::new(vec![
-                        docx_rs::TableCell::new().add_paragraph(
-                            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Header1")),
-                        ),
-                        docx_rs::TableCell::new().add_paragraph(
-                            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Header2")),
-                        ),
-                    ]),
-                    docx_rs::TableRow::new(vec![
-                        docx_rs::TableCell::new().add_paragraph(
-                            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Val1")),
-                        ),
-                        docx_rs::TableCell::new().add_paragraph(
-                            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Val2")),
-                        ),
-                    ]),
-                ]),
-            );
+        let docx = docx_rs::Docx::new().add_table(docx_rs::Table::new(vec![
+            docx_rs::TableRow::new(vec![
+                docx_rs::TableCell::new().add_paragraph(
+                    docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Header1")),
+                ),
+                docx_rs::TableCell::new().add_paragraph(
+                    docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Header2")),
+                ),
+            ]),
+            docx_rs::TableRow::new(vec![
+                docx_rs::TableCell::new().add_paragraph(
+                    docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Val1")),
+                ),
+                docx_rs::TableCell::new().add_paragraph(
+                    docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Val2")),
+                ),
+            ]),
+        ]));
         let mut buf = Vec::new();
-        docx.build().pack(&mut std::io::Cursor::new(&mut buf)).unwrap();
+        docx.build()
+            .pack(&mut std::io::Cursor::new(&mut buf))
+            .unwrap();
 
-        let result = converter().convert(
-            &buf,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ).unwrap();
+        let result = converter()
+            .convert(
+                &buf,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            .unwrap();
         assert!(result.contains("| Header1 | Header2 |"));
         assert!(result.contains("| Val1 | Val2 |"));
     }

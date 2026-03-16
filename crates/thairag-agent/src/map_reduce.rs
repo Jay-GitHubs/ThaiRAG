@@ -35,7 +35,13 @@ impl MapReduceRag {
         map_max_tokens: u32,
         reduce_max_tokens: u32,
     ) -> Self {
-        Self { llm, max_chunks, map_max_tokens, reduce_max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            max_chunks,
+            map_max_tokens,
+            reduce_max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
     pub fn new_with_prompts(
@@ -45,15 +51,17 @@ impl MapReduceRag {
         reduce_max_tokens: u32,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, max_chunks, map_max_tokens, reduce_max_tokens, prompts }
+        Self {
+            llm,
+            max_chunks,
+            map_max_tokens,
+            reduce_max_tokens,
+            prompts,
+        }
     }
 
     /// Decide whether map-reduce is appropriate for this query.
-    pub fn should_use(
-        &self,
-        analysis: &QueryAnalysis,
-        results: &[SearchResult],
-    ) -> bool {
+    pub fn should_use(&self, analysis: &QueryAnalysis, results: &[SearchResult]) -> bool {
         // Use map-reduce for complex queries with many results
         let many_results = results.len() >= 8;
         let is_complex = analysis.complexity == Complexity::Complex;
@@ -85,7 +93,11 @@ Be factual and concise. Preserve key data points, names, dates, and numbers."#;
             handles.push(tokio::spawn(async move {
                 let system = ChatMessage {
                     role: "system".into(),
-                    content: prompts.render_or_default("chat.map_reduce_map", DEFAULT_MAP_PROMPT, &[]),
+                    content: prompts.render_or_default(
+                        "chat.map_reduce_map",
+                        DEFAULT_MAP_PROMPT,
+                        &[],
+                    ),
                 };
 
                 let user = ChatMessage {
@@ -130,11 +142,7 @@ Be factual and concise. Preserve key data points, names, dates, and numbers."#;
     }
 
     /// REDUCE phase: synthesize all mapped extractions into a single coherent answer.
-    pub async fn reduce_phase(
-        &self,
-        query: &str,
-        mapped: &[MappedChunk],
-    ) -> Result<LlmResponse> {
+    pub async fn reduce_phase(&self, query: &str, mapped: &[MappedChunk]) -> Result<LlmResponse> {
         if mapped.is_empty() {
             return Ok(LlmResponse {
                 content: "I found relevant documents but couldn't extract information pertinent to your query.".into(),
@@ -142,7 +150,8 @@ Be factual and concise. Preserve key data points, names, dates, and numbers."#;
             });
         }
 
-        let extractions: String = mapped.iter()
+        let extractions: String = mapped
+            .iter()
             .map(|m| format!("[Source {}]: {}", m.source_index + 1, m.extracted_info))
             .collect::<Vec<_>>()
             .join("\n\n");
@@ -158,7 +167,11 @@ Guidelines:
 
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.map_reduce_reduce", DEFAULT_REDUCE_PROMPT, &[]),
+            content: self.prompts.render_or_default(
+                "chat.map_reduce_reduce",
+                DEFAULT_REDUCE_PROMPT,
+                &[],
+            ),
         };
 
         let user = ChatMessage {
@@ -169,7 +182,11 @@ Guidelines:
             ),
         };
 
-        match self.llm.generate(&[system, user], Some(self.reduce_max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.reduce_max_tokens))
+            .await
+        {
             Ok(resp) => {
                 info!(
                     sources = mapped.len(),
@@ -181,7 +198,8 @@ Guidelines:
             Err(e) => {
                 warn!(error = %e, "Map-Reduce: reduce phase failed");
                 // Fallback: concatenate extractions
-                let fallback = mapped.iter()
+                let fallback = mapped
+                    .iter()
                     .map(|m| format!("[{}] {}", m.source_index + 1, m.extracted_info))
                     .collect::<Vec<_>>()
                     .join("\n\n");
@@ -194,11 +212,7 @@ Guidelines:
     }
 
     /// Full map-reduce pipeline: map then reduce.
-    pub async fn process(
-        &self,
-        query: &str,
-        results: &[SearchResult],
-    ) -> Result<LlmResponse> {
+    pub async fn process(&self, query: &str, results: &[SearchResult]) -> Result<LlmResponse> {
         let mapped = self.map_phase(query, results).await?;
         self.reduce_phase(query, &mapped).await
     }

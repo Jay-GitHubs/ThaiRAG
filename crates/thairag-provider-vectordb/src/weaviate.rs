@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{ChunkId, DocId, DocumentChunk, SearchQuery, SearchResult, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct WeaviateVectorStore {
@@ -105,25 +105,17 @@ impl VectorStore for WeaviateVectorStore {
                 self.url, self.collection, weaviate_id
             ));
             let req = self.auth_header(req);
-            let resp = req
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| ThaiRagError::VectorStore(format!("Weaviate upsert request failed: {e}")))?;
+            let resp = req.json(&body).send().await.map_err(|e| {
+                ThaiRagError::VectorStore(format!("Weaviate upsert request failed: {e}"))
+            })?;
 
             if !resp.status().is_success() {
                 // If PUT fails (object doesn't exist), try POST
-                let req = self
-                    .client
-                    .post(format!("{}/v1/objects", self.url));
+                let req = self.client.post(format!("{}/v1/objects", self.url));
                 let req = self.auth_header(req);
-                let resp = req
-                    .json(&body)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        ThaiRagError::VectorStore(format!("Weaviate create request failed: {e}"))
-                    })?;
+                let resp = req.json(&body).send().await.map_err(|e| {
+                    ThaiRagError::VectorStore(format!("Weaviate create request failed: {e}"))
+                })?;
 
                 if !resp.status().is_success() {
                     let status = resp.status();
@@ -200,15 +192,15 @@ impl VectorStore for WeaviateVectorStore {
             where_filter = where_filter,
         );
 
-        let req = self
-            .client
-            .post(format!("{}/v1/graphql", self.url));
+        let req = self.client.post(format!("{}/v1/graphql", self.url));
         let req = self.auth_header(req);
         let resp = req
             .json(&json!({ "query": graphql }))
             .send()
             .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("Weaviate search request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Weaviate search request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -273,15 +265,11 @@ impl VectorStore for WeaviateVectorStore {
             }
         });
 
-        let req = self
-            .client
-            .delete(format!("{}/v1/batch/objects", self.url));
+        let req = self.client.delete(format!("{}/v1/batch/objects", self.url));
         let req = self.auth_header(req);
-        let resp = req
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ThaiRagError::VectorStore(format!("Weaviate delete request failed: {e}")))?;
+        let resp = req.json(&body).send().await.map_err(|e| {
+            ThaiRagError::VectorStore(format!("Weaviate delete request failed: {e}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

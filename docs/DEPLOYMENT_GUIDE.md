@@ -48,7 +48,11 @@ THAIRAG__ADMIN__PASSWORD=SecurePassword123
 2. **Start services:**
 
 ```bash
-docker compose up -d
+# Core services only (API + Admin UI + PostgreSQL + Qdrant)
+docker compose up --build -d
+
+# Full stack with Keycloak (OIDC) + Open WebUI
+docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
 ```
 
 3. **Verify:**
@@ -59,6 +63,23 @@ curl http://localhost:8080/health?deep=true
 
 # Admin UI
 open http://localhost:8081
+
+# If using full stack:
+# Keycloak:   http://localhost:9090  (admin / admin)
+# Open WebUI: http://localhost:3000  (login via Keycloak SSO)
+```
+
+4. **Stop services:**
+
+```bash
+# Core only
+docker compose down
+
+# Full stack
+docker compose -f docker-compose.yml -f docker-compose.test-idp.yml down
+
+# Full stack + remove all data (clean restart)
+docker compose -f docker-compose.yml -f docker-compose.test-idp.yml down -v
 ```
 
 ### Using Ollama (Free Tier)

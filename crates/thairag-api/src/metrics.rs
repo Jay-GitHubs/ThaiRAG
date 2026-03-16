@@ -41,7 +41,9 @@ impl MetricsState {
                 "http_request_duration_seconds",
                 "HTTP request duration in seconds",
             )
-            .buckets(vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]),
+            .buckets(vec![
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
             &["method", "path"],
         )
         .unwrap();
@@ -198,15 +200,15 @@ mod tests {
     fn normalize_path_known_routes() {
         assert_eq!(normalize_path("/health"), "/health");
         assert_eq!(normalize_path("/v1/models"), "/v1/models");
-        assert_eq!(normalize_path("/v1/chat/completions"), "/v1/chat/completions");
+        assert_eq!(
+            normalize_path("/v1/chat/completions"),
+            "/v1/chat/completions"
+        );
         assert_eq!(normalize_path("/metrics"), "/metrics");
         assert_eq!(normalize_path("/api/auth/login"), "/api/auth/*");
         assert_eq!(normalize_path("/api/auth/register"), "/api/auth/*");
         assert_eq!(normalize_path("/api/km/orgs"), "/api/km/*");
-        assert_eq!(
-            normalize_path("/api/km/orgs/some-uuid/depts"),
-            "/api/km/*"
-        );
+        assert_eq!(normalize_path("/api/km/orgs/some-uuid/depts"), "/api/km/*");
         assert_eq!(normalize_path("/unknown/path"), "other");
     }
 

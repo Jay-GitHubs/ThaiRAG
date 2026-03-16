@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::query_analyzer::{Complexity, QueryAnalysis};
@@ -65,7 +65,12 @@ impl PipelineOrchestrator {
         }
     }
 
-    pub fn new_with_prompts(llm: Option<Arc<dyn LlmProvider>>, max_tokens: u32, budget: u32, prompts: Arc<PromptRegistry>) -> Self {
+    pub fn new_with_prompts(
+        llm: Option<Arc<dyn LlmProvider>>,
+        max_tokens: u32,
+        budget: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
         Self {
             llm,
             max_tokens,
@@ -77,13 +82,13 @@ impl PipelineOrchestrator {
     /// Decide which pipeline route to take based on the query analysis.
     pub async fn decide(&self, analysis: &QueryAnalysis) -> PipelineRoute {
         // Try LLM-based routing if available and budget > 0
-        if let Some(ref llm) = self.llm {
-            if self.budget > 0 {
-                match self.llm_decide(llm, analysis).await {
-                    Ok(route) => return route,
-                    Err(e) => {
-                        warn!(error = %e, "Orchestrator LLM failed, falling back to heuristic");
-                    }
+        if let Some(ref llm) = self.llm
+            && self.budget > 0
+        {
+            match self.llm_decide(llm, analysis).await {
+                Ok(route) => return route,
+                Err(e) => {
+                    warn!(error = %e, "Orchestrator LLM failed, falling back to heuristic");
                 }
             }
         }
@@ -99,14 +104,21 @@ impl PipelineOrchestrator {
     ) -> Result<PipelineRoute> {
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.pipeline_orchestrator", DEFAULT_TEMPLATE, &[]),
+            content: self.prompts.render_or_default(
+                "chat.pipeline_orchestrator",
+                DEFAULT_TEMPLATE,
+                &[],
+            ),
         };
         let user = ChatMessage {
             role: "user".into(),
             content: format!(
                 "Query analysis:\n- language: {:?}\n- intent: {:?}\n- complexity: {:?}\n- topics: {:?}\n- needs_context: {}",
-                analysis.language, analysis.intent, analysis.complexity,
-                analysis.topics, analysis.needs_context,
+                analysis.language,
+                analysis.intent,
+                analysis.complexity,
+                analysis.topics,
+                analysis.needs_context,
             ),
         };
 
@@ -159,10 +171,10 @@ fn parse_route(s: &str) -> PipelineRoute {
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
