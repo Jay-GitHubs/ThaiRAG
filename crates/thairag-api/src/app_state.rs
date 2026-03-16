@@ -465,6 +465,7 @@ impl UserRequestLimiter {
     }
 
     /// Try to acquire a request slot. Returns Err if limit exceeded.
+    #[allow(clippy::result_unit_err)]
     pub fn try_acquire(&self, user_id: &str) -> Result<UserRequestGuard, ()> {
         let mut entry = self.active.entry(user_id.to_string()).or_insert(0);
         if *entry >= self.max_concurrent {
@@ -606,14 +607,14 @@ impl AppState {
         if let Some(all_prompt_keys) = km_store.get_setting("prompt._index") {
             for key in all_prompt_keys.split(',') {
                 let key = key.trim();
-                if !key.is_empty() && prompt_registry.get(key).is_none() {
-                    if let Some(template) = km_store.get_setting(&format!("prompt.{key}")) {
-                        let desc = km_store
-                            .get_setting(&format!("prompt.{key}.description"))
-                            .unwrap_or_default();
-                        let cat = key.split('.').next().unwrap_or("chat").to_string();
-                        prompt_registry.set(key, template, desc, cat);
-                    }
+                if !key.is_empty() && prompt_registry.get(key).is_none()
+                    && let Some(template) = km_store.get_setting(&format!("prompt.{key}"))
+                {
+                    let desc = km_store
+                        .get_setting(&format!("prompt.{key}.description"))
+                        .unwrap_or_default();
+                    let cat = key.split('.').next().unwrap_or("chat").to_string();
+                    prompt_registry.set(key, template, desc, cat);
                 }
             }
         }

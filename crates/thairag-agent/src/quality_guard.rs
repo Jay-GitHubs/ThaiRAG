@@ -188,10 +188,8 @@ impl QualityGuard {
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{') && let Some(end) = s.rfind('}') {
+        return &s[start..=end];
     }
     s
 }

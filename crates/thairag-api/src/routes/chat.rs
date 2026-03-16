@@ -110,16 +110,15 @@ pub async fn chat_completions(
         claims.sub.parse::<Uuid>().ok().map(UserId)
     };
 
-    let scope = if user_id.is_none() {
-        AccessScope::unrestricted()
-    } else {
-        let uid = user_id.unwrap();
+    let scope = if let Some(uid) = user_id {
         let ws_ids = state.km_store.get_user_workspace_ids(uid);
         if ws_ids.is_empty() {
             AccessScope::none()
         } else {
             AccessScope::new(ws_ids)
         }
+    } else {
+        AccessScope::unrestricted()
     };
 
     // ── Load conversation memories (Feature 1) ─────────────────────
@@ -349,7 +348,7 @@ fn maybe_summarize_memory(
     // Only summarize every 5 turns (10 messages)
     let history = state.session_store.get_history(&session_id);
     let msg_count = history.as_ref().map(|h| h.len()).unwrap_or(0);
-    if msg_count < 10 || msg_count % 10 != 0 {
+    if msg_count < 10 || !msg_count.is_multiple_of(10) {
         return;
     }
 
@@ -365,18 +364,18 @@ fn maybe_summarize_memory(
 
     tokio::spawn(async move {
         let p = state_clone.providers();
-        if let Some(ref pipeline) = p.chat_pipeline {
-            if let Some(mem) = pipeline.conversation_memory() {
-                match mem.summarize(&messages).await {
-                    Ok(entry) => {
-                        let mut all = existing_memories;
-                        all.push(entry);
-                        save_memories(&state_clone, user_id, &all, max_summaries);
-                        tracing::debug!(user_id = %user_id.0, "Conversation memory saved");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to summarize conversation for memory");
-                    }
+        if let Some(ref pipeline) = p.chat_pipeline
+            && let Some(mem) = pipeline.conversation_memory()
+        {
+            match mem.summarize(&messages).await {
+                Ok(entry) => {
+                    let mut all = existing_memories;
+                    all.push(entry);
+                    save_memories(&state_clone, user_id, &all, max_summaries);
+                    tracing::debug!(user_id = %user_id.0, "Conversation memory saved");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to summarize conversation for memory");
                 }
             }
         }

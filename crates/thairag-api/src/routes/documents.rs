@@ -231,11 +231,7 @@ pub async fn ingest_document(
 
     // Insert document metadata first (as processing or ready)
     let now = Utc::now();
-    let status = if is_large {
-        DocStatus::Processing
-    } else {
-        DocStatus::Processing
-    };
+    let status = DocStatus::Processing;
     let mime_type = body.mime_type.clone();
     let doc = Document {
         id: doc_id,

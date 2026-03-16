@@ -75,7 +75,7 @@ impl RagasEvaluator {
             return true;
         }
         let interval = (1.0 / self.sample_rate) as u64;
-        count % interval == 0
+        count.is_multiple_of(interval)
     }
 
     /// Run full RAGAS evaluation on a query/context/response triple.
@@ -266,10 +266,8 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{') && let Some(end) = s.rfind('}') {
+        return &s[start..=end];
     }
     s
 }

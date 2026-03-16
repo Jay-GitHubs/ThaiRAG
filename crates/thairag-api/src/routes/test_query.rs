@@ -105,22 +105,20 @@ pub async fn test_query(
         .map_err(|_| ApiError(ThaiRagError::NotFound("Workspace not found".into())))?;
 
     // Verify user has access (unless anonymous/unrestricted)
-    if claims.sub != "anonymous" {
-        if let Ok(user_id) = claims.sub.parse::<Uuid>() {
-            let user_ws_ids = state
+    if claims.sub != "anonymous" && let Ok(user_id) = claims.sub.parse::<Uuid>() {
+        let user_ws_ids = state
+            .km_store
+            .get_user_workspace_ids(thairag_core::types::UserId(user_id));
+        if !user_ws_ids.contains(&ws_id) {
+            let is_super = state
                 .km_store
-                .get_user_workspace_ids(thairag_core::types::UserId(user_id));
-            if !user_ws_ids.contains(&ws_id) {
-                let is_super = state
-                    .km_store
-                    .get_user(thairag_core::types::UserId(user_id))
-                    .map(|u| u.is_super_admin)
-                    .unwrap_or(false);
-                if !is_super {
-                    return Err(ApiError(ThaiRagError::Authorization(
-                        "No access to this workspace".into(),
-                    )));
-                }
+                .get_user(thairag_core::types::UserId(user_id))
+                .map(|u| u.is_super_admin)
+                .unwrap_or(false);
+            if !is_super {
+                return Err(ApiError(ThaiRagError::Authorization(
+                    "No access to this workspace".into(),
+                )));
             }
         }
     }

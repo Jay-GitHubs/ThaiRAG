@@ -67,6 +67,7 @@ impl DocumentPipeline {
     }
 
     /// Create a pipeline with per-agent LLM providers.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_per_agent_ai(
         max_chunk_size: usize,
         chunk_overlap: usize,
@@ -93,6 +94,7 @@ impl DocumentPipeline {
     }
 
     /// Create a pipeline with per-agent LLM providers and shared prompt registry.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_per_agent_ai_and_prompts(
         max_chunk_size: usize,
         chunk_overlap: usize,

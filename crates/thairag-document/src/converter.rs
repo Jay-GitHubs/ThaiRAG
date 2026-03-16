@@ -40,10 +40,8 @@ fn count_image_refs(text: &str) -> i32 {
     // Markdown images: ![alt](url)
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '!' {
-            if chars.peek() == Some(&'[') {
-                count += 1;
-            }
+        if c == '!' && chars.peek() == Some(&'[') {
+            count += 1;
         }
     }
     // HTML images: <img

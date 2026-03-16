@@ -31,10 +31,8 @@ pub async fn csrf_guard(req: Request<Body>, next: Next) -> Response {
     }
 
     // If auth is disabled (anonymous user), skip CSRF — no session to protect
-    if let Some(claims) = req.extensions().get::<AuthClaims>() {
-        if claims.sub == "anonymous" {
-            return next.run(req).await;
-        }
+    if let Some(claims) = req.extensions().get::<AuthClaims>() && claims.sub == "anonymous" {
+        return next.run(req).await;
     }
 
     // Check for CSRF token header on state-changing requests

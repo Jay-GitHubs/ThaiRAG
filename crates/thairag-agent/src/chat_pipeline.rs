@@ -163,16 +163,15 @@ impl ChatPipeline {
         debug!(intent = ?analysis.intent, language = ?analysis.language, "Pipeline: analyzed");
 
         // ── Self-RAG gate: skip retrieval if not needed ──
-        if let Some(ref self_rag) = self.self_rag {
-            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
+        if let Some(ref self_rag) = self.self_rag
+            && let Ok(RetrievalDecision::NoRetrieve { confidence }) =
                 self_rag.should_retrieve(user_query, messages).await
-            {
-                info!(confidence, "Self-RAG: skipping retrieval");
-                let response = self.main_llm.generate(messages, None).await?;
-                self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
-                    .await;
-                return self.maybe_adapt(response, &analysis).await;
-            }
+        {
+            info!(confidence, "Self-RAG: skipping retrieval");
+            let response = self.main_llm.generate(messages, None).await?;
+            self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
+                .await;
+            return self.maybe_adapt(response, &analysis).await;
         }
 
         // ── Orchestrator: decide route ──
@@ -180,16 +179,14 @@ impl ChatPipeline {
         info!(route = ?route, "Pipeline: orchestrator decided");
 
         match route {
-            PipelineRoute::DirectLlm => {
-                return match analysis.intent {
-                    QueryIntent::Clarification => Ok(LlmResponse {
-                        content: "Could you please provide more details about your question?"
-                            .into(),
-                        usage: LlmUsage::default(),
-                    }),
-                    _ => self.main_llm.generate(messages, None).await,
-                };
-            }
+            PipelineRoute::DirectLlm => match analysis.intent {
+                QueryIntent::Clarification => Ok(LlmResponse {
+                    content: "Could you please provide more details about your question?"
+                        .into(),
+                    usage: LlmUsage::default(),
+                }),
+                _ => self.main_llm.generate(messages, None).await,
+            },
             PipelineRoute::SimpleRetrieval => {
                 let rewritten = query_rewriter::fallback_rewrite(user_query);
                 let results = self
@@ -207,31 +204,29 @@ impl ChatPipeline {
                     .response_generator
                     .generate(&analysis, &context, messages, None)
                     .await?;
-                return self.maybe_adapt(response, &analysis).await;
+                self.maybe_adapt(response, &analysis).await
             }
             PipelineRoute::FullPipeline => {
-                return self
-                    .execute_full(
-                        user_query,
-                        messages,
-                        scope,
-                        &analysis,
-                        false,
-                        available_scopes,
-                    )
-                    .await;
+                self.execute_full(
+                    user_query,
+                    messages,
+                    scope,
+                    &analysis,
+                    false,
+                    available_scopes,
+                )
+                .await
             }
             PipelineRoute::ComplexPipeline => {
-                return self
-                    .execute_full(
-                        user_query,
-                        messages,
-                        scope,
-                        &analysis,
-                        true,
-                        available_scopes,
-                    )
-                    .await;
+                self.execute_full(
+                    user_query,
+                    messages,
+                    scope,
+                    &analysis,
+                    true,
+                    available_scopes,
+                )
+                .await
             }
         }
     }
@@ -277,7 +272,7 @@ impl ChatPipeline {
                 debug!(results = results.len(), "Pipeline: graph-enhanced");
             }
             // Extract entities from results to grow the graph
-            if results.len() > 0 {
+            if !results.is_empty() {
                 let texts: Vec<String> = results
                     .iter()
                     .take(3)
@@ -334,14 +329,12 @@ impl ChatPipeline {
         };
 
         // ── Map-Reduce: for complex synthesis queries with many results ──
-        if let Some(ref mr) = self.map_reduce {
-            if mr.should_use(analysis, &results) {
-                info!("Pipeline: using map-reduce for synthesis query");
-                let response = mr.process(user_query, &results).await?;
-                self.maybe_run_ragas(user_query, &context, &response.content)
-                    .await;
-                return self.maybe_adapt(response, analysis).await;
-            }
+        if let Some(ref mr) = self.map_reduce && mr.should_use(analysis, &results) {
+            info!("Pipeline: using map-reduce for synthesis query");
+            let response = mr.process(user_query, &results).await?;
+            self.maybe_run_ragas(user_query, &context, &response.content)
+                .await;
+            return self.maybe_adapt(response, analysis).await;
         }
 
         // ── Agent 4: Response Generator (or Speculative RAG) ──
@@ -359,28 +352,26 @@ impl ChatPipeline {
         // ── Agent 5: Quality Guard (with retry loop) ──
         let threshold = self.effective_threshold();
         let run_guard = force_quality_guard || self.quality_guard.is_some();
-        if run_guard {
-            if let Some(ref guard) = self.quality_guard {
-                for attempt in 0..=self.config.quality_guard_max_retries {
-                    let verdict = guard
-                        .check_with_threshold(user_query, &response.content, &context, threshold)
+        if run_guard && let Some(ref guard) = self.quality_guard {
+            for attempt in 0..=self.config.quality_guard_max_retries {
+                let verdict = guard
+                    .check_with_threshold(user_query, &response.content, &context, threshold)
+                    .await?;
+                if verdict.pass {
+                    debug!(attempt, "Pipeline: quality passed");
+                    break;
+                }
+                if attempt < self.config.quality_guard_max_retries {
+                    let feedback = verdict.feedback.unwrap_or_else(|| {
+                        "Improve relevance and reduce hallucination.".into()
+                    });
+                    warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
+                    response = self
+                        .response_generator
+                        .generate_with_feedback(analysis, &context, messages, &feedback, None)
                         .await?;
-                    if verdict.pass {
-                        debug!(attempt, "Pipeline: quality passed");
-                        break;
-                    }
-                    if attempt < self.config.quality_guard_max_retries {
-                        let feedback = verdict.feedback.unwrap_or_else(|| {
-                            "Improve relevance and reduce hallucination.".into()
-                        });
-                        warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
-                        response = self
-                            .response_generator
-                            .generate_with_feedback(analysis, &context, messages, &feedback, None)
-                            .await?;
-                    } else {
-                        warn!("Pipeline: quality guard exhausted retries, using last response");
-                    }
+                } else {
+                    warn!("Pipeline: quality guard exhausted retries, using last response");
                 }
             }
         }
@@ -549,13 +540,12 @@ impl ChatPipeline {
         let analysis = self.run_analyzer(user_query, messages).await?;
 
         // ── Self-RAG gate (streaming) ──
-        if let Some(ref self_rag) = self.self_rag {
-            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
+        if let Some(ref self_rag) = self.self_rag
+            && let Ok(RetrievalDecision::NoRetrieve { confidence }) =
                 self_rag.should_retrieve(user_query, messages).await
-            {
-                info!(confidence, "Self-RAG(stream): skipping retrieval");
-                return self.main_llm.generate_stream(messages, None).await;
-            }
+        {
+            info!(confidence, "Self-RAG(stream): skipping retrieval");
+            return self.main_llm.generate_stream(messages, None).await;
         }
 
         // ── Orchestrator: decide route ──
@@ -563,19 +553,17 @@ impl ChatPipeline {
         debug!(route = ?route, "Pipeline(stream): orchestrator decided");
 
         match route {
-            PipelineRoute::DirectLlm => {
-                return match analysis.intent {
-                    QueryIntent::Clarification => {
-                        let msg =
-                            "Could you please provide more details about your question?".into();
-                        Ok(LlmStreamResponse {
-                            stream: Box::pin(tokio_stream::once(Ok(msg))),
-                            usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
-                        })
-                    }
-                    _ => self.main_llm.generate_stream(messages, None).await,
-                };
-            }
+            PipelineRoute::DirectLlm => match analysis.intent {
+                QueryIntent::Clarification => {
+                    let msg =
+                        "Could you please provide more details about your question?".into();
+                    Ok(LlmStreamResponse {
+                        stream: Box::pin(tokio_stream::once(Ok(msg))),
+                        usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
+                    })
+                }
+                _ => self.main_llm.generate_stream(messages, None).await,
+            },
             PipelineRoute::SimpleRetrieval => {
                 let rewritten = query_rewriter::fallback_rewrite(user_query);
                 let results = self
@@ -592,7 +580,7 @@ impl ChatPipeline {
                     .response_generator
                     .generate_stream(&analysis, &context, messages, None)
                     .await?;
-                return Ok(self.wrap_stream_with_quality_guard(stream, user_query, context));
+                Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
             }
             PipelineRoute::FullPipeline | PipelineRoute::ComplexPipeline => {
                 let rewritten = self.run_rewriter(user_query, &analysis).await?;
@@ -610,7 +598,7 @@ impl ChatPipeline {
                     .response_generator
                     .generate_stream(&analysis, &context, messages, None)
                     .await?;
-                return Ok(self.wrap_stream_with_quality_guard(stream, user_query, context));
+                Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
             }
         }
     }
@@ -673,33 +661,28 @@ impl ChatPipeline {
             let mut collected = String::new();
 
             while let Some(chunk) = inner_stream.next().await {
-                match &chunk {
-                    Ok(text) => collected.push_str(text),
-                    Err(_) => {}
-                }
+                if let Ok(text) = &chunk { collected.push_str(text) }
                 yield chunk;
             }
 
-            if !collected.is_empty() {
-                if let Some(ref guard) = guard_clone {
-                    match guard.check_with_threshold(&query, &collected, &context, threshold).await {
-                        Ok(verdict) => {
-                            if !verdict.pass {
-                                warn!(
-                                    relevance = verdict.relevance_score,
-                                    hallucination = verdict.hallucination_score,
-                                    "Pipeline(stream): post-stream quality guard FAILED"
-                                );
-                                yield Ok("\n\n---\n⚠️ *Note: This response may contain inaccuracies. \
-                                         Please verify important information against the source documents.*"
-                                    .to_string());
-                            } else {
-                                debug!("Pipeline(stream): post-stream quality guard passed");
-                            }
+            if !collected.is_empty() && let Some(ref guard) = guard_clone {
+                match guard.check_with_threshold(&query, &collected, &context, threshold).await {
+                    Ok(verdict) => {
+                        if !verdict.pass {
+                            warn!(
+                                relevance = verdict.relevance_score,
+                                hallucination = verdict.hallucination_score,
+                                "Pipeline(stream): post-stream quality guard FAILED"
+                            );
+                            yield Ok("\n\n---\n⚠️ *Note: This response may contain inaccuracies. \
+                                     Please verify important information against the source documents.*"
+                                .to_string());
+                        } else {
+                            debug!("Pipeline(stream): post-stream quality guard passed");
                         }
-                        Err(e) => {
-                            debug!(error = %e, "Pipeline(stream): post-stream quality guard error, skipping");
-                        }
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Pipeline(stream): post-stream quality guard error, skipping");
                     }
                 }
             }
@@ -752,12 +735,10 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
     ) -> Result<Vec<thairag_core::types::SearchResult>> {
         // Feature 3: Agentic Tool Use
-        if self.config.tool_use_enabled {
-            if let Some(ref router) = self.tool_router {
-                return router
-                    .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
-                    .await;
-            }
+        if self.config.tool_use_enabled && let Some(ref router) = self.tool_router {
+            return router
+                .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
+                .await;
         }
 
         // Standard search path

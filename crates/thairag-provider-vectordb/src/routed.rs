@@ -227,7 +227,7 @@ impl VectorStore for RoutedVectorStore {
         }
 
         for store in stores {
-            let id = doc_id.clone();
+            let id = doc_id;
             if let Err(e) = store.delete_by_doc(id).await {
                 tracing::warn!(error = %e, "delete_by_doc failed in one collection, continuing");
             }

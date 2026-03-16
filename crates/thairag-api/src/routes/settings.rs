@@ -1568,7 +1568,7 @@ pub async fn update_document_config(
 
     // Persist pipeline settings
     if let Some(v) = req.max_chunk_size {
-        if v < 64 || v > 100_000 {
+        if !(64..=100_000).contains(&v) {
             return Err(ApiError(ThaiRagError::Validation(
                 "max_chunk_size must be between 64 and 100000".into(),
             )));
@@ -1588,7 +1588,7 @@ pub async fn update_document_config(
             .set_setting("document.chunk_overlap", &v.to_string());
     }
     if let Some(v) = req.max_upload_size_mb {
-        if v < 1 || v > 1024 {
+        if !(1..=1024).contains(&v) {
             return Err(ApiError(ThaiRagError::Validation(
                 "max_upload_size_mb must be between 1 and 1024".into(),
             )));
@@ -1696,10 +1696,8 @@ pub async fn update_document_config(
             if let Some(base_url) = &llm_update.base_url {
                 llm_config.base_url = base_url.clone();
             }
-            if let Some(api_key) = &llm_update.api_key {
-                if !api_key.is_empty() {
-                    llm_config.api_key = api_key.clone();
-                }
+            if let Some(api_key) = &llm_update.api_key && !api_key.is_empty() {
+                llm_config.api_key = api_key.clone();
             }
             if let Some(max_tokens) = llm_update.max_tokens {
                 llm_config.max_tokens = Some(max_tokens);
@@ -2600,10 +2598,8 @@ pub async fn update_chat_pipeline_config(
         if let Some(base_url) = &update.base_url {
             cfg.base_url = base_url.clone();
         }
-        if let Some(api_key) = &update.api_key {
-            if !api_key.is_empty() {
-                cfg.api_key = api_key.clone();
-            }
+        if let Some(api_key) = &update.api_key && !api_key.is_empty() {
+            cfg.api_key = api_key.clone();
         }
         if let Some(max_tokens) = update.max_tokens {
             cfg.max_tokens = Some(max_tokens);
@@ -3369,10 +3365,10 @@ pub async fn apply_preset(
     let mut pc = state.providers().providers_config.clone();
 
     // Apply embedding overrides from KV store
-    if let Some(kind) = store.get_setting("providers.embedding.kind") {
-        if let Ok(k) = parse_embedding_kind(&kind) {
-            pc.embedding.kind = k;
-        }
+    if let Some(kind) = store.get_setting("providers.embedding.kind")
+        && let Ok(k) = parse_embedding_kind(&kind)
+    {
+        pc.embedding.kind = k;
     }
     if let Some(model) = store.get_setting("providers.embedding.model") {
         pc.embedding.model = model;
@@ -3380,36 +3376,36 @@ pub async fn apply_preset(
     if let Some(base_url) = store.get_setting("providers.embedding.base_url") {
         pc.embedding.base_url = base_url;
     }
-    if let Some(dim) = store.get_setting("providers.embedding.dimensions") {
-        if let Ok(d) = dim.parse::<usize>() {
-            pc.embedding.dimension = d;
-        }
+    if let Some(dim) = store.get_setting("providers.embedding.dimensions")
+        && let Ok(d) = dim.parse::<usize>()
+    {
+        pc.embedding.dimension = d;
     }
 
     // Apply reranker overrides from KV store
-    if let Some(kind) = store.get_setting("providers.reranker.kind") {
-        if let Ok(k) = parse_reranker_kind(&kind) {
-            pc.reranker.kind = k;
-        }
+    if let Some(kind) = store.get_setting("providers.reranker.kind")
+        && let Ok(k) = parse_reranker_kind(&kind)
+    {
+        pc.reranker.kind = k;
     }
 
     // Apply LLM override from chat pipeline preset (shared mode)
-    if let Some(llm_json) = store.get_setting("chat_pipeline.llm") {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&llm_json) {
-            if let Some(kind) = v.get("kind").and_then(|k| k.as_str()) {
-                if let Ok(k) = parse_llm_kind(kind) {
-                    pc.llm.kind = k;
-                }
-            }
-            if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
-                pc.llm.model = model.to_string();
-            }
-            if let Some(base_url) = v.get("base_url").and_then(|u| u.as_str()) {
-                pc.llm.base_url = base_url.to_string();
-            }
-            if let Some(api_key) = v.get("api_key").and_then(|k| k.as_str()) {
-                pc.llm.api_key = api_key.to_string();
-            }
+    if let Some(llm_json) = store.get_setting("chat_pipeline.llm")
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&llm_json)
+    {
+        if let Some(kind) = v.get("kind").and_then(|k| k.as_str())
+            && let Ok(k) = parse_llm_kind(kind)
+        {
+            pc.llm.kind = k;
+        }
+        if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
+            pc.llm.model = model.to_string();
+        }
+        if let Some(base_url) = v.get("base_url").and_then(|u| u.as_str()) {
+            pc.llm.base_url = base_url.to_string();
+        }
+        if let Some(api_key) = v.get("api_key").and_then(|k| k.as_str()) {
+            pc.llm.api_key = api_key.to_string();
         }
     }
 

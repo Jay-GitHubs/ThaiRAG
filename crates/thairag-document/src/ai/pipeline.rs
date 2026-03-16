@@ -96,6 +96,7 @@ impl AiDocumentPipeline {
     }
 
     /// Create with separate LLM providers per agent for optimal resource usage.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_per_agent(
         analyzer_llm: Arc<dyn LlmProvider>,
         converter_llm: Arc<dyn LlmProvider>,
@@ -122,6 +123,7 @@ impl AiDocumentPipeline {
     }
 
     /// Create with separate LLM providers per agent and shared prompt registry.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_per_agent_with_prompts(
         analyzer_llm: Arc<dyn LlmProvider>,
         converter_llm: Arc<dyn LlmProvider>,
@@ -281,6 +283,7 @@ impl AiDocumentPipeline {
 
     // ── Orchestrator-driven flow ────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_orchestrated(
         &self,
         pages: &[(usize, String)],
@@ -415,15 +418,11 @@ impl AiDocumentPipeline {
             match decision.action {
                 OrchestratorAction::Accept => {
                     // Update effective params from AI recommendations
-                    if let Some(qt) = a.recommended_quality_threshold {
-                        if self.quality_threshold_override.is_none() {
-                            state.effective_quality_threshold = qt;
-                        }
+                    if let Some(qt) = a.recommended_quality_threshold && self.quality_threshold_override.is_none() {
+                        state.effective_quality_threshold = qt;
                     }
-                    if let Some(mcs) = a.recommended_max_chunk_size {
-                        if self.max_chunk_size_override.is_none() {
-                            state.effective_max_chunk_size = mcs;
-                        }
+                    if let Some(mcs) = a.recommended_max_chunk_size && self.max_chunk_size_override.is_none() {
+                        state.effective_max_chunk_size = mcs;
                     }
                     break a;
                 }
@@ -483,12 +482,12 @@ impl AiDocumentPipeline {
 
         // ── Step 2+3: Convert → Quality Check ───────────────────────────
         Self::report_step(on_step, "converting");
-        let mut converted = if analysis.needs_ocr_correction && raw_bytes.is_some() {
+        let mut converted = if let Some(bytes) = raw_bytes.filter(|_| analysis.needs_ocr_correction) {
             // Vision path: send actual document to vision model
             Self::report_step(on_step, "converting_with_vision");
             info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
             match self
-                .do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id)
+                .do_convert_vision(bytes, mime_type, raw_text, &analysis, doc_id)
                 .await
             {
                 Ok(c) => c,
@@ -776,6 +775,7 @@ impl AiDocumentPipeline {
 
     // ── Deterministic retry-based flow (original logic) ─────────────────
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_retry_based(
         &self,
         pages: &[(usize, String)],
@@ -910,11 +910,11 @@ impl AiDocumentPipeline {
         Self::report_step(on_step, "converting");
 
         let (converted, quality) = {
-            let mut converted = if analysis.needs_ocr_correction && raw_bytes.is_some() {
+            let mut converted = if let Some(bytes) = raw_bytes.filter(|_| analysis.needs_ocr_correction) {
                 Self::report_step(on_step, "converting_with_vision");
                 info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
                 match self
-                    .do_convert_vision(raw_bytes.unwrap(), mime_type, raw_text, &analysis, doc_id)
+                    .do_convert_vision(bytes, mime_type, raw_text, &analysis, doc_id)
                     .await
                 {
                     Ok(c) => c,
@@ -1199,6 +1199,7 @@ impl AiDocumentPipeline {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn do_convert_with_feedback(
         &self,
         pages: &[(usize, String)],

@@ -137,11 +137,11 @@ impl PromptRegistry {
     /// Delete an override, reverting to the file/hardcoded default.
     pub fn delete_override(&self, key: &str) -> bool {
         let mut prompts = self.prompts.write().unwrap();
-        if let Some(entry) = prompts.get(key) {
-            if entry.source == PromptSource::Override {
-                prompts.remove(key);
-                return true;
-            }
+        if let Some(entry) = prompts.get(key)
+            && entry.source == PromptSource::Override
+        {
+            prompts.remove(key);
+            return true;
         }
         false
     }
@@ -220,11 +220,8 @@ fn parse_frontmatter(content: &str) -> (String, String) {
             .lines()
             .find_map(|line| {
                 let line = line.trim();
-                if let Some(rest) = line.strip_prefix("description:") {
-                    Some(rest.trim().to_string())
-                } else {
-                    None
-                }
+                line.strip_prefix("description:")
+                    .map(|rest| rest.trim().to_string())
             })
             .unwrap_or_default();
 

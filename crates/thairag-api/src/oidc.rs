@@ -21,7 +21,7 @@ pub struct OidcPendingAuth {
     pub created_at: Instant,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct OidcStateCache {
     inner: Arc<DashMap<String, OidcPendingAuth>>,
 }

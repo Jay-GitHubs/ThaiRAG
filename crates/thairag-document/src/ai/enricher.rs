@@ -161,12 +161,10 @@ impl LlmChunkEnricher {
 
         enriched.push_str(&original_content);
 
-        if let Some(ref queries) = result.hypothetical_queries {
-            if !queries.is_empty() {
-                enriched.push_str("\n\n[Related questions: ");
-                enriched.push_str(&queries.join(" | "));
-                enriched.push(']');
-            }
+        if let Some(ref queries) = result.hypothetical_queries && !queries.is_empty() {
+            enriched.push_str("\n\n[Related questions: ");
+            enriched.push_str(&queries.join(" | "));
+            enriched.push(']');
         }
 
         chunk.content = enriched;

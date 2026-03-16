@@ -5,7 +5,6 @@ use thairag_core::PromptRegistry;
 /// Each function externalizes its prompt via [`PromptRegistry::render_or_default`],
 /// using a `const DEFAULT_TEMPLATE` that mirrors the corresponding markdown file
 /// under `prompts/document/`.
-
 pub fn analyzer_prompt(
     prompts: &PromptRegistry,
     excerpt: &str,
@@ -178,6 +177,7 @@ Output clean Markdown only, no explanation:"#;
 }
 
 /// Converter retry prompt with quality feedback from the previous attempt.
+#[allow(clippy::too_many_arguments)]
 pub fn converter_feedback_prompt(
     prompts: &PromptRegistry,
     text_segment: &str,

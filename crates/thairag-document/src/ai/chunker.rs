@@ -370,10 +370,9 @@ fn build_page_map(lines: &[&str]) -> Vec<Option<usize>> {
             if let Some(num_str) = trimmed
                 .strip_prefix(PAGE_MARKER_PREFIX)
                 .and_then(|s| s.strip_suffix("-->"))
+                && let Ok(page) = num_str.trim().parse::<usize>()
             {
-                if let Ok(page) = num_str.trim().parse::<usize>() {
-                    current_page = Some(page);
-                }
+                current_page = Some(page);
             }
         }
         page_map[i] = current_page;
