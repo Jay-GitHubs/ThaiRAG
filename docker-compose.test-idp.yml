@@ -38,6 +38,7 @@ services:
     environment:
       THAIRAG__ADMIN__EMAIL: admin@thairag.local
       THAIRAG__ADMIN__PASSWORD: admin123
+      THAIRAG__AUTH__API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
     depends_on:
       keycloak:
         condition: service_healthy
@@ -47,14 +48,14 @@ services:
   # OPENID_PROVIDER_URL must use host.docker.internal so that the discovery
   # doc returns browser-reachable URLs (same rule as ThaiRAG's issuer URL).
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.8.10
     ports:
       - "3000:8080"
     volumes:
       - open-webui-data:/app/backend/data
     environment:
       OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-      OPENAI_API_KEYS: "unused"
+      OPENAI_API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
       # OIDC SSO via Keycloak
       # Open WebUI's backend reaches Keycloak via host.docker.internal:9090.
       # This ensures the browser also gets reachable URLs from the discovery doc.

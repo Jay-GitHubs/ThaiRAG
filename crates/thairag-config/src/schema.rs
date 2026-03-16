@@ -178,6 +178,10 @@ pub struct AuthConfig {
     pub max_login_attempts: u32,
     #[serde(default = "default_lockout_duration_secs")]
     pub lockout_duration_secs: u64,
+    /// Static API keys accepted alongside JWT tokens.
+    /// Comma-separated list, e.g. "sk-thairag-abc123,sk-thairag-xyz789"
+    #[serde(default)]
+    pub api_keys: String,
 }
 
 fn default_password_min_length() -> usize {
@@ -744,6 +748,7 @@ mod tests {
                 password_min_length: 8,
                 max_login_attempts: 5,
                 lockout_duration_secs: 300,
+                api_keys: String::new(),
             },
             providers: ProvidersConfig {
                 llm: LlmConfig {

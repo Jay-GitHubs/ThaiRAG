@@ -416,6 +416,7 @@ impl Drop for UserRequestGuard {
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub jwt: Option<Arc<JwtService>>,
+    pub api_keys: Arc<std::collections::HashSet<String>>,
     pub km_store: Arc<dyn KmStoreTrait>,
     pub session_store: Arc<SessionStore>,
     pub metrics: Arc<MetricsState>,
@@ -453,6 +454,7 @@ impl AppState {
         Self {
             config,
             jwt,
+            api_keys: Arc::new(std::collections::HashSet::new()),
             km_store,
             session_store: Arc::new(SessionStore::new()),
             metrics: Arc::new(MetricsState::new()),
@@ -542,9 +544,22 @@ impl AppState {
             config.server.rate_limit.burst_size,
         );
 
+        // Parse static API keys from config
+        let api_keys: std::collections::HashSet<String> = config
+            .auth
+            .api_keys
+            .split(',')
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect();
+        if !api_keys.is_empty() {
+            tracing::info!(count = api_keys.len(), "Loaded static API keys");
+        }
+
         Self {
             config: Arc::new(config),
             jwt,
+            api_keys: Arc::new(api_keys),
             km_store,
             session_store,
             metrics,

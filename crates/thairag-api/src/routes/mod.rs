@@ -250,13 +250,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let jwt = state.jwt.clone();
+    let api_keys = state.api_keys.clone();
     let protected = Router::new()
         .nest("/api/km", km_routes)
         .route("/v1/chat/completions", post(chat::chat_completions))
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {
-            auth_layer(jwt.clone(), req, next)
+            auth_layer(jwt.clone(), api_keys.clone(), req, next)
         }));
 
     // Merge public + protected, optionally with rate limiting

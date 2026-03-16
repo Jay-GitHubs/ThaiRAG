@@ -170,6 +170,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             password_min_length: 8,
             max_login_attempts: 5,
             lockout_duration_secs: 300,
+            api_keys: String::new(),
         },
         providers: ProvidersConfig {
             llm: LlmConfig {
@@ -1599,6 +1600,7 @@ fn build_streaming_test_app() -> Router {
             password_min_length: 8,
             max_login_attempts: 5,
             lockout_duration_secs: 300,
+            api_keys: String::new(),
         },
         providers: ProvidersConfig {
             llm: LlmConfig {
