@@ -1,0 +1,98 @@
+# Pre-built images from GitHub Container Registry / Docker Hub.
+#
+# Use this file to run ThaiRAG without cloning the repository.
+#
+# Quick start:
+#   1. Copy this file and .env.example to an empty directory
+#   2. cp .env.example .env  (edit with your settings)
+#   3. docker compose -f docker-compose.registry.yml up -d
+#
+# Images:
+#   GHCR:       ghcr.io/jay-githubs/thairag       / ghcr.io/jay-githubs/thairag-admin
+#   Docker Hub: jdevspecialist/thairag             / jdevspecialist/thairag-admin
+#
+# To use Docker Hub instead of GHCR, set in .env:
+#   THAIRAG_IMAGE=jdevspecialist/thairag
+#   THAIRAG_ADMIN_IMAGE=jdevspecialist/thairag-admin
+
+services:
+  # ── PostgreSQL ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-thairag}
+      POSTGRES_USER: ${POSTGRES_USER:-thairag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thairag}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Qdrant (vector database) ─────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  # ── ThaiRAG API ──────────────────────────────────────────────────────
+  thairag:
+    image: ${THAIRAG_IMAGE:-ghcr.io/jay-githubs/thairag}:${THAIRAG_TAG:-latest}
+    ports:
+      - "8080:8080"
+    volumes:
+      - thairag-data:/data
+    environment:
+      THAIRAG__SERVER__HOST: "0.0.0.0"
+      THAIRAG_TIER: ${THAIRAG_TIER:-standard}
+      THAIRAG__AUTH__ENABLED: ${THAIRAG__AUTH__ENABLED:-true}
+      THAIRAG__AUTH__JWT_SECRET: ${THAIRAG__AUTH__JWT_SECRET:?Set THAIRAG__AUTH__JWT_SECRET in .env}
+      THAIRAG__DATABASE__URL: postgresql://${POSTGRES_USER:-thairag}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-thairag}
+      THAIRAG__PROVIDERS__LLM__API_KEY: ${THAIRAG__PROVIDERS__LLM__API_KEY:-}
+      THAIRAG__PROVIDERS__EMBEDDING__API_KEY: ${THAIRAG__PROVIDERS__EMBEDDING__API_KEY:-}
+      THAIRAG__PROVIDERS__RERANKER__API_KEY: ${THAIRAG__PROVIDERS__RERANKER__API_KEY:-}
+      THAIRAG__PROVIDERS__VECTOR_STORE__URL: http://qdrant:6334
+      THAIRAG__ADMIN__EMAIL: ${THAIRAG__ADMIN__EMAIL:-}
+      THAIRAG__ADMIN__PASSWORD: ${THAIRAG__ADMIN__PASSWORD:-}
+      THAIRAG__AUTH__API_KEYS: ${THAIRAG__AUTH__API_KEYS:-}
+      THAIRAG__SERVER__CORS_ORIGINS: ${THAIRAG__SERVER__CORS_ORIGINS:-http://localhost:8081,http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Admin UI ─────────────────────────────────────────────────────────
+  admin-ui:
+    image: ${THAIRAG_ADMIN_IMAGE:-ghcr.io/jay-githubs/thairag-admin}:${THAIRAG_TAG:-latest}
+    ports:
+      - "8081:80"
+    depends_on:
+      - thairag
+
+  # ── Open WebUI (optional chat interface) ─────────────────────────────
+  # Uncomment to add a chat UI. Set THAIRAG__AUTH__API_KEYS in .env.
+  #open-webui:
+  #  image: ghcr.io/open-webui/open-webui:v0.8.10
+  #  ports:
+  #    - "3000:8080"
+  #  volumes:
+  #    - open-webui-data:/app/backend/data
+  #  environment:
+  #    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
+  #    OPENAI_API_KEYS: "${THAIRAG__AUTH__API_KEYS:-sk-thairag}"
+  #    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+  #    AIOHTTP_CLIENT_TIMEOUT: "600"
+  #  depends_on:
+  #    - thairag
+
+volumes:
+  postgres-data:
+  thairag-data:
+  qdrant-data:
+  #open-webui-data:
