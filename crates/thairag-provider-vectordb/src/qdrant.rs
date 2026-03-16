@@ -2,14 +2,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use qdrant_client::qdrant::{
-    point_id::PointIdOptions, Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance,
-    Filter, PointStruct, QueryPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+    Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct,
+    QueryPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, point_id::PointIdOptions,
 };
 use qdrant_client::{Payload, Qdrant};
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::VectorStore;
 use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct QdrantVectorStore {
@@ -47,11 +47,14 @@ impl QdrantVectorStore {
         if !exists {
             self.client
                 .create_collection(
-                    CreateCollectionBuilder::new(&self.collection)
-                        .vectors_config(VectorParamsBuilder::new(dimension as u64, Distance::Cosine)),
+                    CreateCollectionBuilder::new(&self.collection).vectors_config(
+                        VectorParamsBuilder::new(dimension as u64, Distance::Cosine),
+                    ),
                 )
                 .await
-                .map_err(|e| ThaiRagError::VectorStore(format!("Failed to create collection: {e}")))?;
+                .map_err(|e| {
+                    ThaiRagError::VectorStore(format!("Failed to create collection: {e}"))
+                })?;
 
             info!(collection = %self.collection, dimension, "Created Qdrant collection");
         }
@@ -70,7 +73,10 @@ impl VectorStore for QdrantVectorStore {
         }
 
         // Determine dimension from the first chunk that has an embedding
-        if let Some(dim) = chunks.iter().find_map(|c| c.embedding.as_ref().map(|e| e.len())) {
+        if let Some(dim) = chunks
+            .iter()
+            .find_map(|c| c.embedding.as_ref().map(|e| e.len()))
+        {
             self.ensure_collection(dim).await?;
         }
 

@@ -53,10 +53,7 @@ impl VectorStore for InMemoryVectorStore {
         let store = self.chunks.read().unwrap();
         let mut results: Vec<SearchResult> = store
             .values()
-            .filter(|chunk| {
-                query.unrestricted
-                    || query.workspace_ids.contains(&chunk.workspace_id)
-            })
+            .filter(|chunk| query.unrestricted || query.workspace_ids.contains(&chunk.workspace_id))
             .filter_map(|chunk| {
                 chunk.embedding.as_ref().map(|emb| {
                     let score = cosine_similarity(embedding, emb);
@@ -68,7 +65,11 @@ impl VectorStore for InMemoryVectorStore {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(query.top_k);
         Ok(results)
     }

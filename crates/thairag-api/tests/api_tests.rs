@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::Router;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -26,8 +26,8 @@ use thairag_api::app_state::{AppState, ProviderBundle};
 use thairag_api::metrics::MetricsState;
 use thairag_api::routes::build_router;
 use thairag_api::session::SessionStore;
-use thairag_api::store::memory::MemoryKmStore;
 use thairag_api::store::KmStoreTrait;
+use thairag_api::store::memory::MemoryKmStore;
 
 // ── Mock Providers ──────────────────────────────────────────────────
 
@@ -170,6 +170,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             password_min_length: 8,
             max_login_attempts: 5,
             lockout_duration_secs: 300,
+            api_keys: String::new(),
         },
         providers: ProvidersConfig {
             llm: LlmConfig {
@@ -228,7 +229,12 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         embedding,
     };
 
-    AppState::from_parts(Arc::new(config), jwt, Arc::new(MemoryKmStore::new()) as Arc<dyn KmStoreTrait>, bundle)
+    AppState::from_parts(
+        Arc::new(config),
+        jwt,
+        Arc::new(MemoryKmStore::new()) as Arc<dyn KmStoreTrait>,
+        bundle,
+    )
 }
 
 fn build_app(auth_enabled: bool) -> Router {
@@ -274,11 +280,7 @@ fn get_request_auth(uri: &str, token: &str) -> Request<Body> {
         .unwrap()
 }
 
-fn delete_json_request_auth(
-    uri: &str,
-    body: serde_json::Value,
-    token: &str,
-) -> Request<Body> {
+fn delete_json_request_auth(uri: &str, body: serde_json::Value, token: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
         .uri(uri)
@@ -298,12 +300,7 @@ fn delete_request_auth(uri: &str, token: &str) -> Request<Body> {
 }
 
 /// Register a user, login, and return the token.
-async fn register_and_get_token(
-    app: &Router,
-    email: &str,
-    name: &str,
-    password: &str,
-) -> String {
+async fn register_and_get_token(app: &Router, email: &str, name: &str, password: &str) -> String {
     // Register
     let req = json_request(
         "POST",
@@ -420,10 +417,12 @@ async fn register_rejects_short_password() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: serde_json::Value = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("at least"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at least")
+    );
 }
 
 #[tokio::test]
@@ -441,10 +440,12 @@ async fn register_rejects_no_uppercase() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: serde_json::Value = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("uppercase"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("uppercase")
+    );
 }
 
 #[tokio::test]
@@ -462,10 +463,7 @@ async fn register_rejects_no_digit() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: serde_json::Value = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("digit"));
+    assert!(body["error"]["message"].as_str().unwrap().contains("digit"));
 }
 
 // ── Brute-force protection tests ────────────────────────────────────
@@ -513,10 +511,12 @@ async fn login_locks_after_max_attempts() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let body: serde_json::Value = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("locked"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("locked")
+    );
 }
 
 #[tokio::test]
@@ -759,10 +759,7 @@ async fn document_crud() {
     assert!(body["chunks"].as_u64().unwrap() >= 1);
 
     // List documents
-    let req = get_request_auth(
-        &format!("/api/km/workspaces/{ws_id}/documents"),
-        &token,
-    );
+    let req = get_request_auth(&format!("/api/km/workspaces/{ws_id}/documents"), &token);
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
@@ -787,10 +784,7 @@ async fn document_crud() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Verify gone
-    let req = get_request_auth(
-        &format!("/api/km/workspaces/{ws_id}/documents"),
-        &token,
-    );
+    let req = get_request_auth(&format!("/api/km/workspaces/{ws_id}/documents"), &token);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 0);
@@ -836,10 +830,7 @@ async fn grant_and_list_permissions() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // List permissions — should show Owner + Viewer = 2
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/permissions"),
-        &token_a,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/permissions"), &token_a);
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
@@ -883,20 +874,14 @@ async fn grant_upserts_existing() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // List — should still be 2 (owner + user), not 3
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/permissions"),
-        &token_a,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/permissions"), &token_a);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 2);
 
     // The user's role should be editor now
     let data = body["data"].as_array().unwrap();
-    let user_perm = data
-        .iter()
-        .find(|p| p["email"] == "user@test.com")
-        .unwrap();
+    let user_perm = data.iter().find(|p| p["email"] == "user@test.com").unwrap();
     assert_eq!(user_perm["role"], "editor");
 }
 
@@ -933,10 +918,7 @@ async fn revoke_permission() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // List — only the owner remains
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/permissions"),
-        &token_a,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/permissions"), &token_a);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 1);
@@ -1020,10 +1002,7 @@ async fn viewer_cannot_manage_permissions() {
     app.clone().oneshot(req).await.unwrap();
 
     // Viewer tries to list permissions → 403
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/permissions"),
-        &token_b,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/permissions"), &token_b);
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
@@ -1309,10 +1288,7 @@ async fn dept_permission_isolation() {
     assert_eq!(body["total"], 0);
 
     // Org-level list shows 2 (owner auto-grant + dept grant)
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/permissions"),
-        &token_a,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/permissions"), &token_a);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 2);
@@ -1395,7 +1371,12 @@ async fn ingest_unsupported_mime_type_returns_400() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"].as_str().unwrap().contains("Unsupported MIME type"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unsupported MIME type")
+    );
 }
 
 #[tokio::test]
@@ -1599,6 +1580,7 @@ fn build_streaming_test_app() -> Router {
             password_min_length: 8,
             max_login_attempts: 5,
             lockout_duration_secs: 300,
+            api_keys: String::new(),
         },
         providers: ProvidersConfig {
             llm: LlmConfig {
@@ -1657,7 +1639,12 @@ fn build_streaming_test_app() -> Router {
         embedding,
     };
 
-    let state = AppState::from_parts(Arc::new(config), None, Arc::new(MemoryKmStore::new()) as Arc<dyn KmStoreTrait>, bundle);
+    let state = AppState::from_parts(
+        Arc::new(config),
+        None,
+        Arc::new(MemoryKmStore::new()) as Arc<dyn KmStoreTrait>,
+        bundle,
+    );
 
     build_router(state, None)
 }
@@ -1715,7 +1702,12 @@ async fn streaming_chat_returns_sse_with_usage() {
     // 2. Content chunks: have delta.content, usage absent/null
     let content_chunks: Vec<&serde_json::Value> = chunks
         .iter()
-        .filter(|c| c["choices"].get(0).and_then(|ch| ch["delta"]["content"].as_str()).is_some())
+        .filter(|c| {
+            c["choices"]
+                .get(0)
+                .and_then(|ch| ch["delta"]["content"].as_str())
+                .is_some()
+        })
         .collect();
     assert!(
         !content_chunks.is_empty(),
@@ -1738,7 +1730,11 @@ async fn streaming_chat_returns_sse_with_usage() {
                 == Some("stop")
         })
         .collect();
-    assert_eq!(finish_chunks.len(), 1, "Should have exactly one finish chunk");
+    assert_eq!(
+        finish_chunks.len(),
+        1,
+        "Should have exactly one finish chunk"
+    );
     let finish = finish_chunks[0];
     assert!(
         finish.get("usage").is_none() || finish["usage"].is_null(),
@@ -1748,7 +1744,9 @@ async fn streaming_chat_returns_sse_with_usage() {
     // 4. Usage chunk: choices is empty, usage has correct token counts
     let usage_chunks: Vec<&serde_json::Value> = chunks
         .iter()
-        .filter(|c| c["choices"].as_array().is_some_and(|arr| arr.is_empty()) && !c["usage"].is_null())
+        .filter(|c| {
+            c["choices"].as_array().is_some_and(|arr| arr.is_empty()) && !c["usage"].is_null()
+        })
         .collect();
     assert_eq!(usage_chunks.len(), 1, "Should have exactly one usage chunk");
     let usage = &usage_chunks[0]["usage"];
@@ -1886,10 +1884,12 @@ async fn empty_messages_returns_400() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("messages must not be empty"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("messages must not be empty")
+    );
 }
 
 #[tokio::test]
@@ -1907,10 +1907,12 @@ async fn wrong_model_returns_400() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("model not found"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("model not found")
+    );
 }
 
 // ── Deep Health Check Tests ─────────────────────────────────────────
@@ -2090,10 +2092,7 @@ async fn list_depts_filtered_by_scope() {
     app.clone().oneshot(req).await.unwrap();
 
     // User lists depts: should see only dept_a (via workspace-level perm), NOT dept_b
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/depts"),
-        &token_user,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/depts"), &token_user);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 1);
@@ -2108,10 +2107,7 @@ async fn list_depts_filtered_by_scope() {
     );
     app.clone().oneshot(req).await.unwrap();
 
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/depts"),
-        &token_user,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/depts"), &token_user);
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 2);
@@ -2282,18 +2278,12 @@ async fn no_permission_user_sees_empty_lists() {
     assert_eq!(body["total"], 0);
 
     // User cannot get org
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}"),
-        &token_user,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}"), &token_user);
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // User cannot list depts (no perm in org)
-    let req = get_request_auth(
-        &format!("/api/km/orgs/{org_id}/depts"),
-        &token_user,
-    );
+    let req = get_request_auth(&format!("/api/km/orgs/{org_id}/depts"), &token_user);
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
@@ -2322,7 +2312,9 @@ async fn super_admin_sees_everything() {
     // Generate JWT for super admin
     let admin_jwt = state.jwt.as_ref().unwrap();
     let admin_user = state.km_store.get_user_by_email("admin@test.com").unwrap();
-    let admin_token = admin_jwt.encode(&admin_user.user.id.0.to_string(), &admin_user.user.email).unwrap();
+    let admin_token = admin_jwt
+        .encode(&admin_user.user.id.0.to_string(), &admin_user.user.email)
+        .unwrap();
 
     // Super admin sees all orgs
     let req = get_request_auth("/api/km/orgs", &admin_token);

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::EmbeddingModel;
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct OllamaEmbeddingProvider {
@@ -54,7 +54,9 @@ impl EmbeddingModel for OllamaEmbeddingProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::Embedding(format!("Ollama embedding request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::Embedding(format!("Ollama embedding request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -64,14 +66,13 @@ impl EmbeddingModel for OllamaEmbeddingProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::Embedding(format!("Failed to parse Ollama embedding response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::Embedding(format!("Failed to parse Ollama embedding response: {e}"))
+        })?;
 
-        let embeddings_arr = json["embeddings"]
-            .as_array()
-            .ok_or_else(|| ThaiRagError::Embedding("Missing embeddings array in Ollama response".into()))?;
+        let embeddings_arr = json["embeddings"].as_array().ok_or_else(|| {
+            ThaiRagError::Embedding("Missing embeddings array in Ollama response".into())
+        })?;
 
         let embeddings: Vec<Vec<f32>> = embeddings_arr
             .iter()

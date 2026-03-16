@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use chrono::Utc;
+use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
-use thairag_core::ThaiRagError;
 
 use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
 
@@ -87,7 +87,9 @@ impl KmStoreTrait for MemoryKmStore {
 
     fn delete_org(&self, id: OrgId) -> Result<()> {
         if self.orgs.write().unwrap().remove(&id).is_none() {
-            return Err(ThaiRagError::NotFound(format!("Organization {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Organization {id} not found"
+            )));
         }
         Ok(())
     }
@@ -280,19 +282,22 @@ impl KmStoreTrait for MemoryKmStore {
 
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)> {
         let blobs = self.document_blobs.read().unwrap();
-        Ok(blobs.get(&doc_id).map(|b| (b.image_count, b.table_count)).unwrap_or((0, 0)))
+        Ok(blobs
+            .get(&doc_id)
+            .map(|b| (b.image_count, b.table_count))
+            .unwrap_or((0, 0)))
     }
 
     // ── User ──────────────────────────────────────────────────────────
 
-    fn insert_user(
-        &self,
-        email: String,
-        name: String,
-        password_hash: String,
-    ) -> Result<User> {
+    fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {
         let email_lower = email.to_lowercase();
-        if self.user_by_email.read().unwrap().contains_key(&email_lower) {
+        if self
+            .user_by_email
+            .read()
+            .unwrap()
+            .contains_key(&email_lower)
+        {
             return Err(ThaiRagError::Validation(format!(
                 "Email {email} is already registered"
             )));
@@ -330,7 +335,12 @@ impl KmStoreTrait for MemoryKmStore {
         role: String,
     ) -> Result<User> {
         let email_lower = email.to_lowercase();
-        let existing_id = self.user_by_email.read().unwrap().get(&email_lower).copied();
+        let existing_id = self
+            .user_by_email
+            .read()
+            .unwrap()
+            .get(&email_lower)
+            .copied();
 
         if let Some(id) = existing_id {
             let mut users = self.users.write().unwrap();
@@ -371,7 +381,10 @@ impl KmStoreTrait for MemoryKmStore {
         let removed = self.users.write().unwrap().remove(&id);
         match removed {
             Some(record) => {
-                self.user_by_email.write().unwrap().remove(&record.user.email);
+                self.user_by_email
+                    .write()
+                    .unwrap()
+                    .remove(&record.user.email);
                 Ok(())
             }
             None => Err(ThaiRagError::NotFound(format!("User {id} not found"))),
@@ -416,7 +429,12 @@ impl KmStoreTrait for MemoryKmStore {
     // ── Identity Providers ──────────────────────────────────────────
 
     fn list_identity_providers(&self) -> Vec<IdentityProvider> {
-        self.identity_providers.read().unwrap().values().cloned().collect()
+        self.identity_providers
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 
     fn list_enabled_identity_providers(&self) -> Vec<IdentityProvider> {
@@ -483,7 +501,13 @@ impl KmStoreTrait for MemoryKmStore {
     }
 
     fn delete_identity_provider(&self, id: IdpId) -> Result<()> {
-        if self.identity_providers.write().unwrap().remove(&id).is_none() {
+        if self
+            .identity_providers
+            .write()
+            .unwrap()
+            .remove(&id)
+            .is_none()
+        {
             return Err(ThaiRagError::NotFound(format!(
                 "Identity provider {id} not found"
             )));
@@ -526,9 +550,7 @@ impl KmStoreTrait for MemoryKmStore {
         let before = perms.len();
         perms.retain(|p| !(p.user_id == user_id && scopes_match(&p.scope, scope)));
         if perms.len() == before {
-            return Err(ThaiRagError::NotFound(
-                "Permission not found".into(),
-            ));
+            return Err(ThaiRagError::NotFound("Permission not found".into()));
         }
         Ok(())
     }
@@ -728,7 +750,10 @@ impl KmStoreTrait for MemoryKmStore {
     }
 
     fn set_setting(&self, key: &str, value: &str) {
-        self.settings.write().unwrap().insert(key.to_string(), value.to_string());
+        self.settings
+            .write()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
     }
 
     fn delete_setting(&self, key: &str) {

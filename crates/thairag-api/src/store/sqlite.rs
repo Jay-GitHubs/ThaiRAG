@@ -2,13 +2,13 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, params};
+use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
-use thairag_core::ThaiRagError;
 use uuid::Uuid;
 
 use super::{KmStoreTrait, UserRecord};
@@ -44,7 +44,7 @@ impl SqliteKmStore {
 
         // Fix existing super admins that have default 'viewer' role
         let _ = conn.execute_batch(
-            "UPDATE users SET role = 'super_admin' WHERE is_super_admin = 1 AND role = 'viewer'"
+            "UPDATE users SET role = 'super_admin' WHERE is_super_admin = 1 AND role = 'viewer'",
         );
 
         Ok(Self {
@@ -98,10 +98,15 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
 
 fn scope_to_parts(scope: &PermissionScope) -> (&str, String, String, String) {
     match scope {
-        PermissionScope::Org { org_id } => ("org", org_id.0.to_string(), String::new(), String::new()),
-        PermissionScope::Dept { org_id, dept_id } => {
-            ("dept", org_id.0.to_string(), dept_id.0.to_string(), String::new())
+        PermissionScope::Org { org_id } => {
+            ("org", org_id.0.to_string(), String::new(), String::new())
         }
+        PermissionScope::Dept { org_id, dept_id } => (
+            "dept",
+            org_id.0.to_string(),
+            dept_id.0.to_string(),
+            String::new(),
+        ),
         PermissionScope::Workspace {
             org_id,
             dept_id,
@@ -218,10 +223,15 @@ impl KmStoreTrait for SqliteKmStore {
     fn delete_org(&self, id: OrgId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
-            .execute("DELETE FROM organizations WHERE id = ?1", params![id.0.to_string()])
+            .execute(
+                "DELETE FROM organizations WHERE id = ?1",
+                params![id.0.to_string()],
+            )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete org: {e}")))?;
         if affected == 0 {
-            return Err(ThaiRagError::NotFound(format!("Organization {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Organization {id} not found"
+            )));
         }
         Ok(())
     }
@@ -297,7 +307,10 @@ impl KmStoreTrait for SqliteKmStore {
     fn delete_dept(&self, id: DeptId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
-            .execute("DELETE FROM departments WHERE id = ?1", params![id.0.to_string()])
+            .execute(
+                "DELETE FROM departments WHERE id = ?1",
+                params![id.0.to_string()],
+            )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete dept: {e}")))?;
         if affected == 0 {
             return Err(ThaiRagError::NotFound(format!("Department {id} not found")));
@@ -400,7 +413,10 @@ impl KmStoreTrait for SqliteKmStore {
     fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
-            .execute("DELETE FROM workspaces WHERE id = ?1", params![id.0.to_string()])
+            .execute(
+                "DELETE FROM workspaces WHERE id = ?1",
+                params![id.0.to_string()],
+            )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete workspace: {e}")))?;
         if affected == 0 {
             return Err(ThaiRagError::NotFound(format!("Workspace {id} not found")));
@@ -497,7 +513,10 @@ impl KmStoreTrait for SqliteKmStore {
     fn delete_document(&self, id: DocId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
-            .execute("DELETE FROM documents WHERE id = ?1", params![id.0.to_string()])
+            .execute(
+                "DELETE FROM documents WHERE id = ?1",
+                params![id.0.to_string()],
+            )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete document: {e}")))?;
         if affected == 0 {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
@@ -564,12 +583,7 @@ impl KmStoreTrait for SqliteKmStore {
 
     // ── User ──────────────────────────────────────────────────────────
 
-    fn insert_user(
-        &self,
-        email: String,
-        name: String,
-        password_hash: String,
-    ) -> Result<User> {
+    fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {
         let email_lower = email.to_lowercase();
         let conn = self.conn.lock().unwrap();
 
@@ -898,7 +912,9 @@ impl KmStoreTrait for SqliteKmStore {
             )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite update idp: {e}")))?;
         if affected == 0 {
-            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Identity provider {id} not found"
+            )));
         }
         drop(conn);
         self.get_identity_provider(id)
@@ -907,10 +923,15 @@ impl KmStoreTrait for SqliteKmStore {
     fn delete_identity_provider(&self, id: IdpId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let affected = conn
-            .execute("DELETE FROM identity_providers WHERE id = ?1", params![id.0.to_string()])
+            .execute(
+                "DELETE FROM identity_providers WHERE id = ?1",
+                params![id.0.to_string()],
+            )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete idp: {e}")))?;
         if affected == 0 {
-            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Identity provider {id} not found"
+            )));
         }
         Ok(())
     }
@@ -1003,10 +1024,13 @@ impl KmStoreTrait for SqliteKmStore {
             .prepare("SELECT role FROM permissions WHERE user_id = ?1 AND org_id = ?2")
             .unwrap();
         let roles: Vec<Role> = stmt
-            .query_map(params![user_id.0.to_string(), org_id.0.to_string()], |row| {
-                let r: String = row.get(0)?;
-                Ok(parse_role(&r))
-            })
+            .query_map(
+                params![user_id.0.to_string(), org_id.0.to_string()],
+                |row| {
+                    let r: String = row.get(0)?;
+                    Ok(parse_role(&r))
+                },
+            )
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -1294,7 +1318,8 @@ impl KmStoreTrait for SqliteKmStore {
 
     fn delete_setting(&self, key: &str) {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM settings WHERE key = ?1", params![key]).ok();
+        conn.execute("DELETE FROM settings WHERE key = ?1", params![key])
+            .ok();
     }
 }
 
@@ -1397,14 +1422,26 @@ mod tests {
     fn upsert_user_by_email_creates_and_updates() {
         let store = mem_store();
         let user = store
-            .upsert_user_by_email("admin@test.com".into(), "Admin".into(), "h1".into(), true, "super_admin".into())
+            .upsert_user_by_email(
+                "admin@test.com".into(),
+                "Admin".into(),
+                "h1".into(),
+                true,
+                "super_admin".into(),
+            )
             .unwrap();
         assert!(user.is_super_admin);
         assert_eq!(user.role, "super_admin");
         assert_eq!(user.email, "admin@test.com");
 
         let updated = store
-            .upsert_user_by_email("admin@test.com".into(), "Admin Updated".into(), "h2".into(), true, "super_admin".into())
+            .upsert_user_by_email(
+                "admin@test.com".into(),
+                "Admin Updated".into(),
+                "h2".into(),
+                true,
+                "super_admin".into(),
+            )
             .unwrap();
         assert_eq!(updated.id, user.id);
         assert_eq!(updated.name, "Admin Updated");
@@ -1413,7 +1450,9 @@ mod tests {
     #[test]
     fn delete_user_works() {
         let store = mem_store();
-        let user = store.insert_user("del@test.com".into(), "Del".into(), "h".into()).unwrap();
+        let user = store
+            .insert_user("del@test.com".into(), "Del".into(), "h".into())
+            .unwrap();
         store.delete_user(user.id).unwrap();
         assert!(store.get_user(user.id).is_err());
     }
@@ -1436,7 +1475,13 @@ mod tests {
         assert_eq!(fetched.provider_type, "oidc");
 
         let updated = store
-            .update_identity_provider(idp.id, "Google SSO".into(), "oidc".into(), false, serde_json::json!({}))
+            .update_identity_provider(
+                idp.id,
+                "Google SSO".into(),
+                "oidc".into(),
+                false,
+                serde_json::json!({}),
+            )
             .unwrap();
         assert_eq!(updated.name, "Google SSO");
         assert!(!updated.enabled);
@@ -1451,7 +1496,9 @@ mod tests {
     #[test]
     fn user_email_uniqueness() {
         let store = mem_store();
-        store.insert_user("bob@test.com".into(), "Bob".into(), "h".into()).unwrap();
+        store
+            .insert_user("bob@test.com".into(), "Bob".into(), "h".into())
+            .unwrap();
         let result = store.insert_user("BOB@test.com".into(), "Bob2".into(), "h2".into());
         assert!(result.is_err());
     }
@@ -1463,7 +1510,9 @@ mod tests {
         let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
         let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
 
-        let user = store.insert_user("u@test.com".into(), "U".into(), "h".into()).unwrap();
+        let user = store
+            .insert_user("u@test.com".into(), "U".into(), "h".into())
+            .unwrap();
 
         store.add_permission(UserPermission {
             user_id: user.id,
@@ -1471,7 +1520,10 @@ mod tests {
             role: Role::Viewer,
         });
 
-        assert_eq!(store.get_user_role_for_org(user.id, org.id), Some(Role::Viewer));
+        assert_eq!(
+            store.get_user_role_for_org(user.id, org.id),
+            Some(Role::Viewer)
+        );
 
         store.add_permission(UserPermission {
             user_id: user.id,
@@ -1483,7 +1535,10 @@ mod tests {
             role: Role::Editor,
         });
 
-        assert_eq!(store.get_user_role_for_org(user.id, org.id), Some(Role::Editor));
+        assert_eq!(
+            store.get_user_role_for_org(user.id, org.id),
+            Some(Role::Editor)
+        );
 
         let ws_ids = store.get_user_workspace_ids(user.id);
         assert!(ws_ids.contains(&ws.id));
@@ -1493,7 +1548,9 @@ mod tests {
     fn upsert_permission_dedup() {
         let store = mem_store();
         let org = store.insert_org("Acme".into()).unwrap();
-        let user = store.insert_user("u@t.com".into(), "U".into(), "h".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
         let scope = PermissionScope::Org { org_id: org.id };
 
         let updated = store.upsert_permission(UserPermission {
@@ -1550,7 +1607,9 @@ mod tests {
     fn count_org_owners() {
         let store = mem_store();
         let org = store.insert_org("Acme".into()).unwrap();
-        let user = store.insert_user("o@t.com".into(), "O".into(), "h".into()).unwrap();
+        let user = store
+            .insert_user("o@t.com".into(), "O".into(), "h".into())
+            .unwrap();
 
         store.add_permission(UserPermission {
             user_id: user.id,

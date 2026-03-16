@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -13,10 +13,7 @@ pub struct HealthQuery {
     pub deep: Option<bool>,
 }
 
-pub async fn health(
-    State(state): State<AppState>,
-    Query(query): Query<HealthQuery>,
-) -> Response {
+pub async fn health(State(state): State<AppState>, Query(query): Query<HealthQuery>) -> Response {
     if query.deep.unwrap_or(false) {
         deep_health(state).await
     } else {

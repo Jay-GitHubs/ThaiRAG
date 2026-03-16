@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, Response, StatusCode};
-use axum::body::Body;
 use dashmap::DashMap;
 use tower::{Layer, Service};
 
@@ -22,8 +22,8 @@ struct Bucket {
 #[derive(Clone)]
 pub struct RateLimiter {
     buckets: Arc<DashMap<IpAddr, Bucket>>,
-    rate: f64,      // tokens per second
-    burst: f64,     // max tokens (bucket capacity)
+    rate: f64,  // tokens per second
+    burst: f64, // max tokens (bucket capacity)
     trust_proxy: bool,
 }
 
@@ -45,7 +45,8 @@ impl RateLimiter {
     /// Evict buckets that haven't been touched for longer than `max_age`.
     pub fn cleanup_stale(&self, max_age: Duration) {
         let cutoff = Instant::now() - max_age;
-        self.buckets.retain(|_ip, bucket| bucket.last_refill > cutoff);
+        self.buckets
+            .retain(|_ip, bucket| bucket.last_refill > cutoff);
     }
 
     /// Try to consume one token for `ip`. Returns `Ok(())` if allowed,
@@ -101,10 +102,13 @@ impl UserRateLimiter {
     /// or `Err(retry_after_secs)` if rate-limited.
     pub fn try_acquire(&self, user_id: &str) -> Result<(), f64> {
         let now = Instant::now();
-        let mut entry = self.buckets.entry(user_id.to_string()).or_insert_with(|| UserBucket {
-            tokens: self.burst,
-            last_refill: now,
-        });
+        let mut entry = self
+            .buckets
+            .entry(user_id.to_string())
+            .or_insert_with(|| UserBucket {
+                tokens: self.burst,
+                last_refill: now,
+            });
 
         let bucket = entry.value_mut();
         let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();

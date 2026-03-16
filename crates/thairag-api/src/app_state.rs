@@ -1,6 +1,5 @@
 use std::sync::{Arc, RwLock};
 
-use thairag_agent::{ChatPipeline, PipelineOrchestrator, QueryOrchestrator, RagEngine};
 use thairag_agent::active_learning::ActiveLearning;
 use thairag_agent::colbert_reranker::ColbertReranker;
 use thairag_agent::context_curator::ContextCurator;
@@ -20,11 +19,12 @@ use thairag_agent::response_generator::ResponseGenerator;
 use thairag_agent::self_rag::SelfRag;
 use thairag_agent::speculative_rag::SpeculativeRag;
 use thairag_agent::tool_router::ToolRouter;
+use thairag_agent::{ChatPipeline, PipelineOrchestrator, QueryOrchestrator, RagEngine};
 use thairag_auth::JwtService;
 use thairag_config::AppConfig;
 use thairag_config::schema::{ChatPipelineConfig, DocumentConfig, ProvidersConfig, SearchConfig};
-use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore};
 use thairag_core::PromptRegistry;
+use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore};
 use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
@@ -58,7 +58,13 @@ impl ProviderBundle {
         doc: &DocumentConfig,
         chat: &ChatPipelineConfig,
     ) -> Self {
-        Self::build_with_prompts(providers, search, doc, chat, Arc::new(thairag_core::PromptRegistry::new()))
+        Self::build_with_prompts(
+            providers,
+            search,
+            doc,
+            chat,
+            Arc::new(thairag_core::PromptRegistry::new()),
+        )
     }
 
     pub fn build_with_prompts(
@@ -90,7 +96,11 @@ impl ProviderBundle {
             Arc::clone(&search_engine),
             Arc::clone(&prompts),
         ));
-        let orchestrator = Arc::new(QueryOrchestrator::new_with_prompts(Arc::clone(&llm), rag_engine, Arc::clone(&prompts)));
+        let orchestrator = Arc::new(QueryOrchestrator::new_with_prompts(
+            Arc::clone(&llm),
+            rag_engine,
+            Arc::clone(&prompts),
+        ));
 
         // Resolve per-agent LLM providers with fallback chain:
         //   agent-specific config → shared preprocessing LLM → main chat LLM
@@ -101,13 +111,14 @@ impl ProviderBundle {
                 Arc::clone(&llm)
             };
 
-        let resolve_agent_llm = |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
-            if let Some(cfg) = agent_cfg {
-                Arc::from(create_llm_provider(cfg))
-            } else {
-                Arc::clone(&shared_preprocessing_llm)
-            }
-        };
+        let resolve_agent_llm =
+            |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
+                if let Some(cfg) = agent_cfg {
+                    Arc::from(create_llm_provider(cfg))
+                } else {
+                    Arc::clone(&shared_preprocessing_llm)
+                }
+            };
 
         let analyzer_llm = resolve_agent_llm(&doc.ai_preprocessing.analyzer_llm);
         let converter_llm = resolve_agent_llm(&doc.ai_preprocessing.converter_llm);
@@ -139,30 +150,42 @@ impl ProviderBundle {
 
         // ── Chat Pipeline (multi-agent) ──
         let chat_pipeline = if chat.enabled {
-            let chat_shared_llm: Arc<dyn LlmProvider> =
-                if let Some(ref cfg) = chat.llm {
-                    Arc::from(create_llm_provider(cfg))
-                } else {
-                    Arc::clone(&llm)
-                };
-
-            let resolve_chat_agent_llm = |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
-                if let Some(cfg) = agent_cfg {
-                    Arc::from(create_llm_provider(cfg))
-                } else {
-                    Arc::clone(&chat_shared_llm)
-                }
+            let chat_shared_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = chat.llm {
+                Arc::from(create_llm_provider(cfg))
+            } else {
+                Arc::clone(&llm)
             };
+
+            let resolve_chat_agent_llm =
+                |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
+                    if let Some(cfg) = agent_cfg {
+                        Arc::from(create_llm_provider(cfg))
+                    } else {
+                        Arc::clone(&chat_shared_llm)
+                    }
+                };
 
             let max_tok = chat.agent_max_tokens;
 
             let qa = if chat.query_analyzer_enabled {
-                Some(QueryAnalyzer::new_with_prompts(resolve_chat_agent_llm(&chat.query_analyzer_llm), max_tok.min(256), Arc::clone(&prompts)))
-            } else { None };
+                Some(QueryAnalyzer::new_with_prompts(
+                    resolve_chat_agent_llm(&chat.query_analyzer_llm),
+                    max_tok.min(256),
+                    Arc::clone(&prompts),
+                ))
+            } else {
+                None
+            };
 
             let qr = if chat.query_rewriter_enabled {
-                Some(QueryRewriter::new_with_prompts(resolve_chat_agent_llm(&chat.query_rewriter_llm), max_tok.min(512), Arc::clone(&prompts)))
-            } else { None };
+                Some(QueryRewriter::new_with_prompts(
+                    resolve_chat_agent_llm(&chat.query_rewriter_llm),
+                    max_tok.min(512),
+                    Arc::clone(&prompts),
+                ))
+            } else {
+                None
+            };
 
             let cc = if chat.context_curator_enabled {
                 Some(ContextCurator::new_with_prompts(
@@ -171,7 +194,9 @@ impl ProviderBundle {
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             let rg = ResponseGenerator::new_with_prompts(
                 resolve_chat_agent_llm(&chat.response_generator_llm),
@@ -185,11 +210,18 @@ impl ProviderBundle {
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 )))
-            } else { None };
+            } else {
+                None
+            };
 
             let la = if chat.language_adapter_enabled {
-                Some(LanguageAdapter::new(resolve_chat_agent_llm(&chat.language_adapter_llm), max_tok))
-            } else { None };
+                Some(LanguageAdapter::new(
+                    resolve_chat_agent_llm(&chat.language_adapter_llm),
+                    max_tok,
+                ))
+            } else {
+                None
+            };
 
             let po = if chat.orchestrator_enabled {
                 Some(PipelineOrchestrator::new_with_prompts(
@@ -199,7 +231,12 @@ impl ProviderBundle {
                     Arc::clone(&prompts),
                 ))
             } else {
-                Some(PipelineOrchestrator::new_with_prompts(None, 0, 0, Arc::clone(&prompts)))
+                Some(PipelineOrchestrator::new_with_prompts(
+                    None,
+                    0,
+                    0,
+                    Arc::clone(&prompts),
+                ))
             };
 
             // Feature 1: Conversation Memory
@@ -209,7 +246,9 @@ impl ProviderBundle {
                     chat.memory_summary_max_tokens,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 3: Tool Router
             let tr = if chat.tool_use_enabled {
@@ -220,7 +259,9 @@ impl ProviderBundle {
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 5: Self-RAG
             let sr = if chat.self_rag_enabled {
@@ -230,7 +271,9 @@ impl ProviderBundle {
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 6: Graph RAG
             let gr = if chat.graph_rag_enabled {
@@ -241,19 +284,27 @@ impl ProviderBundle {
                     max_tok.min(512),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 7: Corrective RAG
             let cr = if chat.crag_enabled {
                 Some(CorrectiveRag::new_with_prompts(
                     resolve_chat_agent_llm(&None), // uses shared LLM
                     chat.crag_relevance_threshold,
-                    if chat.crag_web_search_url.is_empty() { None } else { Some(chat.crag_web_search_url.clone()) },
+                    if chat.crag_web_search_url.is_empty() {
+                        None
+                    } else {
+                        Some(chat.crag_web_search_url.clone())
+                    },
                     chat.crag_max_web_results,
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 8: Speculative RAG
             let sp = if chat.speculative_rag_enabled {
@@ -263,7 +314,9 @@ impl ProviderBundle {
                     max_tok,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 9: Map-Reduce RAG
             let mr = if chat.map_reduce_enabled {
@@ -274,7 +327,9 @@ impl ProviderBundle {
                     max_tok,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 10: RAGAS Evaluation
             let ragas = if chat.ragas_enabled {
@@ -283,7 +338,9 @@ impl ProviderBundle {
                     chat.ragas_sample_rate,
                     max_tok.min(256),
                 )))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 11: Contextual Compression
             let compress = if chat.compression_enabled {
@@ -293,7 +350,9 @@ impl ProviderBundle {
                     max_tok,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 12: Multi-modal RAG
             let mm = if chat.multimodal_enabled {
@@ -303,7 +362,9 @@ impl ProviderBundle {
                     chat.multimodal_max_images,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 13: RAPTOR
             let raptor = if chat.raptor_enabled {
@@ -314,7 +375,9 @@ impl ProviderBundle {
                     max_tok.min(512),
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 14: ColBERT Late Interaction Reranking
             let colbert = if chat.colbert_enabled {
@@ -324,7 +387,9 @@ impl ProviderBundle {
                     chat.colbert_top_n,
                     Arc::clone(&prompts),
                 ))
-            } else { None };
+            } else {
+                None
+            };
 
             // Feature 15: Active Learning
             let al = if chat.active_learning_enabled {
@@ -332,14 +397,33 @@ impl ProviderBundle {
                     chat.active_learning_min_interactions,
                     chat.active_learning_max_low_confidence,
                 )))
-            } else { None };
+            } else {
+                None
+            };
 
             Some(Arc::new(ChatPipeline::new(
                 Arc::clone(&llm),
                 Arc::clone(&search_engine),
-                qa, qr, cc, rg, qg, la, po, cm, tr,
-                sr, gr, cr, sp, mr, ragas,
-                compress, mm, raptor, colbert, al,
+                qa,
+                qr,
+                cc,
+                rg,
+                qg,
+                la,
+                po,
+                cm,
+                tr,
+                sr,
+                gr,
+                cr,
+                sp,
+                mr,
+                ragas,
+                compress,
+                mm,
+                raptor,
+                colbert,
+                al,
                 chat.clone(),
                 Arc::clone(&prompts),
             )))
@@ -381,6 +465,7 @@ impl UserRequestLimiter {
     }
 
     /// Try to acquire a request slot. Returns Err if limit exceeded.
+    #[allow(clippy::result_unit_err)]
     pub fn try_acquire(&self, user_id: &str) -> Result<UserRequestGuard, ()> {
         let mut entry = self.active.entry(user_id.to_string()).or_insert(0);
         if *entry >= self.max_concurrent {
@@ -416,6 +501,7 @@ impl Drop for UserRequestGuard {
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub jwt: Option<Arc<JwtService>>,
+    pub api_keys: Arc<std::collections::HashSet<String>>,
     pub km_store: Arc<dyn KmStoreTrait>,
     pub session_store: Arc<SessionStore>,
     pub metrics: Arc<MetricsState>,
@@ -453,6 +539,7 @@ impl AppState {
         Self {
             config,
             jwt,
+            api_keys: Arc::new(std::collections::HashSet::new()),
             km_store,
             session_store: Arc::new(SessionStore::new()),
             metrics: Arc::new(MetricsState::new()),
@@ -472,7 +559,11 @@ impl AppState {
         match prompt_registry.load_from_dir(prompts_dir) {
             Ok(count) => {
                 if count > 0 {
-                    tracing::info!(count, "Loaded prompt templates from {}", prompts_dir.display());
+                    tracing::info!(
+                        count,
+                        "Loaded prompt templates from {}",
+                        prompts_dir.display()
+                    );
                 }
             }
             Err(e) => {
@@ -509,26 +600,22 @@ impl AppState {
         // Apply KV store overrides to prompt registry (prompt.{key} entries)
         for (key, entry) in prompt_registry.list() {
             if let Some(override_val) = km_store.get_setting(&format!("prompt.{key}")) {
-                prompt_registry.set(
-                    &key,
-                    override_val,
-                    entry.description,
-                    entry.category,
-                );
+                prompt_registry.set(&key, override_val, entry.description, entry.category);
             }
         }
         // Also load prompts that exist only in KV store (no file counterpart)
         if let Some(all_prompt_keys) = km_store.get_setting("prompt._index") {
             for key in all_prompt_keys.split(',') {
                 let key = key.trim();
-                if !key.is_empty() && prompt_registry.get(key).is_none() {
-                    if let Some(template) = km_store.get_setting(&format!("prompt.{key}")) {
-                        let desc = km_store
-                            .get_setting(&format!("prompt.{key}.description"))
-                            .unwrap_or_default();
-                        let cat = key.split('.').next().unwrap_or("chat").to_string();
-                        prompt_registry.set(key, template, desc, cat);
-                    }
+                if !key.is_empty()
+                    && prompt_registry.get(key).is_none()
+                    && let Some(template) = km_store.get_setting(&format!("prompt.{key}"))
+                {
+                    let desc = km_store
+                        .get_setting(&format!("prompt.{key}.description"))
+                        .unwrap_or_default();
+                    let cat = key.split('.').next().unwrap_or("chat").to_string();
+                    prompt_registry.set(key, template, desc, cat);
                 }
             }
         }
@@ -542,9 +629,22 @@ impl AppState {
             config.server.rate_limit.burst_size,
         );
 
+        // Parse static API keys from config
+        let api_keys: std::collections::HashSet<String> = config
+            .auth
+            .api_keys
+            .split(',')
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect();
+        if !api_keys.is_empty() {
+            tracing::info!(count = api_keys.len(), "Loaded static API keys");
+        }
+
         Self {
             config: Arc::new(config),
             jwt,
+            api_keys: Arc::new(api_keys),
             km_store,
             session_store,
             metrics,

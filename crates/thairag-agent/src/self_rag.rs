@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ChatMessage;
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 /// Decision from Self-RAG about whether retrieval is needed.
@@ -46,11 +46,26 @@ pub struct SelfRag {
 
 impl SelfRag {
     pub fn new(llm: Arc<dyn LlmProvider>, confidence_threshold: f32, max_tokens: u32) -> Self {
-        Self { llm, confidence_threshold, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            confidence_threshold,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, confidence_threshold: f32, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, confidence_threshold, max_tokens, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        confidence_threshold: f32,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            confidence_threshold,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Determine whether retrieval is needed for the given query.
@@ -60,7 +75,11 @@ impl SelfRag {
         messages: &[ChatMessage],
     ) -> Result<RetrievalDecision> {
         let history_summary = if messages.len() > 2 {
-            let recent: Vec<String> = messages.iter().rev().take(4).rev()
+            let recent: Vec<String> = messages
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
                 .map(|m| format!("{}: {}", m.role, truncate(&m.content, 100)))
                 .collect();
             format!("\nRecent conversation:\n{}", recent.join("\n"))
@@ -82,7 +101,11 @@ impl SelfRag {
             content: format!("Query: {query}"),
         };
 
-        match self.llm.generate(&[system, user], Some(self.max_tokens)).await {
+        match self
+            .llm
+            .generate(&[system, user], Some(self.max_tokens))
+            .await
+        {
             Ok(resp) => {
                 let json_str = extract_json(resp.content.trim());
                 match serde_json::from_str::<SelfRagOutput>(json_str) {
@@ -93,8 +116,11 @@ impl SelfRag {
                             reason = %output.reason,
                             "Self-RAG decision"
                         );
-                        if !output.needs_retrieval && output.confidence >= self.confidence_threshold {
-                            Ok(RetrievalDecision::NoRetrieve { confidence: output.confidence })
+                        if !output.needs_retrieval && output.confidence >= self.confidence_threshold
+                        {
+                            Ok(RetrievalDecision::NoRetrieve {
+                                confidence: output.confidence,
+                            })
                         } else {
                             Ok(RetrievalDecision::Retrieve)
                         }
@@ -122,10 +148,10 @@ struct SelfRagOutput {
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
@@ -137,12 +163,33 @@ fn truncate(s: &str, max: usize) -> &str {
 /// Heuristic fallback for Self-RAG when no LLM is available.
 pub fn heuristic_needs_retrieval(query: &str) -> bool {
     let q = query.trim().to_lowercase();
-    let greeting_patterns = ["hello", "hi", "hey", "สวัสดี", "thanks", "thank you", "ขอบคุณ",
-        "good morning", "good afternoon", "good evening", "bye", "goodbye"];
-    if greeting_patterns.iter().any(|p| q.starts_with(p) || q == *p) {
+    let greeting_patterns = [
+        "hello",
+        "hi",
+        "hey",
+        "สวัสดี",
+        "thanks",
+        "thank you",
+        "ขอบคุณ",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "bye",
+        "goodbye",
+    ];
+    if greeting_patterns
+        .iter()
+        .any(|p| q.starts_with(p) || q == *p)
+    {
         return false;
     }
-    let meta_patterns = ["who are you", "what can you do", "help", "คุณเป็นใคร", "ทำอะไรได้"];
+    let meta_patterns = [
+        "who are you",
+        "what can you do",
+        "help",
+        "คุณเป็นใคร",
+        "ทำอะไรได้",
+    ];
     if meta_patterns.iter().any(|p| q.contains(p)) {
         return false;
     }

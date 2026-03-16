@@ -74,13 +74,17 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 git clone <repo-url> && cd thairag
 cp .env.example .env  # Edit with your API keys
 
-# 2. Start all services
-docker compose up -d
+# 2a. Core services (API + Admin UI + PostgreSQL + Qdrant)
+docker compose up --build -d
+
+# 2b. Full stack with Keycloak (OIDC) + Open WebUI
+docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
 
 # 3. Access
-#    API:      http://localhost:8080
-#    Admin UI: http://localhost:8081
-#    Qdrant:   http://localhost:6333
+#    API:        http://localhost:8080
+#    Admin UI:   http://localhost:8081
+#    Keycloak:   http://localhost:9090  (full stack only)
+#    Open WebUI: http://localhost:3000  (full stack only)
 ```
 
 ### Option 2: Local Development

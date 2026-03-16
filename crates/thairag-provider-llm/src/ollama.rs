@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct OllamaProvider {
@@ -36,7 +36,11 @@ impl OllamaProvider {
 #[async_trait]
 impl LlmProvider for OllamaProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Result<LlmResponse> {
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
@@ -64,15 +68,16 @@ impl LlmProvider for OllamaProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}"))
+        })?;
 
         let content = json["message"]["content"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in Ollama response".into()))?;
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content in Ollama response".into())
+            })?;
 
         let usage = LlmUsage {
             prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,
@@ -169,10 +174,16 @@ impl LlmProvider for OllamaProvider {
     fn supports_vision(&self) -> bool {
         // Ollama vision models
         let m = self.model.to_lowercase();
-        m.contains("llava") || m.contains("llama3.2-vision") || m.contains("minicpm-v")
-            || m.contains("bakllava") || m.contains("moondream")
-            || m.contains("cogvlm") || m.contains("internvl")
-            || m.contains("qwen2.5vl") || m.contains("qwen2-vl") || m.contains("qwenvl")
+        m.contains("llava")
+            || m.contains("llama3.2-vision")
+            || m.contains("minicpm-v")
+            || m.contains("bakllava")
+            || m.contains("moondream")
+            || m.contains("cogvlm")
+            || m.contains("internvl")
+            || m.contains("qwen2.5vl")
+            || m.contains("qwen2-vl")
+            || m.contains("qwenvl")
             || m.contains("gemma3")
     }
 
@@ -190,7 +201,11 @@ impl LlmProvider for OllamaProvider {
                     "content": m.text,
                 });
                 if !m.images.is_empty() {
-                    let images: Vec<&str> = m.images.iter().map(|img| img.base64_data.as_str()).collect();
+                    let images: Vec<&str> = m
+                        .images
+                        .iter()
+                        .map(|img| img.base64_data.as_str())
+                        .collect();
                     msg["images"] = serde_json::json!(images);
                 }
                 msg
@@ -208,7 +223,8 @@ impl LlmProvider for OllamaProvider {
         }
 
         let url = format!("{}/api/chat", self.base_url);
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -223,13 +239,16 @@ impl LlmProvider for OllamaProvider {
             )));
         }
 
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}"))
+        })?;
 
         let content = json["message"]["content"]
             .as_str()
             .map(String::from)
-            .ok_or_else(|| ThaiRagError::LlmProvider("Missing content in Ollama response".into()))?;
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content in Ollama response".into())
+            })?;
 
         let usage = LlmUsage {
             prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,

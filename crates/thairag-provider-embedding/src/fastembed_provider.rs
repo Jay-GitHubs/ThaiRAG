@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use thairag_core::error::Result;
 use thairag_core::ThaiRagError;
+use thairag_core::error::Result;
 use tracing::info;
 
 pub struct FastEmbedProvider {
@@ -20,12 +20,18 @@ impl FastEmbedProvider {
             "sentence-transformers/all-MiniLM-L6-v2" => EmbeddingModel::AllMiniLML6V2,
             "sentence-transformers/all-MiniLM-L12-v2" => EmbeddingModel::AllMiniLML12V2,
             _ => {
-                info!(model_name, "Unknown model name, falling back to BGESmallENV15");
+                info!(
+                    model_name,
+                    "Unknown model name, falling back to BGESmallENV15"
+                );
                 EmbeddingModel::BGESmallENV15
             }
         };
 
-        info!(?variant, "Initializing FastEmbed model (this may download on first run)");
+        info!(
+            ?variant,
+            "Initializing FastEmbed model (this may download on first run)"
+        );
         let model = TextEmbedding::try_new(InitOptions::new(variant))
             .expect("Failed to initialize FastEmbed model");
         info!("FastEmbed model initialized successfully");

@@ -3,13 +3,13 @@ use std::future::Future;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
-use thairag_core::ThaiRagError;
 use uuid::Uuid;
 
 use super::{KmStoreTrait, UserRecord};
@@ -26,7 +26,10 @@ pub struct PostgresKmStore {
 }
 
 impl PostgresKmStore {
-    pub async fn new(db_url: &str, max_connections: u32) -> std::result::Result<Self, ThaiRagError> {
+    pub async fn new(
+        db_url: &str,
+        max_connections: u32,
+    ) -> std::result::Result<Self, ThaiRagError> {
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .connect(db_url)
@@ -250,9 +253,7 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete dept: {e}")))?;
         if result.rows_affected() == 0 {
-            return Err(ThaiRagError::NotFound(format!(
-                "Department {id} not found"
-            )));
+            return Err(ThaiRagError::NotFound(format!("Department {id} not found")));
         }
         Ok(())
     }
@@ -347,9 +348,7 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete workspace: {e}")))?;
         if result.rows_affected() == 0 {
-            return Err(ThaiRagError::NotFound(format!(
-                "Workspace {id} not found"
-            )));
+            return Err(ThaiRagError::NotFound(format!("Workspace {id} not found")));
         }
         Ok(())
     }
@@ -473,9 +472,7 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete document: {e}")))?;
         if result.rows_affected() == 0 {
-            return Err(ThaiRagError::NotFound(format!(
-                "Document {id} not found"
-            )));
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
         Ok(())
     }
@@ -849,7 +846,9 @@ impl KmStoreTrait for PostgresKmStore {
         .execute(&self.pool))
         .map_err(|e| ThaiRagError::Internal(format!("Postgres update idp: {e}")))?;
         if result.rows_affected() == 0 {
-            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Identity provider {id} not found"
+            )));
         }
         self.get_identity_provider(id)
     }
@@ -862,7 +861,9 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete idp: {e}")))?;
         if result.rows_affected() == 0 {
-            return Err(ThaiRagError::NotFound(format!("Identity provider {id} not found")));
+            return Err(ThaiRagError::NotFound(format!(
+                "Identity provider {id} not found"
+            )));
         }
         Ok(())
     }

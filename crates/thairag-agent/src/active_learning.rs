@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -77,11 +77,7 @@ impl ActiveLearning {
     }
 
     /// Record feedback for chunks that appeared in a response.
-    pub fn record_chunk_feedback(
-        &self,
-        chunk_ids: &[String],
-        thumbs_up: bool,
-    ) {
+    pub fn record_chunk_feedback(&self, chunk_ids: &[String], thumbs_up: bool) {
         let mut feedback = self.chunk_feedback.write().unwrap();
         for chunk_id in chunk_ids {
             let entry = feedback.entry(chunk_id.clone()).or_default();
@@ -93,15 +89,14 @@ impl ActiveLearning {
             entry.update();
         }
         self.total_processed.fetch_add(1, Ordering::Relaxed);
-        debug!(chunks = chunk_ids.len(), thumbs_up, "Active learning: recorded chunk feedback");
+        debug!(
+            chunks = chunk_ids.len(),
+            thumbs_up, "Active learning: recorded chunk feedback"
+        );
     }
 
     /// Record a low-confidence query for later review.
-    pub fn record_low_confidence_query(
-        &self,
-        query: &str,
-        avg_relevance: f32,
-    ) {
+    pub fn record_low_confidence_query(&self, query: &str, avg_relevance: f32) {
         let mut queries = self.low_confidence_queries.write().unwrap();
 
         // Prevent duplicates
@@ -129,31 +124,28 @@ impl ActiveLearning {
     /// Returns 0.0 if not enough data or chunk not tracked.
     pub fn get_chunk_quality_delta(&self, chunk_id: &str) -> f32 {
         let feedback = self.chunk_feedback.read().unwrap();
-        if let Some(fb) = feedback.get(chunk_id) {
-            if fb.total >= self.min_interactions {
-                return fb.quality_delta;
-            }
+        if let Some(fb) = feedback.get(chunk_id)
+            && fb.total >= self.min_interactions
+        {
+            return fb.quality_delta;
         }
         0.0
     }
 
     /// Adjust search result scores based on accumulated chunk feedback.
-    pub fn adjust_scores(
-        &self,
-        results: &mut [thairag_core::types::SearchResult],
-    ) {
+    pub fn adjust_scores(&self, results: &mut [thairag_core::types::SearchResult]) {
         let feedback = self.chunk_feedback.read().unwrap();
         let mut adjusted = 0u32;
 
         for result in results.iter_mut() {
             let key = result.chunk.chunk_id.to_string();
-            if let Some(fb) = feedback.get(&key) {
-                if fb.total >= self.min_interactions {
-                    // Apply a bounded adjustment: max +-10% of score
-                    let adjustment = fb.quality_delta * 0.1;
-                    result.score = (result.score + adjustment).clamp(0.0, 1.0);
-                    adjusted += 1;
-                }
+            if let Some(fb) = feedback.get(&key)
+                && fb.total >= self.min_interactions
+            {
+                // Apply a bounded adjustment: max +-10% of score
+                let adjustment = fb.quality_delta * 0.1;
+                result.score = (result.score + adjustment).clamp(0.0, 1.0);
+                adjusted += 1;
             }
         }
 
@@ -165,8 +157,14 @@ impl ActiveLearning {
     /// Get learning statistics.
     pub fn stats(&self) -> ActiveLearningStats {
         let feedback = self.chunk_feedback.read().unwrap();
-        let positive = feedback.values().filter(|f| f.quality_delta > 0.0 && f.total >= self.min_interactions).count();
-        let negative = feedback.values().filter(|f| f.quality_delta < 0.0 && f.total >= self.min_interactions).count();
+        let positive = feedback
+            .values()
+            .filter(|f| f.quality_delta > 0.0 && f.total >= self.min_interactions)
+            .count();
+        let negative = feedback
+            .values()
+            .filter(|f| f.quality_delta < 0.0 && f.total >= self.min_interactions)
+            .count();
         let low_conf = self.low_confidence_queries.read().unwrap().len();
 
         ActiveLearningStats {

@@ -16,26 +16,31 @@ use thairag_core::types::{VectorIsolation, VectorStoreKind};
 pub fn create_raw_vector_store(config: &VectorStoreConfig) -> Box<dyn VectorStore> {
     match config.kind {
         VectorStoreKind::InMemory => Box::new(in_memory::InMemoryVectorStore::new()),
-        VectorStoreKind::Qdrant => {
-            Box::new(qdrant::QdrantVectorStore::new(&config.url, &config.collection))
-        }
-        VectorStoreKind::Pgvector => {
-            Box::new(pgvector::PgvectorStore::new(&config.url, &config.collection))
-        }
-        VectorStoreKind::ChromaDb => {
-            Box::new(chromadb::ChromaDbVectorStore::new(&config.url, &config.collection))
-        }
-        VectorStoreKind::Pinecone => {
-            Box::new(pinecone::PineconeVectorStore::new(&config.url, &config.api_key))
-        }
+        VectorStoreKind::Qdrant => Box::new(qdrant::QdrantVectorStore::new(
+            &config.url,
+            &config.collection,
+        )),
+        VectorStoreKind::Pgvector => Box::new(pgvector::PgvectorStore::new(
+            &config.url,
+            &config.collection,
+        )),
+        VectorStoreKind::ChromaDb => Box::new(chromadb::ChromaDbVectorStore::new(
+            &config.url,
+            &config.collection,
+        )),
+        VectorStoreKind::Pinecone => Box::new(pinecone::PineconeVectorStore::new(
+            &config.url,
+            &config.api_key,
+        )),
         VectorStoreKind::Weaviate => Box::new(weaviate::WeaviateVectorStore::new(
             &config.url,
             &config.collection,
             &config.api_key,
         )),
-        VectorStoreKind::Milvus => {
-            Box::new(milvus::MilvusVectorStore::new(&config.url, &config.collection))
-        }
+        VectorStoreKind::Milvus => Box::new(milvus::MilvusVectorStore::new(
+            &config.url,
+            &config.collection,
+        )),
     }
 }
 

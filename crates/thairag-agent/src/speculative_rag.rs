@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmUsage};
-use thairag_core::PromptRegistry;
 use tracing::{debug, warn};
 
 use crate::context_curator::CuratedContext;
@@ -29,11 +29,26 @@ pub struct SpeculativeRag {
 
 impl SpeculativeRag {
     pub fn new(llm: Arc<dyn LlmProvider>, num_candidates: u32, max_tokens: u32) -> Self {
-        Self { llm, num_candidates, max_tokens, prompts: Arc::new(PromptRegistry::new()) }
+        Self {
+            llm,
+            num_candidates,
+            max_tokens,
+            prompts: Arc::new(PromptRegistry::new()),
+        }
     }
 
-    pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, num_candidates: u32, max_tokens: u32, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, num_candidates, max_tokens, prompts }
+    pub fn new_with_prompts(
+        llm: Arc<dyn LlmProvider>,
+        num_candidates: u32,
+        max_tokens: u32,
+        prompts: Arc<PromptRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            num_candidates,
+            max_tokens,
+            prompts,
+        }
     }
 
     /// Generate multiple candidate responses with different strategies.
@@ -43,7 +58,9 @@ impl SpeculativeRag {
         context: &CuratedContext,
         messages: &[ChatMessage],
     ) -> Result<Vec<CandidateResponse>> {
-        let context_text: String = context.chunks.iter()
+        let context_text: String = context
+            .chunks
+            .iter()
             .map(|c| c.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
@@ -96,11 +113,14 @@ impl SpeculativeRag {
         if candidates.is_empty() {
             warn!("Speculative RAG: no candidates generated, falling back");
             return Err(thairag_core::ThaiRagError::Internal(
-                "Speculative RAG: all candidates failed".into()
+                "Speculative RAG: all candidates failed".into(),
             ));
         }
 
-        debug!(count = candidates.len(), "Speculative RAG: candidates generated");
+        debug!(
+            count = candidates.len(),
+            "Speculative RAG: candidates generated"
+        );
         Ok(candidates)
     }
 
@@ -114,8 +134,17 @@ impl SpeculativeRag {
             return Ok(candidates[0].clone());
         }
 
-        let candidate_texts: String = candidates.iter().enumerate()
-            .map(|(i, c)| format!("--- Candidate {} ({}) ---\n{}", i + 1, c.strategy, truncate(&c.text, 500)))
+        let candidate_texts: String = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                format!(
+                    "--- Candidate {} ({}) ---\n{}",
+                    i + 1,
+                    c.strategy,
+                    truncate(&c.text, 500)
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -126,7 +155,11 @@ Return JSON: {"rankings": [{"candidate": 1, "score": 0.0-1.0, "reason": "brief"}
 
         let system = ChatMessage {
             role: "system".into(),
-            content: self.prompts.render_or_default("chat.speculative_rag_ranker", DEFAULT_RANKER, &[]),
+            content: self.prompts.render_or_default(
+                "chat.speculative_rag_ranker",
+                DEFAULT_RANKER,
+                &[],
+            ),
         };
 
         let user = ChatMessage {
@@ -146,7 +179,8 @@ Return JSON: {"rankings": [{"candidate": 1, "score": 0.0-1.0, "reason": "brief"}
                                 candidates[idx].quality_score = ranking.score;
                             }
                         }
-                        let best_idx = (output.best.saturating_sub(1) as usize).min(candidates.len() - 1);
+                        let best_idx =
+                            (output.best.saturating_sub(1) as usize).min(candidates.len() - 1);
                         debug!(
                             best = best_idx + 1,
                             strategy = %candidates[best_idx].strategy,
@@ -173,7 +207,9 @@ Return JSON: {"rankings": [{"candidate": 1, "score": 0.0-1.0, "reason": "brief"}
         messages: &[ChatMessage],
         query: &str,
     ) -> Result<LlmResponse> {
-        let mut candidates = self.generate_candidates(analysis, context, messages).await?;
+        let mut candidates = self
+            .generate_candidates(analysis, context, messages)
+            .await?;
         let best = self.select_best(query, &mut candidates).await?;
         Ok(LlmResponse {
             content: best.text,
@@ -192,10 +228,38 @@ Return JSON: {"rankings": [{"candidate": 1, "score": 0.0-1.0, "reason": "brief"}
             If multiple viewpoints or data points exist, present them comparatively. Include citations [1][2].";
 
         vec![
-            ("detailed", self.prompts.render_or_default("chat.speculative_rag_detailed", DEFAULT_DETAILED, &[])),
-            ("concise", self.prompts.render_or_default("chat.speculative_rag_concise", DEFAULT_CONCISE, &[])),
-            ("step_by_step", self.prompts.render_or_default("chat.speculative_rag_step_by_step", DEFAULT_STEP_BY_STEP, &[])),
-            ("comparative", self.prompts.render_or_default("chat.speculative_rag_comparative", DEFAULT_COMPARATIVE, &[])),
+            (
+                "detailed",
+                self.prompts.render_or_default(
+                    "chat.speculative_rag_detailed",
+                    DEFAULT_DETAILED,
+                    &[],
+                ),
+            ),
+            (
+                "concise",
+                self.prompts.render_or_default(
+                    "chat.speculative_rag_concise",
+                    DEFAULT_CONCISE,
+                    &[],
+                ),
+            ),
+            (
+                "step_by_step",
+                self.prompts.render_or_default(
+                    "chat.speculative_rag_step_by_step",
+                    DEFAULT_STEP_BY_STEP,
+                    &[],
+                ),
+            ),
+            (
+                "comparative",
+                self.prompts.render_or_default(
+                    "chat.speculative_rag_comparative",
+                    DEFAULT_COMPARATIVE,
+                    &[],
+                ),
+            ),
         ]
     }
 }
@@ -217,17 +281,23 @@ struct CandidateRanking {
     reason: String,
 }
 
-fn default_one() -> u32 { 1 }
+fn default_one() -> u32 {
+    1
+}
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

@@ -8,10 +8,10 @@
 //! low. This is a defense-in-depth measure for environments that also set
 //! auth cookies via a reverse proxy.
 
+use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::body::Body;
 use thairag_auth::AuthClaims;
 
 /// Middleware that validates the `X-CSRF-Token` header on state-changing requests.
@@ -31,10 +31,10 @@ pub async fn csrf_guard(req: Request<Body>, next: Next) -> Response {
     }
 
     // If auth is disabled (anonymous user), skip CSRF — no session to protect
-    if let Some(claims) = req.extensions().get::<AuthClaims>() {
-        if claims.sub == "anonymous" {
-            return next.run(req).await;
-        }
+    if let Some(claims) = req.extensions().get::<AuthClaims>()
+        && claims.sub == "anonymous"
+    {
+        return next.run(req).await;
     }
 
     // Check for CSRF token header on state-changing requests
@@ -55,11 +55,7 @@ pub async fn csrf_guard(req: Request<Body>, next: Next) -> Response {
                 "type": "csrf_error"
             }
         });
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(body),
-        )
-            .into_response();
+        return (StatusCode::FORBIDDEN, axum::Json(body)).into_response();
     }
 
     next.run(req).await

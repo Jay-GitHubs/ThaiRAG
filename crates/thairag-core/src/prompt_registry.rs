@@ -75,22 +75,14 @@ impl PromptRegistry {
             let path = entry.path();
 
             if path.is_dir() {
-                let category = path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
+                let category = path.file_name().unwrap().to_string_lossy().to_string();
 
                 for sub_entry in std::fs::read_dir(&path)? {
                     let sub_entry = sub_entry?;
                     let sub_path = sub_entry.path();
 
                     if sub_path.extension().is_some_and(|e| e == "md") {
-                        let stem = sub_path
-                            .file_stem()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string();
+                        let stem = sub_path.file_stem().unwrap().to_string_lossy().to_string();
                         let key = format!("{category}.{stem}");
                         let content = std::fs::read_to_string(&sub_path)?;
 
@@ -145,11 +137,11 @@ impl PromptRegistry {
     /// Delete an override, reverting to the file/hardcoded default.
     pub fn delete_override(&self, key: &str) -> bool {
         let mut prompts = self.prompts.write().unwrap();
-        if let Some(entry) = prompts.get(key) {
-            if entry.source == PromptSource::Override {
-                prompts.remove(key);
-                return true;
-            }
+        if let Some(entry) = prompts.get(key)
+            && entry.source == PromptSource::Override
+        {
+            prompts.remove(key);
+            return true;
         }
         false
     }
@@ -182,12 +174,7 @@ impl PromptRegistry {
     ///     &[("context", &context_text)],
     /// );
     /// ```
-    pub fn render_or_default(
-        &self,
-        key: &str,
-        default: &str,
-        vars: &[(&str, &str)],
-    ) -> String {
+    pub fn render_or_default(&self, key: &str, default: &str, vars: &[(&str, &str)]) -> String {
         let template = self
             .get_template(key)
             .unwrap_or_else(|| default.to_string());
@@ -233,11 +220,8 @@ fn parse_frontmatter(content: &str) -> (String, String) {
             .lines()
             .find_map(|line| {
                 let line = line.trim();
-                if let Some(rest) = line.strip_prefix("description:") {
-                    Some(rest.trim().to_string())
-                } else {
-                    None
-                }
+                line.strip_prefix("description:")
+                    .map(|rest| rest.trim().to_string())
             })
             .unwrap_or_default();
 

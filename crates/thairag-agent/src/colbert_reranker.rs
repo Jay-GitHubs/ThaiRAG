@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, SearchResult};
-use thairag_core::PromptRegistry;
 use tracing::debug;
 
 /// Default hardcoded template for ColBERT-style passage scoring.
@@ -48,16 +48,17 @@ impl ColbertReranker {
         top_n: usize,
         prompts: Arc<PromptRegistry>,
     ) -> Self {
-        Self { llm, max_tokens, top_n, prompts }
+        Self {
+            llm,
+            max_tokens,
+            top_n,
+            prompts,
+        }
     }
 
     /// Rerank search results using fine-grained LLM-based scoring.
     /// Returns results sorted by the new scores.
-    pub async fn rerank(
-        &self,
-        query: &str,
-        results: &[SearchResult],
-    ) -> Result<Vec<SearchResult>> {
+    pub async fn rerank(&self, query: &str, results: &[SearchResult]) -> Result<Vec<SearchResult>> {
         if results.len() <= 1 {
             return Ok(results.to_vec());
         }
@@ -128,19 +129,12 @@ async fn score_passage(
 ) -> Result<f32> {
     let system = ChatMessage {
         role: "system".into(),
-        content: prompts.render_or_default(
-            "chat.colbert_reranker",
-            DEFAULT_COLBERT_PROMPT,
-            &[],
-        ),
+        content: prompts.render_or_default("chat.colbert_reranker", DEFAULT_COLBERT_PROMPT, &[]),
     };
 
     let user = ChatMessage {
         role: "user".into(),
-        content: format!(
-            "Query: {query}\n\nPassage:\n{}",
-            truncate(passage, 1500)
-        ),
+        content: format!("Query: {query}\n\nPassage:\n{}", truncate(passage, 1500)),
     };
 
     let resp = llm.generate(&[system, user], Some(max_tokens)).await?;
@@ -158,17 +152,23 @@ async fn score_passage(
     }
 }
 
-fn default_half() -> f32 { 0.5 }
+fn default_half() -> f32 {
+    0.5
+}
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            return &s[start..=end];
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
+        return &s[start..=end];
     }
     s
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { s[..max].to_string() }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        s[..max].to_string()
+    }
 }

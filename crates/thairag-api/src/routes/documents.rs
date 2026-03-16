@@ -4,10 +4,10 @@ use axum::{Extension, Json};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
 use thairag_core::models::{DocStatus, Document};
 use thairag_core::permission::Role;
 use thairag_core::types::{DocId, WorkspaceId};
-use thairag_core::ThaiRagError;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -49,7 +49,10 @@ fn resolve_doc_perm(
     state: &AppState,
     workspace_id: WorkspaceId,
 ) -> Result<DocPermCheck, ApiError> {
-    let ws = state.km_store.get_workspace(workspace_id).map_err(ApiError)?;
+    let ws = state
+        .km_store
+        .get_workspace(workspace_id)
+        .map_err(ApiError)?;
     let dept = state.km_store.get_dept(ws.dept_id).map_err(ApiError)?;
     let perm = resolve_perm_ws(claims, state, dept.org_id, ws.dept_id, workspace_id);
     Ok(perm)
@@ -133,13 +136,9 @@ async fn process_document_inner(
             }
             Err(_) => {
                 // Still save original bytes even if conversion fails
-                let _ = state.km_store.save_document_blob(
-                    doc_id,
-                    Some(bytes.clone()),
-                    None,
-                    0,
-                    0,
-                );
+                let _ = state
+                    .km_store
+                    .save_document_blob(doc_id, Some(bytes.clone()), None, 0, 0);
             }
         }
     }
@@ -168,28 +167,26 @@ async fn process_document_inner(
     let chunk_count = chunks.len();
 
     // Embed + index
-    let _ = state.km_store.update_document_step(doc_id, Some("indexing".into()));
+    let _ = state
+        .km_store
+        .update_document_step(doc_id, Some("indexing".into()));
     if let Err(e) = p.search_engine.index_chunks(&chunks).await {
         let msg = format!("Indexing failed: {e}");
         warn!(%doc_id, %msg);
         let _ = state.km_store.update_document_step(doc_id, None);
-        let _ = state.km_store.update_document_status(
-            doc_id,
-            DocStatus::Failed,
-            0,
-            Some(msg.clone()),
-        );
+        let _ =
+            state
+                .km_store
+                .update_document_status(doc_id, DocStatus::Failed, 0, Some(msg.clone()));
         return (0, Some(msg));
     }
 
     // Mark as ready and clear processing step
     let _ = state.km_store.update_document_step(doc_id, None);
-    let _ = state.km_store.update_document_status(
-        doc_id,
-        DocStatus::Ready,
-        chunk_count as i64,
-        None,
-    );
+    let _ =
+        state
+            .km_store
+            .update_document_status(doc_id, DocStatus::Ready, chunk_count as i64, None);
 
     info!(%doc_id, chunk_count, "Document processed successfully");
     (chunk_count, None)
@@ -234,7 +231,7 @@ pub async fn ingest_document(
 
     // Insert document metadata first (as processing or ready)
     let now = Utc::now();
-    let status = if is_large { DocStatus::Processing } else { DocStatus::Processing };
+    let status = DocStatus::Processing;
     let mime_type = body.mime_type.clone();
     let doc = Document {
         id: doc_id,
@@ -252,17 +249,30 @@ pub async fn ingest_document(
     state.km_store.insert_document(doc)?;
 
     let chunk_count = process_document(
-        state, doc_id, workspace_id,
-        body.content.into_bytes(), mime_type.clone(), is_large,
-    ).await;
+        state,
+        doc_id,
+        workspace_id,
+        body.content.into_bytes(),
+        mime_type.clone(),
+        is_large,
+    )
+    .await;
 
-    let resp_status = if is_large { StatusCode::ACCEPTED } else { StatusCode::CREATED };
+    let resp_status = if is_large {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::CREATED
+    };
     Ok((
         resp_status,
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
-            status: if is_large { "processing".into() } else { "ready".into() },
+            status: if is_large {
+                "processing".into()
+            } else {
+                "ready".into()
+            },
             filename: None,
             mime_type,
             size_bytes,
@@ -286,11 +296,11 @@ pub async fn upload_document(
     let mut file_content_type: Option<String> = None;
     let mut title: Option<String> = None;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ApiError(ThaiRagError::Validation(format!("Invalid multipart data: {e}"))))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError(ThaiRagError::Validation(format!(
+            "Invalid multipart data: {e}"
+        )))
+    })? {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
             "file" => {
@@ -309,16 +319,11 @@ pub async fn upload_document(
                 );
             }
             "title" => {
-                title = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| {
-                            ApiError(ThaiRagError::Validation(format!(
-                                "Failed to read title: {e}"
-                            )))
-                        })?,
-                );
+                title = Some(field.text().await.map_err(|e| {
+                    ApiError(ThaiRagError::Validation(format!(
+                        "Failed to read title: {e}"
+                    )))
+                })?);
             }
             _ => {} // ignore unknown fields
         }
@@ -337,12 +342,7 @@ pub async fn upload_document(
         ))));
     }
 
-    let title = title.unwrap_or_else(|| {
-        file_name
-            .as_deref()
-            .unwrap_or("Untitled")
-            .to_string()
-    });
+    let title = title.unwrap_or_else(|| file_name.as_deref().unwrap_or("Untitled").to_string());
 
     // Determine MIME type: explicit content-type (ignoring octet-stream) → extension → text/plain
     let mime_type = file_content_type
@@ -386,16 +386,30 @@ pub async fn upload_document(
     state.km_store.insert_document(doc)?;
 
     let chunk_count = process_document(
-        state, doc_id, workspace_id, bytes, mime_type.clone(), is_large,
-    ).await;
+        state,
+        doc_id,
+        workspace_id,
+        bytes,
+        mime_type.clone(),
+        is_large,
+    )
+    .await;
 
-    let resp_status = if is_large { StatusCode::ACCEPTED } else { StatusCode::CREATED };
+    let resp_status = if is_large {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::CREATED
+    };
     Ok((
         resp_status,
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
-            status: if is_large { "processing".into() } else { "ready".into() },
+            status: if is_large {
+                "processing".into()
+            } else {
+                "ready".into()
+            },
             filename: file_name,
             mime_type,
             size_bytes,
@@ -467,7 +481,10 @@ pub async fn get_document_content(
     let _ = state.km_store.get_document(doc_id)?;
 
     let converted_text = state.km_store.get_document_content(doc_id).unwrap_or(None);
-    let (image_count, table_count) = state.km_store.get_document_blob_stats(doc_id).unwrap_or((0, 0));
+    let (image_count, table_count) = state
+        .km_store
+        .get_document_blob_stats(doc_id)
+        .unwrap_or((0, 0));
 
     Ok(Json(DocumentContentResponse {
         doc_id: doc_id.0,
@@ -488,7 +505,9 @@ pub async fn download_document(
 
     let doc_id_typed = DocId(doc_id);
     let doc = state.km_store.get_document(doc_id_typed)?;
-    let file_bytes = state.km_store.get_document_file(doc_id_typed)
+    let file_bytes = state
+        .km_store
+        .get_document_file(doc_id_typed)
         .map_err(ApiError)?
         .ok_or_else(|| ApiError(ThaiRagError::NotFound("Original file not stored".into())))?;
 
@@ -496,7 +515,10 @@ pub async fn download_document(
     Ok(axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("content-type", doc.mime_type)
-        .header("content-disposition", format!("attachment; filename=\"{filename}\""))
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{filename}\""),
+        )
         .header("content-length", file_bytes.len().to_string())
         .body(axum::body::Body::from(file_bytes))
         .unwrap())
@@ -530,13 +552,22 @@ pub async fn get_document_chunks(
     let doc = state.km_store.get_document(doc_id_typed)?;
 
     // Get stored converted text and re-chunk it for preview
-    let converted = state.km_store.get_document_content(doc_id_typed)
+    let converted = state
+        .km_store
+        .get_document_content(doc_id_typed)
         .unwrap_or(None);
 
     let chunks: Vec<ChunkInfo> = if let Some(text) = converted {
         let p = state.providers();
-        let doc_chunks = p.document_pipeline
-            .process(text.as_bytes(), "text/plain", doc_id_typed, workspace_id, None)
+        let doc_chunks = p
+            .document_pipeline
+            .process(
+                text.as_bytes(),
+                "text/plain",
+                doc_id_typed,
+                workspace_id,
+                None,
+            )
             .await
             .unwrap_or_default();
 
@@ -544,7 +575,9 @@ pub async fn get_document_chunks(
             .into_iter()
             .enumerate()
             .map(|(i, c)| {
-                let page = c.metadata.as_ref()
+                let page = c
+                    .metadata
+                    .as_ref()
                     .and_then(|m| m.page_numbers.as_ref())
                     .and_then(|pages| pages.first())
                     .map(|&p| p as i32);
@@ -590,17 +623,27 @@ pub async fn reprocess_document(
     let doc = state.km_store.get_document(doc_id_typed)?;
 
     // Get original file bytes
-    let file_bytes = state.km_store.get_document_file(doc_id_typed)
+    let file_bytes = state
+        .km_store
+        .get_document_file(doc_id_typed)
         .map_err(ApiError)?
-        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Original file not stored; cannot reprocess".into())))?;
+        .ok_or_else(|| {
+            ApiError(ThaiRagError::NotFound(
+                "Original file not stored; cannot reprocess".into(),
+            ))
+        })?;
 
     // Delete old chunks from search index
-    let _ = state.providers().search_engine.delete_doc(doc_id_typed).await;
+    let _ = state
+        .providers()
+        .search_engine
+        .delete_doc(doc_id_typed)
+        .await;
 
     // Mark as processing
-    let _ = state.km_store.update_document_status(
-        doc_id_typed, DocStatus::Processing, 0, None,
-    );
+    let _ = state
+        .km_store
+        .update_document_status(doc_id_typed, DocStatus::Processing, 0, None);
 
     info!(%doc_id, "Reprocessing document");
 

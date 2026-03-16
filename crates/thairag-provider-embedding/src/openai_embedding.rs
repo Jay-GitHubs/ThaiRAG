@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::EmbeddingModel;
-use thairag_core::ThaiRagError;
 use tracing::{info, instrument};
 
 pub struct OpenAiEmbeddingProvider {
@@ -62,7 +62,9 @@ impl EmbeddingModel for OpenAiEmbeddingProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::Embedding(format!("OpenAI embedding request failed: {e}")))?;
+            .map_err(|e| {
+                ThaiRagError::Embedding(format!("OpenAI embedding request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -72,14 +74,13 @@ impl EmbeddingModel for OpenAiEmbeddingProvider {
             )));
         }
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ThaiRagError::Embedding(format!("Failed to parse OpenAI embedding response: {e}")))?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::Embedding(format!("Failed to parse OpenAI embedding response: {e}"))
+        })?;
 
-        let data = json["data"]
-            .as_array()
-            .ok_or_else(|| ThaiRagError::Embedding("Missing data array in OpenAI embedding response".into()))?;
+        let data = json["data"].as_array().ok_or_else(|| {
+            ThaiRagError::Embedding("Missing data array in OpenAI embedding response".into())
+        })?;
 
         let mut embeddings: Vec<(usize, Vec<f32>)> = data
             .iter()

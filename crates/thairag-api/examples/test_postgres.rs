@@ -3,8 +3,8 @@
 //! Requires: docker compose up -d postgres
 
 use chrono::Utc;
-use thairag_api::store::postgres::PostgresKmStore;
 use thairag_api::store::KmStoreTrait;
+use thairag_api::store::postgres::PostgresKmStore;
 use thairag_core::models::{DocStatus, Document, PermissionScope, UserPermission};
 use thairag_core::permission::Role;
 use thairag_core::types::DocId;
@@ -15,7 +15,9 @@ async fn main() {
         .unwrap_or_else(|_| "postgresql://thairag:thairag@localhost:5432/thairag".into());
 
     println!("Connecting to {db_url} ...");
-    let store = PostgresKmStore::new(&db_url, 5).await.expect("connect failed");
+    let store = PostgresKmStore::new(&db_url, 5)
+        .await
+        .expect("connect failed");
     println!("Connected. Running tests...\n");
 
     // ── Org CRUD ────────────────────────────────────────────────────
@@ -140,7 +142,10 @@ async fn main() {
     let deleted_docs = store.cascade_delete_org(org.id).unwrap();
     assert_eq!(deleted_docs.len(), 1);
     assert_eq!(deleted_docs[0], doc.id);
-    println!("[OK] cascade_delete_org (returned {} doc ids)", deleted_docs.len());
+    println!(
+        "[OK] cascade_delete_org (returned {} doc ids)",
+        deleted_docs.len()
+    );
 
     // Verify everything is gone
     assert!(store.get_org(org.id).is_err());

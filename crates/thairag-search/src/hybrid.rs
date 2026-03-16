@@ -69,7 +69,10 @@ impl HybridSearchEngine {
 
         let has_enrichment = meta.context_prefix.is_some()
             || meta.keywords.as_ref().is_some_and(|k| !k.is_empty())
-            || meta.hypothetical_queries.as_ref().is_some_and(|h| !h.is_empty());
+            || meta
+                .hypothetical_queries
+                .as_ref()
+                .is_some_and(|h| !h.is_empty());
 
         if !has_enrichment {
             return chunk.content.clone();
@@ -87,19 +90,19 @@ impl HybridSearchEngine {
         text.push_str(&chunk.content);
 
         // Append keywords for broader term matching
-        if let Some(ref kw) = meta.keywords {
-            if !kw.is_empty() {
-                text.push_str("\nKeywords: ");
-                text.push_str(&kw.join(", "));
-            }
+        if let Some(ref kw) = meta.keywords
+            && !kw.is_empty()
+        {
+            text.push_str("\nKeywords: ");
+            text.push_str(&kw.join(", "));
         }
 
         // Append hypothetical queries (HyDE) for query-aware embedding
-        if let Some(ref hq) = meta.hypothetical_queries {
-            if !hq.is_empty() {
-                text.push_str("\nQueries: ");
-                text.push_str(&hq.join(" | "));
-            }
+        if let Some(ref hq) = meta.hypothetical_queries
+            && !hq.is_empty()
+        {
+            text.push_str("\nQueries: ");
+            text.push_str(&hq.join(" | "));
         }
 
         text
@@ -108,7 +111,10 @@ impl HybridSearchEngine {
     /// Hybrid search: parallel vector + BM25, RRF merge, rerank.
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         // Embed the query
-        let query_embeddings = self.embedding.embed(std::slice::from_ref(&query.text)).await?;
+        let query_embeddings = self
+            .embedding
+            .embed(std::slice::from_ref(&query.text))
+            .await?;
         let query_embedding = &query_embeddings[0];
 
         // Parallel search
@@ -180,7 +186,11 @@ impl HybridSearchEngine {
             })
             .collect();
 
-        merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        merged.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         merged
     }
 }
@@ -200,29 +210,53 @@ mod tests {
         async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
             Ok(vec![vec![0.0; 3]])
         }
-        fn dimension(&self) -> usize { 3 }
+        fn dimension(&self) -> usize {
+            3
+        }
     }
 
     struct MockVectorStore;
     #[async_trait]
     impl VectorStore for MockVectorStore {
-        async fn upsert(&self, _chunks: &[DocumentChunk]) -> Result<()> { Ok(()) }
-        async fn search(&self, _embedding: &[f32], _query: &SearchQuery) -> Result<Vec<SearchResult>> { Ok(vec![]) }
-        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> { Ok(()) }
+        async fn upsert(&self, _chunks: &[DocumentChunk]) -> Result<()> {
+            Ok(())
+        }
+        async fn search(
+            &self,
+            _embedding: &[f32],
+            _query: &SearchQuery,
+        ) -> Result<Vec<SearchResult>> {
+            Ok(vec![])
+        }
+        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockTextSearch;
     #[async_trait]
     impl TextSearch for MockTextSearch {
-        async fn index(&self, _chunks: &[DocumentChunk]) -> Result<()> { Ok(()) }
-        async fn search(&self, _query: &SearchQuery) -> Result<Vec<SearchResult>> { Ok(vec![]) }
-        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> { Ok(()) }
+        async fn index(&self, _chunks: &[DocumentChunk]) -> Result<()> {
+            Ok(())
+        }
+        async fn search(&self, _query: &SearchQuery) -> Result<Vec<SearchResult>> {
+            Ok(vec![])
+        }
+        async fn delete_by_doc(&self, _doc_id: thairag_core::types::DocId) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockReranker;
     #[async_trait]
     impl Reranker for MockReranker {
-        async fn rerank(&self, _query: &str, results: Vec<SearchResult>) -> Result<Vec<SearchResult>> { Ok(results) }
+        async fn rerank(
+            &self,
+            _query: &str,
+            results: Vec<SearchResult>,
+        ) -> Result<Vec<SearchResult>> {
+            Ok(results)
+        }
     }
 
     fn make_result(id: &str, score: f32) -> SearchResult {

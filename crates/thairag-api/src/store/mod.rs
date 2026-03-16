@@ -2,13 +2,13 @@ pub mod memory;
 pub mod postgres;
 pub mod sqlite;
 
+use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
-use thairag_core::ThaiRagError;
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
