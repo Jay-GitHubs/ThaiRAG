@@ -1696,7 +1696,9 @@ pub async fn update_document_config(
             if let Some(base_url) = &llm_update.base_url {
                 llm_config.base_url = base_url.clone();
             }
-            if let Some(api_key) = &llm_update.api_key && !api_key.is_empty() {
+            if let Some(api_key) = &llm_update.api_key
+                && !api_key.is_empty()
+            {
                 llm_config.api_key = api_key.clone();
             }
             if let Some(max_tokens) = llm_update.max_tokens {
@@ -2598,7 +2600,9 @@ pub async fn update_chat_pipeline_config(
         if let Some(base_url) = &update.base_url {
             cfg.base_url = base_url.clone();
         }
-        if let Some(api_key) = &update.api_key && !api_key.is_empty() {
+        if let Some(api_key) = &update.api_key
+            && !api_key.is_empty()
+        {
             cfg.api_key = api_key.clone();
         }
         if let Some(max_tokens) = update.max_tokens {

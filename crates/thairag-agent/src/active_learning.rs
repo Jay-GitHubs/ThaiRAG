@@ -124,7 +124,9 @@ impl ActiveLearning {
     /// Returns 0.0 if not enough data or chunk not tracked.
     pub fn get_chunk_quality_delta(&self, chunk_id: &str) -> f32 {
         let feedback = self.chunk_feedback.read().unwrap();
-        if let Some(fb) = feedback.get(chunk_id) && fb.total >= self.min_interactions {
+        if let Some(fb) = feedback.get(chunk_id)
+            && fb.total >= self.min_interactions
+        {
             return fb.quality_delta;
         }
         0.0
@@ -137,7 +139,9 @@ impl ActiveLearning {
 
         for result in results.iter_mut() {
             let key = result.chunk.chunk_id.to_string();
-            if let Some(fb) = feedback.get(&key) && fb.total >= self.min_interactions {
+            if let Some(fb) = feedback.get(&key)
+                && fb.total >= self.min_interactions
+            {
                 // Apply a bounded adjustment: max +-10% of score
                 let adjustment = fb.quality_delta * 0.1;
                 result.score = (result.score + adjustment).clamp(0.0, 1.0);

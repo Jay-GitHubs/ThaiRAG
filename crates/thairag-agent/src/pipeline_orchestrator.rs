@@ -82,7 +82,9 @@ impl PipelineOrchestrator {
     /// Decide which pipeline route to take based on the query analysis.
     pub async fn decide(&self, analysis: &QueryAnalysis) -> PipelineRoute {
         // Try LLM-based routing if available and budget > 0
-        if let Some(ref llm) = self.llm && self.budget > 0 {
+        if let Some(ref llm) = self.llm
+            && self.budget > 0
+        {
             match self.llm_decide(llm, analysis).await {
                 Ok(route) => return route,
                 Err(e) => {
@@ -169,7 +171,9 @@ fn parse_route(s: &str) -> PipelineRoute {
 }
 
 fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{') && let Some(end) = s.rfind('}') {
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+    {
         return &s[start..=end];
     }
     s

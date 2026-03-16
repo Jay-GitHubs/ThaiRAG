@@ -59,7 +59,9 @@ impl LoginTracker {
             });
 
         // Reset if the lockout window has expired
-        if let Some(locked_until) = entry.locked_until && Instant::now() >= locked_until {
+        if let Some(locked_until) = entry.locked_until
+            && Instant::now() >= locked_until
+        {
             entry.count = 0;
             entry.locked_until = None;
             entry.first_attempt = Instant::now();

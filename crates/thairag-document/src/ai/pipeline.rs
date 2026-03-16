@@ -418,10 +418,14 @@ impl AiDocumentPipeline {
             match decision.action {
                 OrchestratorAction::Accept => {
                     // Update effective params from AI recommendations
-                    if let Some(qt) = a.recommended_quality_threshold && self.quality_threshold_override.is_none() {
+                    if let Some(qt) = a.recommended_quality_threshold
+                        && self.quality_threshold_override.is_none()
+                    {
                         state.effective_quality_threshold = qt;
                     }
-                    if let Some(mcs) = a.recommended_max_chunk_size && self.max_chunk_size_override.is_none() {
+                    if let Some(mcs) = a.recommended_max_chunk_size
+                        && self.max_chunk_size_override.is_none()
+                    {
                         state.effective_max_chunk_size = mcs;
                     }
                     break a;
@@ -482,7 +486,8 @@ impl AiDocumentPipeline {
 
         // ── Step 2+3: Convert → Quality Check ───────────────────────────
         Self::report_step(on_step, "converting");
-        let mut converted = if let Some(bytes) = raw_bytes.filter(|_| analysis.needs_ocr_correction) {
+        let mut converted = if let Some(bytes) = raw_bytes.filter(|_| analysis.needs_ocr_correction)
+        {
             // Vision path: send actual document to vision model
             Self::report_step(on_step, "converting_with_vision");
             info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
@@ -910,7 +915,9 @@ impl AiDocumentPipeline {
         Self::report_step(on_step, "converting");
 
         let (converted, quality) = {
-            let mut converted = if let Some(bytes) = raw_bytes.filter(|_| analysis.needs_ocr_correction) {
+            let mut converted = if let Some(bytes) =
+                raw_bytes.filter(|_| analysis.needs_ocr_correction)
+            {
                 Self::report_step(on_step, "converting_with_vision");
                 info!(%doc_id, "AI Agent: converting with vision model (OCR document)");
                 match self

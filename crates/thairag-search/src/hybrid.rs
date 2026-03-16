@@ -90,13 +90,17 @@ impl HybridSearchEngine {
         text.push_str(&chunk.content);
 
         // Append keywords for broader term matching
-        if let Some(ref kw) = meta.keywords && !kw.is_empty() {
+        if let Some(ref kw) = meta.keywords
+            && !kw.is_empty()
+        {
             text.push_str("\nKeywords: ");
             text.push_str(&kw.join(", "));
         }
 
         // Append hypothetical queries (HyDE) for query-aware embedding
-        if let Some(ref hq) = meta.hypothetical_queries && !hq.is_empty() {
+        if let Some(ref hq) = meta.hypothetical_queries
+            && !hq.is_empty()
+        {
             text.push_str("\nQueries: ");
             text.push_str(&hq.join(" | "));
         }

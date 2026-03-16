@@ -607,7 +607,8 @@ impl AppState {
         if let Some(all_prompt_keys) = km_store.get_setting("prompt._index") {
             for key in all_prompt_keys.split(',') {
                 let key = key.trim();
-                if !key.is_empty() && prompt_registry.get(key).is_none()
+                if !key.is_empty()
+                    && prompt_registry.get(key).is_none()
                     && let Some(template) = km_store.get_setting(&format!("prompt.{key}"))
                 {
                     let desc = km_store

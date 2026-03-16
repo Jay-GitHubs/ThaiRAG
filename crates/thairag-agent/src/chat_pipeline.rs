@@ -181,8 +181,7 @@ impl ChatPipeline {
         match route {
             PipelineRoute::DirectLlm => match analysis.intent {
                 QueryIntent::Clarification => Ok(LlmResponse {
-                    content: "Could you please provide more details about your question?"
-                        .into(),
+                    content: "Could you please provide more details about your question?".into(),
                     usage: LlmUsage::default(),
                 }),
                 _ => self.main_llm.generate(messages, None).await,
@@ -329,7 +328,9 @@ impl ChatPipeline {
         };
 
         // ── Map-Reduce: for complex synthesis queries with many results ──
-        if let Some(ref mr) = self.map_reduce && mr.should_use(analysis, &results) {
+        if let Some(ref mr) = self.map_reduce
+            && mr.should_use(analysis, &results)
+        {
             info!("Pipeline: using map-reduce for synthesis query");
             let response = mr.process(user_query, &results).await?;
             self.maybe_run_ragas(user_query, &context, &response.content)
@@ -362,9 +363,9 @@ impl ChatPipeline {
                     break;
                 }
                 if attempt < self.config.quality_guard_max_retries {
-                    let feedback = verdict.feedback.unwrap_or_else(|| {
-                        "Improve relevance and reduce hallucination.".into()
-                    });
+                    let feedback = verdict
+                        .feedback
+                        .unwrap_or_else(|| "Improve relevance and reduce hallucination.".into());
                     warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
                     response = self
                         .response_generator
@@ -555,8 +556,7 @@ impl ChatPipeline {
         match route {
             PipelineRoute::DirectLlm => match analysis.intent {
                 QueryIntent::Clarification => {
-                    let msg =
-                        "Could you please provide more details about your question?".into();
+                    let msg = "Could you please provide more details about your question?".into();
                     Ok(LlmStreamResponse {
                         stream: Box::pin(tokio_stream::once(Ok(msg))),
                         usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -735,7 +735,9 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
     ) -> Result<Vec<thairag_core::types::SearchResult>> {
         // Feature 3: Agentic Tool Use
-        if self.config.tool_use_enabled && let Some(ref router) = self.tool_router {
+        if self.config.tool_use_enabled
+            && let Some(ref router) = self.tool_router
+        {
             return router
                 .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
                 .await;

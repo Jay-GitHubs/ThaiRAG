@@ -275,7 +275,9 @@ fn deduplicate(results: &mut Vec<SearchResult>) {
 }
 
 fn extract_json_array(s: &str) -> &str {
-    if let Some(start) = s.find('[') && let Some(end) = s.rfind(']') {
+    if let Some(start) = s.find('[')
+        && let Some(end) = s.rfind(']')
+    {
         return &s[start..=end];
     }
     s

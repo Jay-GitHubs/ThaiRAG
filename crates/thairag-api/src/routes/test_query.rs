@@ -105,7 +105,9 @@ pub async fn test_query(
         .map_err(|_| ApiError(ThaiRagError::NotFound("Workspace not found".into())))?;
 
     // Verify user has access (unless anonymous/unrestricted)
-    if claims.sub != "anonymous" && let Ok(user_id) = claims.sub.parse::<Uuid>() {
+    if claims.sub != "anonymous"
+        && let Ok(user_id) = claims.sub.parse::<Uuid>()
+    {
         let user_ws_ids = state
             .km_store
             .get_user_workspace_ids(thairag_core::types::UserId(user_id));
