@@ -2648,16 +2648,34 @@ pub async fn update_chat_pipeline_config(
         "chat_pipeline.active_learning_max_low_confidence"
     );
     // Context Compaction
-    persist_bool!(context_compaction_enabled, "chat_pipeline.context_compaction_enabled");
+    persist_bool!(
+        context_compaction_enabled,
+        "chat_pipeline.context_compaction_enabled"
+    );
     persist_num!(model_context_window, "chat_pipeline.model_context_window");
     persist_num!(compaction_threshold, "chat_pipeline.compaction_threshold");
-    persist_num!(compaction_keep_recent, "chat_pipeline.compaction_keep_recent");
+    persist_num!(
+        compaction_keep_recent,
+        "chat_pipeline.compaction_keep_recent"
+    );
     // Personal Memory
-    persist_bool!(personal_memory_enabled, "chat_pipeline.personal_memory_enabled");
+    persist_bool!(
+        personal_memory_enabled,
+        "chat_pipeline.personal_memory_enabled"
+    );
     persist_num!(personal_memory_top_k, "chat_pipeline.personal_memory_top_k");
-    persist_num!(personal_memory_max_per_user, "chat_pipeline.personal_memory_max_per_user");
-    persist_num!(personal_memory_decay_factor, "chat_pipeline.personal_memory_decay_factor");
-    persist_num!(personal_memory_min_relevance, "chat_pipeline.personal_memory_min_relevance");
+    persist_num!(
+        personal_memory_max_per_user,
+        "chat_pipeline.personal_memory_max_per_user"
+    );
+    persist_num!(
+        personal_memory_decay_factor,
+        "chat_pipeline.personal_memory_decay_factor"
+    );
+    persist_num!(
+        personal_memory_min_relevance,
+        "chat_pipeline.personal_memory_min_relevance"
+    );
 
     // Helper: persist LLM config
     fn persist_chat_llm(

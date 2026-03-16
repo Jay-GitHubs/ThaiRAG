@@ -35,12 +35,7 @@ impl SessionStore {
         self.sessions.get(id).map(|s| s.messages.clone())
     }
 
-    pub fn append(
-        &self,
-        id: SessionId,
-        user_msg: ChatMessage,
-        assistant_msg: ChatMessage,
-    ) {
+    pub fn append(&self, id: SessionId, user_msg: ChatMessage, assistant_msg: ChatMessage) {
         self.append_with_user(id, user_msg, assistant_msg, None);
     }
 
@@ -182,7 +177,12 @@ mod tests {
         store.append_with_user(sid1, msg("user", "hi"), msg("assistant", "hey"), Some(uid1));
 
         let sid2 = SessionId(Uuid::new_v4());
-        store.append_with_user(sid2, msg("user", "hello"), msg("assistant", "world"), Some(uid2));
+        store.append_with_user(
+            sid2,
+            msg("user", "hello"),
+            msg("assistant", "world"),
+            Some(uid2),
+        );
 
         let sid3 = SessionId(Uuid::new_v4());
         store.append_with_user(sid3, msg("user", "yo"), msg("assistant", "sup"), Some(uid1));

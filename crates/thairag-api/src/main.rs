@@ -45,8 +45,7 @@ async fn main() {
     // Use get_effective_chat_pipeline to include runtime settings (e.g., context
     // compaction, personal memory) that were enabled via the Admin UI.
     {
-        let effective_chat =
-            thairag_api::routes::settings::get_effective_chat_pipeline(&state);
+        let effective_chat = thairag_api::routes::settings::get_effective_chat_pipeline(&state);
         let saved_providers = state
             .km_store
             .get_setting("provider_config")

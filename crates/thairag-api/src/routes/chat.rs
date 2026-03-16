@@ -473,9 +473,12 @@ async fn handle_non_stream(
             role: "assistant".to_string(),
             content: llm_resp.content.clone(),
         };
-        state
-            .session_store
-            .append_with_user(sid, last_user_msg.clone(), assistant_msg.clone(), user_id);
+        state.session_store.append_with_user(
+            sid,
+            last_user_msg.clone(),
+            assistant_msg.clone(),
+            user_id,
+        );
 
         // Feature 1: Async memory summarization
         if let Some(uid) = user_id {
