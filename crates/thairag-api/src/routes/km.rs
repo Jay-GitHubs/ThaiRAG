@@ -712,6 +712,22 @@ fn revoke_permission_inner(
     }
 
     state.km_store.remove_permission(target.user.id, &scope)?;
+
+    // Security: Clear the user's sessions and conversation memory to prevent
+    // stale context from leaking revoked document content (session history,
+    // context compaction summaries, and conversation memories may contain
+    // information from workspaces the user no longer has access to).
+    let cleared = state.session_store.clear_user_sessions(target.user.id);
+    let memory_key = format!("memory:{}", target.user.id.0);
+    state.km_store.delete_setting(&memory_key);
+    if cleared > 0 {
+        tracing::info!(
+            user_id = %target.user.id,
+            sessions_cleared = cleared,
+            "Cleared user sessions after permission revocation"
+        );
+    }
+
     audit_log(
         &state.km_store,
         "admin",

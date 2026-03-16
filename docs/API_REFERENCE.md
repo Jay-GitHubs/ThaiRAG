@@ -481,10 +481,39 @@ Update document processing configuration.
 ### Chat Pipeline
 
 #### `GET /api/km/settings/chat-pipeline`
-Get chat pipeline configuration.
+Get chat pipeline configuration. Response includes context compaction and personal memory settings:
+
+```json
+{
+  "enabled": true,
+  "context_compaction_enabled": false,
+  "model_context_window": 0,
+  "compaction_threshold": 0.8,
+  "compaction_keep_recent": 6,
+  "personal_memory_enabled": false,
+  "personal_memory_top_k": 5,
+  "personal_memory_max_per_user": 200,
+  "personal_memory_decay_factor": 0.95,
+  "personal_memory_min_relevance": 0.1
+}
+```
 
 #### `PUT /api/km/settings/chat-pipeline`
-Update chat pipeline configuration.
+Update chat pipeline configuration. All fields are optional — only send fields you want to change.
+
+```json
+{
+  "context_compaction_enabled": true,
+  "model_context_window": 128000,
+  "compaction_threshold": 0.8,
+  "compaction_keep_recent": 6,
+  "personal_memory_enabled": true,
+  "personal_memory_top_k": 5,
+  "personal_memory_max_per_user": 200,
+  "personal_memory_decay_factor": 0.95,
+  "personal_memory_min_relevance": 0.1
+}
+```
 
 ### Presets
 
