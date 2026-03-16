@@ -609,6 +609,40 @@ pub struct ChatPipelineConfig {
     pub active_learning_min_interactions: u32,
     #[serde(default = "default_active_learning_max_low_confidence")]
     pub active_learning_max_low_confidence: usize,
+
+    // ── Feature: Context Compaction ──
+    /// Enable automatic context compaction when approaching model context limit.
+    #[serde(default)]
+    pub context_compaction_enabled: bool,
+    /// Model context window size in tokens (0 = auto-detect from provider).
+    #[serde(default = "default_model_context_window")]
+    pub model_context_window: usize,
+    /// Trigger compaction when context exceeds this fraction of the window (0.0–1.0).
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: f32,
+    /// Number of recent messages to keep intact during compaction.
+    #[serde(default = "default_compaction_keep_recent")]
+    pub compaction_keep_recent: usize,
+
+    // ── Feature: Personal Memory (Per-User RAG) ──
+    /// Enable vector-based personal memory per user.
+    #[serde(default)]
+    pub personal_memory_enabled: bool,
+    /// Max personal memories to retrieve per query.
+    #[serde(default = "default_personal_memory_top_k")]
+    pub personal_memory_top_k: usize,
+    /// Max personal memories stored per user (oldest pruned when exceeded).
+    #[serde(default = "default_personal_memory_max_per_user")]
+    pub personal_memory_max_per_user: usize,
+    /// Daily relevance decay factor (0.0–1.0). Applied to relevance_score.
+    #[serde(default = "default_personal_memory_decay_factor")]
+    pub personal_memory_decay_factor: f32,
+    /// Minimum relevance score before memory is pruned.
+    #[serde(default = "default_personal_memory_min_relevance")]
+    pub personal_memory_min_relevance: f32,
+    /// Separate LLM for memory extraction (uses main LLM if not set).
+    #[serde(default)]
+    pub personal_memory_llm: Option<LlmConfig>,
 }
 
 fn default_max_chat_orchestrator_calls() -> u32 {
@@ -695,6 +729,27 @@ fn default_active_learning_min_interactions() -> u32 {
 fn default_active_learning_max_low_confidence() -> usize {
     100
 }
+fn default_model_context_window() -> usize {
+    0 // 0 = auto-detect
+}
+fn default_compaction_threshold() -> f32 {
+    0.8
+}
+fn default_compaction_keep_recent() -> usize {
+    6
+}
+fn default_personal_memory_top_k() -> usize {
+    5
+}
+fn default_personal_memory_max_per_user() -> usize {
+    200
+}
+fn default_personal_memory_decay_factor() -> f32 {
+    0.95
+}
+fn default_personal_memory_min_relevance() -> f32 {
+    0.1
+}
 
 impl Default for ChatPipelineConfig {
     fn default() -> Self {
@@ -779,6 +834,18 @@ impl Default for ChatPipelineConfig {
             active_learning_enabled: false,
             active_learning_min_interactions: default_active_learning_min_interactions(),
             active_learning_max_low_confidence: default_active_learning_max_low_confidence(),
+            // Context Compaction
+            context_compaction_enabled: false,
+            model_context_window: default_model_context_window(),
+            compaction_threshold: default_compaction_threshold(),
+            compaction_keep_recent: default_compaction_keep_recent(),
+            // Personal Memory
+            personal_memory_enabled: false,
+            personal_memory_top_k: default_personal_memory_top_k(),
+            personal_memory_max_per_user: default_personal_memory_max_per_user(),
+            personal_memory_decay_factor: default_personal_memory_decay_factor(),
+            personal_memory_min_relevance: default_personal_memory_min_relevance(),
+            personal_memory_llm: None,
         }
     }
 }

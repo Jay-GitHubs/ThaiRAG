@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use thairag_agent::active_learning::ActiveLearning;
 use thairag_agent::colbert_reranker::ColbertReranker;
+use thairag_agent::context_compactor::ContextCompactor;
 use thairag_agent::context_curator::ContextCurator;
 use thairag_agent::contextual_compression::ContextualCompression;
 use thairag_agent::conversation_memory::ConversationMemory;
@@ -10,6 +11,7 @@ use thairag_agent::graph_rag::GraphRag;
 use thairag_agent::language_adapter::LanguageAdapter;
 use thairag_agent::map_reduce::MapReduceRag;
 use thairag_agent::multimodal_rag::MultimodalRag;
+use thairag_agent::personal_memory::PersonalMemoryManager;
 use thairag_agent::quality_guard::QualityGuard;
 use thairag_agent::query_analyzer::QueryAnalyzer;
 use thairag_agent::query_rewriter::QueryRewriter;
@@ -32,7 +34,7 @@ use thairag_provider_embedding::create_embedding_provider;
 use thairag_provider_llm::create_llm_provider;
 use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
-use thairag_provider_vectordb::create_vector_store;
+use thairag_provider_vectordb::{create_personal_memory_store, create_vector_store};
 
 use crate::login_tracker::LoginTracker;
 use crate::metrics::MetricsState;
@@ -44,11 +46,14 @@ use crate::store::{KmStoreTrait, create_km_store};
 #[derive(Clone)]
 pub struct ProviderBundle {
     pub providers_config: ProvidersConfig,
+    pub chat_pipeline_config: ChatPipelineConfig,
     pub orchestrator: Arc<QueryOrchestrator>,
     pub chat_pipeline: Option<Arc<ChatPipeline>>,
     pub document_pipeline: Arc<DocumentPipeline>,
     pub search_engine: Arc<HybridSearchEngine>,
     pub embedding: Arc<dyn EmbeddingModel>,
+    pub context_compactor: Option<Arc<ContextCompactor>>,
+    pub personal_memory_manager: Option<Arc<PersonalMemoryManager>>,
 }
 
 impl ProviderBundle {
@@ -431,13 +436,46 @@ impl ProviderBundle {
             None
         };
 
+        // ── Context Compaction ──
+        let context_compactor = if chat.context_compaction_enabled {
+            let compactor_llm = if let Some(ref cfg) = chat.personal_memory_llm {
+                Arc::from(create_llm_provider(cfg))
+            } else {
+                Arc::clone(&llm)
+            };
+            Some(Arc::new(ContextCompactor::new_with_prompts(
+                compactor_llm,
+                chat.agent_max_tokens,
+                Arc::clone(&prompts),
+            )))
+        } else {
+            None
+        };
+
+        // ── Personal Memory (Per-User RAG) ──
+        let personal_memory_manager = if chat.personal_memory_enabled {
+            let pm_store =
+                create_personal_memory_store(&providers.vector_store, embedding.dimension());
+            Some(Arc::new(PersonalMemoryManager::new(
+                Arc::clone(&embedding),
+                pm_store,
+                chat.personal_memory_top_k,
+                chat.personal_memory_max_per_user,
+            )))
+        } else {
+            None
+        };
+
         Self {
             providers_config: providers.clone(),
+            chat_pipeline_config: chat.clone(),
             orchestrator,
             chat_pipeline,
             document_pipeline,
             search_engine,
             embedding,
+            context_compactor,
+            personal_memory_manager,
         }
     }
 }

@@ -48,7 +48,7 @@ ThaiRAG is a Rust workspace with 13 crates organized in strict layers. Each laye
 
 ### thairag-core
 Foundation crate with zero external service dependencies.
-- **ID newtypes**: `OrgId`, `DeptId`, `WorkspaceId`, `DocumentId`, `ChunkId`, `UserId`, `IdpId` — all UUID-based with the `define_id!` macro
+- **ID newtypes**: `OrgId`, `DeptId`, `WorkspaceId`, `DocumentId`, `ChunkId`, `UserId`, `IdpId`, `MemoryId` — all UUID-based with the `define_id!` macro
 - **Domain models**: `Organization`, `Department`, `Workspace`, `Document`, `TextChunk`, `User`, `IdentityProvider`
 - **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker` — all async trait-based
 - **Error types**: `ThaiRagError` enum covering validation, auth, not-found, provider errors
@@ -83,7 +83,7 @@ Each provider crate implements one or more trait from `thairag-core`:
 |-------|-------|-----------------|
 | `thairag-provider-llm` | `LlmProvider` | Claude, OpenAI, Ollama |
 | `thairag-provider-embedding` | `EmbeddingProvider` | OpenAI, FastEmbed |
-| `thairag-provider-vectordb` | `VectorStore` | Qdrant, InMemory |
+| `thairag-provider-vectordb` | `VectorStore`, `PersonalMemoryStore` | Qdrant, InMemory |
 | `thairag-provider-search` | `SearchEngine` | Tantivy (BM25) |
 | `thairag-provider-reranker` | `Reranker` | Cohere, Passthrough |
 
@@ -109,13 +109,15 @@ RAG orchestrator:
 - **Intent classification** — Determines if a query needs retrieval or is a direct question
 - **Pipeline processing** — Search → Context assembly → LLM generation
 - **Chat pipeline** — Optional configurable pipeline with system prompt, guardrails, and pre/post processors
+- **Context compaction** — Automatic summarization of older messages when conversation approaches the model's context window limit (Claude Code-style). Uses Thai-aware token estimation (~2 chars/token for Thai, ~4 chars/token for English)
+- **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
 
 ### thairag-api
 Axum HTTP server with:
 - **Routes**: Auth, Chat (OpenAI-compatible), KM hierarchy CRUD, Documents, Settings, Health, Feedback
 - **Stores**: SQLite (default), PostgreSQL, In-Memory — implementing `KmStoreTrait`
 - **Middleware stack**: Request ID → Tracing → Security Headers → CORS → Metrics → Rate Limiting → Auth → CSRF
-- **Session management**: DashMap-based with 50-message cap and 1-hour auto-cleanup
+- **Session management**: DashMap-based with 50-message cap and 1-hour auto-cleanup. Supports context compaction (replacing old messages with summaries)
 - **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions
 
 ## Data Flow
@@ -130,6 +132,17 @@ Client POST /v1/chat/completions
     │
     ▼
 chat::chat_completions()
+    │
+    ├─ Context compaction (if enabled & near context limit)
+    │     ├─ Estimate tokens (Thai-aware)
+    │     ├─ If > threshold: summarize older messages via LLM
+    │     ├─ Extract personal memories (preference/fact/decision/etc.)
+    │     └─ Replace session history with summary + recent messages
+    │
+    ├─ Retrieve personal memories (if enabled)
+    │     ├─ Embed user's query
+    │     ├─ Vector search user's memory store (top_k)
+    │     └─ Inject as system context message
     │
     ├─ Load golden examples from feedback system
     ├─ Prepend as system message (few-shot)
@@ -221,6 +234,8 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - Role hierarchy: `super_admin` > `admin` > `editor` > `viewer`
 - Workspace-scoped permissions — users only access documents in their assigned workspaces
 - Super admins bypass all permission checks
+- **Open WebUI identity passthrough** — When Open WebUI sets `ENABLE_FORWARD_USER_INFO_HEADERS=true`, ThaiRAG resolves real user identity from `X-OpenWebUI-User-Email` header and applies per-user workspace permissions even through the shared API key
+- **Permission revocation** — On workspace access revocation, server-side sessions and personal memories for the affected user are cleared to prevent stale context leaks
 
 ### OWASP Hardening
 - **A01 Broken Access Control**: Role-based route guards, workspace scoping

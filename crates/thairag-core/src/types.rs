@@ -45,6 +45,7 @@ define_id!(ChunkId);
 define_id!(UserId);
 define_id!(SessionId);
 define_id!(IdpId);
+define_id!(MemoryId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -451,4 +452,64 @@ pub enum QueryIntent {
     Retrieval,
     DirectAnswer,
     Clarification,
+}
+
+// ── Context Compaction & Personal Memory ─────────────────────────────
+
+/// Type of personal memory extracted from conversations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalMemoryType {
+    /// User preference (e.g., "prefers bullet points")
+    Preference,
+    /// Factual info about the user (e.g., "works in HR")
+    Fact,
+    /// Decision made during conversation (e.g., "chose PostgreSQL")
+    Decision,
+    /// General conversation summary
+    Conversation,
+    /// User correction (e.g., "deadline is Friday not Thursday")
+    Correction,
+}
+
+/// A personal memory entry stored in the vector database per user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalMemory {
+    pub id: MemoryId,
+    pub user_id: UserId,
+    pub memory_type: PersonalMemoryType,
+    pub summary: String,
+    pub topics: Vec<String>,
+    pub importance: f32,
+    pub created_at: i64,
+    pub last_accessed_at: i64,
+    /// Relevance score that decays over time (0.0–1.0).
+    pub relevance_score: f32,
+}
+
+/// Result of context compaction — the compacted session state.
+#[derive(Debug, Clone)]
+pub struct CompactionResult {
+    /// Summary of compacted messages (injected as system message).
+    pub summary: String,
+    /// Personal memories extracted during compaction.
+    pub extracted_memories: Vec<PersonalMemory>,
+    /// Number of messages that were compacted.
+    pub messages_compacted: usize,
+    /// Number of messages kept intact (recent).
+    pub messages_kept: usize,
+}
+
+/// Estimate tokens for a string using heuristic: Thai ~2 chars/token, EN ~4 chars/token.
+pub fn estimate_tokens(text: &str) -> usize {
+    let mut thai_chars = 0usize;
+    let mut other_chars = 0usize;
+    for c in text.chars() {
+        if ('\u{0E01}'..='\u{0E5B}').contains(&c) {
+            thai_chars += 1;
+        } else {
+            other_chars += 1;
+        }
+    }
+    (thai_chars / 2) + (other_chars / 4) + 1
 }

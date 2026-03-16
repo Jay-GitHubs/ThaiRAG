@@ -41,29 +41,36 @@ async fn main() {
     // Seed super admin from env vars
     seed_super_admin(&*state.km_store);
 
-    // Load saved provider config from DB (if any) and hot-reload
-    if let Some(saved) = state.km_store.get_setting("provider_config") {
-        match serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&saved) {
-            Ok(pc) => {
-                let mut validate_cfg = config.clone();
-                validate_cfg.providers = pc.clone();
-                if let Err(e) = validate_cfg.validate() {
-                    tracing::warn!("Saved provider config is invalid, ignoring: {e}");
-                } else {
-                    let bundle = thairag_api::app_state::ProviderBundle::build(
-                        &pc,
-                        &config.search,
-                        &config.document,
-                        &config.chat_pipeline,
-                    );
-                    state.reload_providers(bundle);
-                    tracing::info!("Loaded saved provider config from database");
-                }
+    // Load saved config from DB (if any) and hot-reload.
+    // Use get_effective_chat_pipeline to include runtime settings (e.g., context
+    // compaction, personal memory) that were enabled via the Admin UI.
+    {
+        let effective_chat =
+            thairag_api::routes::settings::get_effective_chat_pipeline(&state);
+        let saved_providers = state
+            .km_store
+            .get_setting("provider_config")
+            .and_then(|s| serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&s).ok());
+        let pc = if let Some(ref pc) = saved_providers {
+            let mut validate_cfg = config.clone();
+            validate_cfg.providers = pc.clone();
+            if let Err(e) = validate_cfg.validate() {
+                tracing::warn!("Saved provider config is invalid, ignoring: {e}");
+                &config.providers
+            } else {
+                pc
             }
-            Err(e) => {
-                tracing::warn!("Failed to parse saved provider config, ignoring: {e}");
-            }
-        }
+        } else {
+            &config.providers
+        };
+        let bundle = thairag_api::app_state::ProviderBundle::build(
+            pc,
+            &config.search,
+            &config.document,
+            &effective_chat,
+        );
+        state.reload_providers(bundle);
+        tracing::info!("Loaded saved config from database");
     }
 
     // Create rate limiter (if enabled) and spawn background cleanup
