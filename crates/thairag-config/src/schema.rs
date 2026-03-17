@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use thairag_core::types::{
     EmbeddingKind, LlmKind, RerankerKind, TextSearchKind, VectorIsolation, VectorStoreKind,
 };
@@ -109,7 +109,9 @@ pub struct ServerConfig {
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
     /// Allowed CORS origins. Empty = permissive (dev only).
-    #[serde(default)]
+    /// Accepts either a YAML/TOML sequence or a comma-separated string
+    /// (useful for env var overrides via config-rs).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub cors_origins: Vec<String>,
     /// Trust X-Forwarded-For header from reverse proxy for client IP extraction.
     /// Only enable when running behind a trusted proxy (nginx, load balancer).
@@ -133,6 +135,26 @@ fn default_max_message_length() -> usize {
 
 fn default_shutdown_timeout() -> u64 {
     30
+}
+
+/// Deserialize a `Vec<String>` from either a YAML/TOML sequence **or** a
+/// comma-separated string (the form config-rs produces from env vars).
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        Vec(Vec<String>),
+        String(String),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::Vec(v) => Ok(v),
+        StringOrVec::String(s) if s.is_empty() => Ok(vec![]),
+        StringOrVec::String(s) => Ok(s.split(',').map(|s| s.trim().to_string()).collect()),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
