@@ -11,6 +11,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Multi-Format Documents** — PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text with automatic chunking
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
+- **MCP Connectors** — Connect to external data sources (Confluence, Notion, GitHub, Slack, Google Drive, PostgreSQL, and more) via the Model Context Protocol with automatic sync scheduling, retry logic, and webhook notifications
 - **Admin UI** — React + Ant Design dashboard for managing the entire platform (11 pages)
 - **Identity Provider Support** — Local auth (Argon2 + JWT) with OIDC/OAuth2/SAML/LDAP management
 - **Production Hardened** — Rate limiting, CSRF protection, OWASP security headers, Prometheus metrics, audit logging, brute-force protection
@@ -54,7 +55,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 └───────┘ └────────┘ └────────┘ └──────────┘
 ```
 
-**13 Rust crates** organized in a layered dependency graph:
+**14 Rust crates** organized in a layered dependency graph:
 
 | Layer | Crates | Purpose |
 |-------|--------|---------|
@@ -62,6 +63,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 | Foundation | `thairag-config`, `thairag-thai`, `thairag-auth` | Configuration, Thai NLP, JWT authentication |
 | Providers | `thairag-provider-{llm,embedding,vectordb,search,reranker}` | Pluggable provider abstractions |
 | Processing | `thairag-document`, `thairag-search` | Document conversion/chunking, hybrid search |
+| Integration | `thairag-mcp` | MCP client, sync engine, scheduler, webhooks |
 | Intelligence | `thairag-agent` | Orchestrator with intent classification + RAG |
 | Server | `thairag-api` | Axum HTTP server, routes, middleware, stores |
 
@@ -180,6 +182,17 @@ GET|PUT     /settings/chat-pipeline      # Chat pipeline config
 GET|POST    /settings/identity-providers # Identity provider management
 GET|PUT     /settings/feedback/*         # Feedback & tuning
 GET         /settings/audit-log          # Audit log
+
+# MCP Connectors (super admin)
+GET|POST    /connectors                  # List / create connectors
+GET         /connectors/templates        # List connector templates
+POST        /connectors/from-template    # Create from template
+GET|PUT|DEL /connectors/{id}             # Get / update / delete
+POST        /connectors/{id}/sync        # Trigger sync
+POST        /connectors/{id}/pause       # Pause connector
+POST        /connectors/{id}/resume      # Resume connector
+GET         /connectors/{id}/sync-runs   # Sync history
+POST        /connectors/{id}/test        # Test connection
 ```
 
 See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documentation.
@@ -197,7 +210,7 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 ## Testing
 
 ```bash
-# Backend tests (198 tests)
+# Backend tests (220 tests)
 cargo test
 
 # Admin UI type check
