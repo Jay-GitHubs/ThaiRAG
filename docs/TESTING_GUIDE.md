@@ -2467,7 +2467,7 @@ Verify the system using automated test suites — backend unit/integration tests
 cargo test
 ```
 
-**Current test count:** 198 tests across workspace
+**Current test count:** 220 tests across workspace
 
 Key test categories:
 - **Password policy**: `register_rejects_short_password`, `register_rejects_no_uppercase`, `register_rejects_no_digit`
@@ -2938,7 +2938,7 @@ Verify that per-user workspace permissions are enforced when users access ThaiRA
 - At least one workspace with uploaded documents
 - Two user accounts with different workspace permissions
 
-### 18.1 Verify User Identity Forwarding
+### 19.1 Verify User Identity Forwarding
 
 1. Log in to Open WebUI via Keycloak SSO as **User A**
 2. Send a chat message in Open WebUI
@@ -2950,7 +2950,7 @@ docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*p
 
 **Pass criteria:** Logs show that ThaiRAG resolved User A's email from the `X-OpenWebUI-User-Email` header, not the generic `api-key` identity.
 
-### 18.2 Test Per-User Permission Scoping
+### 19.2 Test Per-User Permission Scoping
 
 1. As **admin**, grant User A access to workspace "BA101" via Admin UI → Permissions
 2. Grant User B access to workspace "HR-Docs" only (no access to BA101)
@@ -2961,7 +2961,7 @@ docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*p
 - User A gets a relevant answer with BA101 document content
 - User B gets a response indicating no relevant information found (permission denied)
 
-### 18.3 Test Auto-Provisioning
+### 19.3 Test Auto-Provisioning
 
 1. Create a new user in Keycloak that does not exist in ThaiRAG
 2. Log in to Open WebUI with this new user
@@ -2973,7 +2973,7 @@ docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*p
 - The user was auto-created from the `X-OpenWebUI-User-Email` header
 - The user has no workspace permissions (cannot access any knowledge base content)
 
-### 18.4 Test Permission Revocation
+### 19.4 Test Permission Revocation
 
 1. As admin, grant User A access to workspace "BA101"
 2. In Open WebUI as User A, ask about BA101 → should get an answer
@@ -2986,7 +2986,7 @@ docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*p
 
 > **Note:** The old chat window in Open WebUI may still display previous messages (client-side cache). This is expected — only server-side data is cleared on revocation. Always test with a **new chat session**.
 
-### 18.5 Test Session Clearing on Revocation
+### 19.5 Test Session Clearing on Revocation
 
 1. Grant User A access to workspace "BA101"
 2. In Open WebUI as User A, have a multi-turn conversation about BA101 (3+ messages)
@@ -2999,7 +2999,7 @@ docker compose logs thairag 2>&1 | grep -i "clear.*session\|session.*clear\|revo
 
 **Pass criteria:** Logs show that User A's sessions were cleared when the permission was revoked.
 
-### 18.6 Test SSE Keepalive for Long Pipeline Processing
+### 19.6 Test SSE Keepalive for Long Pipeline Processing
 
 When the chat pipeline is enabled with multiple agents, processing can take 60+ seconds. The SSE keepalive prevents client disconnection.
 
@@ -3012,7 +3012,7 @@ When the chat pipeline is enabled with multiple agents, processing can take 60+ 
 - The response streams normally after the pipeline finishes processing
 - If using Chrome DevTools Network tab, you should see SSE `:ping` comments during the waiting period
 
-### 18.7 Test Without Identity Forwarding (Negative Test)
+### 19.7 Test Without Identity Forwarding (Negative Test)
 
 1. Stop the stack and set `ENABLE_FORWARD_USER_INFO_HEADERS: "false"` in Open WebUI
 2. Restart the stack

@@ -328,6 +328,17 @@ For Ollama LLM provider:
 - List downloaded models
 - Pull new models
 
+### MCP Connectors (API only)
+
+MCP connector management is currently available via the API only. The Admin UI integration is planned for a future release. Super admins can manage connectors through the API endpoints:
+
+- Create connectors from 9 built-in templates (GitHub, Confluence, Notion, Slack, Google Drive, PostgreSQL, SQLite, filesystem, web fetch)
+- Trigger manual or scheduled (cron) syncs
+- Monitor sync history and status
+- Configure webhook notifications
+
+See [API Reference](API_REFERENCE.md#mcp-connectors-super-admin) for endpoint details.
+
 ### Local Auth Tab
 - Shows whether local authentication is enabled
 - Configuration note: "Configure via `THAIRAG__AUTH__ENABLED` env var"
