@@ -52,3 +52,14 @@ text_weight = 0.4
 [document]
 max_chunk_size = 512
 chunk_overlap = 64
+
+[mcp]
+enabled = false
+max_concurrent_syncs = 3
+connect_timeout_secs = 30
+read_timeout_secs = 120
+summarize_on_sync = false
+max_resource_size_bytes = 52428800
+sync_retry_max_attempts = 3
+sync_retry_base_delay_secs = 2
+sync_retry_max_delay_secs = 60

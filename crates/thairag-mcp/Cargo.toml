@@ -1,0 +1,39 @@
+[package]
+name = "thairag-mcp"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thairag-core = { workspace = true }
+thairag-config = { workspace = true }
+
+# MCP client
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Cron scheduling
+cron = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Hashing for change detection
+sha2 = { workspace = true }
+
+# Encoding (for blob decoding)
+base64 = { workspace = true }
+
+# HTTP client (must match rmcp's reqwest version for StreamableHttpClient trait)
+reqwest = { version = "0.13", features = ["json"] }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

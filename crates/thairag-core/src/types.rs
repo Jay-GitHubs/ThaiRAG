@@ -46,6 +46,8 @@ define_id!(UserId);
 define_id!(SessionId);
 define_id!(IdpId);
 define_id!(MemoryId);
+define_id!(ConnectorId);
+define_id!(SyncRunId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -452,6 +454,169 @@ pub enum QueryIntent {
     Retrieval,
     DirectAnswer,
     Clarification,
+}
+
+// ── MCP Connector Types ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    /// Local process via stdin/stdout.
+    Stdio,
+    /// Remote server via SSE/HTTP.
+    Sse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorStatus {
+    Active,
+    Paused,
+    Error,
+    Syncing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    /// Manual trigger only.
+    OnDemand,
+    /// Periodic scheduled sync.
+    Scheduled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRunStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Configuration for a connector to an external MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConnectorConfig {
+    pub id: ConnectorId,
+    pub name: String,
+    pub description: String,
+    pub transport: McpTransport,
+    /// For stdio: the command to spawn (e.g., "npx @anthropic/mcp-server-confluence").
+    #[serde(default)]
+    pub command: Option<String>,
+    /// For stdio: command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// For stdio: environment variables to pass to the child process.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// For SSE: the server URL.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// For SSE: optional auth headers.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    /// Target workspace to ingest content into.
+    pub workspace_id: WorkspaceId,
+    pub sync_mode: SyncMode,
+    /// Cron expression for scheduled sync (e.g., "0 */6 * * *").
+    #[serde(default)]
+    pub schedule_cron: Option<String>,
+    /// Resource URI patterns to include (glob-like filters).
+    #[serde(default)]
+    pub resource_filters: Vec<String>,
+    /// Maximum items to sync per run.
+    #[serde(default)]
+    pub max_items_per_sync: Option<usize>,
+    /// Pre-configured tool calls for tool-based sources (Slack, Web, DB).
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallConfig>,
+    /// Webhook URL to notify on sync completion/failure.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Shared secret sent as Bearer token in webhook Authorization header.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    pub status: ConnectorStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Pre-configured tool call executed during sync (for tool-based MCP sources).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallConfig {
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+    /// JSON path to extract content from the tool result.
+    #[serde(default)]
+    pub result_content_path: Option<String>,
+    /// MIME type to assign to extracted content.
+    #[serde(default = "default_mime_type")]
+    pub result_mime_type: String,
+    /// Title template (can use {index}, {date}).
+    #[serde(default)]
+    pub title_template: String,
+}
+
+fn default_mime_type() -> String {
+    "text/plain".into()
+}
+
+/// Tracks sync state for a single MCP resource (change detection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncState {
+    pub connector_id: ConnectorId,
+    /// MCP resource URI (unique identifier from the MCP server).
+    pub resource_uri: String,
+    /// SHA-256 content hash for change detection.
+    pub content_hash: String,
+    /// The DocId in ThaiRAG's KM store for this resource.
+    pub doc_id: Option<DocId>,
+    pub last_synced_at: chrono::DateTime<chrono::Utc>,
+    /// MCP-provided metadata (e.g., last modified timestamp from source).
+    #[serde(default)]
+    pub source_metadata: Option<serde_json::Value>,
+}
+
+/// A record of a single sync execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncRun {
+    pub id: SyncRunId,
+    pub connector_id: ConnectorId,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub status: SyncRunStatus,
+    pub items_discovered: usize,
+    pub items_created: usize,
+    pub items_updated: usize,
+    pub items_skipped: usize,
+    pub items_failed: usize,
+    pub error_message: Option<String>,
+}
+
+/// A resource discovered from an MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResource {
+    pub uri: String,
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Content read from an MCP resource.
+#[derive(Debug, Clone)]
+pub struct McpResourceContent {
+    pub uri: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
+
+/// Tool info from an MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: Option<serde_json::Value>,
 }
 
 // ── Context Compaction & Personal Memory ─────────────────────────────

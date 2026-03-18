@@ -2,6 +2,7 @@ use std::future::Future;
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 use thairag_core::ThaiRagError;
 use thairag_core::models::{
@@ -9,7 +10,10 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{
+    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport, OrgId,
+    SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+};
 use uuid::Uuid;
 
 use super::{KmStoreTrait, UserRecord};
@@ -104,6 +108,144 @@ fn role_str(r: &Role) -> &'static str {
         Role::Admin => "admin",
         Role::Editor => "editor",
         Role::Viewer => "viewer",
+    }
+}
+
+fn pg_transport_str(t: &McpTransport) -> &'static str {
+    match t {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Sse => "sse",
+    }
+}
+
+fn pg_parse_transport(s: &str) -> McpTransport {
+    match s {
+        "sse" => McpTransport::Sse,
+        _ => McpTransport::Stdio,
+    }
+}
+
+fn pg_connector_status_str(s: &ConnectorStatus) -> &'static str {
+    match s {
+        ConnectorStatus::Active => "active",
+        ConnectorStatus::Paused => "paused",
+        ConnectorStatus::Error => "error",
+        ConnectorStatus::Syncing => "syncing",
+    }
+}
+
+fn pg_parse_connector_status(s: &str) -> ConnectorStatus {
+    match s {
+        "paused" => ConnectorStatus::Paused,
+        "error" => ConnectorStatus::Error,
+        "syncing" => ConnectorStatus::Syncing,
+        _ => ConnectorStatus::Active,
+    }
+}
+
+fn pg_sync_mode_str(m: &SyncMode) -> &'static str {
+    match m {
+        SyncMode::OnDemand => "on_demand",
+        SyncMode::Scheduled => "scheduled",
+    }
+}
+
+fn pg_parse_sync_mode(s: &str) -> SyncMode {
+    match s {
+        "scheduled" => SyncMode::Scheduled,
+        _ => SyncMode::OnDemand,
+    }
+}
+
+fn pg_sync_run_status_str(s: &SyncRunStatus) -> &'static str {
+    match s {
+        SyncRunStatus::Running => "running",
+        SyncRunStatus::Completed => "completed",
+        SyncRunStatus::Failed => "failed",
+        SyncRunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn pg_parse_sync_run_status(s: &str) -> SyncRunStatus {
+    match s {
+        "completed" => SyncRunStatus::Completed,
+        "failed" => SyncRunStatus::Failed,
+        "cancelled" => SyncRunStatus::Cancelled,
+        _ => SyncRunStatus::Running,
+    }
+}
+
+fn pg_row_to_connector(row: &sqlx::postgres::PgRow) -> McpConnectorConfig {
+    let id: Uuid = row.get("id");
+    let name: String = row.get("name");
+    let description: String = row.get("description");
+    let transport: String = row.get("transport");
+    let command: Option<String> = row.get("command");
+    let args: String = row.get("args");
+    let env: String = row.get("env");
+    let url: Option<String> = row.get("url");
+    let headers: String = row.get("headers");
+    let ws_id: Uuid = row.get("workspace_id");
+    let sync_mode: String = row.get("sync_mode");
+    let schedule_cron: Option<String> = row.get("schedule_cron");
+    let resource_filters: String = row.get("resource_filters");
+    let max_items: Option<i32> = row.get("max_items_per_sync");
+    let tool_calls: String = row.get("tool_calls");
+    let webhook_url: Option<String> = row.get("webhook_url");
+    let webhook_secret: Option<String> = row.get("webhook_secret");
+    let status: String = row.get("status");
+    let ca: DateTime<Utc> = row.get("created_at");
+    let ua: DateTime<Utc> = row.get("updated_at");
+    McpConnectorConfig {
+        id: ConnectorId(id),
+        name,
+        description,
+        transport: pg_parse_transport(&transport),
+        command,
+        args: serde_json::from_str(&args).unwrap_or_default(),
+        env: serde_json::from_str(&env).unwrap_or_default(),
+        url,
+        headers: serde_json::from_str(&headers).unwrap_or_default(),
+        workspace_id: WorkspaceId(ws_id),
+        sync_mode: pg_parse_sync_mode(&sync_mode),
+        schedule_cron,
+        resource_filters: serde_json::from_str(&resource_filters).unwrap_or_default(),
+        max_items_per_sync: max_items.map(|v| v as usize),
+        tool_calls: serde_json::from_str(&tool_calls).unwrap_or_default(),
+        webhook_url,
+        webhook_secret,
+        status: pg_parse_connector_status(&status),
+        created_at: ca,
+        updated_at: ua,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pg_row_to_sync_run(
+    id: Uuid,
+    cid: Uuid,
+    started: DateTime<Utc>,
+    completed: Option<DateTime<Utc>>,
+    status: String,
+    disc: i32,
+    crea: i32,
+    upd: i32,
+    skip: i32,
+    fail: i32,
+    err: Option<String>,
+) -> SyncRun {
+    SyncRun {
+        id: SyncRunId(id),
+        connector_id: ConnectorId(cid),
+        started_at: started,
+        completed_at: completed,
+        status: pg_parse_sync_run_status(&status),
+        items_discovered: disc as usize,
+        items_created: crea as usize,
+        items_updated: upd as usize,
+        items_skipped: skip as usize,
+        items_failed: fail as usize,
+        error_message: err,
     }
 }
 
@@ -1231,5 +1373,286 @@ impl KmStoreTrait for PostgresKmStore {
                 .bind(key)
                 .execute(&self.pool),
         );
+    }
+
+    // ── MCP Connectors ───────────────────────────────────────────────
+
+    fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {
+        self.get_workspace(config.workspace_id)?;
+        block_on(sqlx::query(
+            "INSERT INTO mcp_connectors (id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+        )
+        .bind(config.id.0)
+        .bind(&config.name)
+        .bind(&config.description)
+        .bind(pg_transport_str(&config.transport))
+        .bind(&config.command)
+        .bind(serde_json::to_string(&config.args).unwrap_or_default())
+        .bind(serde_json::to_string(&config.env).unwrap_or_default())
+        .bind(&config.url)
+        .bind(serde_json::to_string(&config.headers).unwrap_or_default())
+        .bind(config.workspace_id.0)
+        .bind(pg_sync_mode_str(&config.sync_mode))
+        .bind(&config.schedule_cron)
+        .bind(serde_json::to_string(&config.resource_filters).unwrap_or_default())
+        .bind(config.max_items_per_sync.map(|v| v as i32))
+        .bind(serde_json::to_string(&config.tool_calls).unwrap_or_default())
+        .bind(&config.webhook_url)
+        .bind(&config.webhook_secret)
+        .bind(pg_connector_status_str(&config.status))
+        .bind(config.created_at)
+        .bind(config.updated_at)
+        .execute(&self.pool))
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres insert connector: {e}")))?;
+        Ok(config)
+    }
+
+    fn get_connector(&self, id: ConnectorId) -> Result<McpConnectorConfig> {
+        let row = block_on(
+            sqlx::query(
+                "SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors WHERE id = $1",
+            )
+            .bind(id.0)
+            .fetch_one(&self.pool),
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Connector {id} not found")))?;
+        Ok(pg_row_to_connector(&row))
+    }
+
+    fn list_connectors(&self) -> Vec<McpConnectorConfig> {
+        block_on(
+            sqlx::query(
+                "SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .iter()
+        .map(pg_row_to_connector)
+        .collect()
+    }
+
+    fn list_connectors_for_workspace(&self, ws_id: WorkspaceId) -> Vec<McpConnectorConfig> {
+        block_on(
+            sqlx::query(
+                "SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors WHERE workspace_id = $1",
+            )
+            .bind(ws_id.0)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .iter()
+        .map(pg_row_to_connector)
+        .collect()
+    }
+
+    fn update_connector(&self, config: McpConnectorConfig) -> Result<()> {
+        let result = block_on(sqlx::query(
+            "UPDATE mcp_connectors SET name = $1, description = $2, transport = $3, command = $4, args = $5, env = $6, url = $7, headers = $8, workspace_id = $9, sync_mode = $10, schedule_cron = $11, resource_filters = $12, max_items_per_sync = $13, tool_calls = $14, webhook_url = $15, webhook_secret = $16, status = $17, updated_at = $18 WHERE id = $19",
+        )
+        .bind(&config.name)
+        .bind(&config.description)
+        .bind(pg_transport_str(&config.transport))
+        .bind(&config.command)
+        .bind(serde_json::to_string(&config.args).unwrap_or_default())
+        .bind(serde_json::to_string(&config.env).unwrap_or_default())
+        .bind(&config.url)
+        .bind(serde_json::to_string(&config.headers).unwrap_or_default())
+        .bind(config.workspace_id.0)
+        .bind(pg_sync_mode_str(&config.sync_mode))
+        .bind(&config.schedule_cron)
+        .bind(serde_json::to_string(&config.resource_filters).unwrap_or_default())
+        .bind(config.max_items_per_sync.map(|v| v as i32))
+        .bind(serde_json::to_string(&config.tool_calls).unwrap_or_default())
+        .bind(&config.webhook_url)
+        .bind(&config.webhook_secret)
+        .bind(pg_connector_status_str(&config.status))
+        .bind(config.updated_at)
+        .bind(config.id.0)
+        .execute(&self.pool))
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update connector: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Connector {} not found",
+                config.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_connector(&self, id: ConnectorId) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM mcp_connectors WHERE id = $1")
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete connector: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Connector {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_connector_status(&self, id: ConnectorId, status: ConnectorStatus) -> Result<()> {
+        let now = Utc::now();
+        let result = block_on(
+            sqlx::query("UPDATE mcp_connectors SET status = $1, updated_at = $2 WHERE id = $3")
+                .bind(pg_connector_status_str(&status))
+                .bind(now)
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update connector status: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Connector {id} not found")));
+        }
+        Ok(())
+    }
+
+    // ── MCP Sync State ───────────────────────────────────────────────
+
+    fn get_sync_state(&self, connector_id: ConnectorId, resource_uri: &str) -> Option<SyncState> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, DateTime<Utc>, Option<String>)>(
+                "SELECT connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata FROM mcp_sync_states WHERE connector_id = $1 AND resource_uri = $2",
+            )
+            .bind(connector_id.0)
+            .bind(resource_uri)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(cid, uri, hash, doc_id, synced, meta)| SyncState {
+            connector_id: ConnectorId(cid),
+            resource_uri: uri,
+            content_hash: hash,
+            doc_id: doc_id.map(DocId),
+            last_synced_at: synced,
+            source_metadata: meta.and_then(|s| serde_json::from_str(&s).ok()),
+        })
+    }
+
+    fn upsert_sync_state(&self, state: SyncState) -> Result<()> {
+        block_on(sqlx::query(
+            "INSERT INTO mcp_sync_states (connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (connector_id, resource_uri) DO UPDATE SET content_hash = $3, doc_id = $4, last_synced_at = $5, source_metadata = $6",
+        )
+        .bind(state.connector_id.0)
+        .bind(&state.resource_uri)
+        .bind(&state.content_hash)
+        .bind(state.doc_id.map(|d| d.0))
+        .bind(state.last_synced_at)
+        .bind(state.source_metadata.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()))
+        .execute(&self.pool))
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres upsert sync state: {e}")))?;
+        Ok(())
+    }
+
+    fn list_sync_states(&self, connector_id: ConnectorId) -> Vec<SyncState> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, String, String, Option<Uuid>, DateTime<Utc>, Option<String>)>(
+                "SELECT connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata FROM mcp_sync_states WHERE connector_id = $1",
+            )
+            .bind(connector_id.0)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(cid, uri, hash, doc_id, synced, meta)| SyncState {
+            connector_id: ConnectorId(cid),
+            resource_uri: uri,
+            content_hash: hash,
+            doc_id: doc_id.map(DocId),
+            last_synced_at: synced,
+            source_metadata: meta.and_then(|s| serde_json::from_str(&s).ok()),
+        })
+        .collect()
+    }
+
+    fn delete_sync_states(&self, connector_id: ConnectorId) -> Result<()> {
+        block_on(
+            sqlx::query("DELETE FROM mcp_sync_states WHERE connector_id = $1")
+                .bind(connector_id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete sync states: {e}")))?;
+        Ok(())
+    }
+
+    // ── MCP Sync Runs ────────────────────────────────────────────────
+
+    fn insert_sync_run(&self, run: SyncRun) -> Result<()> {
+        block_on(sqlx::query(
+            "INSERT INTO mcp_sync_runs (id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        )
+        .bind(run.id.0)
+        .bind(run.connector_id.0)
+        .bind(run.started_at)
+        .bind(run.completed_at)
+        .bind(pg_sync_run_status_str(&run.status))
+        .bind(run.items_discovered as i32)
+        .bind(run.items_created as i32)
+        .bind(run.items_updated as i32)
+        .bind(run.items_skipped as i32)
+        .bind(run.items_failed as i32)
+        .bind(&run.error_message)
+        .execute(&self.pool))
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres insert sync run: {e}")))?;
+        Ok(())
+    }
+
+    fn update_sync_run(&self, run: SyncRun) -> Result<()> {
+        let result = block_on(sqlx::query(
+            "UPDATE mcp_sync_runs SET completed_at = $1, status = $2, items_discovered = $3, items_created = $4, items_updated = $5, items_skipped = $6, items_failed = $7, error_message = $8 WHERE id = $9",
+        )
+        .bind(run.completed_at)
+        .bind(pg_sync_run_status_str(&run.status))
+        .bind(run.items_discovered as i32)
+        .bind(run.items_created as i32)
+        .bind(run.items_updated as i32)
+        .bind(run.items_skipped as i32)
+        .bind(run.items_failed as i32)
+        .bind(&run.error_message)
+        .bind(run.id.0)
+        .execute(&self.pool))
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update sync run: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Sync run {} not found",
+                run.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn list_sync_runs(&self, connector_id: ConnectorId, limit: usize) -> Vec<SyncRun> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>, Option<DateTime<Utc>>, String, i32, i32, i32, i32, i32, Option<String>)>(
+                "SELECT id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message FROM mcp_sync_runs WHERE connector_id = $1 ORDER BY started_at DESC LIMIT $2",
+            )
+            .bind(connector_id.0)
+            .bind(limit as i64)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, cid, started, completed, status, disc, crea, upd, skip, fail, err)| {
+            pg_row_to_sync_run(id, cid, started, completed, status, disc, crea, upd, skip, fail, err)
+        })
+        .collect()
+    }
+
+    fn get_latest_sync_run(&self, connector_id: ConnectorId) -> Option<SyncRun> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>, Option<DateTime<Utc>>, String, i32, i32, i32, i32, i32, Option<String>)>(
+                "SELECT id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message FROM mcp_sync_runs WHERE connector_id = $1 ORDER BY started_at DESC LIMIT 1",
+            )
+            .bind(connector_id.0)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(id, cid, started, completed, status, disc, crea, upd, skip, fail, err)| {
+            pg_row_to_sync_run(id, cid, started, completed, status, disc, crea, upd, skip, fail, err)
+        })
     }
 }

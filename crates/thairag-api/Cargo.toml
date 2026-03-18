@@ -15,6 +15,7 @@ thairag-provider-vectordb = { path = "../thairag-provider-vectordb" }
 thairag-provider-search = { path = "../thairag-provider-search" }
 thairag-provider-reranker = { path = "../thairag-provider-reranker" }
 thairag-document = { workspace = true }
+thairag-mcp = { workspace = true }
 
 axum = { workspace = true }
 tower = { workspace = true }
@@ -38,10 +39,10 @@ prometheus = { workspace = true }
 reqwest = { workspace = true }
 openidconnect = { workspace = true }
 urlencoding = { workspace = true }
+async-trait = { workspace = true }
 base64 = "0.22"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }
-async-trait = { workspace = true }
 tokio-stream = { workspace = true }
