@@ -11,6 +11,8 @@ use tracing::{info, instrument};
 
 pub struct OllamaProvider {
     client: reqwest::Client,
+    /// Separate client for streaming — no overall timeout so long generations aren't killed.
+    stream_client: reqwest::Client,
     base_url: String,
     model: String,
     keep_alive: Option<serde_json::Value>,
@@ -31,11 +33,20 @@ impl OllamaProvider {
         timeout_secs: u64,
         keep_alive: Option<&str>,
     ) -> Self {
+        // Non-streaming client: overall timeout covers the full request lifecycle
         let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("Failed to build reqwest client");
+
+        // Streaming client: no overall timeout so long generations aren't killed.
+        // Only connect_timeout is set to detect unreachable servers quickly.
+        let stream_client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .expect("Failed to build reqwest streaming client");
 
         let keep_alive_val = keep_alive.map(|s| {
             // Try to parse as integer (e.g. "-1", "0"), otherwise keep as string (e.g. "5m")
@@ -56,6 +67,7 @@ impl OllamaProvider {
 
         Self {
             client,
+            stream_client,
             base_url: base_url.to_string(),
             model: model.to_string(),
             keep_alive: keep_alive_val,
@@ -91,7 +103,7 @@ impl LlmProvider for OllamaProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Ollama request failed: {e}")))?;
+            .map_err(|e| ThaiRagError::LlmProvider(format_ollama_error(&self.base_url, e)))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -141,12 +153,12 @@ impl LlmProvider for OllamaProvider {
 
         let url = format!("{}/api/chat", self.base_url);
         let resp = self
-            .client
+            .stream_client
             .post(&url)
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Ollama stream request failed: {e}")))?;
+            .map_err(|e| ThaiRagError::LlmProvider(format_ollama_error(&self.base_url, e)))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -268,7 +280,7 @@ impl LlmProvider for OllamaProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("Ollama vision request failed: {e}")))?;
+            .map_err(|e| ThaiRagError::LlmProvider(format_ollama_error(&self.base_url, e)))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -295,5 +307,24 @@ impl LlmProvider for OllamaProvider {
         };
 
         Ok(LlmResponse { content, usage })
+    }
+}
+
+/// Format a reqwest error into a user-friendly message that distinguishes
+/// connection failures from timeouts, helping operators diagnose the root cause.
+fn format_ollama_error(base_url: &str, err: reqwest::Error) -> String {
+    if err.is_connect() {
+        format!(
+            "Cannot connect to Ollama at {base_url}. \
+             Is Ollama running? Check that the URL is correct and the server is reachable."
+        )
+    } else if err.is_timeout() {
+        format!(
+            "Ollama request timed out ({base_url}). \
+             The model may be loading or the server is overloaded. \
+             Try increasing request_timeout_secs in chat pipeline settings."
+        )
+    } else {
+        format!("Ollama request failed ({base_url}): {err}")
     }
 }

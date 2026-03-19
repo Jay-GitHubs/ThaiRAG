@@ -125,6 +125,12 @@ pub struct ServerConfig {
     /// Maximum length (chars) of a single chat message content.
     #[serde(default = "default_max_message_length")]
     pub max_message_length: usize,
+    /// Server-side request timeout (seconds) for non-streaming endpoints.
+    /// Returns a proper JSON error before reverse proxy 504. Set higher than
+    /// the proxy timeout to let the proxy handle it, or lower to return a
+    /// helpful error message from ThaiRAG directly.
+    #[serde(default = "default_server_request_timeout")]
+    pub request_timeout_secs: u64,
 }
 
 fn default_max_chat_messages() -> usize {
@@ -133,6 +139,10 @@ fn default_max_chat_messages() -> usize {
 
 fn default_max_message_length() -> usize {
     32_000 // ~32K chars ≈ ~8K tokens
+}
+
+fn default_server_request_timeout() -> u64 {
+    600 // 10 minutes — generous to cover cold model loading + multi-agent pipeline
 }
 
 fn default_shutdown_timeout() -> u64 {
@@ -695,7 +705,7 @@ fn default_max_llm_calls_per_request() -> u32 {
     25
 }
 fn default_request_timeout_secs() -> u64 {
-    120
+    300
 }
 fn default_ollama_keep_alive() -> String {
     "5m".to_string()
@@ -999,6 +1009,7 @@ mod tests {
                 trust_proxy: false,
                 max_chat_messages: default_max_chat_messages(),
                 max_message_length: default_max_message_length(),
+                request_timeout_secs: default_server_request_timeout(),
             },
             database: DatabaseConfig {
                 url: "sqlite://data.db".into(),

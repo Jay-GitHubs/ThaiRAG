@@ -31,13 +31,17 @@ import {
   DislikeFilled,
   StarOutlined,
   FieldTimeOutlined,
+  CheckCircleOutlined,
+  MinusCircleOutlined,
+  ExclamationCircleOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons';
 import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { testQuery } from '../api/testQuery';
 import { submitFeedback } from '../api/feedback';
-import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo } from '../api/types';
+import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage } from '../api/types';
 
 interface ChatEntry {
   role: 'user' | 'assistant';
@@ -47,6 +51,7 @@ interface ChatEntry {
   usage?: TestQueryUsage;
   timing?: TestQueryTiming;
   providerInfo?: TestQueryProviderInfo;
+  pipelineStages?: PipelineStage[];
   feedback?: 'up' | 'down';
   query?: string;
 }
@@ -117,6 +122,7 @@ export function TestChatPage() {
           usage: res.usage,
           timing: res.timing,
           providerInfo: res.provider_info,
+          pipelineStages: res.pipeline_stages,
           query: q,
         },
       ]);
@@ -210,6 +216,29 @@ export function TestChatPage() {
   };
 
   const formatScore = (score: number) => score.toFixed(4);
+
+  const formatStageName = (stage: string) => {
+    const names: Record<string, string> = {
+      query_analyzer: 'Query Analyzer',
+      self_rag_gate: 'Self-RAG Gate',
+      pipeline_orchestrator: 'Pipeline Orchestrator',
+      query_rewriter: 'Query Rewriter',
+      search: 'Hybrid Search',
+      colbert_reranker: 'ColBERT Reranker',
+      graph_rag: 'Graph RAG',
+      context_curator: 'Context Curator',
+      retrieval_refinement: 'Retrieval Refinement',
+      corrective_rag: 'Corrective RAG',
+      raptor: 'RAPTOR',
+      contextual_compression: 'Contextual Compression',
+      multimodal_rag: 'Multi-modal RAG',
+      map_reduce: 'Map-Reduce',
+      response_generator: 'Response Generator',
+      quality_guard: 'Quality Guard',
+      language_adapter: 'Language Adapter',
+    };
+    return names[stage] ?? stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  };
 
   return (
     <>
@@ -393,6 +422,106 @@ export function TestChatPage() {
                         </Tooltip>
                       )}
                     </Space>
+                  </div>
+                )}
+
+                {/* Pipeline stages */}
+                {msg.pipelineStages && msg.pipelineStages.length > 0 && (
+                  <div style={{ maxWidth: '80%', marginTop: 8 }}>
+                    <Collapse
+                      size="small"
+                      items={[
+                        {
+                          key: 'pipeline',
+                          label: (
+                            <Space>
+                              <DashboardOutlined />
+                              <span>
+                                Pipeline Stages ({msg.pipelineStages.length})
+                              </span>
+                              {(() => {
+                                const totalMs = msg.pipelineStages
+                                  .filter((s) => s.status === 'done' && s.duration_ms != null)
+                                  .reduce((sum, s) => sum + (s.duration_ms ?? 0), 0);
+                                const slowest = msg.pipelineStages
+                                  .filter((s) => s.status === 'done' && s.duration_ms != null)
+                                  .sort((a, b) => (b.duration_ms ?? 0) - (a.duration_ms ?? 0))[0];
+                                return (
+                                  <>
+                                    <Tag color="blue">{totalMs.toLocaleString()}ms total</Tag>
+                                    {slowest && (slowest.duration_ms ?? 0) > 1000 && (
+                                      <Tooltip title={`Slowest stage: ${slowest.stage} took ${(slowest.duration_ms ?? 0).toLocaleString()}ms`}>
+                                        <Tag color="orange">
+                                          Bottleneck: {formatStageName(slowest.stage)}
+                                        </Tag>
+                                      </Tooltip>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </Space>
+                          ),
+                          children: (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {msg.pipelineStages.map((stage, si) => {
+                                const durationMs = stage.duration_ms ?? 0;
+                                const isSlow = stage.status === 'done' && durationMs > 2000;
+                                const isVerySlow = stage.status === 'done' && durationMs > 5000;
+                                return (
+                                  <div
+                                    key={si}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 8,
+                                      padding: '4px 8px',
+                                      borderRadius: 4,
+                                      background: isVerySlow
+                                        ? themeToken.colorErrorBg
+                                        : isSlow
+                                          ? themeToken.colorWarningBg
+                                          : 'transparent',
+                                    }}
+                                  >
+                                    {stage.status === 'done' && (
+                                      <CheckCircleOutlined style={{ color: themeToken.colorSuccess }} />
+                                    )}
+                                    {stage.status === 'skipped' && (
+                                      <MinusCircleOutlined style={{ color: themeToken.colorTextQuaternary }} />
+                                    )}
+                                    {stage.status === 'error' && (
+                                      <ExclamationCircleOutlined style={{ color: themeToken.colorError }} />
+                                    )}
+                                    <span style={{
+                                      flex: 1,
+                                      fontSize: 13,
+                                      color: stage.status === 'skipped'
+                                        ? themeToken.colorTextQuaternary
+                                        : themeToken.colorText,
+                                    }}>
+                                      {formatStageName(stage.stage)}
+                                    </span>
+                                    {stage.status === 'done' && stage.duration_ms != null && (
+                                      <Tag
+                                        color={isVerySlow ? 'error' : isSlow ? 'warning' : 'default'}
+                                        style={{ margin: 0, fontVariantNumeric: 'tabular-nums' }}
+                                      >
+                                        {stage.duration_ms.toLocaleString()}ms
+                                      </Tag>
+                                    )}
+                                    {stage.status === 'skipped' && (
+                                      <span style={{ fontSize: 12, color: themeToken.colorTextQuaternary }}>
+                                        skipped
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
                   </div>
                 )}
 

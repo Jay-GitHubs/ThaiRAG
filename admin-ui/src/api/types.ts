@@ -729,6 +729,12 @@ export interface TestQueryProviderInfo {
   embedding_model: string;
 }
 
+export interface PipelineStage {
+  stage: string;
+  status: 'done' | 'skipped' | 'error';
+  duration_ms: number | null;
+}
+
 export interface TestQueryResponse {
   response_id: string;
   query: string;
@@ -737,6 +743,7 @@ export interface TestQueryResponse {
   usage: TestQueryUsage;
   timing: TestQueryTiming;
   provider_info: TestQueryProviderInfo;
+  pipeline_stages: PipelineStage[];
 }
 
 // ── Usage Stats ────────────────────────────────────────────────────
