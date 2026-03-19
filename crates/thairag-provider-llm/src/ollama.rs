@@ -17,13 +17,17 @@ pub struct OllamaProvider {
 
 impl OllamaProvider {
     pub fn new(base_url: &str, model: &str) -> Self {
+        Self::with_timeout(base_url, model, 120)
+    }
+
+    pub fn with_timeout(base_url: &str, model: &str, timeout_secs: u64) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("Failed to build reqwest client");
 
-        info!(base_url, model, "Initialized Ollama provider");
+        info!(base_url, model, timeout_secs, "Initialized Ollama provider");
 
         Self {
             client,

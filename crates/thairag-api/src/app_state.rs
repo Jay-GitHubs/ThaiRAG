@@ -31,7 +31,7 @@ use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
 use thairag_provider_embedding::create_embedding_provider;
-use thairag_provider_llm::create_llm_provider;
+use thairag_provider_llm::{create_llm_provider, create_llm_provider_with_timeout};
 use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
 use thairag_provider_vectordb::{create_personal_memory_store, create_vector_store};
@@ -155,8 +155,9 @@ impl ProviderBundle {
 
         // ── Chat Pipeline (multi-agent) ──
         let chat_pipeline = if chat.enabled {
+            let chat_timeout = chat.request_timeout_secs;
             let chat_shared_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = chat.llm {
-                Arc::from(create_llm_provider(cfg))
+                Arc::from(create_llm_provider_with_timeout(cfg, chat_timeout))
             } else {
                 Arc::clone(&llm)
             };
@@ -164,7 +165,7 @@ impl ProviderBundle {
             let resolve_chat_agent_llm =
                 |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
                     if let Some(cfg) = agent_cfg {
-                        Arc::from(create_llm_provider(cfg))
+                        Arc::from(create_llm_provider_with_timeout(cfg, chat_timeout))
                     } else {
                         Arc::clone(&chat_shared_llm)
                     }

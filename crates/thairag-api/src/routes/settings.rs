@@ -1921,6 +1921,7 @@ pub struct ChatPipelineConfigResponse {
     pub orchestrator_llm: Option<LlmProviderInfo>,
     pub max_context_tokens: usize,
     pub agent_max_tokens: u32,
+    pub request_timeout_secs: u64,
     // Feature: Conversation Memory
     pub conversation_memory_enabled: bool,
     pub memory_max_summaries: usize,
@@ -2028,6 +2029,7 @@ pub struct UpdateChatPipelineRequest {
     pub remove_orchestrator_llm: Option<bool>,
     pub max_context_tokens: Option<usize>,
     pub agent_max_tokens: Option<u32>,
+    pub request_timeout_secs: Option<u64>,
     // Feature: Conversation Memory
     pub conversation_memory_enabled: Option<bool>,
     pub memory_max_summaries: Option<usize>,
@@ -2341,6 +2343,10 @@ pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::
         max_llm_calls_per_request: s("chat_pipeline.max_llm_calls_per_request")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.max_llm_calls_per_request),
+        // Per-LLM-call timeout
+        request_timeout_secs: s("chat_pipeline.request_timeout_secs")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.request_timeout_secs),
         // Context Compaction
         context_compaction_enabled: s("chat_pipeline.context_compaction_enabled")
             .and_then(|v| v.parse().ok())
@@ -2404,6 +2410,7 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         orchestrator_llm: eff.orchestrator_llm.as_ref().map(llm_config_to_info),
         max_context_tokens: eff.max_context_tokens,
         agent_max_tokens: eff.agent_max_tokens,
+        request_timeout_secs: eff.request_timeout_secs,
         // Feature: Conversation Memory
         conversation_memory_enabled: eff.conversation_memory_enabled,
         memory_max_summaries: eff.memory_max_summaries,
@@ -2548,6 +2555,7 @@ pub async fn update_chat_pipeline_config(
     );
     persist_num!(max_context_tokens, "chat_pipeline.max_context_tokens");
     persist_num!(agent_max_tokens, "chat_pipeline.agent_max_tokens");
+    persist_num!(request_timeout_secs, "chat_pipeline.request_timeout_secs");
     // Feature: Conversation Memory
     persist_bool!(
         conversation_memory_enabled,

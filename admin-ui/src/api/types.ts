@@ -384,6 +384,7 @@ export interface ChatPipelineConfigResponse {
   orchestrator_llm?: LlmProviderInfo;
   max_context_tokens: number;
   agent_max_tokens: number;
+  request_timeout_secs: number;
   // Feature: Conversation Memory
   conversation_memory_enabled: boolean;
   memory_max_summaries: number;
@@ -491,6 +492,7 @@ export interface UpdateChatPipelineRequest {
   remove_orchestrator_llm?: boolean;
   max_context_tokens?: number;
   agent_max_tokens?: number;
+  request_timeout_secs?: number;
   // Feature: Conversation Memory
   conversation_memory_enabled?: boolean;
   memory_max_summaries?: number;

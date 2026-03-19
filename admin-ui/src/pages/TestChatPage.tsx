@@ -30,6 +30,7 @@ import {
   DislikeOutlined,
   DislikeFilled,
   StarOutlined,
+  FieldTimeOutlined,
 } from '@ant-design/icons';
 import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
@@ -50,6 +51,22 @@ interface ChatEntry {
   query?: string;
 }
 
+const TIMEOUT_PRESETS = [
+  { label: '30 seconds', value: 30_000 },
+  { label: '1 minute', value: 60_000 },
+  { label: '2 minutes', value: 120_000 },
+  { label: '5 minutes', value: 300_000 },
+  { label: '10 minutes', value: 600_000 },
+  { label: 'No limit', value: 0 },
+];
+
+const TIMEOUT_STORAGE_KEY = 'thairag-test-chat-timeout';
+
+function loadSavedTimeout(): number {
+  const saved = localStorage.getItem(TIMEOUT_STORAGE_KEY);
+  return saved ? Number(saved) : 120_000;
+}
+
 export function TestChatPage() {
   const [orgId, setOrgId] = useState<string>();
   const [deptId, setDeptId] = useState<string>();
@@ -57,10 +74,16 @@ export function TestChatPage() {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [timeoutMs, setTimeoutMs] = useState(loadSavedTimeout);
   const [commentModal, setCommentModal] = useState<{ index: number; thumbsUp: boolean } | null>(null);
   const [commentText, setCommentText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { token: themeToken } = theme.useToken();
+
+  const handleTimeoutChange = (value: number) => {
+    setTimeoutMs(value);
+    localStorage.setItem(TIMEOUT_STORAGE_KEY, String(value));
+  };
 
   const orgs = useOrgs();
   const depts = useDepts(orgId);
@@ -83,7 +106,7 @@ export function TestChatPage() {
     setLoading(true);
 
     try {
-      const res = await testQuery(wsId, q);
+      const res = await testQuery(wsId, q, timeoutMs || undefined);
       setMessages((prev) => [
         ...prev,
         {
@@ -98,8 +121,13 @@ export function TestChatPage() {
         },
       ]);
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : 'Failed to get response';
+      // Detect timeout errors and show a helpful message
+      const isTimeout =
+        (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'ECONNABORTED') ||
+        (err instanceof Error && err.message.includes('timeout'));
+      const msg = isTimeout
+        ? `Request timed out after ${timeoutMs ? (timeoutMs / 1000) + 's' : 'default timeout'}. Try increasing the timeout using the clock icon next to the Send button.`
+        : err instanceof Error ? err.message : 'Failed to get response';
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', content: `Error: ${msg}` },
@@ -489,6 +517,16 @@ export function TestChatPage() {
               disabled={loading}
               style={{ flex: 1 }}
             />
+            <Tooltip title="Request timeout — increase if you have many documents or a complex pipeline">
+              <Select
+                value={timeoutMs}
+                onChange={handleTimeoutChange}
+                options={TIMEOUT_PRESETS}
+                style={{ width: 130 }}
+                suffixIcon={<FieldTimeOutlined />}
+                disabled={loading}
+              />
+            </Tooltip>
             <Button
               type="primary"
               icon={<SendOutlined />}

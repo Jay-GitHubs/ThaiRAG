@@ -17,13 +17,17 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(api_key: &str, model: &str) -> Self {
+        Self::with_timeout(api_key, model, 120)
+    }
+
+    pub fn with_timeout(api_key: &str, model: &str, timeout_secs: u64) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("Failed to build reqwest client");
 
-        info!(model, "Initialized Gemini LLM provider");
+        info!(model, timeout_secs, "Initialized Gemini LLM provider");
 
         Self {
             client,
