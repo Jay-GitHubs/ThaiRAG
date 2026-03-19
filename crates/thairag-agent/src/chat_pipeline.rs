@@ -332,6 +332,7 @@ impl ChatPipeline {
     }
 
     /// Execute the full pipeline (agents 2-6).
+    #[allow(clippy::too_many_arguments)]
     async fn execute_full(
         &self,
         user_query: &str,
@@ -487,6 +488,7 @@ impl ChatPipeline {
     }
 
     /// Post-retrieval pipeline stages (CRAG, RAPTOR, compression, generation, quality guard).
+    #[allow(clippy::too_many_arguments)]
     async fn execute_post_retrieval(
         &self,
         user_query: &str,
