@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub document: DocumentConfig,
     #[serde(default)]
     pub chat_pipeline: ChatPipelineConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 impl AppConfig {
@@ -876,6 +878,81 @@ fn default_true_val() -> bool {
     true
 }
 
+// ── MCP Connector Config ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpConfig {
+    /// Master switch to enable MCP connector functionality.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum concurrent sync operations across all connectors.
+    #[serde(default = "default_max_concurrent_syncs")]
+    pub max_concurrent_syncs: usize,
+    /// Timeout (seconds) for MCP server connections.
+    #[serde(default = "default_mcp_connect_timeout")]
+    pub connect_timeout_secs: u64,
+    /// Timeout (seconds) for individual resource read operations.
+    #[serde(default = "default_mcp_read_timeout")]
+    pub read_timeout_secs: u64,
+    /// Whether to generate LLM summaries during sync.
+    #[serde(default)]
+    pub summarize_on_sync: bool,
+    /// Maximum content size in bytes to accept from MCP resources.
+    #[serde(default = "default_max_resource_size")]
+    pub max_resource_size_bytes: usize,
+    /// Separate LLM for content summarization during sync.
+    #[serde(default)]
+    pub summarization_llm: Option<LlmConfig>,
+    /// Max retry attempts for sync connect/discover phase.
+    #[serde(default = "default_sync_retry_max_attempts")]
+    pub sync_retry_max_attempts: u32,
+    /// Base delay (seconds) for exponential backoff between retries.
+    #[serde(default = "default_sync_retry_base_delay_secs")]
+    pub sync_retry_base_delay_secs: u64,
+    /// Maximum delay (seconds) cap for exponential backoff.
+    #[serde(default = "default_sync_retry_max_delay_secs")]
+    pub sync_retry_max_delay_secs: u64,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_concurrent_syncs: default_max_concurrent_syncs(),
+            connect_timeout_secs: default_mcp_connect_timeout(),
+            read_timeout_secs: default_mcp_read_timeout(),
+            summarize_on_sync: false,
+            max_resource_size_bytes: default_max_resource_size(),
+            summarization_llm: None,
+            sync_retry_max_attempts: default_sync_retry_max_attempts(),
+            sync_retry_base_delay_secs: default_sync_retry_base_delay_secs(),
+            sync_retry_max_delay_secs: default_sync_retry_max_delay_secs(),
+        }
+    }
+}
+
+fn default_max_concurrent_syncs() -> usize {
+    3
+}
+fn default_mcp_connect_timeout() -> u64 {
+    30
+}
+fn default_mcp_read_timeout() -> u64 {
+    120
+}
+fn default_max_resource_size() -> usize {
+    50 * 1024 * 1024 // 50MB
+}
+fn default_sync_retry_max_attempts() -> u32 {
+    3
+}
+fn default_sync_retry_base_delay_secs() -> u64 {
+    2
+}
+fn default_sync_retry_max_delay_secs() -> u64 {
+    60
+}
+
 fn default_quality_threshold() -> f32 {
     0.7
 }
@@ -967,6 +1044,7 @@ mod tests {
                 ai_preprocessing: AiPreprocessingConfig::default(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 

@@ -83,6 +83,9 @@ THAIRAG__PROVIDERS__RERANKER__API_KEY=...
 # Optional: seed super admin
 THAIRAG__ADMIN__EMAIL=admin@yourcompany.com
 THAIRAG__ADMIN__PASSWORD=SecurePassword123
+
+# MCP Connectors (optional)
+# THAIRAG__MCP__ENABLED=true
 ```
 
 2. **Start services:**
@@ -313,6 +316,19 @@ cd admin-ui && npx playwright test
 | `chat_pipeline.personal_memory_decay_factor` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_DECAY_FACTOR` | `0.95` | Relevance decay rate (0.0–1.0) |
 | `chat_pipeline.personal_memory_min_relevance` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MIN_RELEVANCE` | `0.1` | Prune memories below this score |
 
+### MCP Connectors
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `mcp.enabled` | `THAIRAG__MCP__ENABLED` | `false` | Enable MCP connector integration |
+| `mcp.max_concurrent_syncs` | `THAIRAG__MCP__MAX_CONCURRENT_SYNCS` | `3` | Max concurrent sync operations |
+| `mcp.connect_timeout_secs` | `THAIRAG__MCP__CONNECT_TIMEOUT_SECS` | `30` | MCP server connection timeout |
+| `mcp.read_timeout_secs` | `THAIRAG__MCP__READ_TIMEOUT_SECS` | `120` | Resource read timeout |
+| `mcp.max_resource_size_bytes` | `THAIRAG__MCP__MAX_RESOURCE_SIZE_BYTES` | `10485760` | Max resource size (10MB) |
+| `mcp.sync_retry_max_attempts` | `THAIRAG__MCP__SYNC_RETRY_MAX_ATTEMPTS` | `3` | Retry attempts on sync failure |
+| `mcp.sync_retry_base_delay_secs` | `THAIRAG__MCP__SYNC_RETRY_BASE_DELAY_SECS` | `2` | Base delay for exponential backoff |
+| `mcp.sync_retry_max_delay_secs` | `THAIRAG__MCP__SYNC_RETRY_MAX_DELAY_SECS` | `60` | Max retry delay |
+
 ### Document Processing
 
 | Key | Env Override | Default | Description |
@@ -329,6 +345,7 @@ cd admin-ui && npx playwright test
 - [ ] Use PostgreSQL instead of SQLite for the database
 - [ ] Use Qdrant instead of in-memory vector store
 - [ ] Set `THAIRAG__SERVER__CORS_ORIGINS` to restrict allowed origins
+- [ ] Enable MCP if using external connectors (`THAIRAG__MCP__ENABLED=true`)
 - [ ] Configure rate limiting appropriately for your traffic
 - [ ] Set up Prometheus scraping from `/metrics`
 - [ ] Seed a super admin account via env vars

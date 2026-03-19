@@ -101,3 +101,53 @@ CREATE TABLE IF NOT EXISTS document_blobs (
     table_count      INTEGER NOT NULL DEFAULT 0,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- MCP Connectors
+CREATE TABLE IF NOT EXISTS mcp_connectors (
+    id              UUID PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    transport       TEXT NOT NULL,
+    command         TEXT,
+    args            TEXT NOT NULL DEFAULT '[]',
+    env             TEXT NOT NULL DEFAULT '{}',
+    url             TEXT,
+    headers         TEXT NOT NULL DEFAULT '{}',
+    workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    sync_mode       TEXT NOT NULL DEFAULT 'on_demand',
+    schedule_cron   TEXT,
+    resource_filters TEXT NOT NULL DEFAULT '[]',
+    max_items_per_sync INTEGER,
+    tool_calls      TEXT NOT NULL DEFAULT '[]',
+    webhook_url     TEXT,
+    webhook_secret  TEXT,
+    status          TEXT NOT NULL DEFAULT 'active',
+    created_at      TIMESTAMPTZ NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_connectors_workspace_id ON mcp_connectors(workspace_id);
+
+CREATE TABLE IF NOT EXISTS mcp_sync_states (
+    connector_id    UUID NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+    resource_uri    TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    doc_id          UUID,
+    last_synced_at  TIMESTAMPTZ NOT NULL,
+    source_metadata TEXT,
+    PRIMARY KEY (connector_id, resource_uri)
+);
+
+CREATE TABLE IF NOT EXISTS mcp_sync_runs (
+    id               UUID PRIMARY KEY,
+    connector_id     UUID NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+    started_at       TIMESTAMPTZ NOT NULL,
+    completed_at     TIMESTAMPTZ,
+    status           TEXT NOT NULL,
+    items_discovered INTEGER NOT NULL DEFAULT 0,
+    items_created    INTEGER NOT NULL DEFAULT 0,
+    items_updated    INTEGER NOT NULL DEFAULT 0,
+    items_skipped    INTEGER NOT NULL DEFAULT 0,
+    items_failed     INTEGER NOT NULL DEFAULT 0,
+    error_message    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_sync_runs_connector_id ON mcp_sync_runs(connector_id);

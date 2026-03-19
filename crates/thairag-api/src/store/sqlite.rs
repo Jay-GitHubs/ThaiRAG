@@ -8,7 +8,10 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{
+    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport, OrgId,
+    SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+};
 use uuid::Uuid;
 
 use super::{KmStoreTrait, UserRecord};
@@ -135,6 +138,127 @@ fn parts_to_scope(level: &str, org_id: &str, dept_id: &str, ws_id: &str) -> Perm
             org_id: OrgId(parse_uuid(org_id)),
         },
     }
+}
+
+fn parse_transport(s: &str) -> McpTransport {
+    match s {
+        "sse" => McpTransport::Sse,
+        _ => McpTransport::Stdio,
+    }
+}
+
+fn parse_connector_status(s: &str) -> ConnectorStatus {
+    match s {
+        "paused" => ConnectorStatus::Paused,
+        "error" => ConnectorStatus::Error,
+        "syncing" => ConnectorStatus::Syncing,
+        _ => ConnectorStatus::Active,
+    }
+}
+
+fn parse_sync_mode(s: &str) -> SyncMode {
+    match s {
+        "scheduled" => SyncMode::Scheduled,
+        _ => SyncMode::OnDemand,
+    }
+}
+
+fn parse_sync_run_status(s: &str) -> SyncRunStatus {
+    match s {
+        "completed" => SyncRunStatus::Completed,
+        "failed" => SyncRunStatus::Failed,
+        "cancelled" => SyncRunStatus::Cancelled,
+        _ => SyncRunStatus::Running,
+    }
+}
+
+fn connector_from_row(row: &rusqlite::Row) -> rusqlite::Result<McpConnectorConfig> {
+    let id_s: String = row.get(0)?;
+    let name: String = row.get(1)?;
+    let description: String = row.get(2)?;
+    let transport_s: String = row.get(3)?;
+    let command: Option<String> = row.get(4)?;
+    let args_s: String = row.get(5)?;
+    let env_s: String = row.get(6)?;
+    let url: Option<String> = row.get(7)?;
+    let headers_s: String = row.get(8)?;
+    let ws_s: String = row.get(9)?;
+    let sync_mode_s: String = row.get(10)?;
+    let schedule_cron: Option<String> = row.get(11)?;
+    let resource_filters_s: String = row.get(12)?;
+    let max_items: Option<i64> = row.get(13)?;
+    let tool_calls_s: String = row.get(14)?;
+    let webhook_url: Option<String> = row.get(15)?;
+    let webhook_secret: Option<String> = row.get(16)?;
+    let status_s: String = row.get(17)?;
+    let ca: String = row.get(18)?;
+    let ua: String = row.get(19)?;
+    Ok(McpConnectorConfig {
+        id: ConnectorId(parse_uuid(&id_s)),
+        name,
+        description,
+        transport: parse_transport(&transport_s),
+        command,
+        args: serde_json::from_str(&args_s).unwrap_or_default(),
+        env: serde_json::from_str(&env_s).unwrap_or_default(),
+        url,
+        headers: serde_json::from_str(&headers_s).unwrap_or_default(),
+        workspace_id: WorkspaceId(parse_uuid(&ws_s)),
+        sync_mode: parse_sync_mode(&sync_mode_s),
+        schedule_cron,
+        resource_filters: serde_json::from_str(&resource_filters_s).unwrap_or_default(),
+        max_items_per_sync: max_items.map(|v| v as usize),
+        tool_calls: serde_json::from_str(&tool_calls_s).unwrap_or_default(),
+        webhook_url,
+        webhook_secret,
+        status: parse_connector_status(&status_s),
+        created_at: parse_ts(&ca),
+        updated_at: parse_ts(&ua),
+    })
+}
+
+fn sync_state_from_row(row: &rusqlite::Row) -> rusqlite::Result<SyncState> {
+    let cid_s: String = row.get(0)?;
+    let resource_uri: String = row.get(1)?;
+    let content_hash: String = row.get(2)?;
+    let doc_id_s: Option<String> = row.get(3)?;
+    let last_synced: String = row.get(4)?;
+    let meta_s: Option<String> = row.get(5)?;
+    Ok(SyncState {
+        connector_id: ConnectorId(parse_uuid(&cid_s)),
+        resource_uri,
+        content_hash,
+        doc_id: doc_id_s.map(|s| DocId(parse_uuid(&s))),
+        last_synced_at: parse_ts(&last_synced),
+        source_metadata: meta_s.and_then(|s| serde_json::from_str(&s).ok()),
+    })
+}
+
+fn sync_run_from_row(row: &rusqlite::Row) -> rusqlite::Result<SyncRun> {
+    let id_s: String = row.get(0)?;
+    let cid_s: String = row.get(1)?;
+    let started: String = row.get(2)?;
+    let completed: Option<String> = row.get(3)?;
+    let status_s: String = row.get(4)?;
+    let discovered: i64 = row.get(5)?;
+    let created: i64 = row.get(6)?;
+    let updated: i64 = row.get(7)?;
+    let skipped: i64 = row.get(8)?;
+    let failed: i64 = row.get(9)?;
+    let error_message: Option<String> = row.get(10)?;
+    Ok(SyncRun {
+        id: SyncRunId(parse_uuid(&id_s)),
+        connector_id: ConnectorId(parse_uuid(&cid_s)),
+        started_at: parse_ts(&started),
+        completed_at: completed.map(|s| parse_ts(&s)),
+        status: parse_sync_run_status(&status_s),
+        items_discovered: discovered as usize,
+        items_created: created as usize,
+        items_updated: updated as usize,
+        items_skipped: skipped as usize,
+        items_failed: failed as usize,
+        error_message,
+    })
 }
 
 fn parse_role(s: &str) -> Role {
@@ -1320,6 +1444,270 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM settings WHERE key = ?1", params![key])
             .ok();
+    }
+
+    // ── MCP Connectors ───────────────────────────────────────────────
+
+    fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {
+        self.get_workspace(config.workspace_id)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO mcp_connectors (id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            params![
+                config.id.0.to_string(),
+                config.name,
+                config.description,
+                serde_json::to_string(&config.transport).unwrap_or_default().trim_matches('"'),
+                config.command,
+                serde_json::to_string(&config.args).unwrap_or_default(),
+                serde_json::to_string(&config.env).unwrap_or_default(),
+                config.url,
+                serde_json::to_string(&config.headers).unwrap_or_default(),
+                config.workspace_id.0.to_string(),
+                serde_json::to_string(&config.sync_mode).unwrap_or_default().trim_matches('"'),
+                config.schedule_cron,
+                serde_json::to_string(&config.resource_filters).unwrap_or_default(),
+                config.max_items_per_sync.map(|v| v as i64),
+                serde_json::to_string(&config.tool_calls).unwrap_or_default(),
+                config.webhook_url,
+                config.webhook_secret,
+                serde_json::to_string(&config.status).unwrap_or_default().trim_matches('"'),
+                ts(&config.created_at),
+                ts(&config.updated_at),
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite insert connector: {e}")))?;
+        Ok(config)
+    }
+
+    fn get_connector(&self, id: ConnectorId) -> Result<McpConnectorConfig> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors WHERE id = ?1",
+            params![id.0.to_string()],
+            connector_from_row,
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Connector {id} not found")))
+    }
+
+    fn list_connectors(&self) -> Vec<McpConnectorConfig> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors")
+            .unwrap();
+        stmt.query_map([], connector_from_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    fn list_connectors_for_workspace(&self, ws_id: WorkspaceId) -> Vec<McpConnectorConfig> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, description, transport, command, args, env, url, headers, workspace_id, sync_mode, schedule_cron, resource_filters, max_items_per_sync, tool_calls, webhook_url, webhook_secret, status, created_at, updated_at FROM mcp_connectors WHERE workspace_id = ?1")
+            .unwrap();
+        stmt.query_map(params![ws_id.0.to_string()], connector_from_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    fn update_connector(&self, config: McpConnectorConfig) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE mcp_connectors SET name = ?1, description = ?2, transport = ?3, command = ?4, args = ?5, env = ?6, url = ?7, headers = ?8, workspace_id = ?9, sync_mode = ?10, schedule_cron = ?11, resource_filters = ?12, max_items_per_sync = ?13, tool_calls = ?14, webhook_url = ?15, webhook_secret = ?16, status = ?17, updated_at = ?18 WHERE id = ?19",
+                params![
+                    config.name,
+                    config.description,
+                    serde_json::to_string(&config.transport).unwrap_or_default().trim_matches('"'),
+                    config.command,
+                    serde_json::to_string(&config.args).unwrap_or_default(),
+                    serde_json::to_string(&config.env).unwrap_or_default(),
+                    config.url,
+                    serde_json::to_string(&config.headers).unwrap_or_default(),
+                    config.workspace_id.0.to_string(),
+                    serde_json::to_string(&config.sync_mode).unwrap_or_default().trim_matches('"'),
+                    config.schedule_cron,
+                    serde_json::to_string(&config.resource_filters).unwrap_or_default(),
+                    config.max_items_per_sync.map(|v| v as i64),
+                    serde_json::to_string(&config.tool_calls).unwrap_or_default(),
+                    config.webhook_url,
+                    config.webhook_secret,
+                    serde_json::to_string(&config.status).unwrap_or_default().trim_matches('"'),
+                    ts(&config.updated_at),
+                    config.id.0.to_string(),
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update connector: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Connector {} not found",
+                config.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_connector(&self, id: ConnectorId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "DELETE FROM mcp_connectors WHERE id = ?1",
+                params![id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite delete connector: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Connector {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_connector_status(&self, id: ConnectorId, status: ConnectorStatus) -> Result<()> {
+        let now = Utc::now();
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE mcp_connectors SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&status)
+                        .unwrap_or_default()
+                        .trim_matches('"'),
+                    ts(&now),
+                    id.0.to_string(),
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update connector status: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Connector {id} not found")));
+        }
+        Ok(())
+    }
+
+    // ── MCP Sync State ───────────────────────────────────────────────
+
+    fn get_sync_state(&self, connector_id: ConnectorId, resource_uri: &str) -> Option<SyncState> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata FROM mcp_sync_states WHERE connector_id = ?1 AND resource_uri = ?2",
+            params![connector_id.0.to_string(), resource_uri],
+            sync_state_from_row,
+        )
+        .ok()
+    }
+
+    fn upsert_sync_state(&self, state: SyncState) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO mcp_sync_states (connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(connector_id, resource_uri) DO UPDATE SET content_hash = ?3, doc_id = ?4, last_synced_at = ?5, source_metadata = ?6",
+            params![
+                state.connector_id.0.to_string(),
+                state.resource_uri,
+                state.content_hash,
+                state.doc_id.map(|d| d.0.to_string()),
+                ts(&state.last_synced_at),
+                state.source_metadata.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()),
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite upsert sync state: {e}")))?;
+        Ok(())
+    }
+
+    fn list_sync_states(&self, connector_id: ConnectorId) -> Vec<SyncState> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT connector_id, resource_uri, content_hash, doc_id, last_synced_at, source_metadata FROM mcp_sync_states WHERE connector_id = ?1")
+            .unwrap();
+        stmt.query_map(params![connector_id.0.to_string()], |row| {
+            sync_state_from_row(row)
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn delete_sync_states(&self, connector_id: ConnectorId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM mcp_sync_states WHERE connector_id = ?1",
+            params![connector_id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite delete sync states: {e}")))?;
+        Ok(())
+    }
+
+    // ── MCP Sync Runs ────────────────────────────────────────────────
+
+    fn insert_sync_run(&self, run: SyncRun) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO mcp_sync_runs (id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                run.id.0.to_string(),
+                run.connector_id.0.to_string(),
+                ts(&run.started_at),
+                run.completed_at.as_ref().map(ts),
+                serde_json::to_string(&run.status).unwrap_or_default().trim_matches('"'),
+                run.items_discovered as i64,
+                run.items_created as i64,
+                run.items_updated as i64,
+                run.items_skipped as i64,
+                run.items_failed as i64,
+                run.error_message,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite insert sync run: {e}")))?;
+        Ok(())
+    }
+
+    fn update_sync_run(&self, run: SyncRun) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE mcp_sync_runs SET completed_at = ?1, status = ?2, items_discovered = ?3, items_created = ?4, items_updated = ?5, items_skipped = ?6, items_failed = ?7, error_message = ?8 WHERE id = ?9",
+                params![
+                    run.completed_at.as_ref().map(ts),
+                    serde_json::to_string(&run.status).unwrap_or_default().trim_matches('"'),
+                    run.items_discovered as i64,
+                    run.items_created as i64,
+                    run.items_updated as i64,
+                    run.items_skipped as i64,
+                    run.items_failed as i64,
+                    run.error_message,
+                    run.id.0.to_string(),
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update sync run: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Sync run {} not found",
+                run.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn list_sync_runs(&self, connector_id: ConnectorId, limit: usize) -> Vec<SyncRun> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message FROM mcp_sync_runs WHERE connector_id = ?1 ORDER BY started_at DESC LIMIT ?2")
+            .unwrap();
+        stmt.query_map(params![connector_id.0.to_string(), limit as i64], |row| {
+            sync_run_from_row(row)
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_latest_sync_run(&self, connector_id: ConnectorId) -> Option<SyncRun> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, connector_id, started_at, completed_at, status, items_discovered, items_created, items_updated, items_skipped, items_failed, error_message FROM mcp_sync_runs WHERE connector_id = ?1 ORDER BY started_at DESC LIMIT 1",
+            params![connector_id.0.to_string()],
+            sync_run_from_row,
+        )
+        .ok()
     }
 }
 

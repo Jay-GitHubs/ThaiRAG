@@ -83,3 +83,51 @@ CREATE TABLE IF NOT EXISTS permissions (
     role           TEXT NOT NULL,
     UNIQUE(user_id, scope_level, org_id, dept_id, workspace_id)
 );
+
+-- MCP Connectors
+CREATE TABLE IF NOT EXISTS mcp_connectors (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    transport       TEXT NOT NULL,
+    command         TEXT,
+    args            TEXT NOT NULL DEFAULT '[]',
+    env             TEXT NOT NULL DEFAULT '{}',
+    url             TEXT,
+    headers         TEXT NOT NULL DEFAULT '{}',
+    workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    sync_mode       TEXT NOT NULL DEFAULT 'on_demand',
+    schedule_cron   TEXT,
+    resource_filters TEXT NOT NULL DEFAULT '[]',
+    max_items_per_sync INTEGER,
+    tool_calls      TEXT NOT NULL DEFAULT '[]',
+    webhook_url     TEXT,
+    webhook_secret  TEXT,
+    status          TEXT NOT NULL DEFAULT 'active',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_sync_states (
+    connector_id    TEXT NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+    resource_uri    TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    doc_id          TEXT,
+    last_synced_at  TEXT NOT NULL,
+    source_metadata TEXT,
+    PRIMARY KEY (connector_id, resource_uri)
+);
+
+CREATE TABLE IF NOT EXISTS mcp_sync_runs (
+    id               TEXT PRIMARY KEY,
+    connector_id     TEXT NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+    started_at       TEXT NOT NULL,
+    completed_at     TEXT,
+    status           TEXT NOT NULL,
+    items_discovered INTEGER NOT NULL DEFAULT 0,
+    items_created    INTEGER NOT NULL DEFAULT 0,
+    items_updated    INTEGER NOT NULL DEFAULT 0,
+    items_skipped    INTEGER NOT NULL DEFAULT 0,
+    items_failed     INTEGER NOT NULL DEFAULT 0,
+    error_message    TEXT
+);

@@ -18,6 +18,9 @@ pub struct MetricsState {
     pub http_request_duration_seconds: HistogramVec,
     pub llm_tokens_total: IntCounterVec,
     pub active_sessions_total: IntGauge,
+    pub mcp_sync_runs_total: IntCounterVec,
+    pub mcp_sync_items_total: IntCounterVec,
+    pub mcp_sync_duration_seconds: HistogramVec,
 }
 
 impl Default for MetricsState {
@@ -57,6 +60,25 @@ impl MetricsState {
         let active_sessions_total =
             IntGauge::new("active_sessions_total", "Number of active sessions").unwrap();
 
+        let mcp_sync_runs_total = IntCounterVec::new(
+            Opts::new("mcp_sync_runs_total", "Total MCP sync runs"),
+            &["connector", "status"],
+        )
+        .unwrap();
+
+        let mcp_sync_items_total = IntCounterVec::new(
+            Opts::new("mcp_sync_items_total", "Total MCP sync items processed"),
+            &["connector", "action"],
+        )
+        .unwrap();
+
+        let mcp_sync_duration_seconds = HistogramVec::new(
+            HistogramOpts::new("mcp_sync_duration_seconds", "MCP sync duration in seconds")
+                .buckets(vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0]),
+            &["connector"],
+        )
+        .unwrap();
+
         registry
             .register(Box::new(http_requests_total.clone()))
             .unwrap();
@@ -69,6 +91,15 @@ impl MetricsState {
         registry
             .register(Box::new(active_sessions_total.clone()))
             .unwrap();
+        registry
+            .register(Box::new(mcp_sync_runs_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(mcp_sync_items_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(mcp_sync_duration_seconds.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -76,6 +107,9 @@ impl MetricsState {
             http_request_duration_seconds,
             llm_tokens_total,
             active_sessions_total,
+            mcp_sync_runs_total,
+            mcp_sync_items_total,
+            mcp_sync_duration_seconds,
         }
     }
 
@@ -98,6 +132,45 @@ impl MetricsState {
 
     pub fn set_active_sessions(&self, count: usize) {
         self.active_sessions_total.set(count as i64);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sync_run(
+        &self,
+        connector_name: &str,
+        status: &str,
+        duration_secs: f64,
+        created: u64,
+        updated: u64,
+        skipped: u64,
+        failed: u64,
+    ) {
+        self.mcp_sync_runs_total
+            .with_label_values(&[connector_name, status])
+            .inc();
+        self.mcp_sync_duration_seconds
+            .with_label_values(&[connector_name])
+            .observe(duration_secs);
+        if created > 0 {
+            self.mcp_sync_items_total
+                .with_label_values(&[connector_name, "created"])
+                .inc_by(created);
+        }
+        if updated > 0 {
+            self.mcp_sync_items_total
+                .with_label_values(&[connector_name, "updated"])
+                .inc_by(updated);
+        }
+        if skipped > 0 {
+            self.mcp_sync_items_total
+                .with_label_values(&[connector_name, "skipped"])
+                .inc_by(skipped);
+        }
+        if failed > 0 {
+            self.mcp_sync_items_total
+                .with_label_values(&[connector_name, "failed"])
+                .inc_by(failed);
+        }
     }
 }
 
@@ -243,6 +316,34 @@ mod tests {
         let output = state.encode();
         assert!(output.contains("llm_tokens_total{type=\"prompt\"} 300"));
         assert!(output.contains("llm_tokens_total{type=\"completion\"} 125"));
+    }
+
+    #[test]
+    fn record_sync_run_increments() {
+        let state = MetricsState::new();
+        state.record_sync_run("confluence", "completed", 12.5, 10, 5, 3, 0);
+        state.record_sync_run("confluence", "failed", 2.0, 0, 0, 0, 1);
+
+        let output = state.encode();
+        assert!(
+            output.contains("mcp_sync_runs_total{connector=\"confluence\",status=\"completed\"} 1")
+        );
+        assert!(
+            output.contains("mcp_sync_runs_total{connector=\"confluence\",status=\"failed\"} 1")
+        );
+        assert!(
+            output.contains("mcp_sync_items_total{action=\"created\",connector=\"confluence\"} 10")
+        );
+        assert!(
+            output.contains("mcp_sync_items_total{action=\"updated\",connector=\"confluence\"} 5")
+        );
+        assert!(
+            output.contains("mcp_sync_items_total{action=\"skipped\",connector=\"confluence\"} 3")
+        );
+        assert!(
+            output.contains("mcp_sync_items_total{action=\"failed\",connector=\"confluence\"} 1")
+        );
+        assert!(output.contains("mcp_sync_duration_seconds"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
@@ -184,6 +184,48 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_setting(&self, key: &str) -> Option<String>;
     fn set_setting(&self, key: &str, value: &str);
     fn delete_setting(&self, key: &str);
+
+    // ── MCP Connectors ───────────────────────────────────────────────
+    fn insert_connector(
+        &self,
+        config: thairag_core::types::McpConnectorConfig,
+    ) -> Result<thairag_core::types::McpConnectorConfig>;
+    fn get_connector(&self, id: ConnectorId) -> Result<thairag_core::types::McpConnectorConfig>;
+    fn list_connectors(&self) -> Vec<thairag_core::types::McpConnectorConfig>;
+    fn list_connectors_for_workspace(
+        &self,
+        ws_id: WorkspaceId,
+    ) -> Vec<thairag_core::types::McpConnectorConfig>;
+    fn update_connector(&self, config: thairag_core::types::McpConnectorConfig) -> Result<()>;
+    fn delete_connector(&self, id: ConnectorId) -> Result<()>;
+    fn update_connector_status(
+        &self,
+        id: ConnectorId,
+        status: thairag_core::types::ConnectorStatus,
+    ) -> Result<()>;
+
+    // ── MCP Sync State ───────────────────────────────────────────────
+    fn get_sync_state(
+        &self,
+        connector_id: ConnectorId,
+        resource_uri: &str,
+    ) -> Option<thairag_core::types::SyncState>;
+    fn upsert_sync_state(&self, state: thairag_core::types::SyncState) -> Result<()>;
+    fn list_sync_states(&self, connector_id: ConnectorId) -> Vec<thairag_core::types::SyncState>;
+    fn delete_sync_states(&self, connector_id: ConnectorId) -> Result<()>;
+
+    // ── MCP Sync Runs ────────────────────────────────────────────────
+    fn insert_sync_run(&self, run: thairag_core::types::SyncRun) -> Result<()>;
+    fn update_sync_run(&self, run: thairag_core::types::SyncRun) -> Result<()>;
+    fn list_sync_runs(
+        &self,
+        connector_id: ConnectorId,
+        limit: usize,
+    ) -> Vec<thairag_core::types::SyncRun>;
+    fn get_latest_sync_run(
+        &self,
+        connector_id: ConnectorId,
+    ) -> Option<thairag_core::types::SyncRun>;
 }
 
 /// Factory function to create the appropriate KM store.

@@ -35,6 +35,8 @@ Health check endpoint.
 
 Prometheus-format metrics.
 
+Exposed metrics include `http_requests_total`, `http_request_duration_seconds`, `llm_tokens_total`, `active_sessions_total`, `mcp_sync_runs_total`, `mcp_sync_items_total`, `mcp_sync_duration_seconds`.
+
 ---
 
 ## Authentication
@@ -409,6 +411,180 @@ Run a search + RAG answer against a specific workspace. Returns retrieved chunks
   }
 }
 ```
+
+---
+
+## MCP Connectors (Super Admin)
+
+All connector routes are under `/api/km/connectors` and require super admin access.
+
+### Templates
+
+#### `GET /api/km/connectors/templates`
+List available connector templates (presets for common MCP servers).
+
+**Response:**
+```json
+[
+  {
+    "id": "github",
+    "name": "GitHub",
+    "description": "Access GitHub repositories, issues, and pull requests",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env_keys": ["GITHUB_TOKEN"],
+    "url": null,
+    "resource_filters": []
+  }
+]
+```
+
+Available templates: `filesystem`, `fetch`, `postgres`, `sqlite`, `github`, `slack`, `google-drive`, `notion`, `confluence`.
+
+#### `POST /api/km/connectors/from-template`
+Create a connector from a template.
+
+**Request:**
+```json
+{
+  "template_id": "github",
+  "workspace_id": "workspace-uuid",
+  "name": "My GitHub Connector",
+  "env": {
+    "GITHUB_TOKEN": "ghp_..."
+  },
+  "sync_mode": "on_demand"
+}
+```
+
+**Response:** `201 Created` — Same as connector response below.
+
+### CRUD
+
+#### `POST /api/km/connectors`
+Create a connector.
+
+**Request:**
+```json
+{
+  "name": "My MCP Server",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  "workspace_id": "workspace-uuid",
+  "sync_mode": "on_demand",
+  "webhook_url": "https://hooks.example.com/thairag",
+  "webhook_secret": "my-secret"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Connector display name |
+| `transport` | string | yes | `stdio` or `sse` |
+| `command` | string | stdio only | Command to run |
+| `args` | string[] | no | Command arguments |
+| `env` | object | no | Environment variables for the MCP process |
+| `url` | string | sse only | MCP server URL |
+| `headers` | object | no | HTTP headers for SSE transport |
+| `workspace_id` | uuid | yes | Target workspace for synced content |
+| `sync_mode` | string | no | `on_demand` (default) or `scheduled` |
+| `schedule_cron` | string | scheduled only | Cron expression (e.g., `0 */6 * * *`) |
+| `resource_filters` | string[] | no | Glob patterns to filter resources |
+| `max_items_per_sync` | number | no | Limit items per sync run |
+| `webhook_url` | string | no | URL to POST sync notifications |
+| `webhook_secret` | string | no | Bearer token for webhook auth |
+
+**Response:** `201 Created`
+```json
+{
+  "id": "uuid",
+  "name": "My MCP Server",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  "url": null,
+  "workspace_id": "workspace-uuid",
+  "sync_mode": "on_demand",
+  "schedule_cron": null,
+  "resource_filters": [],
+  "max_items_per_sync": null,
+  "tool_calls": [],
+  "webhook_url": "https://hooks.example.com/thairag",
+  "status": "active",
+  "created_at": "2026-03-18T12:00:00Z",
+  "updated_at": "2026-03-18T12:00:00Z",
+  "last_sync_at": null,
+  "last_sync_status": null
+}
+```
+
+#### `GET /api/km/connectors`
+List all connectors. Supports pagination (`?page=1&per_page=20`).
+
+#### `GET /api/km/connectors/{id}`
+Get a single connector with latest sync status.
+
+#### `PUT /api/km/connectors/{id}`
+Update a connector. All fields optional.
+
+#### `DELETE /api/km/connectors/{id}`
+Delete a connector and all its sync state/history.
+
+### Actions
+
+#### `POST /api/km/connectors/{id}/sync`
+Trigger a sync run. Connects to the MCP server, discovers resources, and ingests content into the workspace through the document pipeline (convert, chunk, embed, index).
+
+**Response:**
+```json
+{
+  "id": "run-uuid",
+  "connector_id": "connector-uuid",
+  "started_at": "2026-03-18T12:00:00Z",
+  "completed_at": "2026-03-18T12:01:30Z",
+  "status": "completed",
+  "items_discovered": 25,
+  "items_created": 20,
+  "items_updated": 3,
+  "items_skipped": 2,
+  "items_failed": 0,
+  "error_message": null,
+  "duration_secs": 90.5
+}
+```
+
+Sync includes:
+- **Content hashing** (SHA-256) for change detection — unchanged resources are skipped
+- **Retry with exponential backoff** on connection/discovery failures (default: 3 attempts)
+- **Webhook notification** if `webhook_url` is configured
+
+#### `POST /api/km/connectors/{id}/pause`
+Pause a connector (stops scheduled syncs). Returns `200 OK`.
+
+#### `POST /api/km/connectors/{id}/resume`
+Resume a paused connector. Returns `200 OK`.
+
+#### `POST /api/km/connectors/{id}/test`
+Test connection to the MCP server and list available resources.
+
+**Response:**
+```json
+{
+  "resources": [
+    {
+      "uri": "file:///data/readme.md",
+      "name": "readme.md",
+      "mime_type": "text/markdown",
+      "description": null
+    }
+  ]
+}
+```
+
+#### `GET /api/km/connectors/{id}/sync-runs`
+List sync run history for a connector.
 
 ---
 

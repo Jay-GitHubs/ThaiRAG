@@ -8,7 +8,10 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{
+    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, OrgId, SyncRun,
+    SyncState, UserId, WorkspaceId,
+};
 
 use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
 
@@ -32,6 +35,9 @@ pub struct MemoryKmStore {
     permissions: RwLock<Vec<UserPermission>>,
     identity_providers: RwLock<HashMap<IdpId, IdentityProvider>>,
     settings: RwLock<HashMap<String, String>>,
+    connectors: RwLock<HashMap<ConnectorId, McpConnectorConfig>>,
+    sync_states: RwLock<HashMap<(ConnectorId, String), SyncState>>,
+    sync_runs: RwLock<Vec<SyncRun>>,
 }
 
 impl Default for MemoryKmStore {
@@ -53,6 +59,9 @@ impl MemoryKmStore {
             permissions: RwLock::new(Vec::new()),
             identity_providers: RwLock::new(HashMap::new()),
             settings: RwLock::new(HashMap::new()),
+            connectors: RwLock::new(HashMap::new()),
+            sync_states: RwLock::new(HashMap::new()),
+            sync_runs: RwLock::new(Vec::new()),
         }
     }
 }
@@ -758,6 +767,157 @@ impl KmStoreTrait for MemoryKmStore {
 
     fn delete_setting(&self, key: &str) {
         self.settings.write().unwrap().remove(key);
+    }
+
+    // ── MCP Connectors ───────────────────────────────────────────────
+
+    fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {
+        self.get_workspace(config.workspace_id)?;
+        self.connectors
+            .write()
+            .unwrap()
+            .insert(config.id, config.clone());
+        Ok(config)
+    }
+
+    fn get_connector(&self, id: ConnectorId) -> Result<McpConnectorConfig> {
+        self.connectors
+            .read()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Connector {id} not found")))
+    }
+
+    fn list_connectors(&self) -> Vec<McpConnectorConfig> {
+        self.connectors.read().unwrap().values().cloned().collect()
+    }
+
+    fn list_connectors_for_workspace(&self, ws_id: WorkspaceId) -> Vec<McpConnectorConfig> {
+        self.connectors
+            .read()
+            .unwrap()
+            .values()
+            .filter(|c| c.workspace_id == ws_id)
+            .cloned()
+            .collect()
+    }
+
+    fn update_connector(&self, config: McpConnectorConfig) -> Result<()> {
+        let mut connectors = self.connectors.write().unwrap();
+        if !connectors.contains_key(&config.id) {
+            return Err(ThaiRagError::NotFound(format!(
+                "Connector {} not found",
+                config.id
+            )));
+        }
+        connectors.insert(config.id, config);
+        Ok(())
+    }
+
+    fn delete_connector(&self, id: ConnectorId) -> Result<()> {
+        if self.connectors.write().unwrap().remove(&id).is_none() {
+            return Err(ThaiRagError::NotFound(format!("Connector {id} not found")));
+        }
+        // Clean up sync states for this connector
+        self.sync_states
+            .write()
+            .unwrap()
+            .retain(|(cid, _), _| *cid != id);
+        // Clean up sync runs for this connector
+        self.sync_runs
+            .write()
+            .unwrap()
+            .retain(|r| r.connector_id != id);
+        Ok(())
+    }
+
+    fn update_connector_status(&self, id: ConnectorId, status: ConnectorStatus) -> Result<()> {
+        let mut connectors = self.connectors.write().unwrap();
+        let connector = connectors
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Connector {id} not found")))?;
+        connector.status = status;
+        connector.updated_at = Utc::now();
+        Ok(())
+    }
+
+    // ── MCP Sync State ───────────────────────────────────────────────
+
+    fn get_sync_state(&self, connector_id: ConnectorId, resource_uri: &str) -> Option<SyncState> {
+        self.sync_states
+            .read()
+            .unwrap()
+            .get(&(connector_id, resource_uri.to_string()))
+            .cloned()
+    }
+
+    fn upsert_sync_state(&self, state: SyncState) -> Result<()> {
+        self.sync_states
+            .write()
+            .unwrap()
+            .insert((state.connector_id, state.resource_uri.clone()), state);
+        Ok(())
+    }
+
+    fn list_sync_states(&self, connector_id: ConnectorId) -> Vec<SyncState> {
+        self.sync_states
+            .read()
+            .unwrap()
+            .values()
+            .filter(|s| s.connector_id == connector_id)
+            .cloned()
+            .collect()
+    }
+
+    fn delete_sync_states(&self, connector_id: ConnectorId) -> Result<()> {
+        self.sync_states
+            .write()
+            .unwrap()
+            .retain(|(cid, _), _| *cid != connector_id);
+        Ok(())
+    }
+
+    // ── MCP Sync Runs ────────────────────────────────────────────────
+
+    fn insert_sync_run(&self, run: SyncRun) -> Result<()> {
+        self.sync_runs.write().unwrap().push(run);
+        Ok(())
+    }
+
+    fn update_sync_run(&self, run: SyncRun) -> Result<()> {
+        let mut runs = self.sync_runs.write().unwrap();
+        if let Some(existing) = runs.iter_mut().find(|r| r.id == run.id) {
+            *existing = run;
+            Ok(())
+        } else {
+            Err(ThaiRagError::NotFound(format!(
+                "Sync run {} not found",
+                run.id
+            )))
+        }
+    }
+
+    fn list_sync_runs(&self, connector_id: ConnectorId, limit: usize) -> Vec<SyncRun> {
+        let runs = self.sync_runs.read().unwrap();
+        let mut filtered: Vec<SyncRun> = runs
+            .iter()
+            .filter(|r| r.connector_id == connector_id)
+            .cloned()
+            .collect();
+        filtered.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        filtered.truncate(limit);
+        filtered
+    }
+
+    fn get_latest_sync_run(&self, connector_id: ConnectorId) -> Option<SyncRun> {
+        self.sync_runs
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| r.connector_id == connector_id)
+            .max_by_key(|r| r.started_at)
+            .cloned()
     }
 }
 

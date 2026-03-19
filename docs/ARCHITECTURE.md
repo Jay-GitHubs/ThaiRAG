@@ -2,7 +2,7 @@
 
 ## Crate Dependency Graph
 
-ThaiRAG is a Rust workspace with 13 crates organized in strict layers. Each layer depends only on layers below it.
+ThaiRAG is a Rust workspace with 14 crates organized in strict layers. Each layer depends only on layers below it.
 
 ```
                     ┌──────────────┐
@@ -43,6 +43,8 @@ ThaiRAG is a Rust workspace with 13 crates organized in strict layers. Each laye
                    │ thairag-core │  Error types, traits, models, IDs
                    └──────────────┘
 ```
+
+> **Note:** `thairag-mcp` (MCP Integration) sits alongside `thairag-agent`, providing MCP client connectivity, sync orchestration, and webhook notifications.
 
 ## Crate Details
 
@@ -111,6 +113,14 @@ RAG orchestrator:
 - **Chat pipeline** — Optional configurable pipeline with system prompt, guardrails, and pre/post processors
 - **Context compaction** — Automatic summarization of older messages when conversation approaches the model's context window limit (Claude Code-style). Uses Thai-aware token estimation (~2 chars/token for Thai, ~4 chars/token for English)
 - **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
+
+### thairag-mcp
+MCP (Model Context Protocol) integration for connecting to external data sources:
+- **RmcpClient**: MCP client supporting stdio (child process) and streamable HTTP transports via the `rmcp` SDK
+- **SyncEngine**: Orchestrates sync runs — connect, discover resources, content-hash for deduplication, ingest via document pipeline, track state. Includes retry with exponential backoff.
+- **SyncScheduler**: Background cron-based scheduler using `CancellationToken` for graceful shutdown
+- **Webhook**: POST notifications to configured URLs after sync completion/failure
+- Dependencies: `rmcp`, `sha2`, `cron`, `tokio-util`
 
 ### thairag-api
 Axum HTTP server with:
@@ -182,6 +192,8 @@ For each chunk:
     ├─ VectorStore::upsert(chunk_id, embedding)
     └─ Tantivy::index(chunk_id, content)
 ```
+
+> **MCP Ingestion:** When MCP connectors are enabled, `thairag-mcp`'s SyncEngine discovers resources from external MCP servers and ingests them through the same document pipeline (format conversion → chunking → embedding → indexing). Content-hash deduplication prevents re-ingesting unchanged resources.
 
 ### Feedback-Driven Tuning Flow
 

@@ -218,6 +218,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
+        mcp: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1631,6 +1632,7 @@ fn build_streaming_test_app() -> Router {
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
+        mcp: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -2327,4 +2329,384 @@ async fn super_admin_sees_everything() {
     let resp = app.clone().oneshot(req).await.unwrap();
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["total"], 1);
+}
+
+// ── Connector CRUD Tests ────────────────────────────────────────────
+
+#[tokio::test]
+async fn connector_crud() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    // First create an org, dept, workspace to get a valid workspace_id
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/orgs",
+            serde_json::json!({"name": "TestOrg"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let org = body_json(resp.into_body()).await;
+    let org_id = org["id"].as_str().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts"),
+            serde_json::json!({"name": "TestDept"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let dept = body_json(resp.into_body()).await;
+    let dept_id = dept["id"].as_str().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+            serde_json::json!({"name": "TestWS"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let ws = body_json(resp.into_body()).await;
+    let ws_id = ws["id"].as_str().unwrap();
+
+    // Create connector
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "Test MCP",
+                "transport": "stdio",
+                "command": "/usr/bin/echo",
+                "args": ["hello"],
+                "workspace_id": ws_id,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let connector = body_json(resp.into_body()).await;
+    let connector_id = connector["id"].as_str().unwrap();
+    assert_eq!(connector["name"], "Test MCP");
+    assert_eq!(connector["transport"], "stdio");
+    assert_eq!(connector["status"], "active");
+
+    // List connectors
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/km/connectors", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list = body_json(resp.into_body()).await;
+    assert_eq!(list["total"], 1);
+
+    // Get connector
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/connectors/{connector_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let fetched = body_json(resp.into_body()).await;
+    assert_eq!(fetched["name"], "Test MCP");
+
+    // Update connector
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            &format!("/api/km/connectors/{connector_id}"),
+            serde_json::json!({"name": "Updated MCP"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let updated = body_json(resp.into_body()).await;
+    assert_eq!(updated["name"], "Updated MCP");
+
+    // Pause connector
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/connectors/{connector_id}/pause"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Verify paused
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/connectors/{connector_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let paused = body_json(resp.into_body()).await;
+    assert_eq!(paused["status"], "paused");
+
+    // Resume connector
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/connectors/{connector_id}/resume"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // List sync runs (empty)
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/connectors/{connector_id}/sync-runs"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let runs = body_json(resp.into_body()).await;
+    assert_eq!(runs["total"], 0);
+
+    // Trigger sync (should fail because MCP is disabled)
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/connectors/{connector_id}/sync"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Test connection (should fail because MCP is disabled)
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/connectors/{connector_id}/test"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Delete connector
+    let resp = app
+        .clone()
+        .oneshot(delete_request_auth(
+            &format!("/api/km/connectors/{connector_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Verify deleted
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/km/connectors", &token))
+        .await
+        .unwrap();
+    let list = body_json(resp.into_body()).await;
+    assert_eq!(list["total"], 0);
+}
+
+#[tokio::test]
+async fn connector_validation() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    // Create org/dept/workspace
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/orgs",
+            serde_json::json!({"name": "Org"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let org = body_json(resp.into_body()).await;
+    let org_id = org["id"].as_str().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts"),
+            serde_json::json!({"name": "Dept"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let dept = body_json(resp.into_body()).await;
+    let dept_id = dept["id"].as_str().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+            serde_json::json!({"name": "WS"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let ws = body_json(resp.into_body()).await;
+    let ws_id = ws["id"].as_str().unwrap();
+
+    // Empty name
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "",
+                "transport": "stdio",
+                "command": "echo",
+                "workspace_id": ws_id,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Invalid transport
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "Bad",
+                "transport": "invalid",
+                "workspace_id": ws_id,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // stdio without command
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "Bad",
+                "transport": "stdio",
+                "workspace_id": ws_id,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // sse without url
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "Bad",
+                "transport": "sse",
+                "workspace_id": ws_id,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // scheduled without cron
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/connectors",
+            serde_json::json!({
+                "name": "Bad",
+                "transport": "stdio",
+                "command": "echo",
+                "workspace_id": ws_id,
+                "sync_mode": "scheduled",
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn connector_requires_auth() {
+    let app = build_app(true);
+
+    // No auth token → should fail
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/km/connectors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn connector_non_admin_rejected() {
+    let app = build_app(true);
+    // First user = super admin
+    let _admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+    // Second user = regular user
+    let user_token = register_and_get_token(&app, "user@test.com", "User", "Pass1234").await;
+
+    // Regular user should be rejected
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/km/connectors", &user_token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

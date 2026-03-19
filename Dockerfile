@@ -17,6 +17,7 @@ COPY crates/thairag-provider-reranker/Cargo.toml  crates/thairag-provider-rerank
 COPY crates/thairag-document/Cargo.toml      crates/thairag-document/Cargo.toml
 COPY crates/thairag-search/Cargo.toml        crates/thairag-search/Cargo.toml
 COPY crates/thairag-agent/Cargo.toml         crates/thairag-agent/Cargo.toml
+COPY crates/thairag-mcp/Cargo.toml           crates/thairag-mcp/Cargo.toml
 COPY crates/thairag-api/Cargo.toml           crates/thairag-api/Cargo.toml
 
 # 2. Create stub source files so cargo can resolve the workspace
