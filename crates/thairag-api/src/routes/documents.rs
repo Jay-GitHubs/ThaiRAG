@@ -660,6 +660,67 @@ pub async fn reprocess_document(
     })))
 }
 
+/// Reprocess all ready documents in a workspace (e.g., after embedding model change).
+/// Clears all vectors first, then re-embeds each document in the background.
+pub async fn reprocess_all_documents(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "reprocess documents")?;
+
+    // Get all docs in this workspace
+    let all_docs = state.km_store.list_documents_in_workspace(workspace_id);
+    let ready_docs: Vec<_> = all_docs
+        .into_iter()
+        .filter(|d| d.status == DocStatus::Ready || d.status == DocStatus::Failed)
+        .collect();
+
+    if ready_docs.is_empty() {
+        return Ok(Json(serde_json::json!({
+            "queued": 0,
+            "message": "No documents to reprocess"
+        })));
+    }
+
+    let count = ready_docs.len();
+
+    // Process each document in background
+    for doc in ready_docs {
+        let doc_id = doc.id;
+        let mime = doc.mime_type.clone();
+        let file_bytes = match state.km_store.get_document_file(doc_id) {
+            Ok(Some(bytes)) => bytes,
+            _ => {
+                warn!(%doc_id, "Skipping reprocess: no original file stored");
+                continue;
+            }
+        };
+
+        // Delete old chunks from search index
+        let _ = state.providers().search_engine.delete_doc(doc_id).await;
+
+        // Mark as processing
+        let _ = state
+            .km_store
+            .update_document_status(doc_id, DocStatus::Processing, 0, None);
+
+        let s = state.clone();
+        tokio::spawn(async move {
+            process_document_inner(s, doc_id, workspace_id, file_bytes, mime).await;
+        });
+    }
+
+    info!(%workspace_id, count, "Reprocessing all documents in workspace");
+
+    Ok(Json(serde_json::json!({
+        "queued": count,
+        "message": format!("{count} documents queued for reprocessing")
+    })))
+}
+
 fn validate_mime_type(mime_type: &str) -> Result<(), ApiError> {
     if !SUPPORTED_MIME_TYPES.contains(&mime_type) {
         return Err(ApiError(ThaiRagError::Validation(format!(

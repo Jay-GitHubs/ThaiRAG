@@ -10,7 +10,7 @@ import { UploadModal } from './UploadModal';
 import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
-import { downloadDocument, reprocessDocument } from '../../api/documents';
+import { downloadDocument, reprocessDocument, reprocessAllDocuments } from '../../api/documents';
 import type { Document, DocStatus } from '../../api/types';
 
 interface Props {
@@ -146,8 +146,8 @@ export function DocumentTable({ workspaceId }: Props) {
               <Button size="small" icon={<ReloadOutlined />} disabled={record.status === 'processing'} />
             </Popconfirm>
           </Tooltip>
-          <Popconfirm title="Delete this document?" onConfirm={() => handleDelete(record.id)}>
-            <Button danger size="small" icon={<DeleteOutlined />} disabled={record.status === 'processing'} />
+          <Popconfirm title={record.status === 'processing' ? "This document is still processing. Delete anyway?" : "Delete this document?"} onConfirm={() => handleDelete(record.id)}>
+            <Button danger size="small" icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -163,6 +163,22 @@ export function DocumentTable({ workspaceId }: Props) {
         <Button icon={<PlusOutlined />} onClick={() => setIngestOpen(true)}>
           Ingest Text
         </Button>
+        <Popconfirm
+          title="Re-embed all documents?"
+          description="This will reprocess all documents with the current embedding model. Use after switching embedding models."
+          onConfirm={async () => {
+            try {
+              const result = await reprocessAllDocuments(workspaceId);
+              message.success(result.message);
+            } catch {
+              message.error('Failed to start reprocessing');
+            }
+          }}
+        >
+          <Tooltip title="Re-embed all documents (use after changing embedding model)">
+            <Button icon={<ReloadOutlined />}>Re-embed All</Button>
+          </Tooltip>
+        </Popconfirm>
         {hasProcessing && (
           <Tag icon={<SyncOutlined spin />} color="processing">
             Documents processing...

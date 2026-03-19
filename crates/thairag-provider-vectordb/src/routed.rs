@@ -234,4 +234,14 @@ impl VectorStore for RoutedVectorStore {
         }
         Ok(())
     }
+
+    async fn delete_all(&self) -> Result<()> {
+        let stores = self.all_stores();
+        for store in stores {
+            if let Err(e) = store.delete_all().await {
+                tracing::warn!(error = %e, "delete_all failed in one collection, continuing");
+            }
+        }
+        Ok(())
+    }
 }

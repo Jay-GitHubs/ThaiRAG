@@ -79,6 +79,12 @@ impl VectorStore for InMemoryVectorStore {
         store.retain(|_, chunk| chunk.doc_id != doc_id);
         Ok(())
     }
+
+    async fn delete_all(&self) -> Result<()> {
+        let mut store = self.chunks.write().unwrap();
+        store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]

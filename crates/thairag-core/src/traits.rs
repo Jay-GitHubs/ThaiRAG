@@ -67,6 +67,10 @@ pub trait VectorStore: Send + Sync {
     async fn upsert(&self, chunks: &[DocumentChunk]) -> Result<()>;
     async fn search(&self, embedding: &[f32], query: &SearchQuery) -> Result<Vec<SearchResult>>;
     async fn delete_by_doc(&self, doc_id: crate::types::DocId) -> Result<()>;
+    /// Delete all vectors (used when embedding model changes and re-indexing is needed).
+    async fn delete_all(&self) -> Result<()> {
+        Ok(()) // default no-op for backwards compatibility
+    }
 }
 
 #[async_trait]

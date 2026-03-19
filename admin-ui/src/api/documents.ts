@@ -76,3 +76,10 @@ export async function reprocessDocument(workspaceId: string, docId: string) {
   );
   return res.data;
 }
+
+export async function reprocessAllDocuments(workspaceId: string) {
+  const res = await client.post<{ queued: number; message: string }>(
+    `/api/km/workspaces/${workspaceId}/documents/reprocess-all`,
+  );
+  return res.data;
+}
