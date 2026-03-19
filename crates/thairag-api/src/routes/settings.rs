@@ -486,6 +486,12 @@ pub async fn update_provider_config(
         }
     }
 
+    // Detect embedding dimension or model change — clear stale vectors
+    let old_embedding = &state.providers().providers_config.embedding;
+    let embedding_changed = old_embedding.dimension != pc.embedding.dimension
+        || old_embedding.model != pc.embedding.model
+        || old_embedding.kind != pc.embedding.kind;
+
     // Validate the new config
     let mut validate_config = (*state.config).clone();
     validate_config.providers = pc.clone();
@@ -493,17 +499,30 @@ pub async fn update_provider_config(
         .validate()
         .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
 
+    // If embedding changed, clear old vectors (they have the wrong dimension)
+    if embedding_changed {
+        tracing::warn!(
+            old_model = %old_embedding.model,
+            old_dim = old_embedding.dimension,
+            new_model = %pc.embedding.model,
+            new_dim = pc.embedding.dimension,
+            "Embedding model changed — clearing vector store. Documents need re-processing."
+        );
+        let _ = state.providers().search_engine.delete_all_vectors().await;
+    }
+
     // Persist to DB
     let json = serde_json::to_string(&pc)
         .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?;
     state.km_store.set_setting("provider_config", &json);
 
     // Hot-reload providers
+    let eff_chat = crate::routes::settings::get_effective_chat_pipeline(&state);
     let bundle = crate::app_state::ProviderBundle::build(
         &pc,
         &state.config.search,
         &state.config.document,
-        &state.config.chat_pipeline,
+        &eff_chat,
     );
     state.reload_providers(bundle);
 
@@ -1922,6 +1941,7 @@ pub struct ChatPipelineConfigResponse {
     pub max_context_tokens: usize,
     pub agent_max_tokens: u32,
     pub request_timeout_secs: u64,
+    pub ollama_keep_alive: String,
     // Feature: Conversation Memory
     pub conversation_memory_enabled: bool,
     pub memory_max_summaries: usize,
@@ -2030,6 +2050,7 @@ pub struct UpdateChatPipelineRequest {
     pub max_context_tokens: Option<usize>,
     pub agent_max_tokens: Option<u32>,
     pub request_timeout_secs: Option<u64>,
+    pub ollama_keep_alive: Option<String>,
     // Feature: Conversation Memory
     pub conversation_memory_enabled: Option<bool>,
     pub memory_max_summaries: Option<usize>,
@@ -2347,6 +2368,9 @@ pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::
         request_timeout_secs: s("chat_pipeline.request_timeout_secs")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.request_timeout_secs),
+        // Ollama keep_alive
+        ollama_keep_alive: s("chat_pipeline.ollama_keep_alive")
+            .unwrap_or_else(|| cp.ollama_keep_alive.clone()),
         // Context Compaction
         context_compaction_enabled: s("chat_pipeline.context_compaction_enabled")
             .and_then(|v| v.parse().ok())
@@ -2411,6 +2435,7 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         max_context_tokens: eff.max_context_tokens,
         agent_max_tokens: eff.agent_max_tokens,
         request_timeout_secs: eff.request_timeout_secs,
+        ollama_keep_alive: eff.ollama_keep_alive.clone(),
         // Feature: Conversation Memory
         conversation_memory_enabled: eff.conversation_memory_enabled,
         memory_max_summaries: eff.memory_max_summaries,
@@ -2556,6 +2581,11 @@ pub async fn update_chat_pipeline_config(
     persist_num!(max_context_tokens, "chat_pipeline.max_context_tokens");
     persist_num!(agent_max_tokens, "chat_pipeline.agent_max_tokens");
     persist_num!(request_timeout_secs, "chat_pipeline.request_timeout_secs");
+    if let Some(ref ka) = req.ollama_keep_alive {
+        state
+            .km_store
+            .set_setting("chat_pipeline.ollama_keep_alive", ka);
+    }
     // Feature: Conversation Memory
     persist_bool!(
         conversation_memory_enabled,

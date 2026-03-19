@@ -385,6 +385,7 @@ export interface ChatPipelineConfigResponse {
   max_context_tokens: number;
   agent_max_tokens: number;
   request_timeout_secs: number;
+  ollama_keep_alive: string;
   // Feature: Conversation Memory
   conversation_memory_enabled: boolean;
   memory_max_summaries: number;
@@ -493,6 +494,7 @@ export interface UpdateChatPipelineRequest {
   max_context_tokens?: number;
   agent_max_tokens?: number;
   request_timeout_secs?: number;
+  ollama_keep_alive?: string;
   // Feature: Conversation Memory
   conversation_memory_enabled?: boolean;
   memory_max_summaries?: number;

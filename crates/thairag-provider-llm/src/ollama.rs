@@ -13,6 +13,7 @@ pub struct OllamaProvider {
     client: reqwest::Client,
     base_url: String,
     model: String,
+    keep_alive: Option<serde_json::Value>,
 }
 
 impl OllamaProvider {
@@ -21,18 +22,43 @@ impl OllamaProvider {
     }
 
     pub fn with_timeout(base_url: &str, model: &str, timeout_secs: u64) -> Self {
+        Self::with_timeout_and_keep_alive(base_url, model, timeout_secs, None)
+    }
+
+    pub fn with_timeout_and_keep_alive(
+        base_url: &str,
+        model: &str,
+        timeout_secs: u64,
+        keep_alive: Option<&str>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("Failed to build reqwest client");
 
-        info!(base_url, model, timeout_secs, "Initialized Ollama provider");
+        let keep_alive_val = keep_alive.map(|s| {
+            // Try to parse as integer (e.g. "-1", "0"), otherwise keep as string (e.g. "5m")
+            if let Ok(n) = s.parse::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(n))
+            } else {
+                serde_json::Value::String(s.to_string())
+            }
+        });
+
+        info!(
+            base_url,
+            model,
+            timeout_secs,
+            ?keep_alive,
+            "Initialized Ollama provider"
+        );
 
         Self {
             client,
             base_url: base_url.to_string(),
             model: model.to_string(),
+            keep_alive: keep_alive_val,
         }
     }
 }
@@ -53,6 +79,9 @@ impl LlmProvider for OllamaProvider {
 
         if let Some(num_predict) = max_tokens {
             body["options"] = serde_json::json!({ "num_predict": num_predict });
+        }
+        if let Some(ref ka) = self.keep_alive {
+            body["keep_alive"] = ka.clone();
         }
 
         let url = format!("{}/api/chat", self.base_url);
@@ -105,6 +134,9 @@ impl LlmProvider for OllamaProvider {
 
         if let Some(num_predict) = max_tokens {
             body["options"] = serde_json::json!({ "num_predict": num_predict });
+        }
+        if let Some(ref ka) = self.keep_alive {
+            body["keep_alive"] = ka.clone();
         }
 
         let url = format!("{}/api/chat", self.base_url);
@@ -224,6 +256,9 @@ impl LlmProvider for OllamaProvider {
 
         if let Some(num_predict) = max_tokens {
             body["options"] = serde_json::json!({ "num_predict": num_predict });
+        }
+        if let Some(ref ka) = self.keep_alive {
+            body["keep_alive"] = ka.clone();
         }
 
         let url = format!("{}/api/chat", self.base_url);

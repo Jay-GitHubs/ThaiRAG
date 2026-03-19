@@ -219,6 +219,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/workspaces/{workspace_id}/documents/{doc_id}/reprocess",
             post(documents::reprocess_document),
         )
+        .route(
+            "/workspaces/{workspace_id}/documents/reprocess-all",
+            post(documents::reprocess_all_documents),
+        )
         // Test query (search + RAG for a workspace)
         .route(
             "/workspaces/{workspace_id}/test-query",

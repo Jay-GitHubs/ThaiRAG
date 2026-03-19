@@ -510,6 +510,10 @@ pub struct ChatPipelineConfig {
     /// Per-LLM-call timeout in seconds. Increase for large document sets or slow models.
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    /// Ollama keep_alive duration. Controls how long models stay loaded in GPU memory.
+    /// Examples: "5m" (default), "30m", "1h", "-1" (forever), "0" (unload immediately).
+    #[serde(default = "default_ollama_keep_alive")]
+    pub ollama_keep_alive: String,
 
     // ── Feature: Conversation Memory ──
     #[serde(default)]
@@ -693,6 +697,9 @@ fn default_max_llm_calls_per_request() -> u32 {
 fn default_request_timeout_secs() -> u64 {
     120
 }
+fn default_ollama_keep_alive() -> String {
+    "5m".to_string()
+}
 fn default_memory_max_summaries() -> usize {
     10
 }
@@ -806,6 +813,7 @@ impl Default for ChatPipelineConfig {
             agent_max_tokens: default_chat_agent_max_tokens(),
             max_llm_calls_per_request: default_max_llm_calls_per_request(),
             request_timeout_secs: default_request_timeout_secs(),
+            ollama_keep_alive: default_ollama_keep_alive(),
             conversation_memory_enabled: false,
             memory_max_summaries: default_memory_max_summaries(),
             memory_summary_max_tokens: default_memory_summary_max_tokens(),

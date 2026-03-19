@@ -341,6 +341,7 @@ export function ChatPipelineCard() {
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
   const [agentMaxTokens, setAgentMaxTokens] = useState(2048);
   const [requestTimeoutSecs, setRequestTimeoutSecs] = useState(120);
+  const [ollamaKeepAlive, setOllamaKeepAlive] = useState('5m');
   const [maxOrchestratorCalls, setMaxOrchestratorCalls] = useState(3);
 
   // Feature: Conversation Memory
@@ -427,6 +428,7 @@ export function ChatPipelineCard() {
       setMaxContextTokens(data.max_context_tokens);
       setAgentMaxTokens(data.agent_max_tokens);
       setRequestTimeoutSecs(data.request_timeout_secs);
+      setOllamaKeepAlive(data.ollama_keep_alive);
       setMaxOrchestratorCalls(data.max_orchestrator_calls);
 
       setAgentToggles({
@@ -551,6 +553,7 @@ export function ChatPipelineCard() {
         max_context_tokens: maxContextTokens,
         agent_max_tokens: agentMaxTokens,
         request_timeout_secs: requestTimeoutSecs,
+        ollama_keep_alive: ollamaKeepAlive,
         // Feature flags
         conversation_memory_enabled: conversationMemoryEnabled,
         memory_max_summaries: memoryMaxSummaries,
@@ -757,6 +760,24 @@ export function ChatPipelineCard() {
                     { label: '2 minutes', value: 120 },
                     { label: '5 minutes', value: 300 },
                     { label: '10 minutes', value: 600 },
+                  ]}
+                />
+              </Space>
+            </Tooltip>
+            <Tooltip title="Ollama keep_alive controls how long models stay loaded in GPU memory after a request. 'Keep forever' (-1) avoids cold-start delays but uses more VRAM. Only applies to Ollama providers.">
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">Ollama Keep Alive <QuestionCircleOutlined /></Text>
+                <Select
+                  value={ollamaKeepAlive}
+                  onChange={setOllamaKeepAlive}
+                  style={{ width: 140 }}
+                  options={[
+                    { label: 'Unload immediately', value: '0' },
+                    { label: '5 minutes', value: '5m' },
+                    { label: '15 minutes', value: '15m' },
+                    { label: '30 minutes', value: '30m' },
+                    { label: '1 hour', value: '1h' },
+                    { label: 'Keep forever', value: '-1' },
                   ]}
                 />
               </Space>

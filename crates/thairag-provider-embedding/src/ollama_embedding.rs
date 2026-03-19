@@ -11,10 +11,20 @@ pub struct OllamaEmbeddingProvider {
     model: String,
     dimension: usize,
     endpoint: String,
+    keep_alive: Option<serde_json::Value>,
 }
 
 impl OllamaEmbeddingProvider {
     pub fn new(base_url: &str, model: &str, dimension: usize) -> Self {
+        Self::with_keep_alive(base_url, model, dimension, None)
+    }
+
+    pub fn with_keep_alive(
+        base_url: &str,
+        model: &str,
+        dimension: usize,
+        keep_alive: Option<&str>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
@@ -24,13 +34,22 @@ impl OllamaEmbeddingProvider {
         let base = base_url.trim_end_matches('/');
         let endpoint = format!("{base}/api/embed");
 
-        info!(model, dimension, %endpoint, "Initialized Ollama embedding provider");
+        let keep_alive_val = keep_alive.map(|s| {
+            if let Ok(n) = s.parse::<i64>() {
+                serde_json::Value::Number(serde_json::Number::from(n))
+            } else {
+                serde_json::Value::String(s.to_string())
+            }
+        });
+
+        info!(model, dimension, %endpoint, ?keep_alive, "Initialized Ollama embedding provider");
 
         Self {
             client,
             model: model.to_string(),
             dimension,
             endpoint,
+            keep_alive: keep_alive_val,
         }
     }
 }
@@ -43,10 +62,13 @@ impl EmbeddingModel for OllamaEmbeddingProvider {
             return Ok(vec![]);
         }
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "input": texts,
         });
+        if let Some(ref ka) = self.keep_alive {
+            body["keep_alive"] = ka.clone();
+        }
 
         let resp = self
             .client

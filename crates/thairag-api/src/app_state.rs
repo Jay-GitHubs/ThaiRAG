@@ -30,8 +30,8 @@ use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, Ve
 use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
-use thairag_provider_embedding::create_embedding_provider;
-use thairag_provider_llm::{create_llm_provider, create_llm_provider_with_timeout};
+use thairag_provider_embedding::create_embedding_provider_with_options;
+use thairag_provider_llm::{create_llm_provider, create_llm_provider_with_options};
 use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
 use thairag_provider_vectordb::{create_personal_memory_store, create_vector_store};
@@ -79,9 +79,21 @@ impl ProviderBundle {
         chat: &ChatPipelineConfig,
         prompts: Arc<thairag_core::PromptRegistry>,
     ) -> Self {
-        let llm: Arc<dyn LlmProvider> = Arc::from(create_llm_provider(&providers.llm));
-        let embedding: Arc<dyn EmbeddingModel> =
-            Arc::from(create_embedding_provider(&providers.embedding));
+        let ollama_ka = &chat.ollama_keep_alive;
+        let ka_opt = if ollama_ka.is_empty() {
+            None
+        } else {
+            Some(ollama_ka.as_str())
+        };
+        let llm: Arc<dyn LlmProvider> = Arc::from(create_llm_provider_with_options(
+            &providers.llm,
+            120,
+            ka_opt,
+        ));
+        let embedding: Arc<dyn EmbeddingModel> = Arc::from(create_embedding_provider_with_options(
+            &providers.embedding,
+            ka_opt,
+        ));
         let vector_store: Arc<dyn VectorStore> =
             Arc::from(create_vector_store(&providers.vector_store));
         let text_search: Arc<dyn TextSearch> =
@@ -157,7 +169,7 @@ impl ProviderBundle {
         let chat_pipeline = if chat.enabled {
             let chat_timeout = chat.request_timeout_secs;
             let chat_shared_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = chat.llm {
-                Arc::from(create_llm_provider_with_timeout(cfg, chat_timeout))
+                Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
             } else {
                 Arc::clone(&llm)
             };
@@ -165,7 +177,7 @@ impl ProviderBundle {
             let resolve_chat_agent_llm =
                 |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
                     if let Some(cfg) = agent_cfg {
-                        Arc::from(create_llm_provider_with_timeout(cfg, chat_timeout))
+                        Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
                     } else {
                         Arc::clone(&chat_shared_llm)
                     }

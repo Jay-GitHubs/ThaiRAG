@@ -15,11 +15,20 @@ pub fn create_llm_provider_with_timeout(
     config: &LlmConfig,
     timeout_secs: u64,
 ) -> Box<dyn LlmProvider> {
+    create_llm_provider_with_options(config, timeout_secs, None)
+}
+
+pub fn create_llm_provider_with_options(
+    config: &LlmConfig,
+    timeout_secs: u64,
+    ollama_keep_alive: Option<&str>,
+) -> Box<dyn LlmProvider> {
     match config.kind {
-        LlmKind::Ollama => Box::new(ollama::OllamaProvider::with_timeout(
+        LlmKind::Ollama => Box::new(ollama::OllamaProvider::with_timeout_and_keep_alive(
             &config.base_url,
             &config.model,
             timeout_secs,
+            ollama_keep_alive,
         )),
         LlmKind::Claude => Box::new(claude::ClaudeProvider::with_timeout(
             &config.api_key,
