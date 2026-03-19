@@ -13,6 +13,7 @@ members = [
     "crates/thairag-document",
     "crates/thairag-search",
     "crates/thairag-agent",
+    "crates/thairag-mcp",
     "crates/thairag-api",
 ]
 
@@ -105,6 +106,12 @@ thiserror = "2.0"
 anyhow = "1.0"
 async-trait = "0.1"
 
+# MCP
+rmcp = { version = "1.2", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+sha2 = "0.10"
+cron = "0.15"
+tokio-util = { version = "0.7", features = ["rt"] }
+
 # Internal crates
 thairag-core = { path = "crates/thairag-core" }
 thairag-config = { path = "crates/thairag-config" }
@@ -118,3 +125,4 @@ thairag-provider-reranker = { path = "crates/thairag-provider-reranker" }
 thairag-document = { path = "crates/thairag-document" }
 thairag-search = { path = "crates/thairag-search" }
 thairag-agent = { path = "crates/thairag-agent" }
+thairag-mcp = { path = "crates/thairag-mcp" }

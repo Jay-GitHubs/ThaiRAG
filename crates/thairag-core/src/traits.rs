@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::types::{
     ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, LlmResponse,
-    LlmStreamResponse, MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, UserId,
-    VisionMessage,
+    LlmStreamResponse, McpResource, McpResourceContent, McpToolInfo, MemoryId, PersonalMemory,
+    QualityReport, SearchQuery, SearchResult, UserId, VisionMessage,
 };
 
 #[async_trait]
@@ -116,6 +116,29 @@ pub trait PersonalMemoryStore: Send + Sync {
 
     /// Apply relevance decay to all memories older than the given age (in seconds).
     async fn apply_decay(&self, decay_factor: f32, min_score: f32) -> Result<usize>;
+}
+
+// ── MCP Client Trait ─────────────────────────────────────────────────
+
+#[async_trait]
+pub trait McpClient: Send + Sync {
+    /// Connect to the MCP server and perform initialization handshake.
+    async fn connect(&mut self) -> Result<()>;
+
+    /// List available resources from the MCP server.
+    async fn list_resources(&self) -> Result<Vec<McpResource>>;
+
+    /// Read a specific resource by URI, returning raw content + mime type.
+    async fn read_resource(&self, uri: &str) -> Result<McpResourceContent>;
+
+    /// List available tools on the MCP server.
+    async fn list_tools(&self) -> Result<Vec<McpToolInfo>>;
+
+    /// Call a tool on the MCP server.
+    async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<serde_json::Value>;
+
+    /// Disconnect / close the session.
+    async fn disconnect(&mut self) -> Result<()>;
 }
 
 // ── AI Document Preprocessing Traits ─────────────────────────────────

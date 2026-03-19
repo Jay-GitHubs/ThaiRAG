@@ -122,6 +122,48 @@ async fn main() {
         });
     }
 
+    // Start MCP sync scheduler (if enabled)
+    let sync_scheduler = if config.mcp.enabled {
+        use thairag_api::routes::connectors::{DocumentIngester, StoreAdapter};
+
+        let engine = std::sync::Arc::new(thairag_mcp::SyncEngine::new(
+            config.mcp.max_resource_size_bytes,
+            config.mcp.sync_retry_max_attempts,
+            config.mcp.sync_retry_base_delay_secs,
+            config.mcp.sync_retry_max_delay_secs,
+        ));
+        let store_adapter: std::sync::Arc<dyn thairag_mcp::sync_engine::SyncStore> =
+            std::sync::Arc::new(StoreAdapter(state.km_store.clone()));
+        let ingester: std::sync::Arc<dyn thairag_mcp::sync_engine::ContentIngester> =
+            std::sync::Arc::new(DocumentIngester {
+                state: state.clone(),
+            });
+
+        // Wire metrics callback for scheduled syncs
+        let metrics = state.metrics.clone();
+        let on_sync_complete: thairag_mcp::sync_scheduler::SyncRunCallback = std::sync::Arc::new(
+            move |name, status, duration, created, updated, skipped, failed| {
+                metrics.record_sync_run(name, status, duration, created, updated, skipped, failed);
+            },
+        );
+
+        let scheduler = std::sync::Arc::new(
+            thairag_mcp::SyncScheduler::new(engine, store_adapter, ingester)
+                .with_on_sync_complete(on_sync_complete),
+        );
+
+        // Load all connectors and start scheduled ones
+        let connectors = state.km_store.list_connectors();
+        let sched = scheduler.clone();
+        tokio::spawn(async move {
+            sched.start(connectors).await;
+        });
+
+        Some(scheduler)
+    } else {
+        None
+    };
+
     // Build router
     let app = build_router(state, rate_limiter);
 
@@ -138,6 +180,11 @@ async fn main() {
     .with_graceful_shutdown(shutdown_signal(shutdown_timeout))
     .await
     .expect("Server error");
+
+    // Gracefully shut down MCP sync scheduler
+    if let Some(scheduler) = sync_scheduler {
+        scheduler.shutdown().await;
+    }
 
     tracing::info!("Server shutdown complete");
 }

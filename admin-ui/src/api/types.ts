@@ -747,6 +747,118 @@ export interface UsageStatsResponse {
   estimated_cost_usd: number | null;
 }
 
+// ── MCP Connectors ──────────────────────────────────────────────────
+export type ConnectorId = string;
+
+export interface Connector {
+  id: ConnectorId;
+  name: string;
+  description: string;
+  transport: string;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  workspace_id: string;
+  sync_mode: string;
+  schedule_cron: string | null;
+  resource_filters: string[];
+  max_items_per_sync: number | null;
+  tool_calls: ToolCallConfig[];
+  webhook_url: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  last_sync_at: string | null;
+  last_sync_status: string | null;
+}
+
+export interface ToolCallConfig {
+  tool_name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface CreateConnectorRequest {
+  name: string;
+  description?: string;
+  transport: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  workspace_id: string;
+  sync_mode?: string;
+  schedule_cron?: string;
+  resource_filters?: string[];
+  max_items_per_sync?: number;
+  webhook_url?: string;
+  webhook_secret?: string;
+}
+
+export interface CreateFromTemplateRequest {
+  template_id: string;
+  workspace_id: string;
+  name?: string;
+  env?: Record<string, string>;
+  sync_mode?: string;
+  schedule_cron?: string;
+}
+
+export interface UpdateConnectorRequest {
+  name?: string;
+  description?: string;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  sync_mode?: string;
+  schedule_cron?: string;
+  resource_filters?: string[];
+  max_items_per_sync?: number;
+  webhook_url?: string;
+  webhook_secret?: string;
+}
+
+export interface SyncRunResponse {
+  id: string;
+  connector_id: string;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  items_discovered: number;
+  items_created: number;
+  items_updated: number;
+  items_skipped: number;
+  items_failed: number;
+  error_message: string | null;
+  duration_secs: number | null;
+}
+
+export interface McpResource {
+  uri: string;
+  name: string;
+  description?: string;
+  mime_type?: string;
+}
+
+export interface ResourceListResponse {
+  resources: McpResource[];
+}
+
+export interface ConnectorTemplate {
+  id: string;
+  name: string;
+  description: string;
+  transport: string;
+  command: string | null;
+  args: string[];
+  env_keys: string[];
+  url: string | null;
+  resource_filters: string[];
+}
+
 // ── Health ──────────────────────────────────────────────────────────
 export interface HealthResponse {
   status: string;

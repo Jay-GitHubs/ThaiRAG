@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod chat;
+pub mod connectors;
 pub mod documents;
 pub mod feedback;
 pub mod health;
@@ -222,7 +223,37 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/test-query",
             post(test_query::test_query),
-        );
+        )
+        // MCP Connectors
+        .route(
+            "/connectors",
+            get(connectors::list_connectors).post(connectors::create_connector),
+        )
+        .route(
+            "/connectors/templates",
+            get(connectors::list_connector_templates),
+        )
+        .route(
+            "/connectors/from-template",
+            post(connectors::create_from_template),
+        )
+        .route(
+            "/connectors/{id}",
+            get(connectors::get_connector)
+                .put(connectors::update_connector)
+                .delete(connectors::delete_connector),
+        )
+        .route("/connectors/{id}/sync", post(connectors::trigger_sync))
+        .route("/connectors/{id}/pause", post(connectors::pause_connector))
+        .route(
+            "/connectors/{id}/resume",
+            post(connectors::resume_connector),
+        )
+        .route(
+            "/connectors/{id}/sync-runs",
+            get(connectors::list_sync_runs),
+        )
+        .route("/connectors/{id}/test", post(connectors::test_connection));
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let jwt = state.jwt.clone();
@@ -263,7 +294,13 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 axum::http::Method::DELETE,
                 axum::http::Method::OPTIONS,
             ])
-            .allow_headers(tower_http::cors::Any)
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::ACCEPT,
+                axum::http::header::ORIGIN,
+                axum::http::header::HeaderName::from_static("x-request-id"),
+            ])
             .allow_credentials(true)
     };
 
