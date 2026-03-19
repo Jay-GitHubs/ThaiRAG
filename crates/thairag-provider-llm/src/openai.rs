@@ -18,9 +18,13 @@ pub struct OpenAiLlmProvider {
 
 impl OpenAiLlmProvider {
     pub fn new(api_key: &str, model: &str, base_url: &str) -> Self {
+        Self::with_timeout(api_key, model, base_url, 120)
+    }
+
+    pub fn with_timeout(api_key: &str, model: &str, base_url: &str, timeout_secs: u64) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("Failed to build reqwest client");
 
@@ -30,7 +34,10 @@ impl OpenAiLlmProvider {
             base_url.trim_end_matches('/').to_string()
         };
 
-        info!(model, base_url, "Initialized OpenAI LLM provider");
+        info!(
+            model,
+            base_url, timeout_secs, "Initialized OpenAI LLM provider"
+        );
 
         Self {
             client,

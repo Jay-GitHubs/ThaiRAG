@@ -40,6 +40,12 @@ const { Text, Paragraph } = Typography;
 
 // ── Agent descriptions with hints ────────────────────────────────────
 
+interface RecommendedModel {
+  provider: string;
+  model: string;
+  note?: string;
+}
+
 interface AgentInfo {
   label: string;
   description: string;
@@ -48,6 +54,7 @@ interface AgentInfo {
   llmTip: string;
   taskWeight: 'Light' | 'Medium' | 'Heavy';
   alwaysOn?: boolean;
+  recommended: RecommendedModel[];
 }
 
 const chatAgents: Record<string, AgentInfo> = {
@@ -58,6 +65,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Falls back to heuristic rules — fast but less accurate for nuanced Thai/English mixed queries.',
     llmTip: 'Small/fast model works well — outputs only a short JSON classification.',
     taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
   },
   pipeline_orchestrator: {
     label: 'Pipeline Orchestrator',
@@ -66,6 +79,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Uses zero-latency heuristic routing (still smart — just not LLM-driven). Simple greetings still short-circuit.',
     llmTip: 'Only uses LLM when enabled. Without LLM, the heuristic decision tree handles routing at zero cost.',
     taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
   },
   query_rewriter: {
     label: 'Query Rewriter',
@@ -74,6 +93,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Search uses the raw user query only — no sub-queries or term expansion. May miss relevant documents.',
     llmTip: 'Medium model recommended — needs to understand query semantics and generate multiple search variants.',
     taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:12b', note: 'Free, good balance' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong reasoning' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
   },
   context_curator: {
     label: 'Context Curator',
@@ -82,6 +107,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Takes the top-K search results directly without LLM curation. Works well with a good reranker.',
     llmTip: 'Small/fast model works — it only needs to judge chunk relevance, not generate text.',
     taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
   },
   response_generator: {
     label: 'Response Generator',
@@ -91,6 +122,12 @@ const chatAgents: Record<string, AgentInfo> = {
     llmTip: 'Use your best/largest model here — response quality directly depends on it.',
     taskWeight: 'Heavy',
     alwaysOn: true,
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, best local quality' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Top tier' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Best balance' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Most capable' },
+    ],
   },
   quality_guard: {
     label: 'Quality Guard',
@@ -99,6 +136,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Responses are returned without quality verification. Faster but may include hallucinations.',
     llmTip: 'Small/fast model works — it evaluates quality, not generates content. Keep threshold 0.5-0.7 for balance.',
     taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Good judgment' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
   },
   language_adapter: {
     label: 'Language Adapter',
@@ -107,6 +150,12 @@ const chatAgents: Record<string, AgentInfo> = {
     disableImpact: 'Response may come in a different language than the query (e.g., English response to Thai query).',
     llmTip: 'Needs a bilingual model that handles Thai well. Only invoked when language mismatch is detected.',
     taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:8b', note: 'Free, good multilingual' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Good multilingual' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Excellent Thai' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Strong multilingual' },
+    ],
   },
 };
 
@@ -147,21 +196,47 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean): LlmConfigUpd
 
 function AgentHints({ info }: { info: AgentInfo }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', marginTop: 4 }}>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        <ThunderboltOutlined /> <strong>Runs:</strong> {info.whenRuns}
-      </Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        <InfoCircleOutlined /> <strong>If disabled:</strong> {info.disableImpact}
-      </Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        <RobotOutlined /> <strong>LLM tip:</strong> {info.llmTip}
-      </Text>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
-          {info.taskWeight} workload
-        </Tag>
-      </Text>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px' }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <ThunderboltOutlined /> <strong>Runs:</strong> {info.whenRuns}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <InfoCircleOutlined /> <strong>If disabled:</strong> {info.disableImpact}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <RobotOutlined /> <strong>LLM tip:</strong> {info.llmTip}
+        </Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
+            {info.taskWeight} workload
+          </Tag>
+        </Text>
+      </div>
+      {info.recommended.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            <RobotOutlined /> <strong>Recommended models:</strong>
+          </Text>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+            {info.recommended.map((r) => (
+              <Tooltip key={`${r.provider}-${r.model}`} title={`${r.provider} — ${r.note || r.model}`}>
+                <Tag
+                  color={
+                    r.provider === 'Claude' ? 'purple' :
+                    r.provider === 'OpenAI' ? 'green' :
+                    r.provider === 'Gemini' ? 'gold' :
+                    'blue'
+                  }
+                  style={{ fontSize: 11, cursor: 'default' }}
+                >
+                  {r.model} {r.note ? `(${r.note})` : ''}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -265,6 +340,7 @@ export function ChatPipelineCard() {
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
   const [agentMaxTokens, setAgentMaxTokens] = useState(2048);
+  const [requestTimeoutSecs, setRequestTimeoutSecs] = useState(120);
   const [maxOrchestratorCalls, setMaxOrchestratorCalls] = useState(3);
 
   // Feature: Conversation Memory
@@ -350,6 +426,7 @@ export function ChatPipelineCard() {
       setQualityThreshold(data.quality_guard_threshold);
       setMaxContextTokens(data.max_context_tokens);
       setAgentMaxTokens(data.agent_max_tokens);
+      setRequestTimeoutSecs(data.request_timeout_secs);
       setMaxOrchestratorCalls(data.max_orchestrator_calls);
 
       setAgentToggles({
@@ -473,6 +550,7 @@ export function ChatPipelineCard() {
         quality_guard_threshold: qualityThreshold,
         max_context_tokens: maxContextTokens,
         agent_max_tokens: agentMaxTokens,
+        request_timeout_secs: requestTimeoutSecs,
         // Feature flags
         conversation_memory_enabled: conversationMemoryEnabled,
         memory_max_summaries: memoryMaxSummaries,
@@ -663,6 +741,23 @@ export function ChatPipelineCard() {
                   value={agentMaxTokens}
                   onChange={(v) => v && setAgentMaxTokens(v)}
                   style={{ width: 140 }}
+                />
+              </Space>
+            </Tooltip>
+            <Tooltip title="Per-LLM-call timeout in seconds. Increase if you have large document sets or slow models. This affects the backend — the Test Chat page also has a separate client-side timeout.">
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">LLM Timeout <QuestionCircleOutlined /></Text>
+                <Select
+                  value={requestTimeoutSecs}
+                  onChange={setRequestTimeoutSecs}
+                  style={{ width: 140 }}
+                  options={[
+                    { label: '30 seconds', value: 30 },
+                    { label: '1 minute', value: 60 },
+                    { label: '2 minutes', value: 120 },
+                    { label: '5 minutes', value: 300 },
+                    { label: '10 minutes', value: 600 },
+                  ]}
                 />
               </Space>
             </Tooltip>
