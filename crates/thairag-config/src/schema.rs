@@ -507,6 +507,9 @@ pub struct ChatPipelineConfig {
     /// LLM10: Hard ceiling on total LLM calls per chat request (prevents cost explosion).
     #[serde(default = "default_max_llm_calls_per_request")]
     pub max_llm_calls_per_request: u32,
+    /// Per-LLM-call timeout in seconds. Increase for large document sets or slow models.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
 
     // ── Feature: Conversation Memory ──
     #[serde(default)]
@@ -687,6 +690,9 @@ fn default_chat_agent_max_tokens() -> u32 {
 fn default_max_llm_calls_per_request() -> u32 {
     25
 }
+fn default_request_timeout_secs() -> u64 {
+    120
+}
 fn default_memory_max_summaries() -> usize {
     10
 }
@@ -799,6 +805,7 @@ impl Default for ChatPipelineConfig {
             max_context_tokens: default_max_context_tokens(),
             agent_max_tokens: default_chat_agent_max_tokens(),
             max_llm_calls_per_request: default_max_llm_calls_per_request(),
+            request_timeout_secs: default_request_timeout_secs(),
             conversation_memory_enabled: false,
             memory_max_summaries: default_memory_max_summaries(),
             memory_summary_max_tokens: default_memory_summary_max_tokens(),
