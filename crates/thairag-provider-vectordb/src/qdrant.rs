@@ -201,4 +201,26 @@ impl VectorStore for QdrantVectorStore {
 
         Ok(())
     }
+
+    #[instrument(skip(self), fields(collection = %self.collection))]
+    async fn delete_all(&self) -> Result<()> {
+        let exists = self
+            .client
+            .collection_exists(&self.collection)
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Failed to check collection: {e}")))?;
+
+        if exists {
+            self.client
+                .delete_collection(&self.collection)
+                .await
+                .map_err(|e| {
+                    ThaiRagError::VectorStore(format!("Failed to delete collection: {e}"))
+                })?;
+            info!(collection = %self.collection, "Deleted Qdrant collection for re-indexing");
+        }
+        // Reset ready flag so collection gets recreated with new dimension
+        self.collection_ready.store(false, Ordering::Relaxed);
+        Ok(())
+    }
 }

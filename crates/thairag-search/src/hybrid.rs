@@ -152,6 +152,11 @@ impl HybridSearchEngine {
         Ok(())
     }
 
+    /// Delete all vectors from the vector store (used when embedding model changes).
+    pub async fn delete_all_vectors(&self) -> Result<()> {
+        self.vector_store.delete_all().await
+    }
+
     pub(crate) fn rrf_merge(
         &self,
         vector_results: &[SearchResult],
