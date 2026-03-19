@@ -8,6 +8,7 @@ import {
   BarChartOutlined,
   TeamOutlined,
   SafetyOutlined,
+  ApiOutlined,
   SettingOutlined,
   HeartOutlined,
   FundOutlined,
@@ -39,6 +40,7 @@ const baseMenuItems = [
   { key: '/permissions', icon: <SafetyOutlined />, label: 'Permissions', minRole: 'admin' as UserRole },
   { key: '/usage', icon: <BarChartOutlined />, label: 'Usage & Costs', minRole: 'admin' as UserRole },
   { key: '/feedback', icon: <FundOutlined />, label: 'Feedback & Tuning', minRole: 'admin' as UserRole },
+  { key: '/connectors', icon: <ApiOutlined />, label: 'Connectors', minRole: 'super_admin' as UserRole },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings', minRole: 'super_admin' as UserRole },
   { key: '/system', icon: <HeartOutlined />, label: 'Health', minRole: 'viewer' as UserRole },
 ];
