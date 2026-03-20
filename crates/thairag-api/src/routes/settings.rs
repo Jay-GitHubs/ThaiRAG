@@ -511,6 +511,58 @@ pub async fn update_provider_config(
         let _ = state.providers().search_engine.delete_all_vectors().await;
     }
 
+    // If the LLM base_url changed, propagate to all per-agent LLM configs in the DB
+    // that were using the old URL. This prevents stale URLs when the user changes the
+    // Ollama port or host.
+    let old_llm_url = &state.providers().providers_config.llm.base_url;
+    if !old_llm_url.is_empty() && pc.llm.base_url != *old_llm_url {
+        let agent_llm_keys = [
+            "chat_pipeline.query_analyzer_llm",
+            "chat_pipeline.query_rewriter_llm",
+            "chat_pipeline.context_curator_llm",
+            "chat_pipeline.response_generator_llm",
+            "chat_pipeline.quality_guard_llm",
+            "chat_pipeline.language_adapter_llm",
+            "chat_pipeline.orchestrator_llm",
+            "chat_pipeline.memory_llm",
+            "chat_pipeline.tool_use_llm",
+            "chat_pipeline.self_rag_llm",
+            "chat_pipeline.graph_rag_llm",
+            "chat_pipeline.map_reduce_llm",
+            "chat_pipeline.ragas_llm",
+            "chat_pipeline.compression_llm",
+            "chat_pipeline.multimodal_llm",
+            "chat_pipeline.raptor_llm",
+            "chat_pipeline.colbert_llm",
+            "chat_pipeline.personal_memory_llm",
+            "chat_pipeline.crag_llm",
+            "ai_preprocessing.analyzer_llm",
+            "ai_preprocessing.converter_llm",
+            "ai_preprocessing.quality_llm",
+            "ai_preprocessing.chunker_llm",
+            "ai_preprocessing.orchestrator_llm",
+            "ai_preprocessing.enricher_llm",
+        ];
+        let mut updated_count = 0;
+        for key in &agent_llm_keys {
+            if let Some(val) = state.km_store.get_setting(key) {
+                if val.contains(old_llm_url.as_str()) {
+                    let new_val = val.replace(old_llm_url.as_str(), &pc.llm.base_url);
+                    state.km_store.set_setting(key, &new_val);
+                    updated_count += 1;
+                }
+            }
+        }
+        if updated_count > 0 {
+            tracing::info!(
+                old_url = %old_llm_url,
+                new_url = %pc.llm.base_url,
+                updated_count,
+                "Propagated LLM base_url change to per-agent configs"
+            );
+        }
+    }
+
     // Persist to DB
     let json = serde_json::to_string(&pc)
         .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?;
