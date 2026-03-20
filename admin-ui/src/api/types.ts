@@ -579,6 +579,8 @@ export interface UpdateChatPipelineRequest {
   personal_memory_max_per_user?: number;
   personal_memory_decay_factor?: number;
   personal_memory_min_relevance?: number;
+  personal_memory_llm?: LlmConfigUpdate;
+  remove_personal_memory_llm?: boolean;
 }
 
 // ── Feedback ─────────────────────────────────────────────────────────

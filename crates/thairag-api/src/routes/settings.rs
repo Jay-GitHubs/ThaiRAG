@@ -2205,6 +2205,8 @@ pub struct UpdateChatPipelineRequest {
     pub personal_memory_max_per_user: Option<usize>,
     pub personal_memory_decay_factor: Option<f32>,
     pub personal_memory_min_relevance: Option<f32>,
+    pub personal_memory_llm: Option<UpdateLlmConfig>,
+    pub remove_personal_memory_llm: Option<bool>,
 }
 
 pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
@@ -2952,6 +2954,14 @@ pub async fn update_chat_pipeline_config(
             eff.colbert_llm.clone(),
         )?;
     }
+    if let Some(ref u) = req.personal_memory_llm {
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.personal_memory_llm",
+            u,
+            eff.personal_memory_llm.clone(),
+        )?;
+    }
 
     // Handle removal of LLM overrides
     macro_rules! remove_llm {
@@ -3031,6 +3041,11 @@ pub async fn update_chat_pipeline_config(
     );
     remove_llm!(raptor_llm, remove_raptor_llm, "chat_pipeline.raptor_llm");
     remove_llm!(colbert_llm, remove_colbert_llm, "chat_pipeline.colbert_llm");
+    remove_llm!(
+        personal_memory_llm,
+        remove_personal_memory_llm,
+        "chat_pipeline.personal_memory_llm"
+    );
 
     // Hot-reload
     let eff_chat = get_effective_chat_pipeline(&state);

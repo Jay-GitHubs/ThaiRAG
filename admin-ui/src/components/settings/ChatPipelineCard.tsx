@@ -323,13 +323,34 @@ export function ChatPipelineCard() {
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<ChatPipelineConfigResponse | null>(null);
 
-  // Helper: render model tag from config LLM info
-  const modelTag = (llmInfo?: LlmProviderInfo) => {
-    if (llmMode !== 'per-agent' && llmMode !== 'shared') return null;
-    if (llmInfo?.model) {
-      return <Tag color="purple" style={{ fontSize: 11 }}>{llmInfo.kind}: {llmInfo.model}</Tag>;
-    }
-    return <Tag color="warning" style={{ fontSize: 11 }}>Uses main LLM</Tag>;
+  // Helper: render model tag for a feature from featureLlms state (live updates)
+  const featureModelTag = (featureKey: string, isEnabled: boolean) => {
+    if (!isEnabled) return null;
+    const form = featureLlms[featureKey];
+    const model = form?.model;
+    return model ? (
+      <Tag color="purple" style={{ fontSize: 11 }}>{form?.kind}: {model}</Tag>
+    ) : (
+      <Tag color="warning" style={{ fontSize: 11 }}>No model (uses fallback)</Tag>
+    );
+  };
+
+  // Helper: render LLM config form for a feature
+  const featureLlmForm = (featureKey: string, isEnabled: boolean) => {
+    if (!isEnabled) return null;
+    return (
+      <>
+        <Divider style={{ margin: '8px 0 4px' }} />
+        <Text type="secondary">Feature LLM Override:</Text>
+        <LlmConfigForm
+          form={featureLlms[featureKey] || defaultLlmForm}
+          onChange={(f) => setFeatureLlms((prev) => ({ ...prev, [featureKey]: f }))}
+          syncedModels={syncedModels}
+          onSync={handleSync}
+          syncing={syncing}
+        />
+      </>
+    );
   };
 
   // Pipeline-level state
@@ -345,6 +366,7 @@ export function ChatPipelineCard() {
     language_adapter: true,
   });
   const [agentLlms, setAgentLlms] = useState<Record<string, LlmFormState>>({});
+  const [featureLlms, setFeatureLlms] = useState<Record<string, LlmFormState>>({});
   const [qualityMaxRetries, setQualityMaxRetries] = useState(1);
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
@@ -466,6 +488,18 @@ export function ChatPipelineCard() {
         llms[stateKey] = llmInfo ? llmInfoToForm(llmInfo) : { ...defaultLlmForm };
       }
       setAgentLlms(llms);
+
+      // Load feature LLMs
+      const fLlms: Record<string, LlmFormState> = {};
+      const featureLlmKeys = [
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+      ] as const;
+      for (const k of featureLlmKeys) {
+        const llmInfo = data[`${k}_llm` as keyof ChatPipelineConfigResponse] as LlmProviderInfo | undefined;
+        fLlms[k] = llmInfo ? llmInfoToForm(llmInfo) : { ...defaultLlmForm };
+      }
+      setFeatureLlms(fLlms);
 
       // Feature states
       setConversationMemoryEnabled(data.conversation_memory_enabled);
@@ -653,6 +687,24 @@ export function ChatPipelineCard() {
         req.remove_quality_guard_llm = true;
         req.remove_language_adapter_llm = true;
         req.remove_orchestrator_llm = true;
+      }
+
+      // Save feature LLMs (independent of LLM mode — features always have their own LLM config)
+      const featureLlmKeys = [
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+      ] as const;
+      for (const stateKey of featureLlmKeys) {
+        const form = featureLlms[stateKey];
+        const reqKey = `${stateKey}_llm` as keyof UpdateChatPipelineRequest;
+        const configKey = `${stateKey}_llm` as keyof ChatPipelineConfigResponse;
+        if (form && form.model) {
+          const existing = config?.[configKey] as LlmProviderInfo | undefined;
+          (req as Record<string, unknown>)[reqKey] = formToUpdate(form, !!existing?.has_api_key);
+        } else {
+          const removeKey = `remove_${stateKey}_llm` as keyof UpdateChatPipelineRequest;
+          (req as Record<string, unknown>)[removeKey] = true;
+        }
       }
 
       const resp = await updateChatPipelineConfig(req);
@@ -1000,7 +1052,7 @@ export function ChatPipelineCard() {
                     <Tag color={conversationMemoryEnabled ? 'green' : 'default'}>
                       {conversationMemoryEnabled ? 'ON' : 'OFF'}
                     </Tag>
-                    {conversationMemoryEnabled && modelTag(config?.memory_llm)}
+                    {featureModelTag('memory', conversationMemoryEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1038,6 +1090,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('memory', conversationMemoryEnabled)}
                   </Space>
                 ),
               },
@@ -1109,7 +1162,7 @@ export function ChatPipelineCard() {
                     <Tag color={toolUseEnabled ? 'green' : 'default'}>
                       {toolUseEnabled ? 'ON' : 'OFF'}
                     </Tag>
-                    {toolUseEnabled && modelTag(config?.tool_use_llm)}
+                    {featureModelTag('tool_use', toolUseEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1133,6 +1186,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('tool_use', toolUseEnabled)}
                   </Space>
                 ),
               },
@@ -1227,7 +1281,7 @@ export function ChatPipelineCard() {
                     <span>Self-RAG</span>
                     <Switch size="small" checked={selfRagEnabled} onChange={setSelfRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={selfRagEnabled ? 'green' : 'default'}>{selfRagEnabled ? 'ON' : 'OFF'}</Tag>
-                    {selfRagEnabled && modelTag(config?.self_rag_llm)}
+                    {featureModelTag('self_rag', selfRagEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1244,6 +1298,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('self_rag', selfRagEnabled)}
                   </Space>
                 ),
               },
@@ -1254,7 +1309,7 @@ export function ChatPipelineCard() {
                     <span>Graph RAG</span>
                     <Switch size="small" checked={graphRagEnabled} onChange={setGraphRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={graphRagEnabled ? 'green' : 'default'}>{graphRagEnabled ? 'ON' : 'OFF'}</Tag>
-                    {graphRagEnabled && modelTag(config?.graph_rag_llm)}
+                    {featureModelTag('graph_rag', graphRagEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1280,6 +1335,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('graph_rag', graphRagEnabled)}
                   </Space>
                 ),
               },
@@ -1364,7 +1420,7 @@ export function ChatPipelineCard() {
                     <span>Map-Reduce RAG</span>
                     <Switch size="small" checked={mapReduceEnabled} onChange={setMapReduceEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={mapReduceEnabled ? 'green' : 'default'}>{mapReduceEnabled ? 'ON' : 'OFF'}</Tag>
-                    {mapReduceEnabled && modelTag(config?.map_reduce_llm)}
+                    {featureModelTag('map_reduce', mapReduceEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1382,6 +1438,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('map_reduce', mapReduceEnabled)}
                   </Space>
                 ),
               },
@@ -1392,7 +1449,7 @@ export function ChatPipelineCard() {
                     <span>RAGAS Evaluation</span>
                     <Switch size="small" checked={ragasEnabled} onChange={setRagasEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={ragasEnabled ? 'green' : 'default'}>{ragasEnabled ? 'ON' : 'OFF'}</Tag>
-                    {ragasEnabled && modelTag(config?.ragas_llm)}
+                    {featureModelTag('ragas', ragasEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1410,6 +1467,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('ragas', ragasEnabled)}
                   </Space>
                 ),
               },
@@ -1420,7 +1478,7 @@ export function ChatPipelineCard() {
                     <span>Contextual Compression</span>
                     <Switch size="small" checked={compressionEnabled} onChange={setCompressionEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={compressionEnabled ? 'green' : 'default'}>{compressionEnabled ? 'ON' : 'OFF'}</Tag>
-                    {compressionEnabled && modelTag(config?.compression_llm)}
+                    {featureModelTag('compression', compressionEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1438,6 +1496,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('compression', compressionEnabled)}
                   </Space>
                 ),
               },
@@ -1448,7 +1507,7 @@ export function ChatPipelineCard() {
                     <span>Multi-modal RAG</span>
                     <Switch size="small" checked={multimodalEnabled} onChange={setMultimodalEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={multimodalEnabled ? 'green' : 'default'}>{multimodalEnabled ? 'ON' : 'OFF'}</Tag>
-                    {multimodalEnabled && modelTag(config?.multimodal_llm)}
+                    {featureModelTag('multimodal', multimodalEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1466,6 +1525,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('multimodal', multimodalEnabled)}
                   </Space>
                 ),
               },
@@ -1476,7 +1536,7 @@ export function ChatPipelineCard() {
                     <span>RAPTOR Hierarchical Summaries</span>
                     <Switch size="small" checked={raptorEnabled} onChange={setRaptorEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={raptorEnabled ? 'green' : 'default'}>{raptorEnabled ? 'ON' : 'OFF'}</Tag>
-                    {raptorEnabled && modelTag(config?.raptor_llm)}
+                    {featureModelTag('raptor', raptorEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1502,6 +1562,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </>
                     )}
+                    {featureLlmForm('raptor', raptorEnabled)}
                   </Space>
                 ),
               },
@@ -1512,7 +1573,7 @@ export function ChatPipelineCard() {
                     <span>ColBERT Late Interaction Reranking</span>
                     <Switch size="small" checked={colbertEnabled} onChange={setColbertEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={colbertEnabled ? 'green' : 'default'}>{colbertEnabled ? 'ON' : 'OFF'}</Tag>
-                    {colbertEnabled && modelTag(config?.colbert_llm)}
+                    {featureModelTag('colbert', colbertEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1531,6 +1592,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('colbert', colbertEnabled)}
                   </Space>
                 ),
               },
@@ -1616,6 +1678,7 @@ export function ChatPipelineCard() {
                     <span>Personal Memory</span>
                     <Switch size="small" checked={personalMemoryEnabled} onChange={setPersonalMemoryEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={personalMemoryEnabled ? 'green' : 'default'}>{personalMemoryEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('personal_memory', personalMemoryEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1653,6 +1716,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('personal_memory', personalMemoryEnabled)}
                   </Space>
                 ),
               },
