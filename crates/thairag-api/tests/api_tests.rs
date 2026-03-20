@@ -158,6 +158,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             trust_proxy: false,
             max_chat_messages: 50,
             max_message_length: 32000,
+            request_timeout_secs: 600,
         },
         database: DatabaseConfig {
             url: "".into(),
@@ -1572,6 +1573,7 @@ fn build_streaming_test_app() -> Router {
             trust_proxy: false,
             max_chat_messages: 50,
             max_message_length: 32000,
+            request_timeout_secs: 600,
         },
         database: DatabaseConfig {
             url: "".into(),

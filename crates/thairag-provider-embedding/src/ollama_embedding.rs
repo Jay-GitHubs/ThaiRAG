@@ -26,8 +26,8 @@ impl OllamaEmbeddingProvider {
         keep_alive: Option<&str>,
     ) -> Self {
         let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(300))
             .build()
             .expect("Failed to build reqwest client");
 
@@ -77,7 +77,22 @@ impl EmbeddingModel for OllamaEmbeddingProvider {
             .send()
             .await
             .map_err(|e| {
-                ThaiRagError::Embedding(format!("Ollama embedding request failed: {e}"))
+                let msg = if e.is_connect() {
+                    format!(
+                        "Cannot connect to Ollama embedding service at {}. \
+                         Is Ollama running? Check that the URL is correct.",
+                        self.endpoint
+                    )
+                } else if e.is_timeout() {
+                    format!(
+                        "Ollama embedding request timed out ({}). \
+                         The model may be loading or the server is overloaded.",
+                        self.endpoint
+                    )
+                } else {
+                    format!("Ollama embedding request failed: {e}")
+                };
+                ThaiRagError::Embedding(msg)
             })?;
 
         let status = resp.status();
