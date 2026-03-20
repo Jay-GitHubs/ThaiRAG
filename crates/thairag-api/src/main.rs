@@ -72,6 +72,33 @@ async fn main() {
         tracing::info!("Loaded saved config from database");
     }
 
+    // Rebuild Tantivy text search index if empty but DB has chunks
+    {
+        let p = state.providers();
+        let tantivy_count = p.search_engine.text_search_doc_count();
+        if tantivy_count == 0 {
+            let chunks = state.km_store.load_all_chunks();
+            if !chunks.is_empty() {
+                tracing::info!(
+                    chunk_count = chunks.len(),
+                    "Tantivy index is empty — rebuilding from stored chunks"
+                );
+                // Index in batches to avoid memory pressure
+                let batch_size = 500;
+                for batch in chunks.chunks(batch_size) {
+                    if let Err(e) = p.search_engine.reindex_text_search(batch).await {
+                        tracing::error!(error = %e, "Failed to rebuild Tantivy index batch");
+                        break;
+                    }
+                }
+                let rebuilt = p.search_engine.text_search_doc_count();
+                tracing::info!(doc_count = rebuilt, "Tantivy index rebuild complete");
+            }
+        } else {
+            tracing::info!(doc_count = tantivy_count, "Tantivy index already populated");
+        }
+    }
+
     // Create rate limiter (if enabled) and spawn background cleanup
     let rate_limiter = if config.server.rate_limit.enabled {
         Some(

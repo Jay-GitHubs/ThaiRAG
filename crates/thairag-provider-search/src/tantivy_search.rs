@@ -1,12 +1,14 @@
+use std::path::Path;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 use tantivy::collector::TopDocs;
+use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::{Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument};
 use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::TextSearch;
@@ -31,37 +33,93 @@ struct TantivyFields {
     chunk_index: Field,
 }
 
+/// Build schema + register Thai tokenizer (shared by create and open).
+fn build_schema() -> (Schema, TantivyFields) {
+    let mut schema_builder = Schema::builder();
+
+    let chunk_id = schema_builder.add_text_field("chunk_id", STRING | STORED);
+    let doc_id = schema_builder.add_text_field("doc_id", STRING | STORED);
+    let workspace_id = schema_builder.add_text_field("workspace_id", STRING | STORED);
+
+    let text_options = TextOptions::default()
+        .set_indexing_options(
+            TextFieldIndexing::default()
+                .set_tokenizer("thai")
+                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+        )
+        .set_stored();
+    let content = schema_builder.add_text_field("content", text_options);
+
+    let chunk_index = schema_builder.add_u64_field("chunk_index", STORED);
+
+    let schema = schema_builder.build();
+    let fields = TantivyFields {
+        chunk_id,
+        doc_id,
+        workspace_id,
+        content,
+        chunk_index,
+    };
+    (schema, fields)
+}
+
+fn register_thai_tokenizer(index: &Index) {
+    let segmenter = DictionarySegmenter::new();
+    let thai_tokenizer = ThaiTantivyTokenizer::new(segmenter.shared());
+    index.tokenizers().register("thai", thai_tokenizer);
+}
+
 impl TantivySearch {
     pub fn new(index_path: &str) -> Self {
-        info!(
-            index_path,
-            "Creating Tantivy index (RamDirectory; index_path reserved for future disk persistence)"
-        );
+        let (schema, fields) = build_schema();
 
-        let mut schema_builder = Schema::builder();
+        // Try disk-based index first, fall back to RAM
+        let index = if !index_path.is_empty() && index_path != "test" {
+            let dir = Path::new(index_path);
+            if dir.exists() && dir.join("meta.json").exists() {
+                // Open existing disk index
+                match Index::open_in_dir(dir) {
+                    Ok(idx) => {
+                        info!(index_path, "Opened existing Tantivy index from disk");
+                        idx
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            index_path,
+                            error = %e,
+                            "Failed to open Tantivy index, recreating"
+                        );
+                        let _ = std::fs::remove_dir_all(dir);
+                        std::fs::create_dir_all(dir)
+                            .expect("Failed to create Tantivy index directory");
+                        let mmap_dir =
+                            MmapDirectory::open(dir).expect("Failed to open MmapDirectory");
+                        let idx = Index::create(mmap_dir, schema, IndexSettings::default())
+                            .expect("Failed to create Tantivy index");
+                        info!(
+                            index_path,
+                            "Created new Tantivy index on disk (after recovery)"
+                        );
+                        idx
+                    }
+                }
+            } else {
+                // Create new disk index
+                std::fs::create_dir_all(dir).expect("Failed to create Tantivy index directory");
+                let mmap_dir = MmapDirectory::open(dir).expect("Failed to open MmapDirectory");
+                let idx = Index::create(mmap_dir, schema, IndexSettings::default())
+                    .expect("Failed to create Tantivy index");
+                info!(index_path, "Created new Tantivy index on disk");
+                idx
+            }
+        } else {
+            // Test mode: use RAM
+            let idx = Index::create_in_ram(schema);
+            info!(index_path, "Created Tantivy index in RAM (test mode)");
+            idx
+        };
 
-        let chunk_id = schema_builder.add_text_field("chunk_id", STRING | STORED);
-        let doc_id = schema_builder.add_text_field("doc_id", STRING | STORED);
-        let workspace_id = schema_builder.add_text_field("workspace_id", STRING | STORED);
-
-        let text_options = TextOptions::default()
-            .set_indexing_options(
-                TextFieldIndexing::default()
-                    .set_tokenizer("thai")
-                    .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-            )
-            .set_stored();
-        let content = schema_builder.add_text_field("content", text_options);
-
-        let chunk_index = schema_builder.add_u64_field("chunk_index", STORED);
-
-        let schema = schema_builder.build();
-        let index = Index::create_in_ram(schema);
-
-        // Register Thai tokenizer (nlpo3 dictionary-based segmentation).
-        let segmenter = DictionarySegmenter::new();
-        let thai_tokenizer = ThaiTantivyTokenizer::new(segmenter.shared());
-        index.tokenizers().register("thai", thai_tokenizer);
+        register_thai_tokenizer(&index);
 
         let writer = index
             .writer(50_000_000) // 50 MB heap
@@ -78,14 +136,14 @@ impl TantivySearch {
             index,
             writer: Mutex::new(writer),
             reader,
-            fields: TantivyFields {
-                chunk_id,
-                doc_id,
-                workspace_id,
-                content,
-                chunk_index,
-            },
+            fields,
         }
+    }
+
+    /// Returns the number of documents currently in the index.
+    pub fn doc_count(&self) -> u64 {
+        let searcher = self.reader.searcher();
+        searcher.num_docs()
     }
 }
 
@@ -153,9 +211,7 @@ impl TextSearch for TantivySearch {
 
         let query_parser = QueryParser::for_index(&self.index, vec![self.fields.content]);
 
-        let text_query = query_parser
-            .parse_query(&query.text)
-            .map_err(|e| ThaiRagError::Internal(format!("Tantivy query parse error: {e}")))?;
+        let (text_query, _parse_errors) = query_parser.parse_query_lenient(&query.text);
 
         // Build final query: text + workspace filter
         let final_query = if query.unrestricted || query.workspace_ids.is_empty() {

@@ -233,6 +233,10 @@ function EditForm({
     setSyncedModels(null);
     if (llmKind !== config.llm.kind) {
       form.setFieldValue('llm_model', undefined);
+      // Clear base_url when switching to providers that use their own default URL
+      if (llmKind !== 'Ollama' && llmKind !== 'OpenAiCompatible') {
+        form.setFieldValue('llm_base_url', '');
+      }
     } else {
       form.setFieldValue('llm_model', config.llm.model);
     }

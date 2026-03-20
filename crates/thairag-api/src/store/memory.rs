@@ -38,6 +38,7 @@ pub struct MemoryKmStore {
     connectors: RwLock<HashMap<ConnectorId, McpConnectorConfig>>,
     sync_states: RwLock<HashMap<(ConnectorId, String), SyncState>>,
     sync_runs: RwLock<Vec<SyncRun>>,
+    chunks: RwLock<Vec<thairag_core::types::DocumentChunk>>,
 }
 
 impl Default for MemoryKmStore {
@@ -62,6 +63,7 @@ impl MemoryKmStore {
             connectors: RwLock::new(HashMap::new()),
             sync_states: RwLock::new(HashMap::new()),
             sync_runs: RwLock::new(Vec::new()),
+            chunks: RwLock::new(Vec::new()),
         }
     }
 }
@@ -295,6 +297,27 @@ impl KmStoreTrait for MemoryKmStore {
             .get(&doc_id)
             .map(|b| (b.image_count, b.table_count))
             .unwrap_or((0, 0)))
+    }
+
+    // ── Document Chunks ────────────────────────────────────────────
+
+    fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
+        let mut store = self.chunks.write().unwrap();
+        for chunk in chunks {
+            store.retain(|c| c.chunk_id != chunk.chunk_id);
+            store.push(chunk.clone());
+        }
+        Ok(())
+    }
+
+    fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk> {
+        self.chunks.read().unwrap().clone()
+    }
+
+    fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
+        let mut store = self.chunks.write().unwrap();
+        store.retain(|c| c.doc_id != doc_id);
+        Ok(())
     }
 
     // ── User ──────────────────────────────────────────────────────────

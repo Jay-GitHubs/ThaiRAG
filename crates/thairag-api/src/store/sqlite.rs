@@ -705,6 +705,66 @@ impl KmStoreTrait for SqliteKmStore {
         .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
     }
 
+    // ── Document Chunks ────────────────────────────────────────────
+
+    fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        for chunk in chunks {
+            conn.execute(
+                "INSERT OR REPLACE INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    chunk.chunk_id.0.to_string(),
+                    chunk.doc_id.0.to_string(),
+                    chunk.workspace_id.0.to_string(),
+                    chunk.content,
+                    chunk.chunk_index as i32,
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite save chunk: {e}")))?;
+        }
+        Ok(())
+    }
+
+    fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk> {
+        use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT chunk_id, doc_id, workspace_id, content, chunk_index FROM document_chunks",
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            let chunk_id_str: String = row.get(0)?;
+            let doc_id_str: String = row.get(1)?;
+            let ws_id_str: String = row.get(2)?;
+            let content: String = row.get(3)?;
+            let chunk_index: i32 = row.get(4)?;
+            Ok(DocumentChunk {
+                chunk_id: ChunkId(chunk_id_str.parse().unwrap_or_default()),
+                doc_id: DocId(doc_id_str.parse().unwrap_or_default()),
+                workspace_id: WorkspaceId(ws_id_str.parse().unwrap_or_default()),
+                content,
+                chunk_index: chunk_index as usize,
+                embedding: None,
+                metadata: None,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM document_chunks WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite delete chunks: {e}")))?;
+        Ok(())
+    }
+
     // ── User ──────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {

@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS permissions (
     UNIQUE(user_id, scope_level, org_id, dept_id, workspace_id)
 );
 
+-- Document chunks (for Tantivy re-indexing on startup)
+CREATE TABLE IF NOT EXISTS document_chunks (
+    chunk_id       TEXT NOT NULL PRIMARY KEY,
+    doc_id         TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    workspace_id   TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    chunk_index    INTEGER NOT NULL
+);
+
 -- MCP Connectors
 CREATE TABLE IF NOT EXISTS mcp_connectors (
     id              TEXT PRIMARY KEY,
