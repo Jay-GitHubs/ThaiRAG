@@ -262,4 +262,49 @@ impl VectorStore for MilvusVectorStore {
 
         Ok(())
     }
+
+    #[instrument(skip(self), fields(collection = %self.collection))]
+    async fn delete_all(&self) -> Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}/v2/vectordb/collections/drop", self.url))
+            .json(&json!({ "collectionName": self.collection }))
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Milvus delete_all request failed: {e}"))
+            })?;
+
+        if resp.status().is_success() {
+            let body: Value = resp.json().await.unwrap_or_default();
+            let code = body["code"].as_i64().unwrap_or(0);
+            if code != 0 {
+                let msg = body["message"].as_str().unwrap_or("unknown error");
+                return Err(ThaiRagError::VectorStore(format!(
+                    "Milvus delete_all failed: {msg}"
+                )));
+            }
+        }
+
+        self.collection_ready.store(false, Ordering::Relaxed);
+        info!(collection = %self.collection, "Deleted Milvus collection for re-indexing");
+        Ok(())
+    }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let resp = self
+            .client
+            .post(format!("{}/v2/vectordb/collections/get_stats", self.url))
+            .json(&json!({ "collectionName": self.collection }))
+            .send()
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Milvus stats request failed: {e}")))?;
+        let body: Value = resp.json().await.unwrap_or_default();
+        let count = body["data"]["row_count"].as_u64().unwrap_or(0);
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "milvus".to_string(),
+            collection_name: self.collection.clone(),
+            vector_count: count,
+        })
+    }
 }

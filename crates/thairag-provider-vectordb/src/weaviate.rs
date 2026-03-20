@@ -281,4 +281,50 @@ impl VectorStore for WeaviateVectorStore {
 
         Ok(())
     }
+
+    async fn delete_all(&self) -> Result<()> {
+        let req = self
+            .client
+            .delete(format!("{}/v1/schema/{}", self.url, self.collection));
+        let req = self.auth_header(req);
+        let resp = req.send().await.map_err(|e| {
+            ThaiRagError::VectorStore(format!("Weaviate delete_all request failed: {e}"))
+        })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ThaiRagError::VectorStore(format!(
+                "Weaviate delete_all failed ({status}): {body}"
+            )));
+        }
+
+        info!(collection = %self.collection, "Deleted Weaviate class for re-indexing");
+        Ok(())
+    }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let graphql = format!(
+            r#"{{ Aggregate {{ {} {{ meta {{ count }} }} }} }}"#,
+            self.collection
+        );
+        let req = self.client.post(format!("{}/v1/graphql", self.url));
+        let req = self.auth_header(req);
+        let resp = req
+            .json(&json!({ "query": graphql }))
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Weaviate stats request failed: {e}"))
+            })?;
+        let body: Value = resp.json().await.unwrap_or_default();
+        let count = body["data"]["Aggregate"][&self.collection][0]["meta"]["count"]
+            .as_u64()
+            .unwrap_or(0);
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "weaviate".to_string(),
+            collection_name: self.collection.clone(),
+            vector_count: count,
+        })
+    }
 }

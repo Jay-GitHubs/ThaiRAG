@@ -157,6 +157,11 @@ impl HybridSearchEngine {
         self.vector_store.delete_all().await
     }
 
+    /// Return statistics about the underlying vector store.
+    pub async fn vector_store_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        self.vector_store.collection_stats().await
+    }
+
     pub(crate) fn rrf_merge(
         &self,
         vector_results: &[SearchResult],
