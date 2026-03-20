@@ -3911,3 +3911,58 @@ pub async fn get_audit_log(
     let entries = audit::get_audit_log(&state.km_store, params.action.as_deref(), limit);
     Ok(Json(entries))
 }
+
+// ── Vector Database Management ──────────────────────────────────────
+
+/// GET /settings/vectordb/info — return stats about the vector store.
+pub async fn get_vectordb_info(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    let p = state.providers();
+    let stats = p.search_engine.vector_store_stats().await.map_err(|e| {
+        tracing::warn!(error = %e, "Failed to get vector store stats");
+        ApiError(e)
+    });
+
+    let cfg = &state.config.providers.vector_store;
+    let stats = stats.unwrap_or_default();
+
+    Ok(Json(serde_json::json!({
+        "backend": kind_str(&cfg.kind),
+        "url": cfg.url,
+        "collection": cfg.collection,
+        "isolation": format!("{:?}", cfg.isolation),
+        "vector_count": stats.vector_count,
+    })))
+}
+
+/// POST /settings/vectordb/clear — delete all vectors.
+pub async fn clear_vectordb(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    let p = state.providers();
+    p.search_engine
+        .delete_all_vectors()
+        .await
+        .map_err(ApiError)?;
+
+    audit::audit_log(
+        &state.km_store,
+        &claims.sub,
+        audit::AuditAction::VectorDbCleared,
+        "vectordb",
+        true,
+        Some("Cleared all vectors"),
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": "All vectors have been deleted. Documents will need to be re-processed."
+    })))
+}

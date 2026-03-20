@@ -154,6 +154,9 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Settings — Ollama model management
         .route("/settings/ollama/models", get(settings::list_ollama_models))
         .route("/settings/ollama/pull", post(settings::ollama_pull_model))
+        // Settings — vector database management
+        .route("/settings/vectordb/info", get(settings::get_vectordb_info))
+        .route("/settings/vectordb/clear", post(settings::clear_vectordb))
         // Settings — prompt management
         .route("/settings/prompts", get(settings::list_prompts))
         .route(

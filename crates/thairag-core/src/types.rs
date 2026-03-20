@@ -127,6 +127,16 @@ pub struct LlmStreamResponse {
     pub usage: Arc<Mutex<Option<LlmUsage>>>,
 }
 
+// ── Vector Store Stats ───────────────────────────────────────────────
+
+/// Statistics returned by a vector store for admin display.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VectorStoreStats {
+    pub backend: String,
+    pub collection_name: String,
+    pub vector_count: u64,
+}
+
 // ── Pipeline Progress ────────────────────────────────────────────────
 
 /// Progress event emitted by the chat pipeline at each agent stage.

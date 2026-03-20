@@ -271,4 +271,53 @@ impl VectorStore for ChromaDbVectorStore {
 
         Ok(())
     }
+
+    async fn delete_all(&self) -> Result<()> {
+        // Delete the collection entirely — it will be recreated on next upsert via get_or_create
+        let resp = self
+            .client
+            .delete(format!(
+                "{}/api/v1/collections/{}",
+                self.url, self.collection_id
+            ))
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("ChromaDB delete_all request failed: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ThaiRagError::VectorStore(format!(
+                "ChromaDB delete_all failed ({status}): {body}"
+            )));
+        }
+
+        info!(
+            collection_id = %self.collection_id,
+            "Deleted ChromaDB collection for re-indexing"
+        );
+        Ok(())
+    }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let resp = self
+            .client
+            .get(format!(
+                "{}/api/v1/collections/{}/count",
+                self.url, self.collection_id
+            ))
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("ChromaDB count request failed: {e}"))
+            })?;
+        let count = resp.json::<u64>().await.unwrap_or(0);
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "chromadb".to_string(),
+            collection_name: self.collection_id.clone(),
+            vector_count: count,
+        })
+    }
 }

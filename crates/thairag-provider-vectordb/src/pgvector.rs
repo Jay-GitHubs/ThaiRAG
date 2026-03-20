@@ -238,4 +238,29 @@ impl VectorStore for PgvectorStore {
 
         Ok(())
     }
+
+    #[instrument(skip(self), fields(collection = %self.collection))]
+    async fn delete_all(&self) -> Result<()> {
+        let sql = format!("DROP TABLE IF EXISTS {}", self.collection);
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("pgvector delete_all failed: {e}")))?;
+        self.table_ready.store(false, Ordering::Relaxed);
+        info!(collection = %self.collection, "Deleted pgvector table for re-indexing");
+        Ok(())
+    }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let sql = format!("SELECT COUNT(*) FROM {}", self.collection);
+        let count: i64 = sqlx::query_scalar(&sql)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "pgvector".to_string(),
+            collection_name: self.collection.clone(),
+            vector_count: count as u64,
+        })
+    }
 }
