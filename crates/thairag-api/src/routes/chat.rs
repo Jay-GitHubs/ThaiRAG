@@ -630,40 +630,80 @@ async fn handle_stream(
     let model_clone = model.clone();
     let last_user_msg = req.messages.last().cloned();
 
-    // Move the pipeline call INSIDE the stream so the SSE connection starts
-    // immediately and KeepAlive comments keep it alive during long processing.
-    let sse_stream = async_stream::stream! {
-        // Create progress channel for pipeline stage tracking
-        let (progress_tx, mut progress_rx) =
-            tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
+    // Spawn the pipeline in a background task so the SSE stream can yield
+    // progress events in real-time as each agent starts/completes.
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
 
-        // Run the pipeline inside the stream — KeepAlive sends SSE comments
-        // while we wait, preventing connection timeouts from clients.
-        let p = state.providers();
-        let pipeline_for_memory = p.chat_pipeline.clone();
-        let stream_result = if let Some(ref pipeline) = p.chat_pipeline {
+    let p = state.providers();
+    let pipeline_for_memory = p.chat_pipeline.clone();
+
+    // Clone what the spawned task needs
+    let augmented_messages_clone = augmented_messages.clone();
+    let scope_clone = scope.clone();
+    let memories_clone = memories.clone();
+    let available_scopes_clone = available_scopes.clone();
+
+    let pipeline_handle = tokio::spawn(async move {
+        if let Some(ref pipeline) = p.chat_pipeline {
             pipeline
-                .process_stream(&augmented_messages, &scope, &memories, &available_scopes, Some(progress_tx))
+                .process_stream(
+                    &augmented_messages_clone,
+                    &scope_clone,
+                    &memories_clone,
+                    &available_scopes_clone,
+                    Some(progress_tx),
+                )
                 .await
         } else {
             drop(progress_tx);
             p.orchestrator
-                .process_stream(&augmented_messages, &scope)
+                .process_stream(&augmented_messages_clone, &scope_clone)
                 .await
-        };
+        }
+    });
 
-        // Emit pipeline progress events (all pre-generation stages are done by now)
-        while let Ok(evt) = progress_rx.try_recv() {
-            let data = serde_json::to_string(&evt).unwrap();
-            yield Ok::<_, std::convert::Infallible>(
-                Event::default().event("progress").data(data)
-            );
+    let sse_stream = async_stream::stream! {
+        // Stream progress events in real-time while pipeline runs in background
+        let mut pipeline_handle = pipeline_handle;
+        let pipeline_result;
+
+        loop {
+            tokio::select! {
+                evt = progress_rx.recv() => {
+                    match evt {
+                        Some(progress) => {
+                            let data = serde_json::to_string(&progress).unwrap();
+                            yield Ok::<_, std::convert::Infallible>(
+                                Event::default().event("progress").data(data)
+                            );
+                        }
+                        None => {
+                            // Channel closed — sender dropped, pipeline must be done or about to be
+                        }
+                    }
+                }
+                result = &mut pipeline_handle => {
+                    // Drain any remaining progress events
+                    while let Ok(evt) = progress_rx.try_recv() {
+                        let data = serde_json::to_string(&evt).unwrap();
+                        yield Ok::<_, std::convert::Infallible>(
+                            Event::default().event("progress").data(data)
+                        );
+                    }
+                    pipeline_result = match result {
+                        Ok(r) => r,
+                        Err(e) => Err(ThaiRagError::LlmProvider(format!("Pipeline task panicked: {e}"))),
+                    };
+                    break;
+                }
+            }
         }
 
         let LlmStreamResponse {
             stream: token_stream,
             usage: usage_cell,
-        } = match stream_result {
+        } = match pipeline_result {
             Ok(resp) => resp,
             Err(e) => {
                 let error_data = serde_json::json!({
