@@ -241,6 +241,168 @@ function AgentHints({ info }: { info: AgentInfo }) {
   );
 }
 
+// ── Feature LLM recommendations ──────────────────────────────────────
+
+interface FeatureLlmInfo {
+  llmTip: string;
+  taskWeight: 'Light' | 'Medium' | 'Heavy';
+  recommended: RecommendedModel[];
+}
+
+const featureLlmRecommendations: Record<string, FeatureLlmInfo> = {
+  memory: {
+    llmTip: 'Summarizes conversations — needs good comprehension. Medium model recommended.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good quality' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  tool_use: {
+    llmTip: 'Decides search strategy and workspace selection. Needs reasoning ability.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good reasoning' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong reasoning' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  self_rag: {
+    llmTip: 'Decides if retrieval is needed — short classification output. Small model works.',
+    taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
+  },
+  graph_rag: {
+    llmTip: 'Extracts entities and relationships from text. Needs strong comprehension.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good NER' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong extraction' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  map_reduce: {
+    llmTip: 'Processes many chunks independently then synthesizes. Heavy workload on large result sets.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good synthesis' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Top tier' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Best balance' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Most capable' },
+    ],
+  },
+  ragas: {
+    llmTip: 'Evaluates response quality (faithfulness, relevancy). Runs on a sample — not latency-critical.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good judgment' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  compression: {
+    llmTip: 'Compresses context by removing low-importance content. Needs good text understanding.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good compression' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  multimodal: {
+    llmTip: 'Generates text descriptions of images. Requires a vision-capable model.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'llama4:scout', note: 'Free, vision-capable' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Strong vision' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Excellent vision' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Best vision' },
+    ],
+  },
+  raptor: {
+    llmTip: 'Builds hierarchical summaries over chunks. Multiple LLM calls per request — quality matters.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good summaries' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Top tier' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Best balance' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Most capable' },
+    ],
+  },
+  colbert: {
+    llmTip: 'LLM-based reranking across multiple aspects. Runs per search result — keep model fast.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
+  },
+  personal_memory: {
+    llmTip: 'Extracts memories from conversations. Needs comprehension for typed memory classification.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good extraction' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+};
+
+function FeatureLlmHints({ featureKey }: { featureKey: string }) {
+  const info = featureLlmRecommendations[featureKey];
+  if (!info) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <RobotOutlined /> <strong>LLM tip:</strong> {info.llmTip}
+        </Text>
+        <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
+          {info.taskWeight} workload
+        </Tag>
+      </div>
+      {info.recommended.length > 0 && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            <RobotOutlined /> <strong>Recommended models:</strong>
+          </Text>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+            {info.recommended.map((r) => (
+              <Tooltip key={`${r.provider}-${r.model}`} title={`${r.provider} — ${r.note || r.model}`}>
+                <Tag
+                  color={
+                    r.provider === 'Claude' ? 'purple' :
+                    r.provider === 'OpenAI' ? 'green' :
+                    r.provider === 'Gemini' ? 'gold' :
+                    'blue'
+                  }
+                  style={{ fontSize: 11, cursor: 'default' }}
+                >
+                  {r.model} {r.note ? `(${r.note})` : ''}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── LlmConfigForm sub-component ─────────────────────────────────────
 
 function LlmConfigForm({
@@ -335,13 +497,14 @@ export function ChatPipelineCard() {
     );
   };
 
-  // Helper: render LLM config form for a feature
+  // Helper: render LLM config form for a feature with recommendations
   const featureLlmForm = (featureKey: string, isEnabled: boolean) => {
     if (!isEnabled) return null;
     return (
       <>
         <Divider style={{ margin: '8px 0 4px' }} />
-        <Text type="secondary">Feature LLM Override:</Text>
+        <FeatureLlmHints featureKey={featureKey} />
+        <Text type="secondary" style={{ marginTop: 4 }}>Feature LLM Override:</Text>
         <LlmConfigForm
           form={featureLlms[featureKey] || defaultLlmForm}
           onChange={(f) => setFeatureLlms((prev) => ({ ...prev, [featureKey]: f }))}
