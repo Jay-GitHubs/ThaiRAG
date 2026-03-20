@@ -166,6 +166,11 @@ async fn process_document_inner(
 
     let chunk_count = chunks.len();
 
+    // Save chunks to DB for Tantivy rebuild on restart
+    if let Err(e) = state.km_store.save_chunks(&chunks) {
+        warn!(%doc_id, error = %e, "Failed to save chunks to DB (non-fatal)");
+    }
+
     // Embed + index
     let _ = state
         .km_store
@@ -452,6 +457,7 @@ pub async fn delete_document(
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_delete, "delete document")?;
     let doc_id = DocId(doc_id);
+    let _ = state.km_store.delete_chunks_by_doc(doc_id);
     state.km_store.delete_document(doc_id)?;
     let _ = state.providers().search_engine.delete_doc(doc_id).await;
     Ok(StatusCode::NO_CONTENT)

@@ -684,6 +684,64 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(row.unwrap_or((0, 0)))
     }
 
+    // ── Document Chunks ────────────────────────────────────────────
+
+    fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
+        for chunk in chunks {
+            block_on(
+                sqlx::query(
+                    "INSERT INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (chunk_id) DO UPDATE SET
+                       content = $4, chunk_index = $5",
+                )
+                .bind(chunk.chunk_id.0)
+                .bind(chunk.doc_id.0)
+                .bind(chunk.workspace_id.0)
+                .bind(&chunk.content)
+                .bind(chunk.chunk_index as i32)
+                .execute(&self.pool),
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("Postgres save chunk: {e}")))?;
+        }
+        Ok(())
+    }
+
+    fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk> {
+        use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
+        let rows: Vec<(Uuid, Uuid, Uuid, String, i32)> = block_on(
+            sqlx::query_as(
+                "SELECT chunk_id, doc_id, workspace_id, content, chunk_index FROM document_chunks",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default();
+
+        rows.into_iter()
+            .map(
+                |(chunk_id, doc_id, workspace_id, content, chunk_index)| DocumentChunk {
+                    chunk_id: ChunkId(chunk_id),
+                    doc_id: DocId(doc_id),
+                    workspace_id: WorkspaceId(workspace_id),
+                    content,
+                    chunk_index: chunk_index as usize,
+                    embedding: None,
+                    metadata: None,
+                },
+            )
+            .collect()
+    }
+
+    fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
+        block_on(
+            sqlx::query("DELETE FROM document_chunks WHERE doc_id = $1")
+                .bind(doc_id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete chunks: {e}")))?;
+        Ok(())
+    }
+
     // ── User ────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {

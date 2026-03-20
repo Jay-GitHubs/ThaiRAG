@@ -131,7 +131,14 @@ impl ResponseGenerator {
                 .sum::<f32>()
                 / context.chunks.len() as f32
         };
-        let confidence_instruction = if avg_score < 0.3 {
+        // When all scores are 0.0, the vector store doesn't return calibrated scores.
+        // Treat this as "unknown confidence" rather than "low confidence" — the chunks
+        // may still be perfectly relevant.
+        let scores_calibrated = !context.chunks.is_empty() && avg_score > 0.0;
+        let confidence_instruction = if !scores_calibrated {
+            // Scores uncalibrated (e.g. Qdrant without score normalization) — use neutral instruction
+            ""
+        } else if avg_score < 0.3 {
             "\n\n⚠️ IMPORTANT: The retrieved context has LOW relevance to this query. \
              You MUST clearly state that you don't have sufficient information. \
              Do NOT fabricate or infer information beyond what the context explicitly says."

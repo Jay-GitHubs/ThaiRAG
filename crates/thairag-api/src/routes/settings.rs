@@ -422,6 +422,7 @@ pub async fn update_provider_config(
 
     // Apply partial updates
     if let Some(llm) = body.llm {
+        let old_kind = pc.llm.kind.clone();
         if let Some(kind) = llm.kind {
             pc.llm.kind =
                 parse_llm_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -429,11 +430,28 @@ pub async fn update_provider_config(
         if let Some(model) = llm.model {
             pc.llm.model = model;
         }
+        let explicit_base_url = llm.base_url.is_some();
         if let Some(base_url) = llm.base_url {
             pc.llm.base_url = base_url;
         }
         if let Some(api_key) = llm.api_key {
             pc.llm.api_key = api_key;
+        }
+        // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
+        // clear base_url so it doesn't keep the old Ollama URL
+        if pc.llm.kind != old_kind {
+            use thairag_core::types::LlmKind;
+            match pc.llm.kind {
+                LlmKind::Ollama | LlmKind::OpenAiCompatible => {
+                    // Keep base_url — user manages it
+                }
+                LlmKind::Claude | LlmKind::OpenAi | LlmKind::Gemini => {
+                    if !explicit_base_url {
+                        // Only clear if user didn't explicitly set a new base_url
+                        pc.llm.base_url = String::new();
+                    }
+                }
+            }
         }
     }
     if let Some(emb) = body.embedding {
@@ -509,6 +527,58 @@ pub async fn update_provider_config(
             "Embedding model changed — clearing vector store. Documents need re-processing."
         );
         let _ = state.providers().search_engine.delete_all_vectors().await;
+    }
+
+    // If the LLM base_url changed, propagate to all per-agent LLM configs in the DB
+    // that were using the old URL. This prevents stale URLs when the user changes the
+    // Ollama port or host.
+    let old_llm_url = &state.providers().providers_config.llm.base_url;
+    if !old_llm_url.is_empty() && pc.llm.base_url != *old_llm_url {
+        let agent_llm_keys = [
+            "chat_pipeline.query_analyzer_llm",
+            "chat_pipeline.query_rewriter_llm",
+            "chat_pipeline.context_curator_llm",
+            "chat_pipeline.response_generator_llm",
+            "chat_pipeline.quality_guard_llm",
+            "chat_pipeline.language_adapter_llm",
+            "chat_pipeline.orchestrator_llm",
+            "chat_pipeline.memory_llm",
+            "chat_pipeline.tool_use_llm",
+            "chat_pipeline.self_rag_llm",
+            "chat_pipeline.graph_rag_llm",
+            "chat_pipeline.map_reduce_llm",
+            "chat_pipeline.ragas_llm",
+            "chat_pipeline.compression_llm",
+            "chat_pipeline.multimodal_llm",
+            "chat_pipeline.raptor_llm",
+            "chat_pipeline.colbert_llm",
+            "chat_pipeline.personal_memory_llm",
+            "chat_pipeline.crag_llm",
+            "ai_preprocessing.analyzer_llm",
+            "ai_preprocessing.converter_llm",
+            "ai_preprocessing.quality_llm",
+            "ai_preprocessing.chunker_llm",
+            "ai_preprocessing.orchestrator_llm",
+            "ai_preprocessing.enricher_llm",
+        ];
+        let mut updated_count = 0;
+        for key in &agent_llm_keys {
+            if let Some(val) = state.km_store.get_setting(key)
+                && val.contains(old_llm_url.as_str())
+            {
+                let new_val = val.replace(old_llm_url.as_str(), &pc.llm.base_url);
+                state.km_store.set_setting(key, &new_val);
+                updated_count += 1;
+            }
+        }
+        if updated_count > 0 {
+            tracing::info!(
+                old_url = %old_llm_url,
+                new_url = %pc.llm.base_url,
+                updated_count,
+                "Propagated LLM base_url change to per-agent configs"
+            );
+        }
     }
 
     // Persist to DB

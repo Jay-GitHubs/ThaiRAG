@@ -702,7 +702,7 @@ fn default_chat_agent_max_tokens() -> u32 {
     2048
 }
 fn default_max_llm_calls_per_request() -> u32 {
-    25
+    12
 }
 fn default_request_timeout_secs() -> u64 {
     300

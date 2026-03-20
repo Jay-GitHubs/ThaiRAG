@@ -33,6 +33,11 @@ impl HybridSearchEngine {
         }
     }
 
+    /// Number of documents in the text search index.
+    pub fn text_search_doc_count(&self) -> u64 {
+        self.text_search.doc_count()
+    }
+
     /// Index document chunks into both vector store and text search.
     ///
     /// When chunks have enrichment metadata (context_prefix, keywords,
@@ -57,6 +62,12 @@ impl HybridSearchEngine {
         t_res?;
 
         Ok(())
+    }
+
+    /// Re-index chunks into text search only (skip vector store).
+    /// Used at startup to rebuild Tantivy from stored chunks.
+    pub async fn reindex_text_search(&self, chunks: &[DocumentChunk]) -> Result<()> {
+        self.text_search.index(chunks).await
     }
 
     /// Build enriched text for embedding by prepending context and appending
