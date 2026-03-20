@@ -300,6 +300,36 @@ Configure the RAG pipeline behavior:
 - Guardrail settings
 - Pre/post processor configuration
 
+#### LLM Mode
+
+Controls how LLMs are assigned to pipeline agents:
+
+| Mode | Behavior |
+|------|----------|
+| **Use Chat LLM** | All agents use the main LLM Provider directly (simplest setup) |
+| **Shared** | All agents share a single dedicated chat LLM (can be different from the main LLM Provider) |
+| **Per-Agent** | Each agent can have its own LLM with individual model selection |
+
+**Per-Agent mode** allows fine-grained control — assign lightweight models (e.g., `qwen3:4b`) to simple agents like Query Analyzer, and heavier models (e.g., `qwen3:14b`) to Response Generator. Each agent panel header shows a model tag indicating which model it uses:
+
+- **Purple tag** (e.g., `ollama: qwen3:14b`) — Agent has a dedicated model configured
+- **Warning tag** (`No model (uses fallback)`) — Agent falls back through the chain: Shared chat LLM → main LLM Provider
+
+The same model tags appear in the **Advanced Features** and **Next-Gen RAG** sections, showing which LLM each feature uses.
+
+**Fallback chain:** Per-agent config → Shared chat LLM → LLM Provider section setting.
+
+#### Agents
+
+Toggle individual pipeline agents on/off:
+- **Query Analyzer** — Analyzes and rewrites user queries for better retrieval
+- **Retriever** — Searches the knowledge base for relevant chunks
+- **Context Builder** — Assembles retrieved chunks into context
+- **Response Generator** — Generates the final answer using the assembled context
+- **Quality Checker** — Validates response quality and relevance
+- **Guardrails** — Applies safety and compliance checks
+- **Citation Manager** — Adds source citations to responses
+
 **Advanced Features** section (inside collapsible panels):
 
 #### Context Compaction

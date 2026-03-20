@@ -174,20 +174,31 @@ impl ProviderBundle {
                 Arc::clone(&llm)
             };
 
-            let resolve_chat_agent_llm =
-                |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
-                    if let Some(cfg) = agent_cfg {
-                        Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
-                    } else {
-                        Arc::clone(&chat_shared_llm)
-                    }
-                };
+            let resolve_chat_agent_llm = |agent_name: &str,
+                                          agent_cfg: &Option<thairag_config::schema::LlmConfig>|
+             -> Arc<dyn LlmProvider> {
+                if let Some(cfg) = agent_cfg {
+                    tracing::info!(
+                        agent = agent_name,
+                        kind = ?cfg.kind,
+                        model = %cfg.model,
+                        "Chat agent: using per-agent LLM"
+                    );
+                    Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
+                } else {
+                    tracing::info!(
+                        agent = agent_name,
+                        "Chat agent: falling back to shared/main LLM"
+                    );
+                    Arc::clone(&chat_shared_llm)
+                }
+            };
 
             let max_tok = chat.agent_max_tokens;
 
             let qa = if chat.query_analyzer_enabled {
                 Some(QueryAnalyzer::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.query_analyzer_llm),
+                    resolve_chat_agent_llm("query_analyzer", &chat.query_analyzer_llm),
                     max_tok.min(256),
                     Arc::clone(&prompts),
                 ))
@@ -197,7 +208,7 @@ impl ProviderBundle {
 
             let qr = if chat.query_rewriter_enabled {
                 Some(QueryRewriter::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.query_rewriter_llm),
+                    resolve_chat_agent_llm("query_rewriter", &chat.query_rewriter_llm),
                     max_tok.min(512),
                     Arc::clone(&prompts),
                 ))
@@ -207,7 +218,7 @@ impl ProviderBundle {
 
             let cc = if chat.context_curator_enabled {
                 Some(ContextCurator::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.context_curator_llm),
+                    resolve_chat_agent_llm("context_curator", &chat.context_curator_llm),
                     chat.max_context_tokens,
                     max_tok.min(256),
                     Arc::clone(&prompts),
@@ -217,13 +228,13 @@ impl ProviderBundle {
             };
 
             let rg = ResponseGenerator::new_with_prompts(
-                resolve_chat_agent_llm(&chat.response_generator_llm),
+                resolve_chat_agent_llm("response_generator", &chat.response_generator_llm),
                 Arc::clone(&prompts),
             );
 
             let qg = if chat.quality_guard_enabled {
                 Some(Arc::new(QualityGuard::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.quality_guard_llm),
+                    resolve_chat_agent_llm("quality_guard", &chat.quality_guard_llm),
                     chat.quality_guard_threshold,
                     max_tok.min(256),
                     Arc::clone(&prompts),
@@ -234,7 +245,7 @@ impl ProviderBundle {
 
             let la = if chat.language_adapter_enabled {
                 Some(LanguageAdapter::new(
-                    resolve_chat_agent_llm(&chat.language_adapter_llm),
+                    resolve_chat_agent_llm("language_adapter", &chat.language_adapter_llm),
                     max_tok,
                 ))
             } else {
@@ -243,7 +254,10 @@ impl ProviderBundle {
 
             let po = if chat.orchestrator_enabled {
                 Some(PipelineOrchestrator::new_with_prompts(
-                    Some(resolve_chat_agent_llm(&chat.orchestrator_llm)),
+                    Some(resolve_chat_agent_llm(
+                        "orchestrator",
+                        &chat.orchestrator_llm,
+                    )),
                     max_tok.min(256),
                     chat.max_orchestrator_calls,
                     Arc::clone(&prompts),
@@ -260,7 +274,7 @@ impl ProviderBundle {
             // Feature 1: Conversation Memory
             let cm = if chat.conversation_memory_enabled {
                 Some(ConversationMemory::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.memory_llm),
+                    resolve_chat_agent_llm("memory", &chat.memory_llm),
                     chat.memory_summary_max_tokens,
                     Arc::clone(&prompts),
                 ))
@@ -271,7 +285,7 @@ impl ProviderBundle {
             // Feature 3: Tool Router
             let tr = if chat.tool_use_enabled {
                 Some(ToolRouter::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.tool_use_llm),
+                    resolve_chat_agent_llm("tool_use", &chat.tool_use_llm),
                     Arc::clone(&search_engine),
                     chat.tool_use_max_calls,
                     max_tok.min(256),
@@ -284,7 +298,7 @@ impl ProviderBundle {
             // Feature 5: Self-RAG
             let sr = if chat.self_rag_enabled {
                 Some(SelfRag::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.self_rag_llm),
+                    resolve_chat_agent_llm("self_rag", &chat.self_rag_llm),
                     chat.self_rag_threshold,
                     max_tok.min(256),
                     Arc::clone(&prompts),
@@ -296,7 +310,7 @@ impl ProviderBundle {
             // Feature 6: Graph RAG
             let gr = if chat.graph_rag_enabled {
                 Some(GraphRag::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.graph_rag_llm),
+                    resolve_chat_agent_llm("graph_rag", &chat.graph_rag_llm),
                     chat.graph_rag_max_entities,
                     chat.graph_rag_max_depth,
                     max_tok.min(512),
@@ -309,7 +323,7 @@ impl ProviderBundle {
             // Feature 7: Corrective RAG
             let cr = if chat.crag_enabled {
                 Some(CorrectiveRag::new_with_prompts(
-                    resolve_chat_agent_llm(&None), // uses shared LLM
+                    resolve_chat_agent_llm("crag", &None), // uses shared LLM
                     chat.crag_relevance_threshold,
                     if chat.crag_web_search_url.is_empty() {
                         None
@@ -339,7 +353,7 @@ impl ProviderBundle {
             // Feature 9: Map-Reduce RAG
             let mr = if chat.map_reduce_enabled {
                 Some(MapReduceRag::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.map_reduce_llm),
+                    resolve_chat_agent_llm("map_reduce", &chat.map_reduce_llm),
                     chat.map_reduce_max_chunks,
                     max_tok.min(256),
                     max_tok,
@@ -352,7 +366,7 @@ impl ProviderBundle {
             // Feature 10: RAGAS Evaluation
             let ragas = if chat.ragas_enabled {
                 Some(Arc::new(RagasEvaluator::new(
-                    resolve_chat_agent_llm(&chat.ragas_llm),
+                    resolve_chat_agent_llm("ragas", &chat.ragas_llm),
                     chat.ragas_sample_rate,
                     max_tok.min(256),
                 )))
@@ -363,7 +377,7 @@ impl ProviderBundle {
             // Feature 11: Contextual Compression
             let compress = if chat.compression_enabled {
                 Some(ContextualCompression::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.compression_llm),
+                    resolve_chat_agent_llm("compression", &chat.compression_llm),
                     chat.compression_target_ratio,
                     max_tok,
                     Arc::clone(&prompts),
@@ -375,7 +389,7 @@ impl ProviderBundle {
             // Feature 12: Multi-modal RAG
             let mm = if chat.multimodal_enabled {
                 Some(MultimodalRag::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.multimodal_llm),
+                    resolve_chat_agent_llm("multimodal", &chat.multimodal_llm),
                     max_tok.min(256),
                     chat.multimodal_max_images,
                     Arc::clone(&prompts),
@@ -387,7 +401,7 @@ impl ProviderBundle {
             // Feature 13: RAPTOR
             let raptor = if chat.raptor_enabled {
                 Some(Raptor::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.raptor_llm),
+                    resolve_chat_agent_llm("raptor", &chat.raptor_llm),
                     chat.raptor_max_depth,
                     chat.raptor_group_size,
                     max_tok.min(512),
@@ -400,7 +414,7 @@ impl ProviderBundle {
             // Feature 14: ColBERT Late Interaction Reranking
             let colbert = if chat.colbert_enabled {
                 Some(ColbertReranker::new_with_prompts(
-                    resolve_chat_agent_llm(&chat.colbert_llm),
+                    resolve_chat_agent_llm("colbert", &chat.colbert_llm),
                     max_tok.min(256),
                     chat.colbert_top_n,
                     Arc::clone(&prompts),

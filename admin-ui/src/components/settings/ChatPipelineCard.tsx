@@ -323,6 +323,15 @@ export function ChatPipelineCard() {
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<ChatPipelineConfigResponse | null>(null);
 
+  // Helper: render model tag from config LLM info
+  const modelTag = (llmInfo?: LlmProviderInfo) => {
+    if (llmMode !== 'per-agent' && llmMode !== 'shared') return null;
+    if (llmInfo?.model) {
+      return <Tag color="purple" style={{ fontSize: 11 }}>{llmInfo.kind}: {llmInfo.model}</Tag>;
+    }
+    return <Tag color="warning" style={{ fontSize: 11 }}>Uses main LLM</Tag>;
+  };
+
   // Pipeline-level state
   const [enabled, setEnabled] = useState(false);
   const [llmMode, setLlmMode] = useState<'chat' | 'shared' | 'per-agent'>('chat');
@@ -825,9 +834,33 @@ export function ChatPipelineCard() {
           )}
 
           {llmMode === 'per-agent' && (
-            <Paragraph type="secondary" style={{ margin: 0 }}>
-              Each agent can use a different LLM. Use small/fast models for light agents (Analyzer, Curator, Guard) and your best model for the Response Generator.
-            </Paragraph>
+            <>
+              <Paragraph type="secondary" style={{ margin: 0 }}>
+                Each agent can use a different LLM. Use small/fast models for light agents (Analyzer, Curator, Guard) and your best model for the Response Generator.
+              </Paragraph>
+              {(() => {
+                const missingAgents = Object.keys(chatAgents).filter((key) => {
+                  const info = chatAgents[key];
+                  const isOn = info.alwaysOn || agentToggles[key];
+                  if (!isOn) return false;
+                  const form = agentLlms[key];
+                  return !form || !form.model;
+                });
+                if (missingAgents.length > 0) {
+                  const names = missingAgents.map((k) => chatAgents[k].label).join(', ');
+                  return (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Agents without model override"
+                      description={`The following enabled agents have no model configured and will fall back to the main Chat LLM Provider: ${names}. Expand each agent to set a model.`}
+                      style={{ marginTop: 8 }}
+                    />
+                  );
+                }
+                return null;
+              })()}
+            </>
           )}
 
           <Divider style={{ margin: '8px 0' }} />
@@ -858,6 +891,15 @@ export function ChatPipelineCard() {
                     <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
                       {info.taskWeight}
                     </Tag>
+                    {llmMode === 'per-agent' && isOn && (() => {
+                      const form = agentLlms[key];
+                      const model = form?.model;
+                      return model ? (
+                        <Tag color="purple" style={{ fontSize: 11 }}>{form?.kind}: {model}</Tag>
+                      ) : (
+                        <Tag color="warning" style={{ fontSize: 11 }}>No model (uses fallback)</Tag>
+                      );
+                    })()}
                   </Space>
                 ),
                 children: (
@@ -958,6 +1000,7 @@ export function ChatPipelineCard() {
                     <Tag color={conversationMemoryEnabled ? 'green' : 'default'}>
                       {conversationMemoryEnabled ? 'ON' : 'OFF'}
                     </Tag>
+                    {conversationMemoryEnabled && modelTag(config?.memory_llm)}
                   </Space>
                 ),
                 children: (
@@ -1066,6 +1109,7 @@ export function ChatPipelineCard() {
                     <Tag color={toolUseEnabled ? 'green' : 'default'}>
                       {toolUseEnabled ? 'ON' : 'OFF'}
                     </Tag>
+                    {toolUseEnabled && modelTag(config?.tool_use_llm)}
                   </Space>
                 ),
                 children: (
@@ -1183,6 +1227,7 @@ export function ChatPipelineCard() {
                     <span>Self-RAG</span>
                     <Switch size="small" checked={selfRagEnabled} onChange={setSelfRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={selfRagEnabled ? 'green' : 'default'}>{selfRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    {selfRagEnabled && modelTag(config?.self_rag_llm)}
                   </Space>
                 ),
                 children: (
@@ -1209,6 +1254,7 @@ export function ChatPipelineCard() {
                     <span>Graph RAG</span>
                     <Switch size="small" checked={graphRagEnabled} onChange={setGraphRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={graphRagEnabled ? 'green' : 'default'}>{graphRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    {graphRagEnabled && modelTag(config?.graph_rag_llm)}
                   </Space>
                 ),
                 children: (
@@ -1318,6 +1364,7 @@ export function ChatPipelineCard() {
                     <span>Map-Reduce RAG</span>
                     <Switch size="small" checked={mapReduceEnabled} onChange={setMapReduceEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={mapReduceEnabled ? 'green' : 'default'}>{mapReduceEnabled ? 'ON' : 'OFF'}</Tag>
+                    {mapReduceEnabled && modelTag(config?.map_reduce_llm)}
                   </Space>
                 ),
                 children: (
@@ -1345,6 +1392,7 @@ export function ChatPipelineCard() {
                     <span>RAGAS Evaluation</span>
                     <Switch size="small" checked={ragasEnabled} onChange={setRagasEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={ragasEnabled ? 'green' : 'default'}>{ragasEnabled ? 'ON' : 'OFF'}</Tag>
+                    {ragasEnabled && modelTag(config?.ragas_llm)}
                   </Space>
                 ),
                 children: (
@@ -1372,6 +1420,7 @@ export function ChatPipelineCard() {
                     <span>Contextual Compression</span>
                     <Switch size="small" checked={compressionEnabled} onChange={setCompressionEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={compressionEnabled ? 'green' : 'default'}>{compressionEnabled ? 'ON' : 'OFF'}</Tag>
+                    {compressionEnabled && modelTag(config?.compression_llm)}
                   </Space>
                 ),
                 children: (
@@ -1399,6 +1448,7 @@ export function ChatPipelineCard() {
                     <span>Multi-modal RAG</span>
                     <Switch size="small" checked={multimodalEnabled} onChange={setMultimodalEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={multimodalEnabled ? 'green' : 'default'}>{multimodalEnabled ? 'ON' : 'OFF'}</Tag>
+                    {multimodalEnabled && modelTag(config?.multimodal_llm)}
                   </Space>
                 ),
                 children: (
@@ -1426,6 +1476,7 @@ export function ChatPipelineCard() {
                     <span>RAPTOR Hierarchical Summaries</span>
                     <Switch size="small" checked={raptorEnabled} onChange={setRaptorEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={raptorEnabled ? 'green' : 'default'}>{raptorEnabled ? 'ON' : 'OFF'}</Tag>
+                    {raptorEnabled && modelTag(config?.raptor_llm)}
                   </Space>
                 ),
                 children: (
@@ -1461,6 +1512,7 @@ export function ChatPipelineCard() {
                     <span>ColBERT Late Interaction Reranking</span>
                     <Switch size="small" checked={colbertEnabled} onChange={setColbertEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={colbertEnabled ? 'green' : 'default'}>{colbertEnabled ? 'ON' : 'OFF'}</Tag>
+                    {colbertEnabled && modelTag(config?.colbert_llm)}
                   </Space>
                 ),
                 children: (
