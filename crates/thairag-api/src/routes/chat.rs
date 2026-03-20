@@ -443,17 +443,29 @@ async fn handle_non_stream(
     };
 
     let p = state.providers();
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
     let llm_resp = if let Some(ref pipeline) = p.chat_pipeline {
         pipeline
-            .process(&augmented_messages, &scope, &memories, &available_scopes)
+            .process(
+                &augmented_messages,
+                &scope,
+                &memories,
+                &available_scopes,
+                Some(progress_tx),
+            )
             .await
             .map_err(ApiError::from)?
     } else {
+        drop(progress_tx);
         p.orchestrator
             .process(&full_messages, &scope)
             .await
             .map_err(ApiError::from)?
     };
+    // Collect pipeline stages for the response
+    let pipeline_stages: Vec<thairag_core::types::PipelineProgress> =
+        std::iter::from_fn(|| progress_rx.try_recv().ok()).collect();
 
     state.metrics.record_tokens(
         llm_resp.usage.prompt_tokens,
@@ -514,6 +526,10 @@ async fn handle_non_stream(
 
     if let Some(sid) = session_id {
         response["session_id"] = serde_json::Value::String(sid.to_string());
+    }
+
+    if !pipeline_stages.is_empty() {
+        response["pipeline_stages"] = serde_json::to_value(&pipeline_stages).unwrap();
     }
 
     Ok(Json(response).into_response())
@@ -617,19 +633,32 @@ async fn handle_stream(
     // Move the pipeline call INSIDE the stream so the SSE connection starts
     // immediately and KeepAlive comments keep it alive during long processing.
     let sse_stream = async_stream::stream! {
+        // Create progress channel for pipeline stage tracking
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
+
         // Run the pipeline inside the stream — KeepAlive sends SSE comments
         // while we wait, preventing connection timeouts from clients.
         let p = state.providers();
         let pipeline_for_memory = p.chat_pipeline.clone();
         let stream_result = if let Some(ref pipeline) = p.chat_pipeline {
             pipeline
-                .process_stream(&augmented_messages, &scope, &memories, &available_scopes)
+                .process_stream(&augmented_messages, &scope, &memories, &available_scopes, Some(progress_tx))
                 .await
         } else {
+            drop(progress_tx);
             p.orchestrator
                 .process_stream(&augmented_messages, &scope)
                 .await
         };
+
+        // Emit pipeline progress events (all pre-generation stages are done by now)
+        while let Ok(evt) = progress_rx.try_recv() {
+            let data = serde_json::to_string(&evt).unwrap();
+            yield Ok::<_, std::convert::Infallible>(
+                Event::default().event("progress").data(data)
+            );
+        }
 
         let LlmStreamResponse {
             stream: token_stream,
@@ -763,7 +792,7 @@ async fn handle_stream(
     Ok(Sse::new(sse_stream)
         .keep_alive(
             KeepAlive::new()
-                .interval(std::time::Duration::from_secs(15))
+                .interval(std::time::Duration::from_secs(5))
                 .text("ping"),
         )
         .into_response())

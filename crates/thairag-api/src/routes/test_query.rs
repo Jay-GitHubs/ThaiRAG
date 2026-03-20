@@ -29,6 +29,7 @@ pub struct TestQueryResponse {
     pub usage: TestQueryUsage,
     pub timing: TestQueryTiming,
     pub provider_info: ProviderInfo,
+    pub pipeline_stages: Vec<PipelineStage>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +68,14 @@ pub struct ProviderInfo {
     pub llm_model: String,
     pub embedding_kind: String,
     pub embedding_model: String,
+}
+
+#[derive(Serialize)]
+pub struct PipelineStage {
+    pub stage: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// POST /api/km/workspaces/{workspace_id}/test-query
@@ -220,18 +229,28 @@ pub async fn test_query(
         content: req.query.clone(),
     });
 
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
     let llm_resp = if let Some(ref pipeline) = p.chat_pipeline {
         pipeline
-            .process(&messages, &scope, &[], &[])
+            .process(&messages, &scope, &[], &[], Some(progress_tx))
             .await
             .map_err(ApiError::from)?
     } else {
+        drop(progress_tx);
         p.orchestrator
             .process(&messages, &scope)
             .await
             .map_err(ApiError::from)?
     };
     let generation_ms = gen_start.elapsed().as_millis() as u64;
+
+    // Collect pipeline stage events and merge started+done pairs
+    let pipeline_stages: Vec<PipelineStage> = {
+        let events: Vec<thairag_core::types::PipelineProgress> =
+            std::iter::from_fn(|| progress_rx.try_recv().ok()).collect();
+        merge_pipeline_stages(&events)
+    };
     let total_ms = total_start.elapsed().as_millis() as u64;
 
     state.metrics.record_tokens(
@@ -273,7 +292,41 @@ pub async fn test_query(
             total_ms,
         },
         provider_info,
+        pipeline_stages,
     }))
+}
+
+/// Merge started+done progress events into a single entry per stage.
+fn merge_pipeline_stages(events: &[thairag_core::types::PipelineProgress]) -> Vec<PipelineStage> {
+    use thairag_core::types::StageStatus;
+    let mut stages = Vec::new();
+    for evt in events {
+        match evt.status {
+            StageStatus::Started => {} // Skip: duration comes from the Done event
+            StageStatus::Done => {
+                stages.push(PipelineStage {
+                    stage: evt.stage.clone(),
+                    status: "done".into(),
+                    duration_ms: evt.duration_ms,
+                });
+            }
+            StageStatus::Skipped => {
+                stages.push(PipelineStage {
+                    stage: evt.stage.clone(),
+                    status: "skipped".into(),
+                    duration_ms: None,
+                });
+            }
+            StageStatus::Error => {
+                stages.push(PipelineStage {
+                    stage: evt.stage.clone(),
+                    status: "error".into(),
+                    duration_ms: evt.duration_ms,
+                });
+            }
+        }
+    }
+    stages
 }
 
 /// Persist cumulative token usage to KV store so it survives restarts.

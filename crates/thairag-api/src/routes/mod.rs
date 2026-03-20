@@ -16,6 +16,7 @@ use axum::{Router, routing::delete, routing::get, routing::post};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::timeout::TimeoutLayer;
 
 use tower_http::trace::TraceLayer;
 use tracing::Span;
@@ -260,6 +261,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/connectors/{id}/test", post(connectors::test_connection));
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
+    let server_timeout = std::time::Duration::from_secs(state.config.server.request_timeout_secs);
     let jwt = state.jwt.clone();
     let api_keys = state.api_keys.clone();
     let protected = Router::new()
@@ -269,7 +271,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {
             auth_layer(jwt.clone(), api_keys.clone(), req, next)
-        }));
+        }))
+        // Server-side request timeout: returns 408 before reverse proxy 504.
+        // For SSE (streaming chat), headers are sent immediately so this
+        // timeout only applies to the header phase, not the stream body.
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::GATEWAY_TIMEOUT,
+            server_timeout,
+        ));
 
     // Merge public + protected, optionally with rate limiting
     let rate_limited = if let Some(limiter) = rate_limiter {

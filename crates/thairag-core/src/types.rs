@@ -127,6 +127,29 @@ pub struct LlmStreamResponse {
     pub usage: Arc<Mutex<Option<LlmUsage>>>,
 }
 
+// ── Pipeline Progress ────────────────────────────────────────────────
+
+/// Progress event emitted by the chat pipeline at each agent stage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineProgress {
+    pub stage: String,
+    pub status: StageStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum StageStatus {
+    Started,
+    Done,
+    Skipped,
+    Error,
+}
+
+/// Sender half for pipeline progress events.
+pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<PipelineProgress>;
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
