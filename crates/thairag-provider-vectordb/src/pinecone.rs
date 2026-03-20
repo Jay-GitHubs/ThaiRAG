@@ -194,4 +194,47 @@ impl VectorStore for PineconeVectorStore {
 
         Ok(())
     }
+
+    async fn delete_all(&self) -> Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}/vectors/delete", self.url))
+            .header("Api-Key", &self.api_key)
+            .json(&json!({ "deleteAll": true }))
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Pinecone delete_all request failed: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ThaiRagError::VectorStore(format!(
+                "Pinecone delete_all failed ({status}): {body}"
+            )));
+        }
+
+        info!("Deleted all Pinecone vectors for re-indexing");
+        Ok(())
+    }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let resp = self
+            .client
+            .get(format!("{}/describe_index_stats", self.url))
+            .header("Api-Key", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| {
+                ThaiRagError::VectorStore(format!("Pinecone stats request failed: {e}"))
+            })?;
+        let body: Value = resp.json().await.unwrap_or_default();
+        let count = body["totalVectorCount"].as_u64().unwrap_or(0);
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "pinecone".to_string(),
+            collection_name: "default".to_string(),
+            vector_count: count,
+        })
+    }
 }

@@ -5,6 +5,7 @@ import { LocalAuthTab } from '../components/settings/LocalAuthTab';
 import { PresetsCard } from '../components/settings/PresetsCard';
 import { PromptsTab } from '../components/settings/PromptsTab';
 import { ProvidersTab } from '../components/settings/ProvidersTab';
+import { VectorDbTab } from '../components/settings/VectorDbTab';
 
 export function SettingsPage() {
   return (
@@ -16,6 +17,7 @@ export function SettingsPage() {
           { key: 'presets', label: 'Quick Setup', children: <PresetsCard /> },
           { key: 'providers', label: 'Chat & Response Pipeline', children: <ProvidersTab /> },
           { key: 'documents', label: 'Document Processing', children: <DocumentProcessingTab /> },
+          { key: 'vectordb', label: 'Vector Database', children: <VectorDbTab /> },
           { key: 'prompts', label: 'Agent Prompts', children: <PromptsTab /> },
           { key: 'idp', label: 'Identity Providers', children: <IdpTab /> },
           { key: 'local', label: 'Local Auth', children: <LocalAuthTab /> },

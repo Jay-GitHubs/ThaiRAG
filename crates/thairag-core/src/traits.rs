@@ -71,6 +71,10 @@ pub trait VectorStore: Send + Sync {
     async fn delete_all(&self) -> Result<()> {
         Ok(()) // default no-op for backwards compatibility
     }
+    /// Return statistics about the vector store (backend type, collection name, vector count).
+    async fn collection_stats(&self) -> Result<crate::types::VectorStoreStats> {
+        Ok(crate::types::VectorStoreStats::default())
+    }
 }
 
 #[async_trait]

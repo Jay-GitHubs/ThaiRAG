@@ -85,6 +85,15 @@ impl VectorStore for InMemoryVectorStore {
         store.clear();
         Ok(())
     }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let store = self.chunks.read().unwrap();
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "in_memory".to_string(),
+            collection_name: "in_memory".to_string(),
+            vector_count: store.len() as u64,
+        })
+    }
 }
 
 #[cfg(test)]

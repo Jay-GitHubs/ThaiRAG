@@ -25,6 +25,8 @@ import type {
   UpdateProviderConfigRequest,
   UpdateRetrievalParamsRequest,
   UsageStatsResponse,
+  VectorDbClearResponse,
+  VectorDbInfo,
 } from './types';
 
 export async function listIdentityProviders() {
@@ -223,5 +225,17 @@ export async function deletePromptOverride(key: string) {
 
 export async function getUsageStats() {
   const res = await client.get<UsageStatsResponse>('/api/km/settings/usage');
+  return res.data;
+}
+
+// ── Vector Database Management ─────────────────────────────────────
+
+export async function getVectorDbInfo() {
+  const res = await client.get<VectorDbInfo>('/api/km/settings/vectordb/info');
+  return res.data;
+}
+
+export async function clearVectorDb() {
+  const res = await client.post<VectorDbClearResponse>('/api/km/settings/vectordb/clear');
   return res.data;
 }

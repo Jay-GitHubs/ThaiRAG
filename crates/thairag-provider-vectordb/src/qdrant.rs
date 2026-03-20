@@ -223,4 +223,16 @@ impl VectorStore for QdrantVectorStore {
         self.collection_ready.store(false, Ordering::Relaxed);
         Ok(())
     }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let count = match self.client.collection_info(&self.collection).await {
+            Ok(info) => info.result.map_or(0, |r| r.points_count.unwrap_or(0)),
+            Err(_) => 0,
+        };
+        Ok(thairag_core::types::VectorStoreStats {
+            backend: "qdrant".to_string(),
+            collection_name: self.collection.clone(),
+            vector_count: count,
+        })
+    }
 }

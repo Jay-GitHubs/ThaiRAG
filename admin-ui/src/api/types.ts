@@ -877,3 +877,17 @@ export interface HealthResponse {
   uptime_secs?: number;
   embedding?: string;
 }
+
+// ── Vector Database ────────────────────────────────────────────────
+export interface VectorDbInfo {
+  backend: string;
+  url: string;
+  collection: string;
+  isolation: string;
+  vector_count: number;
+}
+
+export interface VectorDbClearResponse {
+  status: string;
+  message: string;
+}

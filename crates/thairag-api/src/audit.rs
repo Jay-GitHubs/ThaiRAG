@@ -38,6 +38,7 @@ pub enum AuditAction {
     IdpDeleted,
     PromptUpdated,
     PromptDeleted,
+    VectorDbCleared,
 }
 
 impl std::fmt::Display for AuditAction {

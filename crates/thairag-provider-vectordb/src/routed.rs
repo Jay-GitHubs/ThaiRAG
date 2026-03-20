@@ -244,4 +244,25 @@ impl VectorStore for RoutedVectorStore {
         }
         Ok(())
     }
+
+    async fn collection_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
+        let stores = self.all_stores();
+        let mut total = 0u64;
+        let mut names = Vec::new();
+        let mut backend = String::new();
+        for store in stores {
+            if let Ok(stats) = store.collection_stats().await {
+                total += stats.vector_count;
+                if !stats.collection_name.is_empty() {
+                    names.push(stats.collection_name);
+                }
+                backend = stats.backend;
+            }
+        }
+        Ok(thairag_core::types::VectorStoreStats {
+            vector_count: total,
+            collection_name: names.join(", "),
+            backend,
+        })
+    }
 }
