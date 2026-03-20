@@ -286,6 +286,20 @@ impl ChatPipeline {
             StageStatus::Done,
             Some(t.elapsed().as_millis() as u64),
         );
+        // When the user is querying within a workspace context, force retrieval
+        // unless the query is clearly a greeting/thanks/meta question.
+        let route = if route == PipelineRoute::DirectLlm
+            && !scope.workspace_ids.is_empty()
+            && !matches!(
+                analysis.intent,
+                QueryIntent::DirectAnswer | QueryIntent::Clarification
+            ) {
+            debug!("Pipeline: overriding DirectLlm → SimpleRetrieval (workspace context)");
+            PipelineRoute::SimpleRetrieval
+        } else {
+            route
+        };
+
         info!(route = ?route, remaining_budget = budget.remaining(), "Pipeline: orchestrator decided");
 
         match route {
@@ -958,30 +972,30 @@ impl ChatPipeline {
         );
 
         // ── Self-RAG gate (streaming) ──
-        if let Some(ref self_rag) = self.self_rag {
-            if budget.try_spend() {
-                Self::emit(&progress, "self_rag_gate", StageStatus::Started, None);
-                let t = Instant::now();
-                if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
-                    self_rag.should_retrieve(user_query, messages).await
-                {
-                    Self::emit(
-                        &progress,
-                        "self_rag_gate",
-                        StageStatus::Done,
-                        Some(t.elapsed().as_millis() as u64),
-                    );
-                    info!(confidence, "Self-RAG(stream): skipping retrieval");
-                    Self::emit(&progress, "response_generator", StageStatus::Started, None);
-                    return self.main_llm.generate_stream(messages, None).await;
-                }
+        if let Some(ref self_rag) = self.self_rag
+            && budget.try_spend()
+        {
+            Self::emit(&progress, "self_rag_gate", StageStatus::Started, None);
+            let t = Instant::now();
+            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
+                self_rag.should_retrieve(user_query, messages).await
+            {
                 Self::emit(
                     &progress,
                     "self_rag_gate",
                     StageStatus::Done,
                     Some(t.elapsed().as_millis() as u64),
                 );
+                info!(confidence, "Self-RAG(stream): skipping retrieval");
+                Self::emit(&progress, "response_generator", StageStatus::Started, None);
+                return self.main_llm.generate_stream(messages, None).await;
             }
+            Self::emit(
+                &progress,
+                "self_rag_gate",
+                StageStatus::Done,
+                Some(t.elapsed().as_millis() as u64),
+            );
         }
 
         // ── Orchestrator: decide route ──
@@ -1003,6 +1017,19 @@ impl ChatPipeline {
             StageStatus::Done,
             Some(t.elapsed().as_millis() as u64),
         );
+        // When the user is querying within a workspace context, force retrieval
+        let route = if route == PipelineRoute::DirectLlm
+            && !scope.workspace_ids.is_empty()
+            && !matches!(
+                analysis.intent,
+                QueryIntent::DirectAnswer | QueryIntent::Clarification
+            ) {
+            debug!("Pipeline(stream): overriding DirectLlm → SimpleRetrieval (workspace context)");
+            PipelineRoute::SimpleRetrieval
+        } else {
+            route
+        };
+
         debug!(route = ?route, remaining_budget = budget.remaining(), "Pipeline(stream): orchestrator decided");
 
         match route {

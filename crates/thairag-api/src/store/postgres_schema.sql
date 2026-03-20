@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS document_blobs (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Document chunks (for Tantivy re-indexing on startup)
+CREATE TABLE IF NOT EXISTS document_chunks (
+    chunk_id       UUID NOT NULL,
+    doc_id         UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    workspace_id   UUID NOT NULL,
+    content        TEXT NOT NULL,
+    chunk_index    INTEGER NOT NULL,
+    PRIMARY KEY (chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks(doc_id);
+
 -- MCP Connectors
 CREATE TABLE IF NOT EXISTS mcp_connectors (
     id              UUID PRIMARY KEY,

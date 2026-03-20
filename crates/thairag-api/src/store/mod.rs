@@ -106,6 +106,11 @@ pub trait KmStoreTrait: Send + Sync {
     /// Get image and table counts for a document.
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)>;
 
+    // ── Document Chunks (for Tantivy rebuild) ──────────────────────
+    fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()>;
+    fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk>;
+    fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()>;
+
     // ── User ────────────────────────────────────────────────────────
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User>;
     fn upsert_user_by_email(
