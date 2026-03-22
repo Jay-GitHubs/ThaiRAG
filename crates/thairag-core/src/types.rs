@@ -146,6 +146,9 @@ pub struct PipelineProgress {
     pub status: StageStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// Model name used by this stage (e.g. "claude-sonnet-4-20250514").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1433,6 +1433,16 @@ impl KmStoreTrait for PostgresKmStore {
         );
     }
 
+    fn list_all_settings(&self) -> Vec<(String, String)> {
+        block_on(
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT key, value FROM settings WHERE key NOT LIKE 'snapshot.%' AND key NOT LIKE '\\_snapshot\\_index%' AND key NOT LIKE '\\_embedding\\_fingerprint%'",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+    }
+
     // ── MCP Connectors ───────────────────────────────────────────────
 
     fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {

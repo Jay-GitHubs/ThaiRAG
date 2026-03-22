@@ -1028,7 +1028,7 @@ mod tests {
                 llm: LlmConfig {
                     kind: LlmKind::Ollama,
                     model: "llama3".into(),
-                    base_url: "http://localhost:11434".into(),
+                    base_url: "http://localhost:11435".into(),
                     api_key: String::new(),
                     max_tokens: None,
                 },

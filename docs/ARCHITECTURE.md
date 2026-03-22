@@ -86,7 +86,7 @@ Each provider crate implements one or more trait from `thairag-core`:
 | `thairag-provider-llm` | `LlmProvider` | Claude, OpenAI, Ollama |
 | `thairag-provider-embedding` | `EmbeddingProvider` | OpenAI, FastEmbed |
 | `thairag-provider-vectordb` | `VectorStore`, `PersonalMemoryStore` | Qdrant, InMemory |
-| `thairag-provider-search` | `SearchEngine` | Tantivy (BM25) |
+| `thairag-provider-search` | `SearchEngine` | Tantivy BM25 (disk-persisted via MmapDirectory) |
 | `thairag-provider-reranker` | `Reranker` | Cohere, Passthrough |
 
 All providers are instantiated via factory functions based on config, enabling runtime provider selection.
@@ -97,20 +97,25 @@ Document ingestion pipeline:
 2. **Conversion** — Format-specific extractors (pdf-extract, docx-rs, calamine, scraper)
 3. **Chunking** — Configurable chunk size and overlap, preserving metadata (page numbers, section titles)
 4. **Embedding** — Chunks are embedded via the configured `EmbeddingProvider`
-5. **Indexing** — Stored in both VectorDB (semantic search) and Tantivy (BM25)
+5. **Persistence** — Chunks are saved to the `document_chunks` DB table (for Tantivy rebuild on restart)
+6. **Indexing** — Stored in both VectorDB (semantic search) and Tantivy BM25 (disk-based via MmapDirectory)
 
 ### thairag-search
 Hybrid search engine:
 1. **Vector search** — Embedding query → top-K from VectorDB
-2. **BM25 search** — Tokenized query → top-K from Tantivy
+2. **BM25 search** — Tokenized query → top-K from Tantivy (disk-persisted, auto-rebuilt from `document_chunks` table on startup if empty)
 3. **RRF Fusion** — Reciprocal Rank Fusion merges results with configurable weights (`vector_weight`, `text_weight`) and RRF parameter `k` (default 60)
 4. **Reranking** — Optional cross-encoder reranking (Cohere or passthrough)
 
 ### thairag-agent
-RAG orchestrator:
+RAG orchestrator with multi-agent pipeline:
 - **Intent classification** — Determines if a query needs retrieval or is a direct question
 - **Pipeline processing** — Search → Context assembly → LLM generation
-- **Chat pipeline** — Optional configurable pipeline with system prompt, guardrails, and pre/post processors
+- **Chat pipeline** — Configurable multi-agent pipeline with system prompt, guardrails, and pre/post processors
+- **LLM mode** — Three modes for assigning LLMs to pipeline agents:
+  - **Use Chat LLM** — All agents use the main LLM Provider directly
+  - **Shared** — All agents share a separate dedicated chat LLM
+  - **Per-Agent** — Each agent (Query Analyzer, Retriever, Response Generator, etc.) can have its own LLM, with fallback to shared → main LLM Provider
 - **Context compaction** — Automatic summarization of older messages when conversation approaches the model's context window limit (Claude Code-style). Uses Thai-aware token estimation (~2 chars/token for Thai, ~4 chars/token for English)
 - **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
 
@@ -188,10 +193,18 @@ Client POST /api/km/workspaces/{id}/documents/upload
     │
     ▼
 For each chunk:
+    ├─ Save to document_chunks table (for Tantivy rebuild on restart)
     ├─ EmbeddingProvider::embed(chunk.content)
     ├─ VectorStore::upsert(chunk_id, embedding)
-    └─ Tantivy::index(chunk_id, content)
+    └─ Tantivy::index(chunk_id, content)  [disk-persisted via MmapDirectory]
 ```
+
+### Tantivy Index Recovery
+
+On startup, if the Tantivy index is empty but the database has stored chunks, the server automatically rebuilds the index in batches of 500. This handles:
+- First start with a fresh Docker volume but existing database
+- Index corruption or accidental volume deletion
+- Container restarts with stale writer lock files (auto-cleaned)
 
 > **MCP Ingestion:** When MCP connectors are enabled, `thairag-mcp`'s SyncEngine discovers resources from external MCP servers and ingests them through the same document pipeline (format conversion → chunking → embedding → indexing). Content-hash deduplication prevents re-ingesting unchanged resources.
 
@@ -228,7 +241,8 @@ ThaiRAG supports three storage backends:
 All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - `users` — Authentication with Argon2 password hashes
 - `organizations`, `departments`, `workspaces` — KM hierarchy
-- `documents`, `chunks` — Document storage with metadata
+- `documents` — Document metadata and original content
+- `document_chunks` — Stored chunks with content, used for Tantivy BM25 index rebuild on startup (FK to `documents` with `ON DELETE CASCADE`)
 - `permissions` — Scoped access control (org/dept/workspace level)
 - `identity_providers` — External IdP configuration
 - `settings` — KV store for runtime configuration, feedback data, tuning parameters

@@ -1506,6 +1506,19 @@ impl KmStoreTrait for SqliteKmStore {
             .ok();
     }
 
+    fn list_all_settings(&self) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM settings WHERE key NOT LIKE 'snapshot.%' AND key NOT LIKE '\\_snapshot\\_index%' ESCAPE '\\' AND key NOT LIKE '\\_embedding\\_fingerprint%' ESCAPE '\\'")
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
     // ── MCP Connectors ───────────────────────────────────────────────
 
     fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {

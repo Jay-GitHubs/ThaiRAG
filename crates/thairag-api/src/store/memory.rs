@@ -792,6 +792,20 @@ impl KmStoreTrait for MemoryKmStore {
         self.settings.write().unwrap().remove(key);
     }
 
+    fn list_all_settings(&self) -> Vec<(String, String)> {
+        self.settings
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| {
+                !k.starts_with("snapshot.")
+                    && !k.starts_with("_snapshot_index")
+                    && !k.starts_with("_embedding_fingerprint")
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     // ── MCP Connectors ───────────────────────────────────────────────
 
     fn insert_connector(&self, config: McpConnectorConfig) -> Result<McpConnectorConfig> {

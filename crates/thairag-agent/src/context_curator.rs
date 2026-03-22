@@ -15,6 +15,8 @@ pub struct CuratedChunk {
     pub relevance_score: f32,
     pub source_doc_id: DocId,
     pub source_chunk_id: ChunkId,
+    /// Document title (resolved after curation for richer LLM context).
+    pub source_doc_title: Option<String>,
 }
 
 /// Result of context curation.
@@ -22,6 +24,17 @@ pub struct CuratedChunk {
 pub struct CuratedContext {
     pub chunks: Vec<CuratedChunk>,
     pub total_tokens_est: usize,
+}
+
+impl CuratedContext {
+    /// Populate `source_doc_title` on each chunk using the provided resolver.
+    pub fn resolve_doc_titles(&mut self, resolver: &dyn Fn(DocId) -> Option<String>) {
+        for chunk in &mut self.chunks {
+            if chunk.source_doc_title.is_none() {
+                chunk.source_doc_title = resolver(chunk.source_doc_id);
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -180,6 +193,7 @@ fn build_curated_context(
             relevance_score: r.score,
             source_doc_id: r.chunk.doc_id,
             source_chunk_id: r.chunk.chunk_id,
+            source_doc_title: None,
         });
         total_tokens += tokens;
     }

@@ -657,11 +657,14 @@ Update document processing configuration.
 ### Chat Pipeline
 
 #### `GET /api/km/settings/chat-pipeline`
-Get chat pipeline configuration. Response includes context compaction and personal memory settings:
+Get chat pipeline configuration. Response includes LLM mode, per-agent LLM configs, context compaction, and personal memory settings:
 
 ```json
 {
   "enabled": true,
+  "llm_mode": "per_agent",
+  "response_generator_llm": { "kind": "ollama", "model": "qwen3:14b" },
+  "query_analyzer_llm": { "kind": "ollama", "model": "qwen3:4b" },
   "context_compaction_enabled": false,
   "model_context_window": 0,
   "compaction_threshold": 0.8,
@@ -674,11 +677,18 @@ Get chat pipeline configuration. Response includes context compaction and person
 }
 ```
 
+**LLM modes:**
+- `chat_llm` — All agents use the main LLM Provider
+- `shared` — All agents share a dedicated chat LLM
+- `per_agent` — Each agent can have its own LLM (falls back to shared → main LLM Provider if not set)
+
 #### `PUT /api/km/settings/chat-pipeline`
 Update chat pipeline configuration. All fields are optional — only send fields you want to change.
 
 ```json
 {
+  "llm_mode": "per_agent",
+  "response_generator_llm": { "kind": "ollama", "model": "qwen3:14b" },
   "context_compaction_enabled": true,
   "model_context_window": 128000,
   "compaction_threshold": 0.8,

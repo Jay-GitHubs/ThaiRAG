@@ -157,6 +157,19 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Settings — vector database management
         .route("/settings/vectordb/info", get(settings::get_vectordb_info))
         .route("/settings/vectordb/clear", post(settings::clear_vectordb))
+        // Settings — config snapshots
+        .route(
+            "/settings/snapshots",
+            get(settings::list_snapshots).post(settings::create_snapshot),
+        )
+        .route(
+            "/settings/snapshots/{id}/restore",
+            post(settings::restore_snapshot),
+        )
+        .route(
+            "/settings/snapshots/{id}",
+            delete(settings::delete_snapshot),
+        )
         // Settings — prompt management
         .route("/settings/prompts", get(settings::list_prompts))
         .route(
@@ -231,6 +244,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/test-query",
             post(test_query::test_query),
+        )
+        .route(
+            "/workspaces/{workspace_id}/test-query-stream",
+            post(test_query::test_query_stream),
         )
         // MCP Connectors
         .route(

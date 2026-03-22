@@ -100,7 +100,16 @@ impl ResponseGenerator {
             let chunks_text = context
                 .chunks
                 .iter()
-                .map(|c| format!("<chunk index=\"{}\">\n{}\n</chunk>", c.index, c.content))
+                .map(|c| {
+                    if let Some(ref title) = c.source_doc_title {
+                        format!(
+                            "<chunk index=\"{}\" source=\"{}\">\n{}\n</chunk>",
+                            c.index, title, c.content
+                        )
+                    } else {
+                        format!("<chunk index=\"{}\">\n{}\n</chunk>", c.index, c.content)
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             format!(
@@ -120,7 +129,10 @@ impl ResponseGenerator {
              enough information to fully answer, say so honestly rather than guessing."
         };
 
-        // Assess context confidence for anti-hallucination strength
+        // Assess context confidence for anti-hallucination strength.
+        // Scores are expected in 0–1 range (normalized RRF, cosine similarity,
+        // or reranker relevance scores). A score of 0.0 means the source
+        // doesn't provide calibrated scores — treat as unknown confidence.
         let avg_score = if context.chunks.is_empty() {
             0.0
         } else {
@@ -131,12 +143,11 @@ impl ResponseGenerator {
                 .sum::<f32>()
                 / context.chunks.len() as f32
         };
-        // When all scores are 0.0, the vector store doesn't return calibrated scores.
-        // Treat this as "unknown confidence" rather than "low confidence" — the chunks
-        // may still be perfectly relevant.
+
         let scores_calibrated = !context.chunks.is_empty() && avg_score > 0.0;
+
         let confidence_instruction = if !scores_calibrated {
-            // Scores uncalibrated (e.g. Qdrant without score normalization) — use neutral instruction
+            // Scores uncalibrated or absent — let the LLM judge from content.
             ""
         } else if avg_score < 0.3 {
             "\n\n⚠️ IMPORTANT: The retrieved context has LOW relevance to this query. \

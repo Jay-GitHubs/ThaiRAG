@@ -517,8 +517,48 @@ pub async fn update_provider_config(
         .validate()
         .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
 
-    // If embedding changed, clear old vectors (they have the wrong dimension)
+    // If embedding changed, auto-save a snapshot, clear old vectors, and update fingerprint
     if embedding_changed {
+        let current_fp = get_embedding_fingerprint(&state);
+        let new_fp = format!(
+            "{:?}:{}:{}",
+            pc.embedding.kind, pc.embedding.model, pc.embedding.dimension,
+        );
+
+        // Auto-save snapshot before destructive embedding change
+        let settings: std::collections::HashMap<String, String> =
+            state.km_store.list_all_settings().into_iter().collect();
+        let auto_snap = ConfigSnapshot {
+            id: Uuid::new_v4().to_string(),
+            name: "Auto-save before config change".to_string(),
+            description: format!(
+                "Auto-saved before embedding model change from {}",
+                current_fp
+            ),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            created_by: claims.sub.clone(),
+            embedding_fingerprint: current_fp.clone(),
+            settings,
+        };
+        if let Ok(snap_json) = serde_json::to_string(&auto_snap) {
+            state
+                .km_store
+                .set_setting(&format!("snapshot.{}", auto_snap.id), &snap_json);
+            let mut ids: Vec<String> = state
+                .km_store
+                .get_setting("_snapshot_index")
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            ids.push(auto_snap.id.clone());
+            state
+                .km_store
+                .set_setting("_snapshot_index", &serde_json::to_string(&ids).unwrap());
+            tracing::info!(
+                snapshot_id = %auto_snap.id,
+                "Auto-saved config snapshot before embedding change"
+            );
+        }
+
         tracing::warn!(
             old_model = %old_embedding.model,
             old_dim = old_embedding.dimension,
@@ -527,6 +567,11 @@ pub async fn update_provider_config(
             "Embedding model changed — clearing vector store. Documents need re-processing."
         );
         let _ = state.providers().search_engine.delete_all_vectors().await;
+
+        // Update embedding fingerprint
+        state
+            .km_store
+            .set_setting("_embedding_fingerprint", &new_fp);
     }
 
     // If the LLM base_url changed, propagate to all per-agent LLM configs in the DB
@@ -588,12 +633,8 @@ pub async fn update_provider_config(
 
     // Hot-reload providers
     let eff_chat = crate::routes::settings::get_effective_chat_pipeline(&state);
-    let bundle = crate::app_state::ProviderBundle::build(
-        &pc,
-        &state.config.search,
-        &state.config.document,
-        &eff_chat,
-    );
+    let bundle =
+        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
     state.reload_providers(bundle);
 
     tracing::info!("Provider config updated and hot-reloaded by super admin");
@@ -615,7 +656,7 @@ async fn fetch_models_for_provider(
     match kind {
         LlmKind::Ollama => {
             let effective_url = if base_url.is_empty() {
-                "http://localhost:11434"
+                "http://localhost:11435"
             } else {
                 base_url
             };
@@ -1010,7 +1051,7 @@ async fn fetch_models_for_embedding_provider(
         EmbeddingKind::Ollama => {
             // Query Ollama /api/tags and filter for embedding models
             let effective_url = if base_url.is_empty() {
-                "http://localhost:11434"
+                "http://localhost:11435"
             } else {
                 base_url
             };
@@ -1957,12 +1998,13 @@ pub async fn update_document_config(
     effective_doc.ai_preprocessing.enricher_llm = get_effective_agent_llm(&state, "enricher");
 
     // Try hot-reload; don't fail the save if provider creation has issues
+    let eff_chat = get_effective_chat_pipeline(&state);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::app_state::ProviderBundle::build(
+        state.build_provider_bundle(
             &state.providers().providers_config,
             &state.config.search,
             &effective_doc,
-            &state.config.chat_pipeline,
+            &eff_chat,
         )
     })) {
         Ok(bundle) => {
@@ -2086,6 +2128,8 @@ pub struct ChatPipelineConfigResponse {
     pub personal_memory_max_per_user: usize,
     pub personal_memory_decay_factor: f32,
     pub personal_memory_min_relevance: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personal_memory_llm: Option<LlmProviderInfo>,
 }
 
 #[derive(Deserialize)]
@@ -2205,11 +2249,21 @@ pub struct UpdateChatPipelineRequest {
     pub personal_memory_max_per_user: Option<usize>,
     pub personal_memory_decay_factor: Option<f32>,
     pub personal_memory_min_relevance: Option<f32>,
+    pub personal_memory_llm: Option<UpdateLlmConfig>,
+    pub remove_personal_memory_llm: Option<bool>,
 }
 
 pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
-    let cp = &state.config.chat_pipeline;
-    let s = |key: &str| state.km_store.get_setting(key);
+    get_effective_chat_pipeline_with_store(&state.config, &*state.km_store)
+}
+
+/// Same as `get_effective_chat_pipeline` but takes raw parts — usable before AppState exists.
+pub fn get_effective_chat_pipeline_with_store(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+) -> thairag_config::schema::ChatPipelineConfig {
+    let cp = &config.chat_pipeline;
+    let s = |key: &str| store.get_setting(key);
 
     thairag_config::schema::ChatPipelineConfig {
         enabled: s("chat_pipeline.enabled")
@@ -2580,6 +2634,7 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         personal_memory_max_per_user: eff.personal_memory_max_per_user,
         personal_memory_decay_factor: eff.personal_memory_decay_factor,
         personal_memory_min_relevance: eff.personal_memory_min_relevance,
+        personal_memory_llm: eff.personal_memory_llm.as_ref().map(llm_config_to_info),
     }
 }
 
@@ -2952,6 +3007,14 @@ pub async fn update_chat_pipeline_config(
             eff.colbert_llm.clone(),
         )?;
     }
+    if let Some(ref u) = req.personal_memory_llm {
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.personal_memory_llm",
+            u,
+            eff.personal_memory_llm.clone(),
+        )?;
+    }
 
     // Handle removal of LLM overrides
     macro_rules! remove_llm {
@@ -3031,11 +3094,16 @@ pub async fn update_chat_pipeline_config(
     );
     remove_llm!(raptor_llm, remove_raptor_llm, "chat_pipeline.raptor_llm");
     remove_llm!(colbert_llm, remove_colbert_llm, "chat_pipeline.colbert_llm");
+    remove_llm!(
+        personal_memory_llm,
+        remove_personal_memory_llm,
+        "chat_pipeline.personal_memory_llm"
+    );
 
     // Hot-reload
     let eff_chat = get_effective_chat_pipeline(&state);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::app_state::ProviderBundle::build(
+        state.build_provider_bundle(
             &state.providers().providers_config,
             &state.config.search,
             &state.config.document,
@@ -3218,7 +3286,7 @@ pub struct ApplyPresetRequest {
 }
 
 fn default_ollama_url() -> String {
-    "http://host.docker.internal:11434".into()
+    "http://host.docker.internal:11435".into()
 }
 
 /// POST /api/km/settings/presets/apply
@@ -3620,13 +3688,10 @@ pub async fn apply_preset(
         store.set_setting("provider_config", &json);
     }
 
-    // Hot-reload providers with updated config
-    let bundle = crate::app_state::ProviderBundle::build(
-        &pc,
-        &state.config.search,
-        &state.config.document,
-        &state.config.chat_pipeline,
-    );
+    // Hot-reload providers with updated config (read from DB, not file config)
+    let eff_chat = get_effective_chat_pipeline(&state);
+    let bundle =
+        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
     state.reload_providers(bundle);
     tracing::info!(preset = %req.preset_id, "Preset applied and providers hot-reloaded");
 
@@ -3705,7 +3770,7 @@ pub async fn list_ollama_models(
     // Get Ollama URL from current config
     let pc = state.providers().providers_config;
     let base_url = if pc.llm.base_url.is_empty() {
-        "http://host.docker.internal:11434".to_string()
+        "http://host.docker.internal:11435".to_string()
     } else {
         pc.llm.base_url.clone()
     };
@@ -4035,4 +4100,302 @@ pub async fn clear_vectordb(
         "status": "ok",
         "message": "All vectors have been deleted. Documents will need to be re-processed."
     })))
+}
+
+// ── Config Snapshots ─────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConfigSnapshot {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    created_at: String,
+    created_by: String,
+    embedding_fingerprint: String,
+    settings: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSnapshotRequest {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SnapshotListItem {
+    id: String,
+    name: String,
+    description: String,
+    created_at: String,
+    created_by: String,
+    embedding_fingerprint: String,
+    settings_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreQuery {
+    #[serde(default)]
+    force: bool,
+    /// When true, restore all settings except embedding/vector-store config,
+    /// preserving the current embeddings so no re-indexing is needed.
+    #[serde(default)]
+    skip_embedding: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RestoreResponse {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
+fn get_embedding_fingerprint(state: &AppState) -> String {
+    state
+        .km_store
+        .get_setting("_embedding_fingerprint")
+        .unwrap_or_else(|| {
+            let cfg = &state.providers().providers_config.embedding;
+            format!("{:?}:{}:{}", cfg.kind, cfg.model, cfg.dimension)
+        })
+}
+
+pub async fn create_snapshot(
+    Extension(claims): Extension<AuthClaims>,
+    State(state): State<AppState>,
+    AppJson(req): AppJson<CreateSnapshotRequest>,
+) -> Result<Json<ConfigSnapshot>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    let id = Uuid::new_v4().to_string();
+    let settings: std::collections::HashMap<String, String> =
+        state.km_store.list_all_settings().into_iter().collect();
+
+    let snapshot = ConfigSnapshot {
+        id: id.clone(),
+        name: req.name,
+        description: req.description,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        created_by: claims.sub.clone(),
+        embedding_fingerprint: get_embedding_fingerprint(&state),
+        settings,
+    };
+
+    let json = serde_json::to_string(&snapshot)
+        .map_err(|e| ApiError(ThaiRagError::Internal(e.to_string())))?;
+    state.km_store.set_setting(&format!("snapshot.{id}"), &json);
+
+    // Update snapshot index
+    let mut ids: Vec<String> = state
+        .km_store
+        .get_setting("_snapshot_index")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    ids.push(id.clone());
+    state
+        .km_store
+        .set_setting("_snapshot_index", &serde_json::to_string(&ids).unwrap());
+
+    audit::audit_log(
+        &state.km_store,
+        &claims.sub,
+        audit::AuditAction::SettingsChanged,
+        "snapshot",
+        true,
+        Some(&format!("Created snapshot: {}", snapshot.name)),
+    );
+
+    Ok(Json(snapshot))
+}
+
+pub async fn list_snapshots(
+    Extension(claims): Extension<AuthClaims>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SnapshotListItem>>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    let index_str = state
+        .km_store
+        .get_setting("_snapshot_index")
+        .unwrap_or_default();
+    let ids: Vec<String> = if index_str.is_empty() {
+        vec![]
+    } else {
+        serde_json::from_str(&index_str).unwrap_or_default()
+    };
+
+    let mut items = Vec::new();
+    for id in &ids {
+        if let Some(json) = state.km_store.get_setting(&format!("snapshot.{id}"))
+            && let Ok(snap) = serde_json::from_str::<ConfigSnapshot>(&json)
+        {
+            items.push(SnapshotListItem {
+                id: snap.id,
+                name: snap.name,
+                description: snap.description,
+                created_at: snap.created_at,
+                created_by: snap.created_by,
+                embedding_fingerprint: snap.embedding_fingerprint,
+                settings_count: snap.settings.len(),
+            });
+        }
+    }
+
+    // Sort by created_at descending
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    Ok(Json(items))
+}
+
+pub async fn restore_snapshot(
+    Extension(claims): Extension<AuthClaims>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<RestoreQuery>,
+) -> Result<Json<RestoreResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    let json = state
+        .km_store
+        .get_setting(&format!("snapshot.{id}"))
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Snapshot not found".into())))?;
+    let snapshot: ConfigSnapshot =
+        serde_json::from_str(&json).map_err(|e| ApiError(ThaiRagError::Internal(e.to_string())))?;
+
+    // Check embedding fingerprint
+    let current_fp = get_embedding_fingerprint(&state);
+    let embedding_differs = snapshot.embedding_fingerprint != current_fp;
+
+    // If embedding differs and neither force nor skip_embedding, return warning with options
+    if embedding_differs && !query.force && !query.skip_embedding {
+        return Ok(Json(RestoreResponse {
+            status: "warning".into(),
+            warning: Some(format!(
+                "Embedding model differs: current={}, snapshot={}. \
+                 You have two options:\n\
+                 1. Restore without embedding changes (recommended) — keeps current vectors intact, no re-indexing needed. Use ?skip_embedding=true\n\
+                 2. Restore everything — will clear all vectors and require re-indexing all documents. Use ?force=true",
+                current_fp, snapshot.embedding_fingerprint
+            )),
+        }));
+    }
+
+    // When skip_embedding is set, preserve current embedding + vector store config
+    let current_provider_config_json = if query.skip_embedding {
+        state.km_store.get_setting("provider_config")
+    } else {
+        None
+    };
+
+    // Clear current non-snapshot, non-index settings
+    let current_settings = state.km_store.list_all_settings();
+    for (key, _) in &current_settings {
+        if !key.starts_with("_snapshot_index") {
+            state.km_store.delete_setting(key);
+        }
+    }
+
+    // Write snapshot settings
+    for (key, value) in &snapshot.settings {
+        state.km_store.set_setting(key, value);
+    }
+
+    // If skipping embedding, merge back the current embedding/vector_store config
+    if query.skip_embedding {
+        if let Some(current_pc_json) = current_provider_config_json
+            && let (Ok(mut snap_pc), Ok(current_pc)) = (
+                serde_json::from_str::<serde_json::Value>(
+                    snapshot
+                        .settings
+                        .get("provider_config")
+                        .map(|s| s.as_str())
+                        .unwrap_or("{}"),
+                ),
+                serde_json::from_str::<serde_json::Value>(&current_pc_json),
+            )
+        {
+            // Keep current embedding + vector_store, take everything else from snapshot
+            if let Some(obj) = snap_pc.as_object_mut() {
+                if let Some(emb) = current_pc.get("embedding") {
+                    obj.insert("embedding".to_string(), emb.clone());
+                }
+                if let Some(vs) = current_pc.get("vector_store") {
+                    obj.insert("vector_store".to_string(), vs.clone());
+                }
+            }
+            if let Ok(merged) = serde_json::to_string(&snap_pc) {
+                state.km_store.set_setting("provider_config", &merged);
+            }
+        }
+        // Restore the current embedding fingerprint
+        state
+            .km_store
+            .set_setting("_embedding_fingerprint", &current_fp);
+    } else if embedding_differs {
+        // force=true with different embedding: clear vectors since embeddings are incompatible
+        tracing::warn!(
+            current = %current_fp,
+            snapshot = %snapshot.embedding_fingerprint,
+            "Restoring snapshot with different embedding — clearing vector store"
+        );
+        let _ = state.providers().search_engine.delete_all_vectors().await;
+    }
+
+    // Hot-reload providers
+    let eff_chat = get_effective_chat_pipeline(&state);
+    let pc = state
+        .km_store
+        .get_setting("provider_config")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| state.config.providers.clone());
+    let bundle =
+        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
+    state.reload_providers(bundle);
+
+    audit::audit_log(
+        &state.km_store,
+        &claims.sub,
+        audit::AuditAction::SettingsChanged,
+        "snapshot",
+        true,
+        Some(&format!("Restored snapshot: {}", snapshot.name)),
+    );
+
+    Ok(Json(RestoreResponse {
+        status: "restored".into(),
+        warning: None,
+    }))
+}
+
+pub async fn delete_snapshot(
+    Extension(claims): Extension<AuthClaims>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    state.km_store.delete_setting(&format!("snapshot.{id}"));
+
+    // Update index
+    let mut ids: Vec<String> = state
+        .km_store
+        .get_setting("_snapshot_index")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    ids.retain(|i| i != &id);
+    state
+        .km_store
+        .set_setting("_snapshot_index", &serde_json::to_string(&ids).unwrap());
+
+    audit::audit_log(
+        &state.km_store,
+        &claims.sub,
+        audit::AuditAction::SettingsChanged,
+        "snapshot",
+        true,
+        Some(&format!("Deleted snapshot: {id}")),
+    );
+
+    Ok(Json(serde_json::json!({"status": "deleted"})))
 }

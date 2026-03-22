@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Card,
+  Collapse,
   Descriptions,
   Tag,
   Table,
+  Tabs,
   Spin,
   Alert,
   Button,
@@ -21,7 +23,7 @@ import {
   useAvailableModels,
   useUpdateProviderConfig,
 } from '../../hooks/useSettings';
-import { syncModels, syncRerankerModels } from '../../api/settings';
+import { syncModels, syncEmbeddingModels, syncRerankerModels } from '../../api/settings';
 import type { AvailableModel, ProviderConfigResponse } from '../../api/types';
 import { ChatPipelineCard } from './ChatPipelineCard';
 
@@ -55,48 +57,58 @@ function formatBytes(bytes: number): string {
 function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
   const p = config;
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card title="LLM Provider" size="small">
-        <Descriptions column={2} size="small" bordered>
-          <Descriptions.Item label="Provider">
-            <Tag color={kindColors[p.llm.kind] || 'default'}>{p.llm.kind}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Model">
-            <Typography.Text code>{p.llm.model}</Typography.Text>
-          </Descriptions.Item>
-          {p.llm.base_url && (
-            <Descriptions.Item label="Base URL">{p.llm.base_url}</Descriptions.Item>
-          )}
-          <Descriptions.Item label="API Key">
-            {p.llm.has_api_key ? (
-              <Tag color="success">Configured</Tag>
-            ) : (
-              <Tag color="default">Not set</Tag>
-            )}
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
-
-      <Card title="Reranker" size="small">
-        <Descriptions column={2} size="small" bordered>
-          <Descriptions.Item label="Provider">
-            <Tag color={kindColors[p.reranker.kind] || 'default'}>{p.reranker.kind}</Tag>
-          </Descriptions.Item>
-          {p.reranker.model && (
-            <Descriptions.Item label="Model">
-              <Typography.Text code>{p.reranker.model}</Typography.Text>
-            </Descriptions.Item>
-          )}
-          <Descriptions.Item label="API Key">
-            {p.reranker.has_api_key ? (
-              <Tag color="success">Configured</Tag>
-            ) : (
-              <Tag color="default">Not set</Tag>
-            )}
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
-    </Space>
+    <Collapse
+      defaultActiveKey={['llm-provider', 'reranker']}
+      items={[
+        {
+          key: 'llm-provider',
+          label: 'LLM Provider',
+          children: (
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="Provider">
+                <Tag color={kindColors[p.llm.kind] || 'default'}>{p.llm.kind}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Model">
+                <Typography.Text code>{p.llm.model}</Typography.Text>
+              </Descriptions.Item>
+              {p.llm.base_url && (
+                <Descriptions.Item label="Base URL">{p.llm.base_url}</Descriptions.Item>
+              )}
+              <Descriptions.Item label="API Key">
+                {p.llm.has_api_key ? (
+                  <Tag color="success">Configured</Tag>
+                ) : (
+                  <Tag color="default">Not set</Tag>
+                )}
+              </Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'reranker',
+          label: 'Reranker',
+          children: (
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="Provider">
+                <Tag color={kindColors[p.reranker.kind] || 'default'}>{p.reranker.kind}</Tag>
+              </Descriptions.Item>
+              {p.reranker.model && (
+                <Descriptions.Item label="Model">
+                  <Typography.Text code>{p.reranker.model}</Typography.Text>
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="API Key">
+                {p.reranker.has_api_key ? (
+                  <Tag color="success">Configured</Tag>
+                ) : (
+                  <Tag color="default">Not set</Tag>
+                )}
+              </Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -345,7 +357,7 @@ function EditForm({
           </Form.Item>
           {llmKind === 'Ollama' && (
             <Form.Item name="llm_base_url" label="Base URL">
-              <Input placeholder="http://localhost:11434" />
+              <Input placeholder="http://localhost:11435" />
             </Form.Item>
           )}
           {llmKind === 'OpenAiCompatible' && (
@@ -413,6 +425,179 @@ function EditForm({
   );
 }
 
+function ModelTable({
+  models,
+  loading,
+  provider,
+}: {
+  models?: AvailableModel[];
+  loading: boolean;
+  provider?: string;
+}) {
+  const columns = [
+    { title: 'Model ID', dataIndex: 'id', key: 'id' },
+    { title: 'Name', dataIndex: 'name', key: 'name' },
+    {
+      title: 'Size',
+      dataIndex: 'size',
+      key: 'size',
+      render: (v?: number) => (v ? formatBytes(v) : '-'),
+    },
+  ];
+  return (
+    <>
+      {provider && (
+        <Typography.Text type="secondary" style={{ marginBottom: 8, display: 'block' }}>
+          Source: <Tag>{provider}</Tag>
+          {models?.length ?? 0} model(s) available
+        </Typography.Text>
+      )}
+      <Table<AvailableModel>
+        rowKey="id"
+        columns={columns}
+        dataSource={models}
+        loading={loading}
+        pagination={false}
+        size="small"
+      />
+    </>
+  );
+}
+
+function AvailableModelsPanel({
+  config,
+  llmModels,
+  onRefreshLlm,
+}: {
+  config: ProviderConfigResponse;
+  llmModels: ReturnType<typeof useAvailableModels>;
+  onRefreshLlm: () => void;
+}) {
+  const [embModels, setEmbModels] = useState<AvailableModel[]>([]);
+  const [embProvider, setEmbProvider] = useState<string>();
+  const [embLoading, setEmbLoading] = useState(false);
+  const [rrModels, setRrModels] = useState<AvailableModel[]>([]);
+  const [rrProvider, setRrProvider] = useState<string>();
+  const [rrLoading, setRrLoading] = useState(false);
+
+  const loadEmbedding = useCallback(async () => {
+    setEmbLoading(true);
+    try {
+      const res = await syncEmbeddingModels({ kind: config.embedding.kind });
+      setEmbModels(res.models);
+      setEmbProvider(res.provider);
+    } catch {
+      setEmbModels([]);
+    } finally {
+      setEmbLoading(false);
+    }
+  }, [config.embedding.kind]);
+
+  const loadReranker = useCallback(async () => {
+    setRrLoading(true);
+    try {
+      const res = await syncRerankerModels({ kind: config.reranker.kind });
+      setRrModels(res.models);
+      setRrProvider(res.provider);
+    } catch {
+      setRrModels([]);
+    } finally {
+      setRrLoading(false);
+    }
+  }, [config.reranker.kind]);
+
+  const llmCount = llmModels.data?.models.length ?? 0;
+  const embCount = embModels.length;
+  const rrCount = rrModels.length;
+
+  return (
+    <Collapse
+      size="small"
+      items={[
+        {
+          key: 'available-models',
+          label: (
+            <span>
+              Available Models
+              {llmCount > 0 && <Tag style={{ marginLeft: 8 }}>{llmCount} LLM</Tag>}
+              {embCount > 0 && <Tag style={{ marginLeft: 4 }}>{embCount} Embedding</Tag>}
+              {rrCount > 0 && <Tag style={{ marginLeft: 4 }}>{rrCount} Reranker</Tag>}
+            </span>
+          ),
+          children: (
+            <Tabs
+              size="small"
+              items={[
+                {
+                  key: 'llm',
+                  label: `LLM (${llmCount})`,
+                  children: (
+                    <>
+                      <div style={{ marginBottom: 8, textAlign: 'right' }}>
+                        <Button
+                          icon={<ReloadOutlined />}
+                          size="small"
+                          onClick={onRefreshLlm}
+                          loading={llmModels.isFetching}
+                        >
+                          Refresh
+                        </Button>
+                      </div>
+                      <ModelTable
+                        models={llmModels.data?.models}
+                        loading={llmModels.isLoading}
+                        provider={llmModels.data?.provider}
+                      />
+                    </>
+                  ),
+                },
+                {
+                  key: 'embedding',
+                  label: `Embedding (${embCount})`,
+                  children: (
+                    <>
+                      <div style={{ marginBottom: 8, textAlign: 'right' }}>
+                        <Button
+                          icon={<SyncOutlined />}
+                          size="small"
+                          onClick={loadEmbedding}
+                          loading={embLoading}
+                        >
+                          {embCount > 0 ? 'Refresh' : 'Load Models'}
+                        </Button>
+                      </div>
+                      <ModelTable models={embModels} loading={embLoading} provider={embProvider} />
+                    </>
+                  ),
+                },
+                {
+                  key: 'reranker',
+                  label: `Reranker (${rrCount})`,
+                  children: (
+                    <>
+                      <div style={{ marginBottom: 8, textAlign: 'right' }}>
+                        <Button
+                          icon={<SyncOutlined />}
+                          size="small"
+                          onClick={loadReranker}
+                          loading={rrLoading}
+                        >
+                          {rrCount > 0 ? 'Refresh' : 'Load Models'}
+                        </Button>
+                      </div>
+                      <ModelTable models={rrModels} loading={rrLoading} provider={rrProvider} />
+                    </>
+                  ),
+                },
+              ]}
+            />
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 export function ProvidersTab() {
   const config = useProviderConfig();
   const models = useAvailableModels();
@@ -439,17 +624,6 @@ export function ProvidersTab() {
     }
   };
 
-  const modelColumns = [
-    { title: 'Model ID', dataIndex: 'id', key: 'id' },
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    {
-      title: 'Size',
-      dataIndex: 'size',
-      key: 'size',
-      render: (v?: number) => (v ? formatBytes(v) : '-'),
-    },
-  ];
-
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       {!editing && (
@@ -472,35 +646,7 @@ export function ProvidersTab() {
         <ReadOnlyView config={p} />
       )}
 
-      <Card
-        title="Available LLM Models"
-        size="small"
-        extra={
-          <Button
-            icon={<ReloadOutlined />}
-            size="small"
-            onClick={() => models.refetch()}
-            loading={models.isFetching}
-          >
-            Refresh
-          </Button>
-        }
-      >
-        {models.data && (
-          <Typography.Text type="secondary" style={{ marginBottom: 8, display: 'block' }}>
-            Source: <Tag>{models.data.provider}</Tag>
-            {models.data.models.length} model(s) available
-          </Typography.Text>
-        )}
-        <Table<AvailableModel>
-          rowKey="id"
-          columns={modelColumns}
-          dataSource={models.data?.models}
-          loading={models.isLoading}
-          pagination={false}
-          size="small"
-        />
-      </Card>
+      <AvailableModelsPanel config={p} llmModels={models} onRefreshLlm={() => models.refetch()} />
 
       <ChatPipelineCard />
     </Space>

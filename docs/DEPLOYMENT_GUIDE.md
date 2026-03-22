@@ -176,9 +176,11 @@ See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup incl
 | Volume | Purpose |
 |--------|---------|
 | `postgres-data` | PostgreSQL database |
-| `thairag-data` | Tantivy search index |
+| `thairag-data` | Tantivy BM25 search index (disk-persisted via MmapDirectory) |
 | `qdrant-data` | Qdrant vector storage |
 | `ollama-models` | Ollama model files |
+
+> **Tantivy auto-recovery:** On startup, ThaiRAG automatically detects and removes stale Tantivy writer lock files (from previous crashes or ungraceful shutdowns). If the Tantivy index is empty but the database has stored chunks, the index is rebuilt automatically in batches. No manual intervention is needed after a container restart.
 
 ### Docker Build Details
 
@@ -351,8 +353,9 @@ cd admin-ui && npx playwright test
 - [ ] Seed a super admin account via env vars
 - [ ] Use Docker secrets or a vault for API keys (avoid `.env` in production)
 - [ ] Set `RUST_LOG=info` (or `warn` for less output)
-- [ ] Mount persistent volumes for postgres-data, qdrant-data, and thairag-data
+- [ ] Mount persistent volumes for postgres-data, qdrant-data, and thairag-data (Tantivy index auto-rebuilds from DB if volume is lost)
 - [ ] Set up health check monitoring on `/health?deep=true`
+- [ ] Configure Chat Pipeline LLM mode (Use Chat LLM / Shared / Per-Agent) via Admin UI Settings
 
 ---
 

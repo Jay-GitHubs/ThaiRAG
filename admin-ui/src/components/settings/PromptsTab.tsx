@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Card, Table, Tag, Button, Modal, Input, Typography, Space, message,
+  Card, Collapse, Table, Tag, Button, Modal, Input, Typography, Space, message,
   Popconfirm, Tooltip, Badge,
 } from 'antd';
 import {
@@ -119,6 +119,12 @@ export function PromptsTab() {
         Use <Typography.Text code>{'{{variable}}'}</Typography.Text> syntax for template placeholders.
       </Typography.Paragraph>
 
+      <Collapse
+        defaultActiveKey={['prompts-table']}
+        items={[{
+          key: 'prompts-table',
+          label: `Prompts (${filtered.length})`,
+          children: (
       <Table<PromptEntry>
         dataSource={filtered}
         rowKey="key"
@@ -216,6 +222,9 @@ export function PromptsTab() {
             ),
           },
         ]}
+      />
+          ),
+        }]}
       />
 
       <Modal

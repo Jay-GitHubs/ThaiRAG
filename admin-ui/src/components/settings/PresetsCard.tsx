@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Card, Button, Tag, Space, Typography, Table, Popconfirm, message,
-  Alert, Spin, Badge, Tooltip, Modal, Input, Divider,
+  Alert, Spin, Badge, Tooltip, Modal, Input, Divider, Collapse,
 } from 'antd';
 import {
   RocketOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -23,7 +23,7 @@ export function PresetsCard() {
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState<string | null>(null);
   const [pulling, setPulling] = useState<Set<string>>(new Set());
-  const [ollamaUrl, setOllamaUrl] = useState('http://host.docker.internal:11434');
+  const [ollamaUrl, setOllamaUrl] = useState('http://host.docker.internal:11435');
   const [showUrlModal, setShowUrlModal] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<string | null>(null);
 
@@ -240,19 +240,29 @@ export function PresetsCard() {
         message="Pick one preset from each section. Chat and Document presets are independent — applying one won't affect the other."
       />
 
-      <Divider orientation="left">
-        <Space><MessageOutlined /> Chat & Response Pipeline</Space>
-      </Divider>
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        {chatPresets.map(renderPresetCard)}
-      </Space>
-
-      <Divider orientation="left" style={{ marginTop: 32 }}>
-        <Space><FileTextOutlined /> Document Processing</Space>
-      </Divider>
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        {docPresets.map(renderPresetCard)}
-      </Space>
+      <Collapse
+        defaultActiveKey={['chat-presets', 'doc-presets']}
+        items={[
+          {
+            key: 'chat-presets',
+            label: <Space><MessageOutlined /> Chat & Response Pipeline</Space>,
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                {chatPresets.map(renderPresetCard)}
+              </Space>
+            ),
+          },
+          {
+            key: 'doc-presets',
+            label: <Space><FileTextOutlined /> Document Processing</Space>,
+            children: (
+              <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                {docPresets.map(renderPresetCard)}
+              </Space>
+            ),
+          },
+        ]}
+      />
 
       <Modal
         title="Ollama Connection"
@@ -271,11 +281,11 @@ export function PresetsCard() {
         <Input
           value={ollamaUrl}
           onChange={e => setOllamaUrl(e.target.value)}
-          placeholder="http://host.docker.internal:11434"
+          placeholder="http://host.docker.internal:11435"
         />
         <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
-          <strong>Docker Desktop (Mac/Windows):</strong> http://host.docker.internal:11434<br />
-          <strong>Linux:</strong> http://172.17.0.1:11434 or http://host.docker.internal:11434<br />
+          <strong>Docker Desktop (Mac/Windows):</strong> http://host.docker.internal:11435<br />
+          <strong>Linux:</strong> http://172.17.0.1:11434 or http://host.docker.internal:11435<br />
           <strong>Same machine:</strong> http://localhost:11434
         </Typography.Paragraph>
       </Modal>

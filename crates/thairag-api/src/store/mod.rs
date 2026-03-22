@@ -189,6 +189,8 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_setting(&self, key: &str) -> Option<String>;
     fn set_setting(&self, key: &str, value: &str);
     fn delete_setting(&self, key: &str);
+    /// List all settings, excluding internal keys (snapshot.*, _snapshot_index, _embedding_fingerprint).
+    fn list_all_settings(&self) -> Vec<(String, String)>;
 
     // ── MCP Connectors ───────────────────────────────────────────────
     fn insert_connector(

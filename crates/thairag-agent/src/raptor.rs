@@ -108,6 +108,7 @@ impl Raptor {
                             relevance_score: 0.4 + (level as f32 * 0.1), // higher levels get moderate scores
                             source_doc_id: Default::default(),
                             source_chunk_id: Default::default(),
+                            source_doc_title: None,
                         });
                     }
                     Ok(Err(e)) => {

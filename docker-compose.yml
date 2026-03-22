@@ -51,7 +51,7 @@ services:
   #ollama:
   #  image: ollama/ollama:latest
   #  ports:
-  #    - "11434:11434"
+  #    - "11435:11435"
   #  volumes:
   #    - ollama-models:/root/.ollama
 

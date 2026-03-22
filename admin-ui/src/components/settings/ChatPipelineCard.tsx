@@ -184,7 +184,7 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean): LlmConfigUpd
   // Always send base_url for providers that need it (Ollama defaults to localhost)
   const needsBaseUrl = form.kind === 'Ollama' || form.kind === 'OpenAiCompatible';
   if (needsBaseUrl) {
-    update.base_url = form.base_url || 'http://localhost:11434';
+    update.base_url = form.base_url || 'http://localhost:11435';
   } else if (form.base_url) {
     update.base_url = form.base_url;
   }
@@ -215,6 +215,168 @@ function AgentHints({ info }: { info: AgentInfo }) {
       </div>
       {info.recommended.length > 0 && (
         <div style={{ marginTop: 4 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            <RobotOutlined /> <strong>Recommended models:</strong>
+          </Text>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+            {info.recommended.map((r) => (
+              <Tooltip key={`${r.provider}-${r.model}`} title={`${r.provider} — ${r.note || r.model}`}>
+                <Tag
+                  color={
+                    r.provider === 'Claude' ? 'purple' :
+                    r.provider === 'OpenAI' ? 'green' :
+                    r.provider === 'Gemini' ? 'gold' :
+                    'blue'
+                  }
+                  style={{ fontSize: 11, cursor: 'default' }}
+                >
+                  {r.model} {r.note ? `(${r.note})` : ''}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Feature LLM recommendations ──────────────────────────────────────
+
+interface FeatureLlmInfo {
+  llmTip: string;
+  taskWeight: 'Light' | 'Medium' | 'Heavy';
+  recommended: RecommendedModel[];
+}
+
+const featureLlmRecommendations: Record<string, FeatureLlmInfo> = {
+  memory: {
+    llmTip: 'Summarizes conversations — needs good comprehension. Medium model recommended.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good quality' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  tool_use: {
+    llmTip: 'Decides search strategy and workspace selection. Needs reasoning ability.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good reasoning' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong reasoning' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  self_rag: {
+    llmTip: 'Decides if retrieval is needed — short classification output. Small model works.',
+    taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
+  },
+  graph_rag: {
+    llmTip: 'Extracts entities and relationships from text. Needs strong comprehension.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good NER' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong extraction' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  map_reduce: {
+    llmTip: 'Processes many chunks independently then synthesizes. Heavy workload on large result sets.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good synthesis' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Top tier' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Best balance' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Most capable' },
+    ],
+  },
+  ragas: {
+    llmTip: 'Evaluates response quality (faithfulness, relevancy). Runs on a sample — not latency-critical.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good judgment' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  compression: {
+    llmTip: 'Compresses context by removing low-importance content. Needs good text understanding.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good compression' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  multimodal: {
+    llmTip: 'Generates text descriptions of images. Requires a vision-capable model.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'llama4:scout', note: 'Free, vision-capable' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Strong vision' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Excellent vision' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Best vision' },
+    ],
+  },
+  raptor: {
+    llmTip: 'Builds hierarchical summaries over chunks. Multiple LLM calls per request — quality matters.',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good summaries' },
+      { provider: 'OpenAI', model: 'gpt-4.1', note: 'Top tier' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Best balance' },
+      { provider: 'Gemini', model: 'gemini-2.5-pro', note: 'Most capable' },
+    ],
+  },
+  colbert: {
+    llmTip: 'LLM-based reranking across multiple aspects. Runs per search result — keep model fast.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
+  },
+  personal_memory: {
+    llmTip: 'Extracts memories from conversations. Needs comprehension for typed memory classification.',
+    taskWeight: 'Medium',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good extraction' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+};
+
+function FeatureLlmHints({ featureKey }: { featureKey: string }) {
+  const info = featureLlmRecommendations[featureKey];
+  if (!info) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          <RobotOutlined /> <strong>LLM tip:</strong> {info.llmTip}
+        </Text>
+        <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
+          {info.taskWeight} workload
+        </Tag>
+      </div>
+      {info.recommended.length > 0 && (
+        <div>
           <Text type="secondary" style={{ fontSize: 12 }}>
             <RobotOutlined /> <strong>Recommended models:</strong>
           </Text>
@@ -300,7 +462,7 @@ function LlmConfigForm({
         <Input
           value={form.base_url}
           onChange={(e) => onChange({ ...form, base_url: e.target.value })}
-          placeholder="Base URL (e.g., http://localhost:11434)"
+          placeholder="Base URL (e.g., http://localhost:11435)"
           style={{ width: 400 }}
         />
       )}
@@ -323,6 +485,37 @@ export function ChatPipelineCard() {
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<ChatPipelineConfigResponse | null>(null);
 
+  // Helper: render model tag for a feature from featureLlms state (live updates)
+  const featureModelTag = (featureKey: string, isEnabled: boolean) => {
+    if (!isEnabled) return null;
+    const form = featureLlms[featureKey];
+    const model = form?.model;
+    return model ? (
+      <Tag color="purple" style={{ fontSize: 11 }}>{form?.kind}: {model}</Tag>
+    ) : (
+      <Tag color="warning" style={{ fontSize: 11 }}>No model (uses fallback)</Tag>
+    );
+  };
+
+  // Helper: render LLM config form for a feature with recommendations
+  const featureLlmForm = (featureKey: string, isEnabled: boolean) => {
+    if (!isEnabled) return null;
+    return (
+      <>
+        <Divider style={{ margin: '8px 0 4px' }} />
+        <FeatureLlmHints featureKey={featureKey} />
+        <Text type="secondary" style={{ marginTop: 4 }}>Feature LLM Override:</Text>
+        <LlmConfigForm
+          form={featureLlms[featureKey] || defaultLlmForm}
+          onChange={(f) => setFeatureLlms((prev) => ({ ...prev, [featureKey]: f }))}
+          syncedModels={syncedModels}
+          onSync={handleSync}
+          syncing={syncing}
+        />
+      </>
+    );
+  };
+
   // Pipeline-level state
   const [enabled, setEnabled] = useState(false);
   const [llmMode, setLlmMode] = useState<'chat' | 'shared' | 'per-agent'>('chat');
@@ -336,6 +529,7 @@ export function ChatPipelineCard() {
     language_adapter: true,
   });
   const [agentLlms, setAgentLlms] = useState<Record<string, LlmFormState>>({});
+  const [featureLlms, setFeatureLlms] = useState<Record<string, LlmFormState>>({});
   const [qualityMaxRetries, setQualityMaxRetries] = useState(1);
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
@@ -457,6 +651,18 @@ export function ChatPipelineCard() {
         llms[stateKey] = llmInfo ? llmInfoToForm(llmInfo) : { ...defaultLlmForm };
       }
       setAgentLlms(llms);
+
+      // Load feature LLMs
+      const fLlms: Record<string, LlmFormState> = {};
+      const featureLlmKeys = [
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+      ] as const;
+      for (const k of featureLlmKeys) {
+        const llmInfo = data[`${k}_llm` as keyof ChatPipelineConfigResponse] as LlmProviderInfo | undefined;
+        fLlms[k] = llmInfo ? llmInfoToForm(llmInfo) : { ...defaultLlmForm };
+      }
+      setFeatureLlms(fLlms);
 
       // Feature states
       setConversationMemoryEnabled(data.conversation_memory_enabled);
@@ -646,6 +852,24 @@ export function ChatPipelineCard() {
         req.remove_orchestrator_llm = true;
       }
 
+      // Save feature LLMs (independent of LLM mode — features always have their own LLM config)
+      const featureLlmKeys = [
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+      ] as const;
+      for (const stateKey of featureLlmKeys) {
+        const form = featureLlms[stateKey];
+        const reqKey = `${stateKey}_llm` as keyof UpdateChatPipelineRequest;
+        const configKey = `${stateKey}_llm` as keyof ChatPipelineConfigResponse;
+        if (form && form.model) {
+          const existing = config?.[configKey] as LlmProviderInfo | undefined;
+          (req as Record<string, unknown>)[reqKey] = formToUpdate(form, !!existing?.has_api_key);
+        } else {
+          const removeKey = `remove_${stateKey}_llm` as keyof UpdateChatPipelineRequest;
+          (req as Record<string, unknown>)[removeKey] = true;
+        }
+      }
+
       const resp = await updateChatPipelineConfig(req);
       setConfig(resp);
       message.success('Chat pipeline settings saved');
@@ -825,9 +1049,33 @@ export function ChatPipelineCard() {
           )}
 
           {llmMode === 'per-agent' && (
-            <Paragraph type="secondary" style={{ margin: 0 }}>
-              Each agent can use a different LLM. Use small/fast models for light agents (Analyzer, Curator, Guard) and your best model for the Response Generator.
-            </Paragraph>
+            <>
+              <Paragraph type="secondary" style={{ margin: 0 }}>
+                Each agent can use a different LLM. Use small/fast models for light agents (Analyzer, Curator, Guard) and your best model for the Response Generator.
+              </Paragraph>
+              {(() => {
+                const missingAgents = Object.keys(chatAgents).filter((key) => {
+                  const info = chatAgents[key];
+                  const isOn = info.alwaysOn || agentToggles[key];
+                  if (!isOn) return false;
+                  const form = agentLlms[key];
+                  return !form || !form.model;
+                });
+                if (missingAgents.length > 0) {
+                  const names = missingAgents.map((k) => chatAgents[k].label).join(', ');
+                  return (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="Agents without model override"
+                      description={`The following enabled agents have no model configured and will fall back to the main Chat LLM Provider: ${names}. Expand each agent to set a model.`}
+                      style={{ marginTop: 8 }}
+                    />
+                  );
+                }
+                return null;
+              })()}
+            </>
           )}
 
           <Divider style={{ margin: '8px 0' }} />
@@ -858,6 +1106,15 @@ export function ChatPipelineCard() {
                     <Tag color={info.taskWeight === 'Heavy' ? 'red' : info.taskWeight === 'Medium' ? 'orange' : 'green'} style={{ fontSize: 11 }}>
                       {info.taskWeight}
                     </Tag>
+                    {llmMode === 'per-agent' && isOn && (() => {
+                      const form = agentLlms[key];
+                      const model = form?.model;
+                      return model ? (
+                        <Tag color="purple" style={{ fontSize: 11 }}>{form?.kind}: {model}</Tag>
+                      ) : (
+                        <Tag color="warning" style={{ fontSize: 11 }}>No model (uses fallback)</Tag>
+                      );
+                    })()}
                   </Space>
                 ),
                 children: (
@@ -958,6 +1215,7 @@ export function ChatPipelineCard() {
                     <Tag color={conversationMemoryEnabled ? 'green' : 'default'}>
                       {conversationMemoryEnabled ? 'ON' : 'OFF'}
                     </Tag>
+                    {featureModelTag('memory', conversationMemoryEnabled)}
                   </Space>
                 ),
                 children: (
@@ -995,6 +1253,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('memory', conversationMemoryEnabled)}
                   </Space>
                 ),
               },
@@ -1066,6 +1325,7 @@ export function ChatPipelineCard() {
                     <Tag color={toolUseEnabled ? 'green' : 'default'}>
                       {toolUseEnabled ? 'ON' : 'OFF'}
                     </Tag>
+                    {featureModelTag('tool_use', toolUseEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1089,6 +1349,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('tool_use', toolUseEnabled)}
                   </Space>
                 ),
               },
@@ -1183,6 +1444,7 @@ export function ChatPipelineCard() {
                     <span>Self-RAG</span>
                     <Switch size="small" checked={selfRagEnabled} onChange={setSelfRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={selfRagEnabled ? 'green' : 'default'}>{selfRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('self_rag', selfRagEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1199,6 +1461,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('self_rag', selfRagEnabled)}
                   </Space>
                 ),
               },
@@ -1209,6 +1472,7 @@ export function ChatPipelineCard() {
                     <span>Graph RAG</span>
                     <Switch size="small" checked={graphRagEnabled} onChange={setGraphRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={graphRagEnabled ? 'green' : 'default'}>{graphRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('graph_rag', graphRagEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1234,6 +1498,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('graph_rag', graphRagEnabled)}
                   </Space>
                 ),
               },
@@ -1318,6 +1583,7 @@ export function ChatPipelineCard() {
                     <span>Map-Reduce RAG</span>
                     <Switch size="small" checked={mapReduceEnabled} onChange={setMapReduceEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={mapReduceEnabled ? 'green' : 'default'}>{mapReduceEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('map_reduce', mapReduceEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1335,6 +1601,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('map_reduce', mapReduceEnabled)}
                   </Space>
                 ),
               },
@@ -1345,6 +1612,7 @@ export function ChatPipelineCard() {
                     <span>RAGAS Evaluation</span>
                     <Switch size="small" checked={ragasEnabled} onChange={setRagasEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={ragasEnabled ? 'green' : 'default'}>{ragasEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('ragas', ragasEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1362,6 +1630,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('ragas', ragasEnabled)}
                   </Space>
                 ),
               },
@@ -1372,6 +1641,7 @@ export function ChatPipelineCard() {
                     <span>Contextual Compression</span>
                     <Switch size="small" checked={compressionEnabled} onChange={setCompressionEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={compressionEnabled ? 'green' : 'default'}>{compressionEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('compression', compressionEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1389,6 +1659,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('compression', compressionEnabled)}
                   </Space>
                 ),
               },
@@ -1399,6 +1670,7 @@ export function ChatPipelineCard() {
                     <span>Multi-modal RAG</span>
                     <Switch size="small" checked={multimodalEnabled} onChange={setMultimodalEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={multimodalEnabled ? 'green' : 'default'}>{multimodalEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('multimodal', multimodalEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1416,6 +1688,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('multimodal', multimodalEnabled)}
                   </Space>
                 ),
               },
@@ -1426,6 +1699,7 @@ export function ChatPipelineCard() {
                     <span>RAPTOR Hierarchical Summaries</span>
                     <Switch size="small" checked={raptorEnabled} onChange={setRaptorEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={raptorEnabled ? 'green' : 'default'}>{raptorEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('raptor', raptorEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1451,6 +1725,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </>
                     )}
+                    {featureLlmForm('raptor', raptorEnabled)}
                   </Space>
                 ),
               },
@@ -1461,6 +1736,7 @@ export function ChatPipelineCard() {
                     <span>ColBERT Late Interaction Reranking</span>
                     <Switch size="small" checked={colbertEnabled} onChange={setColbertEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={colbertEnabled ? 'green' : 'default'}>{colbertEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('colbert', colbertEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1479,6 +1755,7 @@ export function ChatPipelineCard() {
                         </Space>
                       </Tooltip>
                     )}
+                    {featureLlmForm('colbert', colbertEnabled)}
                   </Space>
                 ),
               },
@@ -1564,6 +1841,7 @@ export function ChatPipelineCard() {
                     <span>Personal Memory</span>
                     <Switch size="small" checked={personalMemoryEnabled} onChange={setPersonalMemoryEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={personalMemoryEnabled ? 'green' : 'default'}>{personalMemoryEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('personal_memory', personalMemoryEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1601,6 +1879,7 @@ export function ChatPipelineCard() {
                         </Tooltip>
                       </Space>
                     )}
+                    {featureLlmForm('personal_memory', personalMemoryEnabled)}
                   </Space>
                 ),
               },

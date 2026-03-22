@@ -21,7 +21,7 @@ token_expiry_hours = 24
 [providers.llm]
 kind = "ollama"
 model = "llama3.2"
-base_url = "http://localhost:11434"
+base_url = "http://localhost:11435"
 api_key = ""
 
 [providers.embedding]

@@ -5,12 +5,14 @@ import { LocalAuthTab } from '../components/settings/LocalAuthTab';
 import { PresetsCard } from '../components/settings/PresetsCard';
 import { PromptsTab } from '../components/settings/PromptsTab';
 import { ProvidersTab } from '../components/settings/ProvidersTab';
+import { SnapshotsCard } from '../components/settings/SnapshotsCard';
 import { VectorDbTab } from '../components/settings/VectorDbTab';
 
 export function SettingsPage() {
   return (
     <>
       <Typography.Title level={4}>Settings</Typography.Title>
+      <SnapshotsCard />
       <Tabs
         defaultActiveKey="presets"
         items={[

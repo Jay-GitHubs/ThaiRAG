@@ -14,7 +14,7 @@ set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────
 API_URL="http://localhost:8080"
-OLLAMA_URL="http://localhost:11434"
+OLLAMA_URL="http://localhost:11435"
 OLLAMA_MODEL="llama3.2"
 COMPOSE_FILE="docker-compose.yml"
 
@@ -84,7 +84,7 @@ echo "▸ Step 2: Starting services..."
 if $NATIVE_OLLAMA; then
     # macOS: run only ThaiRAG container, connect to native Ollama via host.docker.internal
     warn "Using native Ollama (--native-ollama). Skipping Docker Ollama container."
-    THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11434 \
+    THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11435 \
         docker compose -f "$COMPOSE_FILE" up -d thairag
 else
     docker compose -f "$COMPOSE_FILE" up -d
