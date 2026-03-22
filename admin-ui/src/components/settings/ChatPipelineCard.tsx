@@ -184,7 +184,7 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean): LlmConfigUpd
   // Always send base_url for providers that need it (Ollama defaults to localhost)
   const needsBaseUrl = form.kind === 'Ollama' || form.kind === 'OpenAiCompatible';
   if (needsBaseUrl) {
-    update.base_url = form.base_url || 'http://localhost:11434';
+    update.base_url = form.base_url || 'http://localhost:11435';
   } else if (form.base_url) {
     update.base_url = form.base_url;
   }
@@ -462,7 +462,7 @@ function LlmConfigForm({
         <Input
           value={form.base_url}
           onChange={(e) => onChange({ ...form, base_url: e.target.value })}
-          placeholder="Base URL (e.g., http://localhost:11434)"
+          placeholder="Base URL (e.g., http://localhost:11435)"
           style={{ width: 400 }}
         />
       )}

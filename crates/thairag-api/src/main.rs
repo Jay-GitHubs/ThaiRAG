@@ -68,12 +68,8 @@ async fn main() {
         } else {
             &config.providers
         };
-        let bundle = thairag_api::app_state::ProviderBundle::build(
-            pc,
-            &config.search,
-            &config.document,
-            &effective_chat,
-        );
+        let bundle =
+            state.build_provider_bundle(pc, &config.search, &config.document, &effective_chat);
         state.reload_providers(bundle);
         tracing::info!("Loaded saved config from database");
     }

@@ -79,6 +79,17 @@ impl ProviderBundle {
         chat: &ChatPipelineConfig,
         prompts: Arc<thairag_core::PromptRegistry>,
     ) -> Self {
+        Self::build_full(providers, search, doc, chat, prompts, None)
+    }
+
+    pub fn build_full(
+        providers: &ProvidersConfig,
+        search: &SearchConfig,
+        doc: &DocumentConfig,
+        chat: &ChatPipelineConfig,
+        prompts: Arc<thairag_core::PromptRegistry>,
+        km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
+    ) -> Self {
         let ollama_ka = &chat.ollama_keep_alive;
         let ka_opt = if ollama_ka.is_empty() {
             None
@@ -433,6 +444,16 @@ impl ProviderBundle {
                 None
             };
 
+            let doc_resolver: Option<
+                Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>,
+            > = km_store.as_ref().map(|store| {
+                let store = Arc::clone(store);
+                Arc::new(move |doc_id: thairag_core::types::DocId| {
+                    store.get_document(doc_id).ok().map(|d| d.title)
+                })
+                    as Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>
+            });
+
             Some(Arc::new(ChatPipeline::new(
                 Arc::clone(&llm),
                 Arc::clone(&search_engine),
@@ -458,6 +479,7 @@ impl ProviderBundle {
                 al,
                 chat.clone(),
                 Arc::clone(&prompts),
+                doc_resolver,
             )))
         } else {
             None
@@ -590,6 +612,24 @@ impl AppState {
         *self.providers.write().unwrap() = bundle;
     }
 
+    /// Build a new `ProviderBundle` with doc-title resolver and prompt registry.
+    pub fn build_provider_bundle(
+        &self,
+        providers: &ProvidersConfig,
+        search: &SearchConfig,
+        doc: &DocumentConfig,
+        chat: &ChatPipelineConfig,
+    ) -> ProviderBundle {
+        ProviderBundle::build_full(
+            providers,
+            search,
+            doc,
+            chat,
+            Arc::clone(&self.prompt_registry),
+            Some(Arc::clone(&self.km_store)),
+        )
+    }
+
     /// Construct from pre-built parts (used in tests).
     pub fn from_parts(
         config: Arc<AppConfig>,
@@ -635,14 +675,6 @@ impl AppState {
                 tracing::warn!(error = %e, "Failed to load prompt templates from {}", prompts_dir.display());
             }
         }
-
-        let bundle = ProviderBundle::build_with_prompts(
-            &config.providers,
-            &config.search,
-            &config.document,
-            &config.chat_pipeline,
-            Arc::clone(&prompt_registry),
-        );
 
         let jwt = if config.auth.enabled {
             Some(Arc::new(JwtService::new(
@@ -705,6 +737,40 @@ impl AppState {
         if !api_keys.is_empty() {
             tracing::info!(count = api_keys.len(), "Loaded static API keys");
         }
+
+        // Re-build the provider bundle now that km_store is available, so DB-stored
+        // per-agent LLM configs (from presets) are picked up on restart.
+        let bundle = {
+            let eff_chat = crate::routes::settings::get_effective_chat_pipeline_with_store(
+                &config, &*km_store,
+            );
+            // Also read DB-overridden provider config
+            let pc = if let Some(json) = km_store.get_setting("provider_config")
+                && let Ok(pc) = serde_json::from_str::<ProvidersConfig>(&json)
+            {
+                pc
+            } else {
+                config.providers.clone()
+            };
+            ProviderBundle::build_full(
+                &pc,
+                &config.search,
+                &config.document,
+                &eff_chat,
+                Arc::clone(&prompt_registry),
+                Some(Arc::clone(&km_store)),
+            )
+        };
+
+        // Store the embedding fingerprint on startup so snapshot restore
+        // can detect mismatches even if no manual change has been made.
+        let emb_fp = format!(
+            "{:?}:{}:{}",
+            bundle.providers_config.embedding.kind,
+            bundle.providers_config.embedding.model,
+            bundle.providers_config.embedding.dimension,
+        );
+        km_store.set_setting("_embedding_fingerprint", &emb_fp);
 
         Self {
             config: Arc::new(config),

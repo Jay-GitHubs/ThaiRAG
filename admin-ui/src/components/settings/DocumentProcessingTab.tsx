@@ -136,7 +136,7 @@ interface LlmFormState {
 const defaultLlmForm: LlmFormState = {
   kind: 'Ollama',
   model: '',
-  base_url: 'http://localhost:11434',
+  base_url: 'http://localhost:11435',
   api_key: '',
 };
 
@@ -144,7 +144,7 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
   return {
     kind: info.kind,
     model: info.model,
-    base_url: info.base_url || (info.kind === 'Ollama' ? 'http://localhost:11434' : ''),
+    base_url: info.base_url || (info.kind === 'Ollama' ? 'http://localhost:11435' : ''),
     api_key: '',
   };
 }
@@ -257,7 +257,7 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
               onChange({
                 kind: v,
                 model: '',
-                base_url: v === 'Ollama' ? 'http://localhost:11434' : '',
+                base_url: v === 'Ollama' ? 'http://localhost:11435' : '',
                 api_key: '',
               })
             }
@@ -318,7 +318,7 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
                 onChange={(e) => onChange({ ...form, base_url: e.target.value })}
                 placeholder={
                   form.kind === 'Ollama'
-                    ? 'http://localhost:11434'
+                    ? 'http://localhost:11435'
                     : 'e.g. https://api.groq.com/openai'
                 }
               />
@@ -831,6 +831,12 @@ export function DocumentProcessingTab() {
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       {/* Pipeline Settings */}
+      <Collapse
+        defaultActiveKey={['pipeline-settings']}
+        items={[{
+          key: 'pipeline-settings',
+          label: <><SettingOutlined /> Pipeline Settings</>,
+          children: (
       <Card
         size="small"
         title={<Text type="secondary"><SettingOutlined /> Pipeline Settings</Text>}
@@ -884,8 +890,17 @@ export function DocumentProcessingTab() {
           Note: Max upload size change takes effect after server restart.
         </Paragraph>
       </Card>
+          ),
+        }]}
+      />
 
       {/* AI Preprocessing */}
+      <Collapse
+        defaultActiveKey={['ai-preprocessing']}
+        items={[{
+          key: 'ai-preprocessing',
+          label: <><RobotOutlined /> AI Document Preprocessing</>,
+          children: (
       <Card
         title={
           <Space>
@@ -1165,7 +1180,7 @@ export function DocumentProcessingTab() {
                                 onClick={() => {
                                   updateAgentLlm(agent, {
                                     enabled: true,
-                                    form: { kind: 'Ollama', model: m, base_url: 'http://localhost:11434', api_key: '' },
+                                    form: { kind: 'Ollama', model: m, base_url: 'http://localhost:11435', api_key: '' },
                                   });
                                 }}
                               >
@@ -1513,6 +1528,9 @@ export function DocumentProcessingTab() {
           </Space>
         )}
       </Card>
+          ),
+        }]}
+      />
 
       {/* Pipeline Explanation — compact */}
       <Card size="small">
@@ -1532,7 +1550,14 @@ export function DocumentProcessingTab() {
       </Card>
 
       {/* Embedding & Vector Store — final pipeline steps */}
-      <EmbeddingVectorSection />
+      <Collapse
+        defaultActiveKey={['embedding-vector']}
+        items={[{
+          key: 'embedding-vector',
+          label: 'Embedding & Vector Store',
+          children: <EmbeddingVectorSection />,
+        }]}
+      />
     </Space>
   );
 }
@@ -1883,7 +1908,7 @@ function EmbeddingVectorSection() {
                 size="small"
                 value={embBaseUrl}
                 onChange={(e) => setEmbBaseUrl(e.target.value)}
-                placeholder={embKind === 'Ollama' ? 'http://localhost:11434' : 'https://api.openai.com (default)'}
+                placeholder={embKind === 'Ollama' ? 'http://localhost:11435' : 'https://api.openai.com (default)'}
                 style={{ maxWidth: 400 }}
               />
             </div>

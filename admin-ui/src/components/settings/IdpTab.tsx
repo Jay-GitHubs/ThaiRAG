@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Popconfirm, Space, Table, Tag, message } from 'antd';
+import { Button, Collapse, Popconfirm, Space, Table, Tag, message } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { IdentityProvider, IdpType } from '../../api/types';
@@ -116,12 +116,21 @@ export function IdpTab() {
           Add Provider
         </Button>
       </div>
-      <Table<IdentityProvider>
-        rowKey="id"
-        columns={columns}
-        dataSource={data?.data}
-        loading={isLoading}
-        pagination={false}
+      <Collapse
+        defaultActiveKey={['idp-table']}
+        items={[{
+          key: 'idp-table',
+          label: 'Identity Providers',
+          children: (
+            <Table<IdentityProvider>
+              rowKey="id"
+              columns={columns}
+              dataSource={data?.data}
+              loading={isLoading}
+              pagination={false}
+            />
+          ),
+        }]}
       />
       <IdpFormModal
         open={modalOpen}

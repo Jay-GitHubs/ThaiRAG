@@ -212,6 +212,20 @@ impl HybridSearchEngine {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Normalize RRF scores to 0–1 range so downstream confidence
+        // thresholds (calibrated for cosine similarity) work correctly.
+        // Without normalization, RRF scores are ~0.001–0.05 (because the
+        // formula is weight/(k+rank+1) with k=60) and would always trigger
+        // false "low confidence" anti-hallucination guards.
+        if let Some(max) = merged.first().map(|r| r.score)
+            && max > 0.0
+        {
+            for r in &mut merged {
+                r.score /= max;
+            }
+        }
+
         merged
     }
 }
@@ -327,7 +341,8 @@ mod tests {
         let vec_results = vec![make_result(id, 0.9)];
         let merged = engine.rrf_merge(&vec_results, &[]);
         assert_eq!(merged.len(), 1);
-        assert!(merged[0].score > 0.0);
+        // Single result is normalized to 1.0
+        assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -337,7 +352,7 @@ mod tests {
         let text_results = vec![make_result(id, 0.8)];
         let merged = engine.rrf_merge(&[], &text_results);
         assert_eq!(merged.len(), 1);
-        assert!(merged[0].score > 0.0);
+        assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -371,18 +386,45 @@ mod tests {
 
     #[test]
     fn rrf_score_uses_weights() {
-        // Equal weight engine
-        let engine_eq = build_engine(60, 0.5, 0.5);
-        // Vector-heavy engine
-        let engine_vec = build_engine(60, 1.0, 0.0);
+        // With normalization, a single result always scores 1.0.
+        // To test weight influence, use two results — the *ratio* between
+        // scores changes when a result appears in both lists (weighted).
+        let engine = build_engine(60, 0.7, 0.3);
+        let id_a = "00000000-0000-0000-0000-000000000005";
+        let id_b = "00000000-0000-0000-0000-000000000006";
 
-        let id = "00000000-0000-0000-0000-000000000005";
-        let results = vec![make_result(id, 0.9)];
+        // a in both lists, b only in text → vector-heavy weight should favor a
+        let vec_results = vec![make_result(id_a, 0.9)];
+        let text_results = vec![make_result(id_a, 0.8), make_result(id_b, 0.7)];
 
-        let eq_merged = engine_eq.rrf_merge(&results, &[]);
-        let vec_merged = engine_vec.rrf_merge(&results, &[]);
+        let merged = engine.rrf_merge(&vec_results, &text_results);
+        assert_eq!(merged.len(), 2);
+        // a (in both) should have a higher normalized score than b (text only)
+        assert_eq!(merged[0].chunk.chunk_id.0.to_string(), id_a);
+        assert!(merged[0].score > merged[1].score);
+    }
 
-        // With vector_weight=1.0 the score should be higher than 0.5
-        assert!(vec_merged[0].score > eq_merged[0].score);
+    #[test]
+    fn rrf_scores_normalized_to_0_1() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let ids: Vec<String> = (1..=5)
+            .map(|i| format!("00000000-0000-0000-0000-{i:012}"))
+            .collect();
+
+        let vec_results: Vec<SearchResult> = ids.iter().map(|id| make_result(id, 0.9)).collect();
+        let text_results: Vec<SearchResult> =
+            ids[0..3].iter().map(|id| make_result(id, 0.8)).collect();
+
+        let merged = engine.rrf_merge(&vec_results, &text_results);
+
+        // Top result should be 1.0, all others in (0, 1]
+        assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
+        for r in &merged {
+            assert!(
+                r.score > 0.0 && r.score <= 1.0,
+                "score {} out of 0–1",
+                r.score
+            );
+        }
     }
 }

@@ -25,6 +25,7 @@ import {
   RobotOutlined,
   QuestionCircleOutlined,
   ThunderboltOutlined,
+  LoadingOutlined,
   LikeOutlined,
   LikeFilled,
   DislikeOutlined,
@@ -39,9 +40,9 @@ import {
 import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
-import { testQuery } from '../api/testQuery';
+import { testQueryStream } from '../api/testQuery';
 import { submitFeedback } from '../api/feedback';
-import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage } from '../api/types';
+import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress } from '../api/types';
 
 interface ChatEntry {
   role: 'user' | 'assistant';
@@ -66,19 +67,48 @@ const TIMEOUT_PRESETS = [
 ];
 
 const TIMEOUT_STORAGE_KEY = 'thairag-test-chat-timeout';
+const CHAT_STORAGE_KEY = 'thairag-test-chat-history';
+const SELECTION_STORAGE_KEY = 'thairag-test-chat-selection';
 
 function loadSavedTimeout(): number {
   const saved = localStorage.getItem(TIMEOUT_STORAGE_KEY);
   return saved ? Number(saved) : 120_000;
 }
 
+function loadSavedChat(): ChatEntry[] {
+  try {
+    const saved = sessionStorage.getItem(CHAT_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch { return []; }
+}
+
+function saveChatHistory(messages: ChatEntry[]) {
+  try {
+    sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+  } catch { /* quota exceeded — ignore */ }
+}
+
+function loadSavedSelection(): { orgId?: string; deptId?: string; wsId?: string } {
+  try {
+    const saved = sessionStorage.getItem(SELECTION_STORAGE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch { return {}; }
+}
+
+function saveSelection(orgId?: string, deptId?: string, wsId?: string) {
+  sessionStorage.setItem(SELECTION_STORAGE_KEY, JSON.stringify({ orgId, deptId, wsId }));
+}
+
 export function TestChatPage() {
-  const [orgId, setOrgId] = useState<string>();
-  const [deptId, setDeptId] = useState<string>();
-  const [wsId, setWsId] = useState<string>();
+  const savedSelection = loadSavedSelection();
+  const [orgId, setOrgId] = useState<string | undefined>(savedSelection.orgId);
+  const [deptId, setDeptId] = useState<string | undefined>(savedSelection.deptId);
+  const [wsId, setWsId] = useState<string | undefined>(savedSelection.wsId);
   const [query, setQuery] = useState('');
-  const [messages, setMessages] = useState<ChatEntry[]>([]);
+  const [messages, setMessages] = useState<ChatEntry[]>(loadSavedChat);
   const [loading, setLoading] = useState(false);
+  const [liveStages, setLiveStages] = useState<PipelineProgress[]>([]);
+  const liveStagesRef = useRef<PipelineProgress[]>([]);
   const [timeoutMs, setTimeoutMs] = useState(loadSavedTimeout);
   const [commentModal, setCommentModal] = useState<{ index: number; thumbsUp: boolean } | null>(null);
   const [commentText, setCommentText] = useState('');
@@ -100,7 +130,12 @@ export function TestChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    saveChatHistory(messages);
   }, [messages]);
+
+  useEffect(() => {
+    saveSelection(orgId, deptId, wsId);
+  }, [orgId, deptId, wsId]);
 
   const handleSend = async () => {
     const q = query.trim();
@@ -109,9 +144,46 @@ export function TestChatPage() {
     setMessages((prev) => [...prev, { role: 'user', content: q }]);
     setQuery('');
     setLoading(true);
+    setLiveStages([]);
+    liveStagesRef.current = [];
+
+    const abortController = new AbortController();
+    if (timeoutMs > 0) {
+      setTimeout(() => abortController.abort(), timeoutMs);
+    }
 
     try {
-      const res = await testQuery(wsId, q, timeoutMs || undefined);
+      const res = await testQueryStream(
+        wsId,
+        q,
+        (progress: PipelineProgress) => {
+          // Update ref IMMEDIATELY (outside React's batched state updater)
+          // so it's available when testQueryStream resolves.
+          const prev = liveStagesRef.current;
+          const idx = prev.findIndex((s) => s.stage === progress.stage && s.status === 'started');
+          let next: PipelineProgress[];
+          if (progress.status !== 'started' && idx >= 0) {
+            next = [...prev];
+            next[idx] = { ...progress, model: progress.model || prev[idx].model };
+          } else {
+            next = [...prev, progress];
+          }
+          liveStagesRef.current = next;
+          setLiveStages(next);
+        },
+        abortController.signal,
+      );
+
+      // Build pipeline stages from streamed events (server sends empty array for streaming)
+      const collectedStages: PipelineStage[] = liveStagesRef.current
+        .filter((s) => s.status !== 'started')
+        .map((s) => ({
+          stage: s.stage,
+          status: s.status as 'done' | 'skipped' | 'error',
+          duration_ms: s.duration_ms,
+          model: s.model,
+        }));
+
       setMessages((prev) => [
         ...prev,
         {
@@ -122,17 +194,14 @@ export function TestChatPage() {
           usage: res.usage,
           timing: res.timing,
           providerInfo: res.provider_info,
-          pipelineStages: res.pipeline_stages,
+          pipelineStages: collectedStages.length > 0 ? collectedStages : res.pipeline_stages,
           query: q,
         },
       ]);
     } catch (err: unknown) {
-      // Detect timeout errors and show a helpful message
-      const isTimeout =
-        (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'ECONNABORTED') ||
-        (err instanceof Error && err.message.includes('timeout'));
-      const msg = isTimeout
-        ? `Request timed out after ${timeoutMs ? (timeoutMs / 1000) + 's' : 'default timeout'}. Try increasing the timeout using the clock icon next to the Send button.`
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      const msg = isAbort
+        ? `Request timed out after ${timeoutMs ? (timeoutMs / 1000) + 's' : 'default timeout'}. Try increasing the timeout.`
         : err instanceof Error ? err.message : 'Failed to get response';
       setMessages((prev) => [
         ...prev,
@@ -140,6 +209,7 @@ export function TestChatPage() {
       ]);
     } finally {
       setLoading(false);
+      setLiveStages([]);
     }
   };
 
@@ -206,6 +276,7 @@ export function TestChatPage() {
 
   const handleClear = () => {
     setMessages([]);
+    sessionStorage.removeItem(CHAT_STORAGE_KEY);
   };
 
   const scoreColor = (score: number) => {
@@ -217,28 +288,31 @@ export function TestChatPage() {
 
   const formatScore = (score: number) => score.toFixed(4);
 
-  const formatStageName = (stage: string) => {
-    const names: Record<string, string> = {
-      query_analyzer: 'Query Analyzer',
-      self_rag_gate: 'Self-RAG Gate',
-      pipeline_orchestrator: 'Pipeline Orchestrator',
-      query_rewriter: 'Query Rewriter',
-      search: 'Hybrid Search',
-      colbert_reranker: 'ColBERT Reranker',
-      graph_rag: 'Graph RAG',
-      context_curator: 'Context Curator',
-      retrieval_refinement: 'Retrieval Refinement',
-      corrective_rag: 'Corrective RAG',
-      raptor: 'RAPTOR',
-      contextual_compression: 'Contextual Compression',
-      multimodal_rag: 'Multi-modal RAG',
-      map_reduce: 'Map-Reduce',
-      response_generator: 'Response Generator',
-      quality_guard: 'Quality Guard',
-      language_adapter: 'Language Adapter',
-    };
-    return names[stage] ?? stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const STAGE_INFO: Record<string, { name: string; task: string }> = {
+    query_analyzer: { name: 'Query Analyzer', task: 'Analyzing intent, language & complexity' },
+    self_rag_gate: { name: 'Self-RAG Gate', task: 'Deciding whether retrieval is needed' },
+    pipeline_orchestrator: { name: 'Pipeline Orchestrator', task: 'Choosing the optimal pipeline route' },
+    query_rewriter: { name: 'Query Rewriter', task: 'Rewriting query for better retrieval' },
+    search: { name: 'Hybrid Search', task: 'Searching vector store & BM25 index' },
+    colbert_reranker: { name: 'ColBERT Reranker', task: 'Re-ranking results with ColBERT' },
+    graph_rag: { name: 'Graph RAG', task: 'Extracting entities & traversing knowledge graph' },
+    context_curator: { name: 'Context Curator', task: 'Scoring & selecting the best context' },
+    retrieval_refinement: { name: 'Retrieval Refinement', task: 'Refining retrieval with feedback signals' },
+    corrective_rag: { name: 'Corrective RAG', task: 'Checking & correcting retrieved context' },
+    raptor: { name: 'RAPTOR', task: 'Building hierarchical document summaries' },
+    contextual_compression: { name: 'Contextual Compression', task: 'Compressing context to key information' },
+    multimodal_rag: { name: 'Multi-modal RAG', task: 'Processing images & tables from documents' },
+    map_reduce: { name: 'Map-Reduce', task: 'Summarizing chunks in parallel' },
+    response_generator: { name: 'Response Generator', task: 'Generating the final answer' },
+    quality_guard: { name: 'Quality Guard', task: 'Checking answer quality & hallucinations' },
+    language_adapter: { name: 'Language Adapter', task: 'Adapting response language to match query' },
   };
+
+  const formatStageName = (stage: string) =>
+    STAGE_INFO[stage]?.name ?? stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+  const formatStageTask = (stage: string) =>
+    STAGE_INFO[stage]?.task ?? '';
 
   return (
     <>
@@ -493,7 +567,6 @@ export function TestChatPage() {
                                       <ExclamationCircleOutlined style={{ color: themeToken.colorError }} />
                                     )}
                                     <span style={{
-                                      flex: 1,
                                       fontSize: 13,
                                       color: stage.status === 'skipped'
                                         ? themeToken.colorTextQuaternary
@@ -501,6 +574,10 @@ export function TestChatPage() {
                                     }}>
                                       {formatStageName(stage.stage)}
                                     </span>
+                                    {stage.model && (
+                                      <Tag style={{ fontSize: 11, lineHeight: '18px', margin: 0 }}>{stage.model}</Tag>
+                                    )}
+                                    <span style={{ flex: 1 }} />
                                     {stage.status === 'done' && stage.duration_ms != null && (
                                       <Tag
                                         color={isVerySlow ? 'error' : isSlow ? 'warning' : 'default'}
@@ -622,8 +699,80 @@ export function TestChatPage() {
             ))}
 
             {loading && (
-              <div style={{ textAlign: 'center', padding: 16 }}>
-                <Spin tip="Searching & generating..." />
+              <div style={{ padding: '12px 16px' }}>
+                {liveStages.length === 0 ? (
+                  <div style={{ textAlign: 'center' }}>
+                    <Spin tip="Connecting..." />
+                  </div>
+                ) : (
+                  <Card size="small" style={{ maxWidth: '80%' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {liveStages
+                        .filter((s, i, arr) => {
+                          // Show only the latest event per stage
+                          for (let j = arr.length - 1; j >= 0; j--) {
+                            if (arr[j].stage === s.stage) return i === j;
+                          }
+                          return true;
+                        })
+                        .map((s) => {
+                          const isActive = s.status === 'started';
+                          const isDone = s.status === 'done';
+                          const isSkipped = s.status === 'skipped';
+                          const icon =
+                            isActive ? <LoadingOutlined spin style={{ color: themeToken.colorPrimary }} /> :
+                            isDone ? <CheckCircleOutlined style={{ color: themeToken.colorSuccess }} /> :
+                            isSkipped ? <MinusCircleOutlined style={{ color: themeToken.colorTextQuaternary }} /> :
+                            <ExclamationCircleOutlined style={{ color: themeToken.colorError }} />;
+                          const taskDesc = formatStageTask(s.stage);
+                          return (
+                            <div
+                              key={s.stage}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                fontSize: 13,
+                                padding: '3px 6px',
+                                borderRadius: 4,
+                                background: isActive ? themeToken.colorPrimaryBg : 'transparent',
+                                transition: 'background 0.2s',
+                              }}
+                            >
+                              {icon}
+                              <span style={{
+                                fontWeight: isActive ? 600 : 400,
+                                color: isActive
+                                  ? themeToken.colorPrimaryText
+                                  : isSkipped
+                                    ? themeToken.colorTextQuaternary
+                                    : themeToken.colorTextSecondary,
+                              }}>
+                                {formatStageName(s.stage)}
+                              </span>
+                              {isActive && taskDesc && (
+                                <span style={{ color: themeToken.colorTextSecondary, fontSize: 12, fontStyle: 'italic' }}>
+                                  — {taskDesc}
+                                </span>
+                              )}
+                              {s.model && (
+                                <Tag style={{ fontSize: 11, lineHeight: '18px', margin: 0 }}>{s.model}</Tag>
+                              )}
+                              <span style={{ flex: 1 }} />
+                              {isDone && s.duration_ms != null && (
+                                <span style={{ color: themeToken.colorTextQuaternary, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                                  {s.duration_ms < 1000 ? `${s.duration_ms}ms` : `${(s.duration_ms / 1000).toFixed(1)}s`}
+                                </span>
+                              )}
+                              {isSkipped && (
+                                <span style={{ color: themeToken.colorTextQuaternary, fontSize: 12 }}>skipped</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </Card>
+                )}
               </div>
             )}
 
