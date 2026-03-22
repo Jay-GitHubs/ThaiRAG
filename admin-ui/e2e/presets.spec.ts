@@ -54,7 +54,7 @@ test.describe('Quick Setup Presets', () => {
 
     // Apply thai-recommended
     const applyRes = await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-recommended', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-recommended', ollama_url: 'http://host.docker.internal:11435' },
     });
     expect(applyRes.ok()).toBeTruthy();
     expect((await applyRes.json()).status).toBe('applied');
@@ -85,7 +85,7 @@ test.describe('Quick Setup Presets', () => {
 
     // Apply thai-doc-recommended
     const applyRes = await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-doc-recommended', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-doc-recommended', ollama_url: 'http://host.docker.internal:11435' },
     });
     expect(applyRes.ok()).toBeTruthy();
 
@@ -115,13 +115,13 @@ test.describe('Quick Setup Presets', () => {
 
     // Set known doc state
     await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-doc-recommended', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-doc-recommended', ollama_url: 'http://host.docker.internal:11435' },
     });
     const docBefore = await (await page.request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
 
     // Apply CHAT preset
     await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-basic', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-basic', ollama_url: 'http://host.docker.internal:11435' },
     });
     const docAfter = await (await page.request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
 
@@ -139,13 +139,13 @@ test.describe('Quick Setup Presets', () => {
 
     // Set known chat state
     await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-recommended', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-recommended', ollama_url: 'http://host.docker.internal:11435' },
     });
     const chatBefore = await (await page.request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
 
     // Apply DOC preset
     await page.request.post(`${API_BASE}/api/km/settings/presets/apply`, {
-      headers, data: { preset_id: 'thai-doc-basic', ollama_url: 'http://host.docker.internal:11434' },
+      headers, data: { preset_id: 'thai-doc-basic', ollama_url: 'http://host.docker.internal:11435' },
     });
     const chatAfter = await (await page.request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
 

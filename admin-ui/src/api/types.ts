@@ -579,6 +579,8 @@ export interface UpdateChatPipelineRequest {
   personal_memory_max_per_user?: number;
   personal_memory_decay_factor?: number;
   personal_memory_min_relevance?: number;
+  personal_memory_llm?: LlmConfigUpdate;
+  remove_personal_memory_llm?: boolean;
 }
 
 // ── Feedback ─────────────────────────────────────────────────────────
@@ -733,6 +735,15 @@ export interface PipelineStage {
   stage: string;
   status: 'done' | 'skipped' | 'error';
   duration_ms: number | null;
+  model?: string;
+}
+
+/** Real-time progress event from SSE stream (includes 'started' status). */
+export interface PipelineProgress {
+  stage: string;
+  status: 'started' | 'done' | 'skipped' | 'error';
+  duration_ms: number | null;
+  model?: string;
 }
 
 export interface TestQueryResponse {
@@ -890,4 +901,25 @@ export interface VectorDbInfo {
 export interface VectorDbClearResponse {
   status: string;
   message: string;
+}
+
+// ── Config Snapshots ──────────────────────────────────────────────
+export interface ConfigSnapshot {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  created_by: string;
+  embedding_fingerprint: string;
+  settings: Record<string, string>;
+}
+
+export interface SnapshotListItem {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  created_by: string;
+  embedding_fingerprint: string;
+  settings_count: number;
 }

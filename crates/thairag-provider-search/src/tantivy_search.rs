@@ -121,6 +121,15 @@ impl TantivySearch {
 
         register_thai_tokenizer(&index);
 
+        // Clear stale lock file from previous crash/restart (single-writer assumption)
+        if !index_path.is_empty() && index_path != "test" {
+            let lock_file = Path::new(index_path).join(".tantivy-writer.lock");
+            if lock_file.exists() {
+                info!(index_path, "Removing stale Tantivy writer lock file");
+                let _ = std::fs::remove_file(&lock_file);
+            }
+        }
+
         let writer = index
             .writer(50_000_000) // 50 MB heap
             .expect("Failed to create Tantivy IndexWriter");

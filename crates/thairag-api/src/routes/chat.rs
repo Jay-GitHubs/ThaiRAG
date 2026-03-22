@@ -374,7 +374,10 @@ async fn retrieve_personal_memories(
 }
 
 /// Build searchable scopes from the user's accessible workspaces.
-fn build_searchable_scopes(state: &AppState, scope: &AccessScope) -> Vec<SearchableScope> {
+pub(crate) fn build_searchable_scopes(
+    state: &AppState,
+    scope: &AccessScope,
+) -> Vec<SearchableScope> {
     if scope.is_unrestricted() {
         // For unrestricted access, list all workspaces
         state

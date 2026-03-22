@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Descriptions,
   Popconfirm,
   Space,
@@ -70,75 +71,85 @@ export function VectorDbTab() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card
-        title={
-          <Space>
-            <DatabaseOutlined />
-            <span>Vector Database</span>
-          </Space>
-        }
-        extra={
-          <Button icon={<ReloadOutlined />} onClick={fetchInfo} loading={loading}>
-            Refresh
-          </Button>
-        }
-      >
-        {info && (
-          <>
-            <Descriptions column={2} bordered size="small">
-              <Descriptions.Item label="Backend">
-                <Tag color={backendColors[info.backend] || 'default'}>
-                  {info.backend}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Isolation">
-                <Tag>{info.isolation}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Collection">
-                <Typography.Text code>{info.collection || '(default)'}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="URL">
-                <Typography.Text code copyable={!!info.url}>
-                  {info.url || '(local)'}
-                </Typography.Text>
-              </Descriptions.Item>
-            </Descriptions>
+      <Collapse
+        defaultActiveKey={['vector-db']}
+        items={[
+          {
+            key: 'vector-db',
+            label: (
+              <Space>
+                <DatabaseOutlined />
+                <span>Vector Database</span>
+              </Space>
+            ),
+            extra: (
+              <Button icon={<ReloadOutlined />} onClick={(e) => { e.stopPropagation(); fetchInfo(); }} loading={loading} size="small">
+                Refresh
+              </Button>
+            ),
+            children: info ? (
+              <>
+                <Descriptions column={2} bordered size="small">
+                  <Descriptions.Item label="Backend">
+                    <Tag color={backendColors[info.backend] || 'default'}>
+                      {info.backend}
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Isolation">
+                    <Tag>{info.isolation}</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Collection">
+                    <Typography.Text code>{info.collection || '(default)'}</Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="URL">
+                    <Typography.Text code copyable={!!info.url}>
+                      {info.url || '(local)'}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                </Descriptions>
 
-            <div style={{ marginTop: 16 }}>
-              <Statistic
-                title="Total Vectors"
-                value={info.vector_count}
-                suffix="vectors indexed"
-              />
-            </div>
-          </>
-        )}
-      </Card>
-
-      <Card title="Danger Zone" type="inner">
-        <Alert
-          message="Clearing the vector database will delete all indexed vectors. All documents will need to be re-processed to rebuild the search index."
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-        <Popconfirm
-          title="Clear all vectors?"
-          description="This action cannot be undone. All indexed vectors will be permanently deleted."
-          onConfirm={handleClear}
-          okText="Yes, clear all"
-          okButtonProps={{ danger: true }}
-          cancelText="Cancel"
-        >
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            loading={clearing}
-          >
-            Clear All Vectors
-          </Button>
-        </Popconfirm>
-      </Card>
+                <div style={{ marginTop: 16 }}>
+                  <Statistic
+                    title="Total Vectors"
+                    value={info.vector_count}
+                    suffix="vectors indexed"
+                  />
+                </div>
+              </>
+            ) : null,
+          },
+          {
+            key: 'danger-zone',
+            label: 'Danger Zone',
+            children: (
+              <>
+                <Alert
+                  message="Clearing the vector database will delete all indexed vectors. All documents will need to be re-processed to rebuild the search index."
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                />
+                <Popconfirm
+                  title="Clear all vectors?"
+                  description="This action cannot be undone. All indexed vectors will be permanently deleted."
+                  onConfirm={handleClear}
+                  okText="Yes, clear all"
+                  okButtonProps={{ danger: true }}
+                  cancelText="Cancel"
+                >
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={clearing}
+                  >
+                    Clear All Vectors
+                  </Button>
+                </Popconfirm>
+              </>
+            ),
+          },
+        ]}
+      />
     </Space>
   );
 }

@@ -175,7 +175,9 @@ GET    /api/km/settings/chat-pipeline      # Get pipeline config
 PUT    /api/km/settings/chat-pipeline      # Update + hot-reload
 ```
 
-Includes **Context Compaction** and **Personal Memory** settings:
+Includes **LLM Mode**, **Context Compaction**, and **Personal Memory** settings:
+- `llm_mode` — LLM assignment mode: `chat_llm` (use main LLM), `shared` (dedicated chat LLM), `per_agent` (individual LLM per agent)
+- Per-agent LLM configs (when `llm_mode=per_agent`): `query_analyzer_llm`, `retriever_llm`, `response_generator_llm`, etc.
 - `context_compaction_enabled` — Auto-summarize older messages when near context limit
 - `model_context_window` — Context window size in tokens (0 = auto-detect)
 - `compaction_threshold` — Trigger at this fraction of context window (default: 0.8)

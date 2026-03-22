@@ -25,6 +25,8 @@ import type {
   UpdateProviderConfigRequest,
   UpdateRetrievalParamsRequest,
   UsageStatsResponse,
+  ConfigSnapshot,
+  SnapshotListItem,
   VectorDbClearResponse,
   VectorDbInfo,
 } from './types';
@@ -176,7 +178,7 @@ export async function listPresets() {
 export async function applyPreset(presetId: string, ollamaUrl?: string) {
   const res = await client.post('/api/km/settings/presets/apply', {
     preset_id: presetId,
-    ollama_url: ollamaUrl || 'http://host.docker.internal:11434',
+    ollama_url: ollamaUrl || 'http://host.docker.internal:11435',
   });
   return res.data;
 }
@@ -191,7 +193,7 @@ export async function listOllamaModels() {
 export async function pullOllamaModel(model: string, ollamaUrl?: string) {
   const res = await client.post<OllamaPullResponse>('/api/km/settings/ollama/pull', {
     model,
-    ollama_url: ollamaUrl || 'http://host.docker.internal:11434',
+    ollama_url: ollamaUrl || 'http://host.docker.internal:11435',
   });
   return res.data;
 }
@@ -238,4 +240,34 @@ export async function getVectorDbInfo() {
 export async function clearVectorDb() {
   const res = await client.post<VectorDbClearResponse>('/api/km/settings/vectordb/clear');
   return res.data;
+}
+
+// ── Config Snapshots ────────────────────────────────────────────
+
+export async function listSnapshots() {
+  const res = await client.get<SnapshotListItem[]>('/api/km/settings/snapshots');
+  return res.data;
+}
+
+export async function createSnapshot(data: { name: string; description?: string }) {
+  const res = await client.post<ConfigSnapshot>('/api/km/settings/snapshots', data);
+  return res.data;
+}
+
+export async function restoreSnapshot(
+  id: string,
+  opts?: { force?: boolean; skipEmbedding?: boolean },
+) {
+  const params = new URLSearchParams();
+  if (opts?.force) params.set('force', 'true');
+  if (opts?.skipEmbedding) params.set('skip_embedding', 'true');
+  const qs = params.toString();
+  const res = await client.post<{ status: string; warning?: string }>(
+    `/api/km/settings/snapshots/${id}/restore${qs ? `?${qs}` : ''}`,
+  );
+  return res.data;
+}
+
+export async function deleteSnapshot(id: string) {
+  await client.delete(`/api/km/settings/snapshots/${id}`);
 }

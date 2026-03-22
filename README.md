@@ -4,11 +4,12 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 
 ## Features
 
-- **Hybrid Search** — Vector similarity + BM25 full-text search with Reciprocal Rank Fusion and optional reranking
+- **Hybrid Search** — Vector similarity + BM25 full-text search (disk-persisted Tantivy with auto-recovery) with Reciprocal Rank Fusion and optional reranking
 - **Thai NLP** — Built-in Thai word segmentation via `nlpo3` for accurate tokenization
 - **OpenAI-Compatible API** — Drop-in replacement at `/v1/chat/completions` and `/v1/models`, works with Open WebUI and any OpenAI-compatible client
 - **Hierarchical Knowledge Management** — Organization → Department → Workspace → Documents with scoped permissions
 - **Multi-Format Documents** — PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text with automatic chunking
+- **Multi-Agent Chat Pipeline** — Configurable LLM assignment per agent (Use Chat LLM / Shared / Per-Agent modes) with fallback chain
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
 - **MCP Connectors** — Connect to external data sources (Confluence, Notion, GitHub, Slack, Google Drive, PostgreSQL, and more) via the Model Context Protocol with automatic sync scheduling, retry logic, and webhook notifications
