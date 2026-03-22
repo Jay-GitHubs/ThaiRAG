@@ -15,6 +15,8 @@ The ThaiRAG Admin UI is a React + Ant Design application for managing the entire
 9. [Feedback & Tuning](#feedback--tuning)
 10. [Settings](#settings)
 11. [Health](#health)
+12. [Config Snapshots](#config-snapshots)
+13. [Collapsible Settings](#collapsible-settings)
 
 ## Access Control
 
@@ -131,6 +133,12 @@ Each response has three action buttons:
 - **Star** — Save the Q&A pair as a golden example for few-shot learning
 
 Feedback is stored with full context (query, answer, retrieved chunks, scores, workspace ID) and drives the auto-tuning system.
+
+### Pipeline Stages
+Each response includes a collapsible pipeline stages panel showing exactly which agents ran, how long each took, and which models were used. See [Pipeline Stages UI](#pipeline-stages-ui) for details.
+
+### Chat Persistence
+Chat history and workspace selection persist across page navigation within the same tab. See [Chat Persistence](#chat-persistence) for details.
 
 ### Session Management
 - Each chat session maintains conversation history (up to 50 messages)
@@ -398,6 +406,138 @@ System health monitoring.
 - Uptime
 - Configuration tier
 - Provider details
+
+---
+
+## Config Snapshots
+
+**Location:** Collapsible panel at the top of the Settings page (above the tabs)
+
+Config Snapshots let super admins save and restore the entire system configuration as named restore points. This is useful before making major changes (e.g., switching LLM providers, changing embedding models, or adjusting pipeline settings).
+
+### Saving a Snapshot
+- Click **"Save Current Config"** in the snapshots panel header
+- A modal prompts for:
+  - **Name** (required, max 100 characters) — e.g., "Before switching to Claude"
+  - **Description** (optional, max 500 characters) — notes about what this configuration represents
+- The snapshot captures the full configuration including provider settings, pipeline config, presets, document processing settings, and all other configuration keys
+
+### Snapshot Table
+Each saved snapshot displays:
+- **Name** — Snapshot name with description shown below in smaller text
+- **Created** — Date and time the snapshot was taken
+- **Embedding** — Embedding fingerprint badge (identifies the embedding model + dimension used when the snapshot was created)
+- **Settings** — Number of configuration keys stored (shown as a tag, e.g., "42 keys")
+
+### Restoring a Snapshot
+- Click **Restore** on any snapshot row
+- If the snapshot's embedding fingerprint matches the current configuration, the restore proceeds immediately
+- If the embedding fingerprint differs, a confirmation dialog appears with two options:
+  - **"Restore Without Embedding (Safe)"** — Restores all settings except the embedding configuration, avoiding a reindex
+  - **"Restore Everything (Re-index Required)"** — Restores the full configuration including embedding settings; existing vector data will need to be re-indexed
+- After restoring, reload the page to see the updated settings
+
+### Deleting a Snapshot
+- Click the delete button (trash icon) next to any snapshot
+- A popconfirm dialog asks for confirmation before deletion
+
+---
+
+## Pipeline Stages UI
+
+**Location:** Test Chat page — visible during and after query execution
+
+The pipeline stages UI provides real-time visibility into what the RAG pipeline is doing as it processes a query.
+
+### Live Progress Card
+During query execution, a progress card appears showing each pipeline stage as it runs:
+- **Spinning indicator** — Active stage currently being processed, shown with a highlighted background
+- **Green checkmark** — Stage completed successfully
+- **Minus icon** — Stage was skipped (e.g., an optional agent that wasn't needed)
+- **Exclamation icon** — Stage encountered an error
+
+Each stage row shows:
+- **Friendly name** — Human-readable agent names instead of internal identifiers (e.g., "Query Analyzer" instead of `query_analyzer`, "Hybrid Search" instead of `search`, "Response Generator" instead of `response_generator`)
+- **Task description** — Shown for the active stage in italic (e.g., "Analyzing intent, language & complexity", "Searching vector store & BM25 index")
+- **Model tag** — The LLM model used by that stage, when applicable
+- **Duration** — Shown for completed stages (milliseconds or seconds)
+
+### Pipeline Stages Summary
+After a response is received, a collapsible **"Pipeline Stages"** panel appears below the response:
+- Header shows the total number of stages and total pipeline time (e.g., "Pipeline Stages (8) — 3,240ms total")
+- If any stage took more than 1 second, a **Bottleneck** tag highlights the slowest stage
+- Expanding the panel shows all stages with their status, model, and individual durations
+- Slow stages (>2s) are highlighted with a warning background; very slow stages (>5s) get an error background
+
+### Supported Stages
+The UI maps the following internal stage names to friendly labels:
+
+| Internal Name | Display Name | Task Description |
+|---------------|-------------|------------------|
+| `query_analyzer` | Query Analyzer | Analyzing intent, language & complexity |
+| `self_rag_gate` | Self-RAG Gate | Deciding whether retrieval is needed |
+| `pipeline_orchestrator` | Pipeline Orchestrator | Choosing the optimal pipeline route |
+| `query_rewriter` | Query Rewriter | Rewriting query for better retrieval |
+| `search` | Hybrid Search | Searching vector store & BM25 index |
+| `colbert_reranker` | ColBERT Reranker | Re-ranking results with ColBERT |
+| `graph_rag` | Graph RAG | Extracting entities & traversing knowledge graph |
+| `context_curator` | Context Curator | Scoring & selecting the best context |
+| `retrieval_refinement` | Retrieval Refinement | Refining retrieval with feedback signals |
+| `corrective_rag` | Corrective RAG | Checking & correcting retrieved context |
+| `raptor` | RAPTOR | Building hierarchical document summaries |
+| `contextual_compression` | Contextual Compression | Compressing context to key information |
+| `multimodal_rag` | Multi-modal RAG | Processing images & tables from documents |
+| `map_reduce` | Map-Reduce | Summarizing chunks in parallel |
+| `response_generator` | Response Generator | Generating the final answer |
+| `quality_guard` | Quality Guard | Checking answer quality & hallucinations |
+| `language_adapter` | Language Adapter | Adapting response language to match query |
+
+Any unrecognized stage names are auto-formatted by replacing underscores with spaces and capitalizing each word.
+
+---
+
+## Chat Persistence
+
+**Location:** Test Chat page
+
+Chat history and workspace selection are preserved across page navigation within the same browser tab using `sessionStorage`.
+
+### What is Preserved
+- **Messages** — All chat messages (user queries and assistant responses), including metadata such as retrieved chunks, usage stats, timing, pipeline stages, and feedback state
+- **Workspace selection** — The selected organization, department, and workspace dropdowns
+
+### Storage Behavior
+- Uses `sessionStorage` (per-tab), so each browser tab has its own independent chat history
+- Data is automatically cleared when the tab is closed
+- If storage quota is exceeded, the write is silently ignored (chat continues to work but won't persist)
+
+### Clearing Chat
+- Click the **Clear Chat** button (broom icon) next to the Send button to manually reset the conversation
+- Changing the workspace selection also clears the chat (since the context changes)
+
+---
+
+## Collapsible Settings
+
+All settings sections across the Admin UI use collapsible panels (Ant Design `Collapse` components) to reduce visual clutter and let admins focus on the section they are configuring.
+
+### Presets Tab
+- **Chat Pipeline** — Collapsible group containing chat pipeline preset options
+- **Document Processing** — Collapsible group containing document processing preset options
+
+### Providers Tab
+- **LLM Provider** — Collapsible card for LLM configuration (provider type, model, API key)
+- **Reranker** — Collapsible card for reranker configuration
+
+### Document Processing Tab
+- **Pipeline Settings** — Collapsible section for chunk size, overlap, and upload limits
+- **AI Preprocessing** — Collapsible section for AI-powered document preprocessing options
+- **Embedding Config** — Collapsible section for embedding provider and dimension settings
+
+### Other Tabs
+All remaining settings tabs (Identity Providers, Chat Pipeline, Prompts, Vector DB, Ollama Management, Local Auth) wrap their content in collapsible sections following the same pattern.
+
+Sections remember their expanded/collapsed state within the current page session.
 
 ---
 

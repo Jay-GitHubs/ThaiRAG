@@ -13,7 +13,12 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
 - **MCP Connectors** — Connect to external data sources (Confluence, Notion, GitHub, Slack, Google Drive, PostgreSQL, and more) via the Model Context Protocol with automatic sync scheduling, retry logic, and webhook notifications
-- **Admin UI** — React + Ant Design dashboard for managing the entire platform (11 pages)
+- **Config Snapshots** — Save and restore full configuration with embedding fingerprint tracking for safe rollbacks
+- **Live Pipeline Stages** — Real-time SSE progress showing agent names and tasks during queries
+- **Chat Persistence** — Test chat history preserved across page navigation via sessionStorage
+- **Collapsible Settings UI** — All settings sections are collapsible for a cleaner interface
+- **Embedding Protection** — Warns before destructive embedding model changes, auto-saves snapshot before applying
+- **Admin UI** — React + Ant Design dashboard for managing the entire platform (11 pages) with pipeline stages visualization and config snapshots management
 - **Identity Provider Support** — Local auth (Argon2 + JWT) with OIDC/OAuth2/SAML/LDAP management
 - **Production Hardened** — Rate limiting, CSRF protection, OWASP security headers, Prometheus metrics, audit logging, brute-force protection
 
@@ -175,6 +180,7 @@ GET|POST    /orgs/{id}/depts/{id}/workspaces  # Workspaces
 GET|POST    /workspaces/{id}/documents   # Documents
 POST        /workspaces/{id}/documents/upload  # File upload
 POST        /workspaces/{id}/test-query  # Test search + RAG
+POST        /workspaces/{id}/test-query-stream  # SSE streaming test query
 
 # Settings (super admin)
 GET|PUT     /settings/providers          # Provider configuration
@@ -183,6 +189,10 @@ GET|PUT     /settings/chat-pipeline      # Chat pipeline config
 GET|POST    /settings/identity-providers # Identity provider management
 GET|PUT     /settings/feedback/*         # Feedback & tuning
 GET         /settings/audit-log          # Audit log
+POST        /settings/snapshots          # Create config snapshot
+GET         /settings/snapshots          # List config snapshots
+DELETE      /settings/snapshots          # Delete a snapshot
+POST        /settings/snapshots/{id}/restore  # Restore config snapshot
 
 # MCP Connectors (super admin)
 GET|POST    /connectors                  # List / create connectors
@@ -211,13 +221,13 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 ## Testing
 
 ```bash
-# Backend tests (220 tests)
+# Backend tests (185 tests)
 cargo test
 
 # Admin UI type check
 cd admin-ui && npx tsc --noEmit
 
-# Playwright e2e tests (48 tests)
+# Playwright e2e tests (51 tests)
 cd admin-ui && npx playwright test
 ```
 
