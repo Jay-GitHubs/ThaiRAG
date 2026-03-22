@@ -2467,7 +2467,7 @@ Verify the system using automated test suites — backend unit/integration tests
 cargo test
 ```
 
-**Current test count:** 220 tests across workspace
+**Current test count:** 185 tests across workspace
 
 Key test categories:
 - **Password policy**: `register_rejects_short_password`, `register_rejects_no_uppercase`, `register_rejects_no_digit`
@@ -2485,7 +2485,7 @@ npx playwright test --headed    # Headed mode (visible browser)
 npx playwright test              # Headless mode (CI)
 ```
 
-**Current test count:** 90 tests (1 setup + 89 specs)
+**Current test count:** 51 tests (1 setup + 50 specs)
 
 Test files:
 | File | Tests | Description |
@@ -2505,6 +2505,9 @@ Test files:
 | `advanced-features.spec.ts` | 10 | Context Compaction & Personal Memory toggles, parameters, persistence |
 | `presets.spec.ts` | 7 | Chat presets CRUD, selection, defaults |
 | `settings-debug.spec.ts` | 2 | Settings page debug/diagnostics |
+| `pipeline-stages.spec.ts` | 5 | Pipeline stages API, SSE streaming, UI rendering |
+
+> **Note:** Config snapshots are tested as part of the settings e2e tests (snapshot create, restore, and delete flows are covered in the existing settings test suite).
 
 **Playwright configuration** (`admin-ui/playwright.config.ts`):
 - Base URL: `http://localhost:8081`

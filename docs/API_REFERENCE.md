@@ -408,9 +408,71 @@ Run a search + RAG answer against a specific workspace. Returns retrieved chunks
     "llm_model": "claude-sonnet-4-20250514",
     "embedding_kind": "openai",
     "embedding_model": "text-embedding-3-small"
-  }
+  },
+  "pipeline_stages": [
+    {
+      "stage": "query_analyzer",
+      "status": "completed",
+      "duration_ms": 120,
+      "model": "qwen3:4b"
+    },
+    {
+      "stage": "retrieval",
+      "status": "completed",
+      "duration_ms": 45,
+      "model": null
+    },
+    {
+      "stage": "response_generator",
+      "status": "completed",
+      "duration_ms": 1200,
+      "model": "qwen3:14b"
+    }
+  ]
 }
 ```
+
+The `pipeline_stages` array provides per-stage timing and model information for the chat pipeline. Each entry includes the stage name, completion status, duration in milliseconds, and the model used (if applicable).
+
+### `POST /api/km/workspaces/{workspace_id}/test-query-stream`
+
+SSE streaming variant of the test query endpoint. Sends real-time progress events as each pipeline stage executes, followed by the full result.
+
+**Request:**
+```json
+{ "query": "How does authentication work?" }
+```
+
+**Response:** Server-Sent Events (SSE) stream.
+
+**Event types:**
+
+`event: progress` — Emitted as each pipeline stage starts and completes.
+```json
+{
+  "stage": "query_analyzer",
+  "status": "started",
+  "duration_ms": 0,
+  "model": "qwen3:4b"
+}
+```
+```json
+{
+  "stage": "query_analyzer",
+  "status": "completed",
+  "duration_ms": 120,
+  "model": "qwen3:4b"
+}
+```
+
+`event: result` — Full `TestQueryResponse` JSON (same schema as the non-streaming endpoint above).
+
+`event: error` — Emitted if the pipeline fails.
+```json
+{ "error": "LLM provider returned an error" }
+```
+
+`data: [DONE]` — Stream complete.
 
 ---
 
@@ -812,6 +874,86 @@ Get current retrieval parameters and suggestions.
 
 #### `PUT /api/km/settings/feedback/retrieval-params`
 Update retrieval parameters.
+
+### Config Snapshots
+
+Save and restore complete configuration snapshots. Useful for rollback or environment migration.
+
+#### `POST /api/km/settings/snapshots`
+Create a snapshot of the current configuration.
+
+**Request:**
+```json
+{
+  "name": "Before embedding migration",
+  "description": "Optional description"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "uuid",
+  "name": "Before embedding migration",
+  "description": "Optional description",
+  "created_at": "2026-03-23T10:00:00Z",
+  "created_by": "user-uuid",
+  "embedding_fingerprint": "openai/text-embedding-3-small",
+  "settings": {
+    "providers": { "..." : "..." },
+    "chat_pipeline": { "..." : "..." },
+    "document": { "..." : "..." }
+  }
+}
+```
+
+The `embedding_fingerprint` records the embedding provider and model at snapshot time. This is checked during restore to warn about incompatible embedding changes.
+
+#### `GET /api/km/settings/snapshots`
+List all snapshots. Returns metadata only (no settings payload).
+
+**Response:**
+```json
+{
+  "snapshots": [
+    {
+      "id": "uuid",
+      "name": "Before embedding migration",
+      "description": "Optional description",
+      "created_at": "2026-03-23T10:00:00Z",
+      "created_by": "user-uuid",
+      "embedding_fingerprint": "openai/text-embedding-3-small"
+    }
+  ]
+}
+```
+
+#### `POST /api/km/settings/snapshots/{id}/restore`
+Restore a configuration snapshot.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `force` | bool | If `true`, proceed even if the embedding fingerprint differs from the current config |
+
+**Response:**
+```json
+{
+  "restored": true,
+  "warning": null
+}
+```
+
+If the embedding fingerprint has changed and `force` is not set, the request returns `409 Conflict` with a warning. With `?force=true`, the response includes the warning message:
+```json
+{
+  "restored": true,
+  "warning": "Embedding model changed from openai/text-embedding-3-small to ollama/nomic-embed-text. Re-embedding may be required."
+}
+```
+
+#### `DELETE /api/km/settings/snapshots/{id}`
+Delete a snapshot.
 
 ### Audit Log
 

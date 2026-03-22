@@ -199,6 +199,52 @@ For each chunk:
     └─ Tantivy::index(chunk_id, content)  [disk-persisted via MmapDirectory]
 ```
 
+### Test Query SSE Streaming Flow
+
+```
+Client GET /api/km/test-query-stream?q=...
+    │
+    ▼
+[Auth] → test_query::stream()
+    │
+    ├─ Create tokio::mpsc channel for PipelineProgress events
+    │
+    ├─ Spawn pipeline task ──────────────────────────────────┐
+    │                                                        │
+    ▼                                                        ▼
+SSE response (Content-Type: text/event-stream)     Pipeline stages execute:
+    │                                                ├─ Query Analysis  (started → completed)
+    ├─ event: pipeline_progress                      ├─ Retrieval       (started → completed)
+    │  data: {"stage":"query_analysis","status":     ├─ Reranking       (started → completed)
+    │         "started"}                             ├─ Context Assembly (started → completed)
+    │                                                └─ Response Gen    (started → completed)
+    ├─ event: pipeline_progress                              │
+    │  data: {"stage":"query_analysis","status":             │
+    │         "completed","duration_ms":123}                  │
+    │  ...                                                   │
+    ├─ event: result                                         │
+    │  data: {full test-query response}              ◄───────┘
+    │
+    └─ stream closed
+```
+
+Each pipeline stage sends `started` and `completed` events through the `tokio::mpsc` channel. The frontend renders these in real-time, showing which stage is currently executing and timing information.
+
+### Config Snapshots
+
+Config snapshots allow saving and restoring complete system configuration. Snapshots are stored in the existing `settings` KV table using a `snapshot.{uuid}` key prefix, so no schema migration is needed.
+
+```
+POST /api/km/settings/snapshots          → Create snapshot (captures all current settings)
+GET  /api/km/settings/snapshots          → List all snapshots
+POST /api/km/settings/snapshots/restore  → Restore a snapshot by ID
+DELETE /api/km/settings/snapshots/{id}   → Delete a snapshot
+```
+
+### Embedding Fingerprint Tracking
+
+The system tracks the current embedding configuration via an `_embedding_fingerprint` key in the `settings` KV table. The fingerprint format is `{kind}:{model}:{dimension}` (e.g., `fastembed:BAAI/bge-small-en-v1.5:384`). This allows detecting when the embedding model changes, which would invalidate existing vector data.
+
 ### Tantivy Index Recovery
 
 On startup, if the Tantivy index is empty but the database has stored chunks, the server automatically rebuilds the index in batches of 500. This handles:

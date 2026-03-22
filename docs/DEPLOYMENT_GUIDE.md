@@ -199,6 +199,25 @@ The Dockerfile uses a multi-stage build:
    - Creates `/data` directory for persistent state
    - Exposes port 8080
 
+### Nginx SSE Configuration
+
+The admin UI's test-query-stream endpoint uses Server-Sent Events (SSE) for real-time pipeline progress. If you run nginx as a reverse proxy (including the admin-ui Docker container's built-in nginx), the following directives are required for SSE to work correctly:
+
+```nginx
+location /api/ {
+    proxy_pass http://thairag:8080;
+
+    # SSE requires these settings to prevent buffering
+    proxy_buffering off;
+    proxy_cache off;
+    chunked_transfer_encoding off;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+}
+```
+
+Without these settings, nginx buffers the SSE stream and the frontend will not receive pipeline progress events until the entire response completes (or times out).
+
 ---
 
 ## Local Development
@@ -355,6 +374,7 @@ cd admin-ui && npx playwright test
 - [ ] Set `RUST_LOG=info` (or `warn` for less output)
 - [ ] Mount persistent volumes for postgres-data, qdrant-data, and thairag-data (Tantivy index auto-rebuilds from DB if volume is lost)
 - [ ] Set up health check monitoring on `/health?deep=true`
+- [ ] Verify SSE streaming works through any reverse proxies/load balancers (test the `/api/km/test-query-stream` endpoint)
 - [ ] Configure Chat Pipeline LLM mode (Use Chat LLM / Shared / Per-Agent) via Admin UI Settings
 
 ---

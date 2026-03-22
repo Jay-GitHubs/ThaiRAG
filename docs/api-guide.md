@@ -211,6 +211,28 @@ GET    /api/km/settings/audit-log          # Query audit log (super admin only)
 
 Actions logged: `login`, `login_failed`, `register`, `user_deleted`, `permission_granted`, `permission_revoked`, `settings_changed`, `idp_created`, `idp_updated`, `idp_deleted`, `prompt_updated`, `prompt_deleted`.
 
+### Config Snapshots
+```
+POST   /api/km/settings/snapshots           # Create snapshot (captures current config)
+GET    /api/km/settings/snapshots           # List all snapshots
+POST   /api/km/settings/snapshots/restore   # Restore a snapshot by ID
+DELETE /api/km/settings/snapshots/{id}      # Delete a snapshot
+```
+
+Snapshots capture the complete system configuration (providers, chat pipeline, document processing, prompts). Stored in the `settings` KV table with `snapshot.{uuid}` key prefix.
+
+### Test Query (with Pipeline Stages)
+```
+GET    /api/km/test-query?q=<query>         # Test query with pipeline_stages in response
+GET    /api/km/test-query-stream?q=<query>  # SSE stream with real-time pipeline progress
+```
+
+The `test-query` response includes a `pipeline_stages` array showing timing for each pipeline stage (query analysis, retrieval, reranking, context assembly, response generation).
+
+The `test-query-stream` endpoint returns Server-Sent Events:
+- `event: pipeline_progress` — Sent as each stage starts and completes, with `stage`, `status`, and `duration_ms` fields
+- `event: result` — Final complete test-query response (same shape as the non-streaming endpoint)
+
 ### Feedback
 ```
 POST   /v1/chat/feedback                   # Submit quality feedback
