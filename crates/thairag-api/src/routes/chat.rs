@@ -832,11 +832,23 @@ async fn handle_stream(
         yield Ok(Event::default().data("[DONE]"));
     };
 
-    Ok(Sse::new(sse_stream)
+    let mut response = Sse::new(sse_stream)
         .keep_alive(
             KeepAlive::new()
                 .interval(std::time::Duration::from_secs(5))
                 .text("ping"),
         )
-        .into_response())
+        .into_response();
+
+    // Tell reverse proxies (nginx, Cloudflare, etc.) not to buffer SSE events
+    response.headers_mut().insert(
+        "X-Accel-Buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+
+    Ok(response)
 }

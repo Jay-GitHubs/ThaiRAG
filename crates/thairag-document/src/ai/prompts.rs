@@ -77,7 +77,10 @@ Return ONLY valid JSON, no explanation or markdown fences."#;
 
     let size_str = doc_size_bytes.to_string();
     let ocr_ref = if ocr_text.len() > 2000 {
-        format!("{}... [truncated]", &ocr_text[..2000])
+        format!(
+            "{}... [truncated]",
+            thairag_core::safe_truncate(ocr_text, 2000)
+        )
     } else {
         ocr_text.to_string()
     };
@@ -246,7 +249,7 @@ Output improved Markdown only, no explanation:"#;
 
     // Truncate previous output to keep prompt size reasonable
     let prev_truncated = if previous_output.len() > 3000 {
-        &previous_output[..3000]
+        thairag_core::safe_truncate(previous_output, 3000)
     } else {
         previous_output
     };
@@ -305,7 +308,10 @@ Output clean Markdown only, no explanation:"#;
     };
 
     let ocr_ref = if raw_text.len() > 2000 {
-        format!("{}... [truncated]", &raw_text[..2000])
+        format!(
+            "{}... [truncated]",
+            thairag_core::safe_truncate(raw_text, 2000)
+        )
     } else {
         raw_text.to_string()
     };
@@ -360,7 +366,10 @@ Output clean Markdown for page {{page_num}} only, no explanation:"#;
     };
 
     let ocr_ref = if page_text.len() > 1500 {
-        format!("{}... [truncated]", &page_text[..1500])
+        format!(
+            "{}... [truncated]",
+            thairag_core::safe_truncate(page_text, 1500)
+        )
     } else {
         page_text.to_string()
     };
@@ -452,13 +461,19 @@ Return ONLY valid JSON, no explanation or markdown fences:
 {"coherence_score": 0.0, "completeness_score": 0.0, "formatting_score": 0.0, "issues": []}"#;
 
     let ocr_ref = if ocr_text.len() > 1500 {
-        format!("{}... [truncated]", &ocr_text[..1500])
+        format!(
+            "{}... [truncated]",
+            thairag_core::safe_truncate(ocr_text, 1500)
+        )
     } else {
         ocr_text.to_string()
     };
 
     let converted_ref = if converted_sample.len() > 2000 {
-        format!("{}... [truncated]", &converted_sample[..2000])
+        format!(
+            "{}... [truncated]",
+            thairag_core::safe_truncate(converted_sample, 2000)
+        )
     } else {
         converted_sample.to_string()
     };
@@ -700,7 +715,10 @@ Return ONLY a JSON array, no explanation or markdown fences:
         .iter()
         .map(|(idx, content)| {
             let truncated = if content.len() > 1500 {
-                format!("{}... [truncated]", &content[..1500])
+                format!(
+                    "{}... [truncated]",
+                    thairag_core::safe_truncate(content, 1500)
+                )
             } else {
                 content.to_string()
             };

@@ -137,6 +137,8 @@ export function TestChatPage() {
     saveSelection(orgId, deptId, wsId);
   }, [orgId, deptId, wsId]);
 
+  const [sseBuffered, setSseBuffered] = useState(false);
+
   const handleSend = async () => {
     const q = query.trim();
     if (!q || !wsId || loading) return;
@@ -146,17 +148,29 @@ export function TestChatPage() {
     setLoading(true);
     setLiveStages([]);
     liveStagesRef.current = [];
+    setSseBuffered(false);
 
     const abortController = new AbortController();
     if (timeoutMs > 0) {
       setTimeout(() => abortController.abort(), timeoutMs);
     }
 
+    // Detect if SSE events are being buffered by a proxy (Kong, Cloudflare, etc.)
+    // If no progress event arrives within 3s, assume buffering and show fallback UI.
+    let gotFirstEvent = false;
+    const bufferDetector = setTimeout(() => {
+      if (!gotFirstEvent) setSseBuffered(true);
+    }, 3000);
+
     try {
       const res = await testQueryStream(
         wsId,
         q,
         (progress: PipelineProgress) => {
+          gotFirstEvent = true;
+          clearTimeout(bufferDetector);
+          if (sseBuffered) setSseBuffered(false);
+
           // Update ref IMMEDIATELY (outside React's batched state updater)
           // so it's available when testQueryStream resolves.
           const prev = liveStagesRef.current;
@@ -173,6 +187,7 @@ export function TestChatPage() {
         },
         abortController.signal,
       );
+      clearTimeout(bufferDetector);
 
       // Build pipeline stages from streamed events (server sends empty array for streaming)
       const collectedStages: PipelineStage[] = liveStagesRef.current
@@ -700,10 +715,22 @@ export function TestChatPage() {
 
             {loading && (
               <div style={{ padding: '12px 16px' }}>
-                {liveStages.length === 0 ? (
+                {liveStages.length === 0 && !sseBuffered ? (
                   <div style={{ textAlign: 'center' }}>
                     <Spin tip="Connecting..." />
                   </div>
+                ) : liveStages.length === 0 && sseBuffered ? (
+                  <Card size="small" style={{ maxWidth: '80%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0' }}>
+                      <LoadingOutlined spin style={{ fontSize: 20, color: themeToken.colorPrimary }} />
+                      <div>
+                        <div style={{ fontWeight: 500 }}>Processing your query...</div>
+                        <div style={{ fontSize: 12, color: themeToken.colorTextSecondary, marginTop: 2 }}>
+                          Analyzing, searching, and generating answer. Pipeline stages will appear after completion.
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
                 ) : (
                   <Card size="small" style={{ maxWidth: '80%' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

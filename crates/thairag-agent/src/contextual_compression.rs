@@ -153,9 +153,5 @@ async fn compress_chunk(
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        s[..max].to_string()
-    }
+    thairag_core::safe_truncate(s, max).to_string()
 }
