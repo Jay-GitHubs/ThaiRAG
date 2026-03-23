@@ -314,6 +314,7 @@ export function TestChatPage() {
     context_curator: { name: 'Context Curator', task: 'Scoring & selecting the best context' },
     retrieval_refinement: { name: 'Retrieval Refinement', task: 'Refining retrieval with feedback signals' },
     corrective_rag: { name: 'Corrective RAG', task: 'Checking & correcting retrieved context' },
+    live_retrieval: { name: 'Live Source Retrieval', task: 'Fetching from external sources (OneDrive, web, etc.)' },
     raptor: { name: 'RAPTOR', task: 'Building hierarchical document summaries' },
     contextual_compression: { name: 'Contextual Compression', task: 'Compressing context to key information' },
     multimodal_rag: { name: 'Multi-modal RAG', task: 'Processing images & tables from documents' },

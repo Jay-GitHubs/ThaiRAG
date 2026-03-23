@@ -2130,6 +2130,13 @@ pub struct ChatPipelineConfigResponse {
     pub personal_memory_min_relevance: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personal_memory_llm: Option<LlmProviderInfo>,
+    // Live Source Retrieval
+    pub live_retrieval_enabled: bool,
+    pub live_retrieval_timeout_secs: u64,
+    pub live_retrieval_max_connectors: u32,
+    pub live_retrieval_max_content_chars: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_retrieval_llm: Option<LlmProviderInfo>,
 }
 
 #[derive(Deserialize)]
@@ -2251,6 +2258,13 @@ pub struct UpdateChatPipelineRequest {
     pub personal_memory_min_relevance: Option<f32>,
     pub personal_memory_llm: Option<UpdateLlmConfig>,
     pub remove_personal_memory_llm: Option<bool>,
+    // Live Source Retrieval
+    pub live_retrieval_enabled: Option<bool>,
+    pub live_retrieval_timeout_secs: Option<u64>,
+    pub live_retrieval_max_connectors: Option<u32>,
+    pub live_retrieval_max_content_chars: Option<usize>,
+    pub live_retrieval_llm: Option<UpdateLlmConfig>,
+    pub remove_live_retrieval_llm: Option<bool>,
 }
 
 pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
@@ -2527,6 +2541,22 @@ pub fn get_effective_chat_pipeline_with_store(
         personal_memory_llm: s("chat_pipeline.personal_memory_llm")
             .and_then(|v| serde_json::from_str(&v).ok())
             .or_else(|| cp.personal_memory_llm.clone()),
+        // Live Source Retrieval
+        live_retrieval_enabled: s("chat_pipeline.live_retrieval_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.live_retrieval_enabled),
+        live_retrieval_timeout_secs: s("chat_pipeline.live_retrieval_timeout_secs")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.live_retrieval_timeout_secs),
+        live_retrieval_max_connectors: s("chat_pipeline.live_retrieval_max_connectors")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.live_retrieval_max_connectors),
+        live_retrieval_max_content_chars: s("chat_pipeline.live_retrieval_max_content_chars")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.live_retrieval_max_content_chars),
+        live_retrieval_llm: s("chat_pipeline.live_retrieval_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.live_retrieval_llm.clone()),
     }
 }
 
@@ -2635,6 +2665,12 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         personal_memory_decay_factor: eff.personal_memory_decay_factor,
         personal_memory_min_relevance: eff.personal_memory_min_relevance,
         personal_memory_llm: eff.personal_memory_llm.as_ref().map(llm_config_to_info),
+        // Live Source Retrieval
+        live_retrieval_enabled: eff.live_retrieval_enabled,
+        live_retrieval_timeout_secs: eff.live_retrieval_timeout_secs,
+        live_retrieval_max_connectors: eff.live_retrieval_max_connectors,
+        live_retrieval_max_content_chars: eff.live_retrieval_max_content_chars,
+        live_retrieval_llm: eff.live_retrieval_llm.as_ref().map(llm_config_to_info),
     }
 }
 
@@ -2839,6 +2875,23 @@ pub async fn update_chat_pipeline_config(
         personal_memory_min_relevance,
         "chat_pipeline.personal_memory_min_relevance"
     );
+    // Live Source Retrieval
+    persist_bool!(
+        live_retrieval_enabled,
+        "chat_pipeline.live_retrieval_enabled"
+    );
+    persist_num!(
+        live_retrieval_timeout_secs,
+        "chat_pipeline.live_retrieval_timeout_secs"
+    );
+    persist_num!(
+        live_retrieval_max_connectors,
+        "chat_pipeline.live_retrieval_max_connectors"
+    );
+    persist_num!(
+        live_retrieval_max_content_chars,
+        "chat_pipeline.live_retrieval_max_content_chars"
+    );
 
     // Helper: persist LLM config
     fn persist_chat_llm(
@@ -3015,6 +3068,14 @@ pub async fn update_chat_pipeline_config(
             eff.personal_memory_llm.clone(),
         )?;
     }
+    if let Some(ref u) = req.live_retrieval_llm {
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.live_retrieval_llm",
+            u,
+            eff.live_retrieval_llm.clone(),
+        )?;
+    }
 
     // Handle removal of LLM overrides
     macro_rules! remove_llm {
@@ -3098,6 +3159,11 @@ pub async fn update_chat_pipeline_config(
         personal_memory_llm,
         remove_personal_memory_llm,
         "chat_pipeline.personal_memory_llm"
+    );
+    remove_llm!(
+        live_retrieval_llm,
+        remove_live_retrieval_llm,
+        "chat_pipeline.live_retrieval_llm"
     );
 
     // Hot-reload

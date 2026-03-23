@@ -9,6 +9,7 @@ use thairag_agent::conversation_memory::ConversationMemory;
 use thairag_agent::corrective_rag::CorrectiveRag;
 use thairag_agent::graph_rag::GraphRag;
 use thairag_agent::language_adapter::LanguageAdapter;
+use thairag_agent::live_retrieval::LiveRetrieval;
 use thairag_agent::map_reduce::MapReduceRag;
 use thairag_agent::multimodal_rag::MultimodalRag;
 use thairag_agent::personal_memory::PersonalMemoryManager;
@@ -444,6 +445,66 @@ impl ProviderBundle {
                 None
             };
 
+            // Feature 16: Live Source Retrieval
+            let live_retrieval = if chat.live_retrieval_enabled {
+                // Use mcp config for timeouts if available, otherwise sensible defaults
+                let mcp_connect_timeout = std::time::Duration::from_secs(30);
+                let mcp_read_timeout = std::time::Duration::from_secs(120);
+                Some(LiveRetrieval::new(
+                    resolve_chat_agent_llm("live_retrieval", &chat.live_retrieval_llm),
+                    max_tok.min(512),
+                    std::time::Duration::from_secs(chat.live_retrieval_timeout_secs),
+                    chat.live_retrieval_max_connectors,
+                    chat.live_retrieval_max_content_chars,
+                    mcp_connect_timeout,
+                    mcp_read_timeout,
+                    Arc::clone(&prompts),
+                ))
+            } else {
+                None
+            };
+
+            #[allow(clippy::type_complexity)]
+            let connector_provider: Option<
+                Arc<
+                    dyn Fn(
+                            &thairag_core::permission::AccessScope,
+                        ) -> Vec<thairag_core::types::McpConnectorConfig>
+                        + Send
+                        + Sync,
+                >,
+            > = if chat.live_retrieval_enabled {
+                km_store.as_ref().map(|store| {
+                    let store = Arc::clone(store);
+                    Arc::new(
+                        move |scope: &thairag_core::permission::AccessScope| -> Vec<
+                            thairag_core::types::McpConnectorConfig,
+                        > {
+                            scope
+                                .workspace_ids
+                                .iter()
+                                .flat_map(|ws_id| {
+                                    store.list_connectors_for_workspace(*ws_id)
+                                })
+                                .filter(|c| {
+                                    c.status == thairag_core::types::ConnectorStatus::Active
+                                })
+                                .collect()
+                        },
+                    )
+                        as Arc<
+                            dyn Fn(
+                                    &thairag_core::permission::AccessScope,
+                                )
+                                    -> Vec<thairag_core::types::McpConnectorConfig>
+                                + Send
+                                + Sync,
+                        >
+                })
+            } else {
+                None
+            };
+
             let doc_resolver: Option<
                 Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>,
             > = km_store.as_ref().map(|store| {
@@ -477,6 +538,8 @@ impl ProviderBundle {
                 raptor,
                 colbert,
                 al,
+                live_retrieval,
+                connector_provider,
                 chat.clone(),
                 Arc::clone(&prompts),
                 doc_resolver,
