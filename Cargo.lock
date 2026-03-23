@@ -5521,6 +5521,7 @@ dependencies = [
  "serde_json",
  "thairag-config",
  "thairag-core",
+ "thairag-mcp",
  "thairag-provider-llm",
  "thairag-search",
  "thairag-thai",

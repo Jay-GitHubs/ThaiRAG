@@ -461,6 +461,12 @@ export interface ChatPipelineConfigResponse {
   personal_memory_decay_factor: number;
   personal_memory_min_relevance: number;
   personal_memory_llm?: LlmProviderInfo;
+  // Live Source Retrieval
+  live_retrieval_enabled: boolean;
+  live_retrieval_timeout_secs: number;
+  live_retrieval_max_connectors: number;
+  live_retrieval_max_content_chars: number;
+  live_retrieval_llm?: LlmProviderInfo;
 }
 
 export interface UpdateChatPipelineRequest {
@@ -581,6 +587,13 @@ export interface UpdateChatPipelineRequest {
   personal_memory_min_relevance?: number;
   personal_memory_llm?: LlmConfigUpdate;
   remove_personal_memory_llm?: boolean;
+  // Live Source Retrieval
+  live_retrieval_enabled?: boolean;
+  live_retrieval_timeout_secs?: number;
+  live_retrieval_max_connectors?: number;
+  live_retrieval_max_content_chars?: number;
+  live_retrieval_llm?: LlmConfigUpdate;
+  remove_live_retrieval_llm?: boolean;
 }
 
 // ── Feedback ─────────────────────────────────────────────────────────

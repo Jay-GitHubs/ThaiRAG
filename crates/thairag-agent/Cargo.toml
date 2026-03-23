@@ -22,3 +22,6 @@ reqwest = { workspace = true }
 
 [dependencies.thairag-provider-llm]
 path = "../thairag-provider-llm"
+
+[dependencies.thairag-mcp]
+path = "../thairag-mcp"

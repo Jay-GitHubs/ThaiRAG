@@ -293,6 +293,21 @@ fn connector_templates() -> Vec<ConnectorTemplate> {
             url: None,
             resource_filters: vec![],
         },
+        ConnectorTemplate {
+            id: "onedrive".into(),
+            name: "Microsoft OneDrive".into(),
+            description: "Sync documents from Microsoft OneDrive / SharePoint".into(),
+            transport: "stdio".into(),
+            command: Some("npx".into()),
+            args: vec!["-y".into(), "@anthropic/onedrive-mcp-server".into()],
+            env_keys: vec![
+                "MICROSOFT_CLIENT_ID".into(),
+                "MICROSOFT_CLIENT_SECRET".into(),
+                "MICROSOFT_TENANT_ID".into(),
+            ],
+            url: None,
+            resource_filters: vec![],
+        },
     ]
 }
 

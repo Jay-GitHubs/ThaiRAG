@@ -8,6 +8,7 @@ pub mod conversation_memory;
 pub mod corrective_rag;
 pub mod graph_rag;
 pub mod language_adapter;
+pub mod live_retrieval;
 pub mod map_reduce;
 pub mod multimodal_rag;
 pub mod orchestrator;

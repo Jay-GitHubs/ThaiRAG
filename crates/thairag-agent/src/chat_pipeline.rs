@@ -23,6 +23,7 @@ use crate::conversation_memory::{ConversationMemory, MemoryEntry};
 use crate::corrective_rag::{ContextAction, CorrectiveRag};
 use crate::graph_rag::{GraphRag, KnowledgeGraph};
 use crate::language_adapter::LanguageAdapter;
+use crate::live_retrieval::LiveRetrieval;
 use crate::map_reduce::MapReduceRag;
 use crate::multimodal_rag::MultimodalRag;
 use crate::pipeline_orchestrator::{PipelineOrchestrator, PipelineRoute, heuristic_decide};
@@ -35,6 +36,10 @@ use crate::response_generator::ResponseGenerator;
 use crate::self_rag::{RetrievalDecision, SelfRag};
 use crate::speculative_rag::SpeculativeRag;
 use crate::tool_router::{SearchableScope, ToolRouter};
+
+/// Closure that resolves MCP connector configs for a given access scope.
+type ConnectorProvider =
+    Arc<dyn Fn(&AccessScope) -> Vec<thairag_core::types::McpConnectorConfig> + Send + Sync>;
 
 /// Per-request LLM call budget. Shared across pipeline stages to enforce
 /// `max_llm_calls_per_request` and skip optional agents when budget runs low.
@@ -94,6 +99,10 @@ pub struct ChatPipeline {
     raptor: Option<Raptor>,
     colbert_reranker: Option<ColbertReranker>,
     active_learning: Option<Arc<ActiveLearning>>,
+    /// Live source retrieval from MCP connectors.
+    live_retrieval: Option<LiveRetrieval>,
+    /// Provider of MCP connector configs for a given access scope.
+    connector_provider: Option<ConnectorProvider>,
     /// In-memory knowledge graph built from document entity extraction.
     knowledge_graph: Arc<std::sync::RwLock<KnowledgeGraph>>,
     // Infrastructure
@@ -133,6 +142,8 @@ impl ChatPipeline {
         raptor: Option<Raptor>,
         colbert_reranker: Option<ColbertReranker>,
         active_learning: Option<Arc<ActiveLearning>>,
+        live_retrieval: Option<LiveRetrieval>,
+        connector_provider: Option<ConnectorProvider>,
         config: ChatPipelineConfig,
         prompts: Arc<PromptRegistry>,
         doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
@@ -159,6 +170,8 @@ impl ChatPipeline {
             raptor,
             colbert_reranker,
             active_learning,
+            live_retrieval,
+            connector_provider,
             knowledge_graph: Arc::new(std::sync::RwLock::new(KnowledgeGraph::default())),
             main_llm,
             search_engine,
@@ -209,6 +222,7 @@ impl ChatPipeline {
             "quality_guard" => cfg.quality_guard_llm.as_ref(),
             "language_adapter" => cfg.language_adapter_llm.as_ref(),
             "pipeline_orchestrator" => cfg.orchestrator_llm.as_ref(),
+            "live_retrieval" => cfg.live_retrieval_llm.as_ref(),
             "self_rag_gate"
             | "corrective_rag"
             | "speculative_rag"
@@ -595,6 +609,7 @@ impl ChatPipeline {
         self.execute_post_retrieval(
             user_query,
             messages,
+            scope,
             analysis,
             &results,
             context,
@@ -605,12 +620,13 @@ impl ChatPipeline {
         .await
     }
 
-    /// Post-retrieval pipeline stages (CRAG, RAPTOR, compression, generation, quality guard).
+    /// Post-retrieval pipeline stages (CRAG, live retrieval, RAPTOR, compression, generation, quality guard).
     #[allow(clippy::too_many_arguments)]
     async fn execute_post_retrieval(
         &self,
         user_query: &str,
         messages: &[ChatMessage],
+        scope: &AccessScope,
         analysis: &QueryAnalysis,
         results: &[thairag_core::types::SearchResult],
         context: CuratedContext,
@@ -642,6 +658,11 @@ impl ChatPipeline {
                 }
                 context
             };
+
+        // ── Live Source Retrieval: fetch from connectors if KB context insufficient ──
+        let context = self
+            .maybe_live_retrieve(user_query, scope, context, budget, progress)
+            .await?;
 
         // ── RAPTOR: build hierarchical summary tree (skip if budget low) ──
         let context = if let Some(ref raptor) = self.raptor {
@@ -1119,6 +1140,9 @@ impl ChatPipeline {
                 } else {
                     context
                 };
+                let context = self
+                    .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
+                    .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
                     return Ok(resp);
                 }
@@ -1179,6 +1203,9 @@ impl ChatPipeline {
                 } else {
                     context
                 };
+                let context = self
+                    .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
+                    .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
                     return Ok(resp);
                 }
@@ -1190,6 +1217,83 @@ impl ChatPipeline {
                     .await?;
                 Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
             }
+        }
+    }
+
+    /// Attempt live retrieval from MCP connectors when KB context is insufficient.
+    async fn maybe_live_retrieve(
+        &self,
+        query: &str,
+        scope: &AccessScope,
+        context: CuratedContext,
+        budget: &LlmBudget,
+        progress: &Option<ProgressSender>,
+    ) -> Result<CuratedContext> {
+        // Check if live retrieval is enabled and conditions are met
+        if !self.config.live_retrieval_enabled {
+            return Ok(context);
+        }
+        let live = match &self.live_retrieval {
+            Some(lr) => lr,
+            None => return Ok(context),
+        };
+        let connector_provider = match &self.connector_provider {
+            Some(cp) => cp,
+            None => return Ok(context),
+        };
+        if budget.remaining() < 2 {
+            debug!(
+                remaining = budget.remaining(),
+                "Pipeline: skipping live retrieval (budget low)"
+            );
+            return Ok(context);
+        }
+
+        // Check if context is actually insufficient
+        let is_empty = context.chunks.is_empty();
+        let avg_score = if context.chunks.is_empty() {
+            0.0
+        } else {
+            context
+                .chunks
+                .iter()
+                .map(|c| c.relevance_score)
+                .sum::<f32>()
+                / context.chunks.len() as f32
+        };
+        if !is_empty && avg_score >= 0.15 {
+            return Ok(context);
+        }
+
+        // Get active connectors for this scope
+        let connectors = connector_provider(scope);
+        if connectors.is_empty() {
+            debug!("Pipeline: no connectors available for live retrieval");
+            return Ok(context);
+        }
+
+        self.emit_progress(progress, "live_retrieval", StageStatus::Started, None);
+        let t = std::time::Instant::now();
+        budget.try_spend();
+
+        let live_context = live.fetch_live_context(query, &connectors).await?;
+
+        self.emit_progress(
+            progress,
+            "live_retrieval",
+            StageStatus::Done,
+            Some(t.elapsed().as_millis() as u64),
+        );
+
+        if live_context.chunks.is_empty() {
+            debug!("Pipeline: live retrieval returned no results");
+            Ok(context) // Keep original (even if poor)
+        } else {
+            info!(
+                chunks = live_context.chunks.len(),
+                "Pipeline: using live-retrieved context"
+            );
+            Ok(live_context)
         }
     }
 

@@ -355,6 +355,14 @@ Per-user memory that persists across sessions. The system extracts typed memorie
 - **Decay Factor** (InputNumber, 0.0–1.0) — Relevance decay rate applied periodically (default: 0.95)
 - **Min Relevance** (InputNumber, 0.0–1.0) — Minimum relevance score before a memory is pruned (default: 0.1)
 
+#### Live Source Retrieval
+When the knowledge base has no relevant documents, automatically fetch content from active MCP connectors (OneDrive, web pages, Slack, etc.) in real time. Requires at least one active connector in the workspace.
+- **Enabled** (Switch) — Turn on/off live source retrieval
+- **Timeout** (InputNumber, seconds) — Overall timeout for the retrieval stage (default: 15s)
+- **Max Connectors** (InputNumber) — Maximum connectors to query in parallel (default: 3)
+- **Max Content** (InputNumber, chars) — Maximum total characters to fetch across all connectors (default: 30,000)
+- **LLM Override** — Optional LLM for connector selection (only used when more connectors are available than max)
+
 ### Prompts Tab
 Manage system prompts:
 - View all prompt templates
@@ -484,6 +492,7 @@ The UI maps the following internal stage names to friendly labels:
 | `context_curator` | Context Curator | Scoring & selecting the best context |
 | `retrieval_refinement` | Retrieval Refinement | Refining retrieval with feedback signals |
 | `corrective_rag` | Corrective RAG | Checking & correcting retrieved context |
+| `live_retrieval` | Live Source Retrieval | Fetching from external sources (OneDrive, web, etc.) |
 | `raptor` | RAPTOR | Building hierarchical document summaries |
 | `contextual_compression` | Contextual Compression | Compressing context to key information |
 | `multimodal_rag` | Multi-modal RAG | Processing images & tables from documents |

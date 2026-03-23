@@ -12,7 +12,8 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Multi-Agent Chat Pipeline** — Configurable LLM assignment per agent (Use Chat LLM / Shared / Per-Agent modes) with fallback chain
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
-- **MCP Connectors** — Connect to external data sources (Confluence, Notion, GitHub, Slack, Google Drive, PostgreSQL, and more) via the Model Context Protocol with automatic sync scheduling, retry logic, and webhook notifications
+- **MCP Connectors** — Connect to external data sources (Confluence, Notion, GitHub, Slack, Google Drive, OneDrive, PostgreSQL, and more) via the Model Context Protocol with automatic sync scheduling, retry logic, and webhook notifications
+- **Live Source Retrieval** — When the knowledge base has no relevant results, automatically fetch content from active MCP connectors (OneDrive, web pages, Slack, etc.) in real time — no pre-embedding required
 - **Config Snapshots** — Save and restore full configuration with embedding fingerprint tracking for safe rollbacks
 - **Live Pipeline Stages** — Real-time SSE progress showing agent names and tasks during queries
 - **Chat Persistence** — Test chat history preserved across page navigation via sessionStorage

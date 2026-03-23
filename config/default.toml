@@ -54,6 +54,12 @@ text_weight = 0.4
 max_chunk_size = 512
 chunk_overlap = 64
 
+# [chat_pipeline]
+# live_retrieval_enabled = false
+# live_retrieval_timeout_secs = 15
+# live_retrieval_max_connectors = 3
+# live_retrieval_max_content_chars = 30000
+
 [mcp]
 enabled = false
 max_concurrent_syncs = 3
