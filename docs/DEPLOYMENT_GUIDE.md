@@ -336,6 +336,10 @@ cd admin-ui && npx playwright test
 | `chat_pipeline.personal_memory_max_per_user` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MAX_PER_USER` | `200` | Max memories stored per user |
 | `chat_pipeline.personal_memory_decay_factor` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_DECAY_FACTOR` | `0.95` | Relevance decay rate (0.0–1.0) |
 | `chat_pipeline.personal_memory_min_relevance` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MIN_RELEVANCE` | `0.1` | Prune memories below this score |
+| `chat_pipeline.live_retrieval_enabled` | `THAIRAG__CHAT_PIPELINE__LIVE_RETRIEVAL_ENABLED` | `false` | Auto-fetch from MCP connectors when KB has no results |
+| `chat_pipeline.live_retrieval_timeout_secs` | `THAIRAG__CHAT_PIPELINE__LIVE_RETRIEVAL_TIMEOUT_SECS` | `15` | Overall timeout for live retrieval stage |
+| `chat_pipeline.live_retrieval_max_connectors` | `THAIRAG__CHAT_PIPELINE__LIVE_RETRIEVAL_MAX_CONNECTORS` | `3` | Max connectors to query in parallel |
+| `chat_pipeline.live_retrieval_max_content_chars` | `THAIRAG__CHAT_PIPELINE__LIVE_RETRIEVAL_MAX_CONTENT_CHARS` | `30000` | Max total chars fetched from all connectors |
 
 ### MCP Connectors
 

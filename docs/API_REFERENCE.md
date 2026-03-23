@@ -502,7 +502,7 @@ List available connector templates (presets for common MCP servers).
 ]
 ```
 
-Available templates: `filesystem`, `fetch`, `postgres`, `sqlite`, `github`, `slack`, `google-drive`, `notion`, `confluence`.
+Available templates: `filesystem`, `fetch`, `postgres`, `sqlite`, `github`, `slack`, `google-drive`, `notion`, `confluence`, `onedrive`.
 
 #### `POST /api/km/connectors/from-template`
 Create a connector from a template.
@@ -735,7 +735,12 @@ Get chat pipeline configuration. Response includes LLM mode, per-agent LLM confi
   "personal_memory_top_k": 5,
   "personal_memory_max_per_user": 200,
   "personal_memory_decay_factor": 0.95,
-  "personal_memory_min_relevance": 0.1
+  "personal_memory_min_relevance": 0.1,
+  "live_retrieval_enabled": false,
+  "live_retrieval_timeout_secs": 15,
+  "live_retrieval_max_connectors": 3,
+  "live_retrieval_max_content_chars": 30000,
+  "live_retrieval_llm": null
 }
 ```
 
@@ -759,7 +764,12 @@ Update chat pipeline configuration. All fields are optional — only send fields
   "personal_memory_top_k": 5,
   "personal_memory_max_per_user": 200,
   "personal_memory_decay_factor": 0.95,
-  "personal_memory_min_relevance": 0.1
+  "personal_memory_min_relevance": 0.1,
+  "live_retrieval_enabled": true,
+  "live_retrieval_timeout_secs": 15,
+  "live_retrieval_max_connectors": 3,
+  "live_retrieval_max_content_chars": 30000,
+  "live_retrieval_llm": { "kind": "ollama", "model": "qwen3:4b" }
 }
 ```
 

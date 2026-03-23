@@ -3023,3 +3023,160 @@ When the chat pipeline is enabled with multiple agents, processing can take 60+ 
 4. The user should have unrestricted access to all workspaces
 
 **Pass criteria:** All workspace content is accessible regardless of user permissions — confirming that without the header forwarding, the shared API key grants full access.
+
+## 20. Live Source Retrieval
+
+Live Source Retrieval automatically fetches content from MCP connectors when the knowledge base has no relevant results for a query. This avoids the "I don't have enough information" response by querying external sources (OneDrive, web pages, Slack, etc.) in real time.
+
+### 20.1 Prerequisites
+
+- At least one MCP connector configured and in **Active** status (e.g., web fetch, OneDrive)
+- Live Source Retrieval enabled in Admin UI → Settings → Chat Pipeline → Live Source Retrieval
+- An empty or minimal knowledge base (no documents uploaded, or documents unrelated to the test query)
+
+### 20.2 Enable Live Retrieval via Admin UI
+
+1. Open Admin UI → Settings → Chat Pipeline
+2. Scroll to the **Live Source Retrieval** section
+3. Toggle **Enable Live Source Retrieval** to ON
+4. Configure settings:
+   - **Timeout**: 15 seconds (default) — overall deadline for all connector fetches
+   - **Max Connectors**: 3 (default) — limits how many connectors are queried in parallel
+   - **Max Content**: 30,000 chars (default) — total content budget across all connectors
+5. Optionally assign a lightweight LLM (e.g., `qwen3:4b`) for connector selection
+6. Click **Save**
+
+### 20.3 Enable Live Retrieval via API
+
+```bash
+curl -X PUT http://localhost:8080/api/km/settings/chat-pipeline \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "live_retrieval_enabled": true,
+    "live_retrieval_timeout_secs": 15,
+    "live_retrieval_max_connectors": 3,
+    "live_retrieval_max_content_chars": 30000
+  }'
+```
+
+### 20.4 Test with Web Fetch Connector
+
+This is the easiest way to test live retrieval since it requires no external credentials.
+
+1. Create a web fetch connector:
+```bash
+curl -X POST http://localhost:8080/api/km/connectors/from-template \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "template_id": "fetch",
+    "workspace_id": "<your-workspace-id>",
+    "name": "Web Fetch Test",
+    "env_vars": {}
+  }'
+```
+
+2. Ensure no documents are uploaded to the workspace (or ask about a topic not covered by existing documents)
+
+3. Send a chat query:
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "model": "ThaiRAG-1.0",
+    "messages": [{"role": "user", "content": "What is the latest news about Rust programming language?"}],
+    "stream": true
+  }'
+```
+
+**Pass criteria:**
+- The response includes content fetched from external sources instead of "I don't have enough information"
+- In streaming mode, you see a `pipeline_progress` event for `live_retrieval` stage (started → completed)
+- The response cites the connector source
+
+### 20.5 Test Pipeline Stages (SSE Streaming)
+
+Use the Test Chat page in Admin UI or the test-query-stream endpoint to observe live retrieval in the pipeline stages visualization.
+
+1. Open Admin UI → Test Chat
+2. Select a workspace with an active connector but no relevant documents
+3. Ask a question that the KB cannot answer
+4. Observe the pipeline stages panel — you should see:
+   - Query Analysis → completed
+   - Retrieval → completed (with low/zero results)
+   - **Live Source Retrieval** → started → completed (with duration)
+   - Response Generation → completed
+
+### 20.6 Test OneDrive Connector Template
+
+1. Verify the OneDrive template is available:
+```bash
+curl http://localhost:8080/api/km/connectors/templates \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | select(.id == "onedrive")'
+```
+
+**Expected output:**
+```json
+{
+  "id": "onedrive",
+  "name": "Microsoft OneDrive",
+  "description": "Sync documents from Microsoft OneDrive / SharePoint",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@anthropic/onedrive-mcp-server"],
+  "env_keys": ["MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT_ID"]
+}
+```
+
+2. Create a connector from the template (requires Microsoft Azure AD app registration):
+```bash
+curl -X POST http://localhost:8080/api/km/connectors/from-template \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "template_id": "onedrive",
+    "workspace_id": "<your-workspace-id>",
+    "name": "My OneDrive",
+    "env_vars": {
+      "MICROSOFT_CLIENT_ID": "<client-id>",
+      "MICROSOFT_CLIENT_SECRET": "<client-secret>",
+      "MICROSOFT_TENANT_ID": "<tenant-id>"
+    }
+  }'
+```
+
+### 20.7 Test Timeout and Error Handling
+
+1. Set a very short timeout (2 seconds):
+```bash
+curl -X PUT http://localhost:8080/api/km/settings/chat-pipeline \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"live_retrieval_timeout_secs": 2}'
+```
+
+2. Query with a connector that takes longer than 2 seconds to respond
+
+**Pass criteria:**
+- The pipeline does not hang — it times out gracefully after 2 seconds
+- The response falls back to "I don't have enough information" or uses whatever partial results were fetched
+- No server errors or panics in the logs
+
+### 20.8 Test with Feature Disabled
+
+1. Disable live retrieval:
+```bash
+curl -X PUT http://localhost:8080/api/km/settings/chat-pipeline \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"live_retrieval_enabled": false}'
+```
+
+2. Query with an empty knowledge base
+
+**Pass criteria:**
+- No `live_retrieval` pipeline stage appears
+- The response is the standard "I don't have enough information" message
+- Zero additional latency from live retrieval

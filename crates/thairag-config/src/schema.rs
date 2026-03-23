@@ -684,6 +684,23 @@ pub struct ChatPipelineConfig {
     /// Separate LLM for memory extraction (uses main LLM if not set).
     #[serde(default)]
     pub personal_memory_llm: Option<LlmConfig>,
+
+    // ── Feature: Live Source Retrieval ──
+    /// Enable live retrieval from MCP connectors when vector DB has no results.
+    #[serde(default)]
+    pub live_retrieval_enabled: bool,
+    /// Overall timeout (seconds) for the live retrieval stage.
+    #[serde(default = "default_live_retrieval_timeout_secs")]
+    pub live_retrieval_timeout_secs: u64,
+    /// Max number of MCP connectors to query in parallel.
+    #[serde(default = "default_live_retrieval_max_connectors")]
+    pub live_retrieval_max_connectors: u32,
+    /// Max total characters of content to fetch from all connectors combined.
+    #[serde(default = "default_live_retrieval_max_content_chars")]
+    pub live_retrieval_max_content_chars: usize,
+    /// Separate LLM for connector selection (uses main LLM if not set).
+    #[serde(default)]
+    pub live_retrieval_llm: Option<LlmConfig>,
 }
 
 fn default_max_chat_orchestrator_calls() -> u32 {
@@ -797,6 +814,15 @@ fn default_personal_memory_decay_factor() -> f32 {
 fn default_personal_memory_min_relevance() -> f32 {
     0.1
 }
+fn default_live_retrieval_timeout_secs() -> u64 {
+    15
+}
+fn default_live_retrieval_max_connectors() -> u32 {
+    3
+}
+fn default_live_retrieval_max_content_chars() -> usize {
+    30_000
+}
 
 impl Default for ChatPipelineConfig {
     fn default() -> Self {
@@ -895,6 +921,12 @@ impl Default for ChatPipelineConfig {
             personal_memory_decay_factor: default_personal_memory_decay_factor(),
             personal_memory_min_relevance: default_personal_memory_min_relevance(),
             personal_memory_llm: None,
+            // Live Source Retrieval
+            live_retrieval_enabled: false,
+            live_retrieval_timeout_secs: default_live_retrieval_timeout_secs(),
+            live_retrieval_max_connectors: default_live_retrieval_max_connectors(),
+            live_retrieval_max_content_chars: default_live_retrieval_max_content_chars(),
+            live_retrieval_llm: None,
         }
     }
 }

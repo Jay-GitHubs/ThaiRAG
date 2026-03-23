@@ -118,11 +118,13 @@ RAG orchestrator with multi-agent pipeline:
   - **Per-Agent** — Each agent (Query Analyzer, Retriever, Response Generator, etc.) can have its own LLM, with fallback to shared → main LLM Provider
 - **Context compaction** — Automatic summarization of older messages when conversation approaches the model's context window limit (Claude Code-style). Uses Thai-aware token estimation (~2 chars/token for Thai, ~4 chars/token for English)
 - **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
+- **Live source retrieval** — When the knowledge base returns no relevant results (empty context or avg relevance < 0.15), the pipeline automatically fetches content from active MCP connectors in real time. Uses `LiveRetrieval` agent to connect to configured connectors (OneDrive, web fetch, Slack, etc.) in parallel, read resources, and build a `CuratedContext` for the response generator. If more connectors than `max_connectors` are available, an LLM selects the most relevant ones
 
 ### thairag-mcp
 MCP (Model Context Protocol) integration for connecting to external data sources:
 - **RmcpClient**: MCP client supporting stdio (child process) and streamable HTTP transports via the `rmcp` SDK
-- **SyncEngine**: Orchestrates sync runs — connect, discover resources, content-hash for deduplication, ingest via document pipeline, track state. Includes retry with exponential backoff.
+- **SyncEngine**: Orchestrates sync runs — connect, discover resources, content-hash for deduplication, ingest via document pipeline, track state. Includes retry with exponential backoff
+- **Live retrieval support**: `RmcpClient` is also used by the `thairag-agent::LiveRetrieval` agent for query-time fetching from connectors when the knowledge base has no results
 - **SyncScheduler**: Background cron-based scheduler using `CancellationToken` for graceful shutdown
 - **Webhook**: POST notifications to configured URLs after sync completion/failure
 - Dependencies: `rmcp`, `sha2`, `cron`, `tokio-util`

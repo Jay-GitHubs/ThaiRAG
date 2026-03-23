@@ -360,6 +360,16 @@ const featureLlmRecommendations: Record<string, FeatureLlmInfo> = {
       { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
     ],
   },
+  live_retrieval: {
+    llmTip: 'Selects relevant connectors when many are available. Light task — only runs when >3 connectors.',
+    taskWeight: 'Light',
+    recommended: [
+      { provider: 'Ollama', model: 'qwen3:4b', note: 'Free, fast' },
+      { provider: 'OpenAI', model: 'gpt-4.1-nano', note: 'Cheapest' },
+      { provider: 'Claude', model: 'claude-haiku-4-20250414', note: 'Fast & cheap' },
+      { provider: 'Gemini', model: 'gemini-2.0-flash', note: 'Fast' },
+    ],
+  },
 };
 
 function FeatureLlmHints({ featureKey }: { featureKey: string }) {
@@ -606,6 +616,12 @@ export function ChatPipelineCard() {
   const [personalMemoryDecayFactor, setPersonalMemoryDecayFactor] = useState(0.95);
   const [personalMemoryMinRelevance, setPersonalMemoryMinRelevance] = useState(0.1);
 
+  // Live Source Retrieval
+  const [liveRetrievalEnabled, setLiveRetrievalEnabled] = useState(false);
+  const [liveRetrievalTimeoutSecs, setLiveRetrievalTimeoutSecs] = useState(15);
+  const [liveRetrievalMaxConnectors, setLiveRetrievalMaxConnectors] = useState(3);
+  const [liveRetrievalMaxContentChars, setLiveRetrievalMaxContentChars] = useState(30000);
+
   // Sync state
   const [syncedModels, setSyncedModels] = useState<AvailableModel[] | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -657,6 +673,7 @@ export function ChatPipelineCard() {
       const featureLlmKeys = [
         'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
         'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+        'live_retrieval',
       ] as const;
       for (const k of featureLlmKeys) {
         const llmInfo = data[`${k}_llm` as keyof ChatPipelineConfigResponse] as LlmProviderInfo | undefined;
@@ -715,6 +732,10 @@ export function ChatPipelineCard() {
       setPersonalMemoryMaxPerUser(data.personal_memory_max_per_user);
       setPersonalMemoryDecayFactor(data.personal_memory_decay_factor);
       setPersonalMemoryMinRelevance(data.personal_memory_min_relevance);
+      setLiveRetrievalEnabled(data.live_retrieval_enabled);
+      setLiveRetrievalTimeoutSecs(data.live_retrieval_timeout_secs);
+      setLiveRetrievalMaxConnectors(data.live_retrieval_max_connectors);
+      setLiveRetrievalMaxContentChars(data.live_retrieval_max_content_chars);
 
       // Load feedback stats if adaptive threshold is relevant
       try {
@@ -810,6 +831,11 @@ export function ChatPipelineCard() {
         personal_memory_max_per_user: personalMemoryMaxPerUser,
         personal_memory_decay_factor: personalMemoryDecayFactor,
         personal_memory_min_relevance: personalMemoryMinRelevance,
+        // Live Source Retrieval
+        live_retrieval_enabled: liveRetrievalEnabled,
+        live_retrieval_timeout_secs: liveRetrievalTimeoutSecs,
+        live_retrieval_max_connectors: liveRetrievalMaxConnectors,
+        live_retrieval_max_content_chars: liveRetrievalMaxContentChars,
       };
 
       // LLM configs based on mode
@@ -856,6 +882,7 @@ export function ChatPipelineCard() {
       const featureLlmKeys = [
         'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
         'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
+        'live_retrieval',
       ] as const;
       for (const stateKey of featureLlmKeys) {
         const form = featureLlms[stateKey];
@@ -1880,6 +1907,48 @@ export function ChatPipelineCard() {
                       </Space>
                     )}
                     {featureLlmForm('personal_memory', personalMemoryEnabled)}
+                  </Space>
+                ),
+              },
+              {
+                key: 'live_retrieval',
+                label: (
+                  <Space>
+                    <span>Live Source Retrieval</span>
+                    <Switch size="small" checked={liveRetrievalEnabled} onChange={setLiveRetrievalEnabled} onClick={(_, e) => e.stopPropagation()} />
+                    <Tag color={liveRetrievalEnabled ? 'green' : 'default'}>{liveRetrievalEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('live_retrieval', liveRetrievalEnabled)}
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <Paragraph style={{ margin: 0 }}>
+                      When the knowledge base has no relevant documents, automatically fetch content from configured MCP
+                      connectors (OneDrive, web pages, Slack, etc.) in real time. Requires at least one active connector.
+                    </Paragraph>
+                    {liveRetrievalEnabled && (
+                      <Space size="large" wrap>
+                        <Tooltip title="Overall timeout in seconds for the live retrieval stage">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Timeout (seconds) <QuestionCircleOutlined /></Text>
+                            <InputNumber min={5} max={60} value={liveRetrievalTimeoutSecs} onChange={v => setLiveRetrievalTimeoutSecs(v ?? 15)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Maximum number of connectors to query in parallel">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Max Connectors <QuestionCircleOutlined /></Text>
+                            <InputNumber min={1} max={10} value={liveRetrievalMaxConnectors} onChange={v => setLiveRetrievalMaxConnectors(v ?? 3)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        <Tooltip title="Maximum total characters of content to fetch from all connectors">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Max Content (chars) <QuestionCircleOutlined /></Text>
+                            <InputNumber min={5000} max={100000} step={5000} value={liveRetrievalMaxContentChars} onChange={v => setLiveRetrievalMaxContentChars(v ?? 30000)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                      </Space>
+                    )}
+                    {featureLlmForm('live_retrieval', liveRetrievalEnabled)}
                   </Space>
                 ),
               },
