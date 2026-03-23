@@ -126,7 +126,7 @@ impl QueryAnalyzer {
             Ok(resp) => {
                 let content = resp.content.trim();
                 // Try to extract JSON from response (handle markdown code blocks)
-                let json_str = extract_json(content);
+                let json_str = thairag_core::extract_json(content);
                 match serde_json::from_str::<LlmAnalysis>(json_str) {
                     Ok(a) => {
                         debug!(language = %a.language, intent = %a.intent, "Query analyzed by LLM");
@@ -144,16 +144,6 @@ impl QueryAnalyzer {
             }
         }
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    // Handle ```json ... ``` wrapping
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn parse_llm_analysis(a: LlmAnalysis) -> QueryAnalysis {

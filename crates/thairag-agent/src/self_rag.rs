@@ -107,7 +107,7 @@ impl SelfRag {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<SelfRagOutput>(json_str) {
                     Ok(output) => {
                         debug!(
@@ -145,15 +145,6 @@ struct SelfRagOutput {
     confidence: f32,
     #[serde(default)]
     reason: String,
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn truncate(s: &str, max: usize) -> &str {

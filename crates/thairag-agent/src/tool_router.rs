@@ -169,7 +169,7 @@ Output ONLY valid JSON array.";
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json_array(resp.content.trim());
+                let json_str = thairag_core::extract_json_array(resp.content.trim());
                 match serde_json::from_str::<Vec<ToolCall>>(json_str) {
                     Ok(calls) if !calls.is_empty() => {
                         debug!(calls = calls.len(), "Tool router: LLM planned");
@@ -272,13 +272,4 @@ fn deduplicate(results: &mut Vec<SearchResult>) {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     *results = keep;
-}
-
-fn extract_json_array(s: &str) -> &str {
-    if let Some(start) = s.find('[')
-        && let Some(end) = s.rfind(']')
-    {
-        return &s[start..=end];
-    }
-    s
 }

@@ -88,7 +88,7 @@ impl ConversationMemory {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmMemory>(json_str) {
                     Ok(m) => {
                         debug!(topics = ?m.topics, "Conversation summarized");
@@ -155,13 +155,4 @@ struct LlmMemory {
     summary: String,
     #[serde(default)]
     topics: Vec<String>,
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }

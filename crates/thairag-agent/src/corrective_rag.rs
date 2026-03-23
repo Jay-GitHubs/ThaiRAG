@@ -140,7 +140,7 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<CragOutput>(json_str) {
                     Ok(output) => {
                         debug!(
@@ -291,15 +291,6 @@ struct WebSearchApiResult {
     url: String,
     #[serde(default)]
     snippet: String,
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn truncate(s: &str, max: usize) -> String {

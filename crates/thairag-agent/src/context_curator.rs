@@ -125,7 +125,7 @@ impl ContextCurator {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmCuration>(json_str) {
                     Ok(c) => {
                         debug!(selected = c.selected.len(), "Chunks curated by LLM");
@@ -145,15 +145,6 @@ impl ContextCurator {
 
         build_curated_context(results, &selected_indices, self.max_context_tokens)
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 /// Estimate token count (rough: 4 chars/token English, 2 chars/token Thai).

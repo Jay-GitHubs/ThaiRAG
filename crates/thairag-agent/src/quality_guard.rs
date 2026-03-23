@@ -143,7 +143,7 @@ impl QualityGuard {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmVerdict>(json_str) {
                     Ok(v) => {
                         debug!(
@@ -185,13 +185,4 @@ impl QualityGuard {
             }
         }
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
