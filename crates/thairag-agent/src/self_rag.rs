@@ -157,7 +157,7 @@ fn extract_json(s: &str) -> &str {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    thairag_core::safe_truncate(s, max)
 }
 
 /// Heuristic fallback for Self-RAG when no LLM is available.
