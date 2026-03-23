@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use axum::extract::{Path, State};
+use axum::http::header;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
@@ -327,8 +328,13 @@ pub async fn test_query_stream(
     Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
     AppJson(req): AppJson<TestQueryRequest>,
-) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError>
-{
+) -> Result<
+    (
+        header::HeaderMap,
+        Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>,
+    ),
+    ApiError,
+> {
     let total_start = Instant::now();
 
     // Validate
@@ -608,7 +614,16 @@ pub async fn test_query_stream(
         yield Ok(Event::default().data("[DONE]"));
     };
 
-    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+    // X-Accel-Buffering: no tells reverse proxies (nginx, Cloudflare, etc.)
+    // to pass SSE events through immediately instead of buffering them.
+    let mut headers = header::HeaderMap::new();
+    headers.insert("X-Accel-Buffering", "no".parse().unwrap());
+    headers.insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+
+    Ok((
+        headers,
+        Sse::new(sse_stream).keep_alive(KeepAlive::default()),
+    ))
 }
 
 /// Merge started+done progress events into a single entry per stage.
