@@ -117,12 +117,12 @@ impl LlmProvider for OllamaProvider {
             ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}"))
         })?;
 
-        let content = json["message"]["content"]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| {
-                ThaiRagError::LlmProvider("Missing content in Ollama response".into())
-            })?;
+        let raw_content = json["message"]["content"].as_str().ok_or_else(|| {
+            ThaiRagError::LlmProvider("Missing content in Ollama response".into())
+        })?;
+
+        // Strip <think>...</think> blocks (Qwen3, DeepSeek-R1, etc.)
+        let content = thairag_core::strip_thinking_tags(raw_content);
 
         let usage = LlmUsage {
             prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,
@@ -175,6 +175,8 @@ impl LlmProvider for OllamaProvider {
         let mut byte_stream = resp.bytes_stream();
         let stream = try_stream! {
             let mut buf = String::new();
+            let mut in_thinking = false; // Track <think> blocks in stream
+
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = chunk
                     .map_err(|e| ThaiRagError::LlmProvider(format!("Ollama stream read error: {e}")))?;
@@ -203,6 +205,24 @@ impl LlmProvider for OllamaProvider {
                     if let Some(content) = json["message"]["content"].as_str()
                         && !content.is_empty()
                     {
+                        // Suppress <think>...</think> tokens from stream
+                        if content.contains("<think>") {
+                            in_thinking = true;
+                            continue;
+                        }
+                        if in_thinking {
+                            if content.contains("</think>") {
+                                in_thinking = false;
+                                // Emit any text after </think> on the same token
+                                if let Some(after) = content.split("</think>").nth(1) {
+                                    let trimmed = after.trim();
+                                    if !trimmed.is_empty() {
+                                        yield trimmed.to_string();
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         yield content.to_string();
                     }
                 }
@@ -294,12 +314,12 @@ impl LlmProvider for OllamaProvider {
             ThaiRagError::LlmProvider(format!("Failed to parse Ollama response: {e}"))
         })?;
 
-        let content = json["message"]["content"]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| {
-                ThaiRagError::LlmProvider("Missing content in Ollama response".into())
-            })?;
+        let raw_content = json["message"]["content"].as_str().ok_or_else(|| {
+            ThaiRagError::LlmProvider("Missing content in Ollama response".into())
+        })?;
+
+        // Strip <think>...</think> blocks (Qwen3, DeepSeek-R1, etc.)
+        let content = thairag_core::strip_thinking_tags(raw_content);
 
         let usage = LlmUsage {
             prompt_tokens: json["prompt_eval_count"].as_u64().unwrap_or(0) as u32,

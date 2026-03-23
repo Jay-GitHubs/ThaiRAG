@@ -126,7 +126,7 @@ impl PipelineOrchestrator {
         let content = resp.content.trim();
 
         // Extract JSON
-        let json_str = extract_json(content);
+        let json_str = thairag_core::extract_json(content);
         match serde_json::from_str::<LlmRouteDecision>(json_str) {
             Ok(decision) => {
                 let route = parse_route(&decision.route);
@@ -168,13 +168,4 @@ fn parse_route(s: &str) -> PipelineRoute {
         "complex_pipeline" | "complex" => PipelineRoute::ComplexPipeline,
         _ => PipelineRoute::FullPipeline,
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }

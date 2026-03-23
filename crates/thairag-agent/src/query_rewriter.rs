@@ -130,7 +130,7 @@ impl QueryRewriter {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmRewrite>(json_str) {
                     Ok(r) => {
                         debug!(primary = %r.primary, sub_queries = r.sub_queries.len(), "Query rewritten by LLM");
@@ -187,7 +187,7 @@ impl QueryRewriter {
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<LlmRewrite>(json_str) {
                     Ok(r) => {
                         debug!(primary = %r.primary, "Query rewritten with feedback");
@@ -214,15 +214,6 @@ impl QueryRewriter {
             }
         }
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 /// Heuristic fallback: use existing orchestrator normalize logic.

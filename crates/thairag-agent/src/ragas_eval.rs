@@ -150,7 +150,7 @@ Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 #[derive(Deserialize)]
                 struct F {
                     faithfulness: f32,
@@ -196,7 +196,7 @@ Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 #[derive(Deserialize)]
                 struct R {
                     relevancy: f32,
@@ -242,7 +242,7 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 #[derive(Deserialize)]
                 struct P {
                     precision: f32,
@@ -263,15 +263,6 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
     pub fn total_evaluations(&self) -> u64 {
         self.eval_counter.load(Ordering::Relaxed)
     }
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn truncate(s: &str, max: usize) -> String {

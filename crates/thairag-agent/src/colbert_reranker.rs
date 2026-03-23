@@ -138,7 +138,7 @@ async fn score_passage(
     };
 
     let resp = llm.generate(&[system, user], Some(max_tokens)).await?;
-    let json_str = extract_json(resp.content.trim());
+    let json_str = thairag_core::extract_json(resp.content.trim());
 
     #[derive(Deserialize)]
     struct Score {
@@ -154,15 +154,6 @@ async fn score_passage(
 
 fn default_half() -> f32 {
     0.5
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn truncate(s: &str, max: usize) -> String {

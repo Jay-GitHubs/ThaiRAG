@@ -172,7 +172,7 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
             .await
         {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 match serde_json::from_str::<ExtractionResult>(json_str) {
                     Ok(result) => {
                         debug!(
@@ -209,7 +209,7 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
 
         match self.llm.generate(&[system, user], Some(128)).await {
             Ok(resp) => {
-                let json_str = extract_json(resp.content.trim());
+                let json_str = thairag_core::extract_json(resp.content.trim());
                 #[derive(Deserialize)]
                 struct QE {
                     entities: Vec<String>,
@@ -277,15 +277,6 @@ pub struct ExtractionResult {
     pub entities: Vec<Entity>,
     #[serde(default)]
     pub relationships: Vec<Relationship>,
-}
-
-fn extract_json(s: &str) -> &str {
-    if let Some(start) = s.find('{')
-        && let Some(end) = s.rfind('}')
-    {
-        return &s[start..=end];
-    }
-    s
 }
 
 fn truncate(s: &str, max: usize) -> String {
