@@ -28,7 +28,7 @@ use crate::map_reduce::MapReduceRag;
 use crate::multimodal_rag::MultimodalRag;
 use crate::pipeline_orchestrator::{PipelineOrchestrator, PipelineRoute, heuristic_decide};
 use crate::quality_guard::QualityGuard;
-use crate::query_analyzer::{self, QueryAnalysis, QueryAnalyzer};
+use crate::query_analyzer::{self, QueryAnalysis, QueryAnalyzer, QueryLanguage};
 use crate::query_rewriter::{self, QueryRewriter, RewrittenQueries};
 use crate::ragas_eval::RagasEvaluator;
 use crate::raptor::Raptor;
@@ -253,6 +253,7 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
     ) -> Result<LlmResponse> {
+        let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
 
         // Inject memory context if available
@@ -261,58 +262,75 @@ impl ChatPipeline {
 
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
-        // ── Agent 1: Query Analyzer ──
+        // ── Agent 1: Query Analyzer + Self-RAG gate (concurrent) ──
         self.emit_progress(&progress, "query_analyzer", StageStatus::Started, None);
+        self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
         let t = Instant::now();
-        let analysis = self
-            .run_analyzer_budgeted(user_query, messages, &budget)
-            .await?;
+        let (analysis, self_rag_decision) = tokio::join!(
+            self.run_analyzer_budgeted(user_query, messages, &budget),
+            async {
+                if let Some(ref self_rag) = self.self_rag
+                    && budget.try_spend()
+                {
+                    return self_rag.should_retrieve(user_query, messages).await.ok();
+                }
+                None
+            }
+        );
+        let analysis = analysis?;
+        let analyzer_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             &progress,
             "query_analyzer",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(analyzer_ms),
+        );
+        info!(
+            stage = "query_analyzer",
+            duration_ms = analyzer_ms,
+            "Pipeline stage complete"
+        );
+        self.emit_progress(
+            &progress,
+            "self_rag_gate",
+            StageStatus::Done,
+            Some(analyzer_ms),
+        );
+        info!(
+            stage = "self_rag_gate",
+            duration_ms = analyzer_ms,
+            "Pipeline stage complete"
         );
         debug!(intent = ?analysis.intent, language = ?analysis.language, "Pipeline: analyzed");
 
-        // ── Self-RAG gate: skip retrieval if not needed ──
-        if let Some(ref self_rag) = self.self_rag {
-            if budget.try_spend() {
-                self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
-                let t = Instant::now();
-                if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
-                    self_rag.should_retrieve(user_query, messages).await
-                {
-                    self.emit_progress(
-                        &progress,
-                        "self_rag_gate",
-                        StageStatus::Done,
-                        Some(t.elapsed().as_millis() as u64),
-                    );
-                    info!(confidence, "Self-RAG: skipping retrieval");
-                    self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
-                    let t2 = Instant::now();
-                    budget.try_spend(); // count the generation call
-                    let response = self.main_llm.generate(messages, None).await?;
-                    self.emit_progress(
-                        &progress,
-                        "response_generator",
-                        StageStatus::Done,
-                        Some(t2.elapsed().as_millis() as u64),
-                    );
-                    self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
-                        .await;
-                    return self.maybe_adapt(response, &analysis).await;
-                }
-                self.emit_progress(
-                    &progress,
-                    "self_rag_gate",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
-                );
-            } else {
-                debug!("Pipeline: skipping self_rag (budget exhausted)");
-            }
+        // ── Handle Self-RAG decision ──
+        if let Some(RetrievalDecision::NoRetrieve { confidence }) = self_rag_decision.as_ref() {
+            info!(confidence, "Self-RAG: skipping retrieval");
+            self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+            let t2 = Instant::now();
+            budget.try_spend(); // count the generation call
+            let response = self.main_llm.generate(messages, None).await?;
+            let gen_ms = t2.elapsed().as_millis() as u64;
+            self.emit_progress(
+                &progress,
+                "response_generator",
+                StageStatus::Done,
+                Some(gen_ms),
+            );
+            info!(
+                stage = "response_generator",
+                duration_ms = gen_ms,
+                "Pipeline stage complete"
+            );
+            self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
+                .await;
+            let result = self.maybe_adapt(response, &analysis).await;
+            info!(
+                total_ms = pipeline_start.elapsed().as_millis() as u64,
+                remaining_budget = budget.remaining(),
+                "Pipeline: complete"
+            );
+            return result;
         }
 
         // ── Orchestrator: decide route ──
@@ -329,11 +347,17 @@ impl ChatPipeline {
             // Budget exhausted, use heuristic routing (no LLM call)
             heuristic_decide(&analysis)
         };
+        let orch_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             &progress,
             "pipeline_orchestrator",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(orch_ms),
+        );
+        info!(
+            stage = "pipeline_orchestrator",
+            duration_ms = orch_ms,
+            "Pipeline stage complete"
         );
         // When the user is querying within a workspace context, force retrieval
         // unless the query is clearly a greeting/thanks/meta question.
@@ -351,7 +375,7 @@ impl ChatPipeline {
 
         info!(route = ?route, remaining_budget = budget.remaining(), "Pipeline: orchestrator decided");
 
-        match route {
+        let result = match route {
             PipelineRoute::DirectLlm => match analysis.intent {
                 QueryIntent::Clarification => Ok(LlmResponse {
                     content: "Could you please provide more details about your question?".into(),
@@ -361,11 +385,17 @@ impl ChatPipeline {
                     self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
                     let t = Instant::now();
                     let resp = self.main_llm.generate(messages, None).await?;
+                    let gen_ms = t.elapsed().as_millis() as u64;
                     self.emit_progress(
                         &progress,
                         "response_generator",
                         StageStatus::Done,
-                        Some(t.elapsed().as_millis() as u64),
+                        Some(gen_ms),
+                    );
+                    info!(
+                        stage = "response_generator",
+                        duration_ms = gen_ms,
+                        "Pipeline stage complete"
                     );
                     Ok(resp)
                 }
@@ -377,11 +407,12 @@ impl ChatPipeline {
                 let results = self
                     .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
                     .await?;
-                self.emit_progress(
-                    &progress,
-                    "search",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let search_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(&progress, "search", StageStatus::Done, Some(search_ms));
+                info!(
+                    stage = "search",
+                    duration_ms = search_ms,
+                    "Pipeline stage complete"
                 );
                 debug!(results = results.len(), "Pipeline(simple): searched");
 
@@ -390,11 +421,17 @@ impl ChatPipeline {
                 let context = self
                     .run_curator_budgeted(user_query, &results, &budget)
                     .await?;
+                let curator_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
                     "context_curator",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(curator_ms),
+                );
+                info!(
+                    stage = "context_curator",
+                    duration_ms = curator_ms,
+                    "Pipeline stage complete"
                 );
 
                 // Retrieval refinement (budget-aware: skip if < 2 calls remain)
@@ -418,11 +455,17 @@ impl ChatPipeline {
                     .response_generator
                     .generate(&analysis, &context, messages, None)
                     .await?;
+                let gen_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
                     "response_generator",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(gen_ms),
+                );
+                info!(
+                    stage = "response_generator",
+                    duration_ms = gen_ms,
+                    "Pipeline stage complete"
                 );
                 self.maybe_adapt(response, &analysis).await
             }
@@ -452,7 +495,13 @@ impl ChatPipeline {
                 )
                 .await
             }
-        }
+        };
+        info!(
+            total_ms = pipeline_start.elapsed().as_millis() as u64,
+            remaining_budget = budget.remaining(),
+            "Pipeline: complete"
+        );
+        result
     }
 
     /// Execute the full pipeline (agents 2-6).
@@ -474,11 +523,17 @@ impl ChatPipeline {
         let rewritten = self
             .run_rewriter_budgeted(user_query, analysis, budget)
             .await?;
+        let rewriter_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             progress,
             "query_rewriter",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(rewriter_ms),
+        );
+        info!(
+            stage = "query_rewriter",
+            duration_ms = rewriter_ms,
+            "Pipeline stage complete"
         );
         debug!(primary = %rewritten.primary, sub = rewritten.sub_queries.len(), "Pipeline: rewritten");
 
@@ -488,11 +543,12 @@ impl ChatPipeline {
         let mut results = self
             .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
             .await?;
-        self.emit_progress(
-            progress,
-            "search",
-            StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+        let search_ms = t.elapsed().as_millis() as u64;
+        self.emit_progress(progress, "search", StageStatus::Done, Some(search_ms));
+        info!(
+            stage = "search",
+            duration_ms = search_ms,
+            "Pipeline stage complete"
         );
         debug!(results = results.len(), "Pipeline: searched");
 
@@ -502,11 +558,17 @@ impl ChatPipeline {
                 self.emit_progress(progress, "colbert_reranker", StageStatus::Started, None);
                 let t = Instant::now();
                 results = colbert.rerank(user_query, &results).await?;
+                let colbert_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     progress,
                     "colbert_reranker",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(colbert_ms),
+                );
+                info!(
+                    stage = "colbert_reranker",
+                    duration_ms = colbert_ms,
+                    "Pipeline stage complete"
                 );
                 debug!(results = results.len(), "Pipeline: ColBERT reranked");
             } else {
@@ -550,11 +612,12 @@ impl ChatPipeline {
                         }
                     }
                 }
-                self.emit_progress(
-                    progress,
-                    "graph_rag",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let graph_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(progress, "graph_rag", StageStatus::Done, Some(graph_ms));
+                info!(
+                    stage = "graph_rag",
+                    duration_ms = graph_ms,
+                    "Pipeline stage complete"
                 );
             } else {
                 debug!(
@@ -570,11 +633,17 @@ impl ChatPipeline {
         let context = self
             .run_curator_budgeted(user_query, &results, budget)
             .await?;
+        let curator_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             progress,
             "context_curator",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(curator_ms),
+        );
+        info!(
+            stage = "context_curator",
+            duration_ms = curator_ms,
+            "Pipeline stage complete"
         );
         debug!(
             chunks = context.chunks.len(),
@@ -589,11 +658,17 @@ impl ChatPipeline {
             let context_inner = self
                 .maybe_refine_retrieval(user_query, analysis, scope, context, available_scopes)
                 .await?;
+            let refine_ms = t.elapsed().as_millis() as u64;
             self.emit_progress(
                 progress,
                 "retrieval_refinement",
                 StageStatus::Done,
-                Some(t.elapsed().as_millis() as u64),
+                Some(refine_ms),
+            );
+            info!(
+                stage = "retrieval_refinement",
+                duration_ms = refine_ms,
+                "Pipeline stage complete"
             );
             context_inner
         } else {
@@ -642,11 +717,12 @@ impl ChatPipeline {
                 let t = Instant::now();
                 budget.try_spend();
                 let ctx = self.maybe_corrective_rag(user_query, context).await?;
-                self.emit_progress(
-                    progress,
-                    "corrective_rag",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let crag_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(progress, "corrective_rag", StageStatus::Done, Some(crag_ms));
+                info!(
+                    stage = "corrective_rag",
+                    duration_ms = crag_ms,
+                    "Pipeline stage complete"
                 );
                 ctx
             } else {
@@ -671,11 +747,12 @@ impl ChatPipeline {
                 let t = Instant::now();
                 budget.try_spend();
                 let ctx = raptor.build_tree(user_query, &context).await?;
-                self.emit_progress(
-                    progress,
-                    "raptor",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let raptor_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(progress, "raptor", StageStatus::Done, Some(raptor_ms));
+                info!(
+                    stage = "raptor",
+                    duration_ms = raptor_ms,
+                    "Pipeline stage complete"
                 );
                 ctx
             } else {
@@ -701,11 +778,17 @@ impl ChatPipeline {
                 let t = Instant::now();
                 budget.try_spend();
                 let ctx = compressor.compress(user_query, &context).await?;
+                let compress_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     progress,
                     "contextual_compression",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(compress_ms),
+                );
+                info!(
+                    stage = "contextual_compression",
+                    duration_ms = compress_ms,
+                    "Pipeline stage complete"
                 );
                 ctx
             } else {
@@ -726,11 +809,12 @@ impl ChatPipeline {
                 let t = Instant::now();
                 budget.try_spend();
                 let ctx = mm.enrich_context(user_query, &context).await?;
-                self.emit_progress(
-                    progress,
-                    "multimodal_rag",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let mm_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(progress, "multimodal_rag", StageStatus::Done, Some(mm_ms));
+                info!(
+                    stage = "multimodal_rag",
+                    duration_ms = mm_ms,
+                    "Pipeline stage complete"
                 );
                 ctx
             } else {
@@ -754,11 +838,12 @@ impl ChatPipeline {
             info!("Pipeline: using map-reduce for synthesis query");
             budget.try_spend();
             let response = mr.process(user_query, results).await?;
-            self.emit_progress(
-                progress,
-                "map_reduce",
-                StageStatus::Done,
-                Some(t.elapsed().as_millis() as u64),
+            let mr_ms = t.elapsed().as_millis() as u64;
+            self.emit_progress(progress, "map_reduce", StageStatus::Done, Some(mr_ms));
+            info!(
+                stage = "map_reduce",
+                duration_ms = mr_ms,
+                "Pipeline stage complete"
             );
             self.maybe_run_ragas(user_query, &context, &response.content)
                 .await;
@@ -778,11 +863,17 @@ impl ChatPipeline {
                 .generate(analysis, &context, messages, None)
                 .await?
         };
+        let gen_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             progress,
             "response_generator",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(gen_ms),
+        );
+        info!(
+            stage = "response_generator",
+            duration_ms = gen_ms,
+            "Pipeline stage complete"
         );
         debug!(len = response.content.len(), "Pipeline: generated");
 
@@ -819,11 +910,12 @@ impl ChatPipeline {
                     break;
                 }
             }
-            self.emit_progress(
-                progress,
-                "quality_guard",
-                StageStatus::Done,
-                Some(t.elapsed().as_millis() as u64),
+            let guard_ms = t.elapsed().as_millis() as u64;
+            self.emit_progress(progress, "quality_guard", StageStatus::Done, Some(guard_ms));
+            info!(
+                stage = "quality_guard",
+                duration_ms = guard_ms,
+                "Pipeline stage complete"
             );
         }
 
@@ -831,22 +923,27 @@ impl ChatPipeline {
         self.maybe_run_ragas(user_query, &context, &response.content)
             .await;
 
-        // ── Agent 6: Language Adapter (skip if budget exhausted) ──
-        if self.language_adapter.is_some() && budget.try_spend() {
+        // ── Agent 6: Language Adapter (skip if query is English — LLMs default to English output) ──
+        let needs_adaptation = !matches!(analysis.language, QueryLanguage::English);
+        if self.language_adapter.is_some() && needs_adaptation && budget.try_spend() {
             self.emit_progress(progress, "language_adapter", StageStatus::Started, None);
             let t = Instant::now();
             let response = self.maybe_adapt(response, analysis).await?;
+            let adapt_ms = t.elapsed().as_millis() as u64;
             self.emit_progress(
                 progress,
                 "language_adapter",
                 StageStatus::Done,
-                Some(t.elapsed().as_millis() as u64),
+                Some(adapt_ms),
             );
-            info!(remaining_budget = budget.remaining(), "Pipeline: complete");
+            info!(
+                stage = "language_adapter",
+                duration_ms = adapt_ms,
+                "Pipeline stage complete"
+            );
             return Ok(response);
         }
 
-        info!(remaining_budget = budget.remaining(), "Pipeline: complete");
         Ok(response)
     }
 
@@ -1007,6 +1104,7 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
     ) -> Result<LlmStreamResponse> {
+        let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
 
         let full_messages = self.inject_memory(messages, memories);
@@ -1014,44 +1112,56 @@ impl ChatPipeline {
 
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
-        // ── Agent 1: Query Analyzer ──
+        // ── Agent 1: Query Analyzer + Self-RAG gate (concurrent) ──
         self.emit_progress(&progress, "query_analyzer", StageStatus::Started, None);
+        self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
         let t = Instant::now();
-        let analysis = self
-            .run_analyzer_budgeted(user_query, messages, &budget)
-            .await?;
+        let (analysis, self_rag_decision) = tokio::join!(
+            self.run_analyzer_budgeted(user_query, messages, &budget),
+            async {
+                if let Some(ref self_rag) = self.self_rag
+                    && budget.try_spend()
+                {
+                    return self_rag.should_retrieve(user_query, messages).await.ok();
+                }
+                None
+            }
+        );
+        let analysis = analysis?;
+        let analyzer_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             &progress,
             "query_analyzer",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(analyzer_ms),
+        );
+        info!(
+            stage = "query_analyzer",
+            duration_ms = analyzer_ms,
+            "Pipeline stage complete"
+        );
+        self.emit_progress(
+            &progress,
+            "self_rag_gate",
+            StageStatus::Done,
+            Some(analyzer_ms),
+        );
+        info!(
+            stage = "self_rag_gate",
+            duration_ms = analyzer_ms,
+            "Pipeline stage complete"
         );
 
-        // ── Self-RAG gate (streaming) ──
-        if let Some(ref self_rag) = self.self_rag
-            && budget.try_spend()
-        {
-            self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
-            let t = Instant::now();
-            if let Ok(RetrievalDecision::NoRetrieve { confidence }) =
-                self_rag.should_retrieve(user_query, messages).await
-            {
-                self.emit_progress(
-                    &progress,
-                    "self_rag_gate",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
-                );
-                info!(confidence, "Self-RAG(stream): skipping retrieval");
-                self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
-                return self.main_llm.generate_stream(messages, None).await;
-            }
-            self.emit_progress(
-                &progress,
-                "self_rag_gate",
-                StageStatus::Done,
-                Some(t.elapsed().as_millis() as u64),
+        // ── Handle Self-RAG decision (streaming) ──
+        if let Some(RetrievalDecision::NoRetrieve { confidence }) = self_rag_decision.as_ref() {
+            info!(confidence, "Self-RAG(stream): skipping retrieval");
+            self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+            info!(
+                total_ms = pipeline_start.elapsed().as_millis() as u64,
+                remaining_budget = budget.remaining(),
+                "Pipeline: complete"
             );
+            return self.main_llm.generate_stream(messages, None).await;
         }
 
         // ── Orchestrator: decide route ──
@@ -1067,11 +1177,17 @@ impl ChatPipeline {
         } else {
             heuristic_decide(&analysis)
         };
+        let orch_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             &progress,
             "pipeline_orchestrator",
             StageStatus::Done,
-            Some(t.elapsed().as_millis() as u64),
+            Some(orch_ms),
+        );
+        info!(
+            stage = "pipeline_orchestrator",
+            duration_ms = orch_ms,
+            "Pipeline stage complete"
         );
         // When the user is querying within a workspace context, force retrieval
         let route = if route == PipelineRoute::DirectLlm
@@ -1092,6 +1208,11 @@ impl ChatPipeline {
             PipelineRoute::DirectLlm => match analysis.intent {
                 QueryIntent::Clarification => {
                     let msg = "Could you please provide more details about your question?".into();
+                    info!(
+                        total_ms = pipeline_start.elapsed().as_millis() as u64,
+                        remaining_budget = budget.remaining(),
+                        "Pipeline: complete"
+                    );
                     Ok(LlmStreamResponse {
                         stream: Box::pin(tokio_stream::once(Ok(msg))),
                         usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -1099,6 +1220,11 @@ impl ChatPipeline {
                 }
                 _ => {
                     self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+                    info!(
+                        total_ms = pipeline_start.elapsed().as_millis() as u64,
+                        remaining_budget = budget.remaining(),
+                        "Pipeline: complete"
+                    );
                     self.main_llm.generate_stream(messages, None).await
                 }
             },
@@ -1109,11 +1235,12 @@ impl ChatPipeline {
                 let results = self
                     .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
                     .await?;
-                self.emit_progress(
-                    &progress,
-                    "search",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let search_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(&progress, "search", StageStatus::Done, Some(search_ms));
+                info!(
+                    stage = "search",
+                    duration_ms = search_ms,
+                    "Pipeline stage complete"
                 );
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
@@ -1121,11 +1248,17 @@ impl ChatPipeline {
                 let context = self
                     .run_curator_budgeted(user_query, &results, &budget)
                     .await?;
+                let curator_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
                     "context_curator",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(curator_ms),
+                );
+                info!(
+                    stage = "context_curator",
+                    duration_ms = curator_ms,
+                    "Pipeline stage complete"
                 );
 
                 let context = if budget.remaining() >= 2 {
@@ -1144,6 +1277,11 @@ impl ChatPipeline {
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
+                    info!(
+                        total_ms = pipeline_start.elapsed().as_millis() as u64,
+                        remaining_budget = budget.remaining(),
+                        "Pipeline: complete"
+                    );
                     return Ok(resp);
                 }
                 self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
@@ -1152,6 +1290,11 @@ impl ChatPipeline {
                     .response_generator
                     .generate_stream(&analysis, &context, messages, None)
                     .await?;
+                info!(
+                    total_ms = pipeline_start.elapsed().as_millis() as u64,
+                    remaining_budget = budget.remaining(),
+                    "Pipeline: complete"
+                );
                 Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
             }
             PipelineRoute::FullPipeline | PipelineRoute::ComplexPipeline => {
@@ -1160,11 +1303,17 @@ impl ChatPipeline {
                 let rewritten = self
                     .run_rewriter_budgeted(user_query, &analysis, &budget)
                     .await?;
+                let rewriter_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
                     "query_rewriter",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(rewriter_ms),
+                );
+                info!(
+                    stage = "query_rewriter",
+                    duration_ms = rewriter_ms,
+                    "Pipeline stage complete"
                 );
 
                 self.emit_progress(&progress, "search", StageStatus::Started, None);
@@ -1172,11 +1321,12 @@ impl ChatPipeline {
                 let results = self
                     .run_search_with_tools(&rewritten, scope, user_query, available_scopes)
                     .await?;
-                self.emit_progress(
-                    &progress,
-                    "search",
-                    StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                let search_ms = t.elapsed().as_millis() as u64;
+                self.emit_progress(&progress, "search", StageStatus::Done, Some(search_ms));
+                info!(
+                    stage = "search",
+                    duration_ms = search_ms,
+                    "Pipeline stage complete"
                 );
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
@@ -1184,11 +1334,17 @@ impl ChatPipeline {
                 let context = self
                     .run_curator_budgeted(user_query, &results, &budget)
                     .await?;
+                let curator_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
                     "context_curator",
                     StageStatus::Done,
-                    Some(t.elapsed().as_millis() as u64),
+                    Some(curator_ms),
+                );
+                info!(
+                    stage = "context_curator",
+                    duration_ms = curator_ms,
+                    "Pipeline stage complete"
                 );
 
                 let context = if budget.remaining() >= 3 {
@@ -1207,6 +1363,11 @@ impl ChatPipeline {
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
                 if let Some(resp) = self.context_insufficient_response(&context) {
+                    info!(
+                        total_ms = pipeline_start.elapsed().as_millis() as u64,
+                        remaining_budget = budget.remaining(),
+                        "Pipeline: complete"
+                    );
                     return Ok(resp);
                 }
                 self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
@@ -1215,6 +1376,11 @@ impl ChatPipeline {
                     .response_generator
                     .generate_stream(&analysis, &context, messages, None)
                     .await?;
+                info!(
+                    total_ms = pipeline_start.elapsed().as_millis() as u64,
+                    remaining_budget = budget.remaining(),
+                    "Pipeline: complete"
+                );
                 Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
             }
         }
