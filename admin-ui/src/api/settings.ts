@@ -175,10 +175,11 @@ export async function listPresets() {
   return res.data;
 }
 
-export async function applyPreset(presetId: string, ollamaUrl?: string) {
+export async function applyPreset(presetId: string, ollamaUrl?: string, apiKey?: string) {
   const res = await client.post('/api/km/settings/presets/apply', {
     preset_id: presetId,
     ollama_url: ollamaUrl || 'http://host.docker.internal:11435',
+    ...(apiKey ? { api_key: apiKey } : {}),
   });
   return res.data;
 }

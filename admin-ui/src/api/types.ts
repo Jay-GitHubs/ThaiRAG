@@ -86,6 +86,11 @@ export interface PresetInfo {
   category: 'chat' | 'document';
   required_models: PresetModelInfo[];
   settings_summary: SettingsSummaryItem[];
+  estimated_cost_per_query: string;
+  estimated_latency: string;
+  llm_calls_per_query: string;
+  feature_count: number;
+  provider_type: 'ollama' | 'cloud';
 }
 
 export interface OllamaPullResponse {
