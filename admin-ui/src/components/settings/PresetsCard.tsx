@@ -6,16 +6,39 @@ import {
 import {
   RocketOutlined, CheckCircleOutlined, CloseCircleOutlined,
   DownloadOutlined, ThunderboltOutlined, CloudDownloadOutlined,
-  MessageOutlined, FileTextOutlined,
+  MessageOutlined, FileTextOutlined, CloudOutlined, DesktopOutlined,
+  DollarOutlined, ClockCircleOutlined, ApiOutlined, AppstoreOutlined,
 } from '@ant-design/icons';
 import { listPresets, applyPreset, listOllamaModels, pullOllamaModel } from '../../api/settings';
 import type { PresetInfo, PresetModelInfo, AvailableModel, SettingsSummaryItem } from '../../api/types';
+
+const { Text } = Typography;
 
 const WEIGHT_COLORS: Record<string, string> = {
   heavy: 'red',
   medium: 'orange',
   light: 'green',
 };
+
+function CostTag({ cost }: { cost: string }) {
+  const color = cost === 'Free' ? 'green' : cost.includes('0.0') ? 'blue' : 'orange';
+  return <Tag color={color}><DollarOutlined /> {cost}</Tag>;
+}
+
+function LatencyTag({ latency }: { latency: string }) {
+  const isfast = latency.match(/^[0-9]-/) && !latency.includes('min');
+  const color = isfast ? 'green' : latency.includes('min') ? 'red' : 'orange';
+  return <Tag color={color}><ClockCircleOutlined /> {latency}</Tag>;
+}
+
+function CallsTag({ calls }: { calls: string }) {
+  return <Tag><ApiOutlined /> {calls}</Tag>;
+}
+
+function FeatureTag({ count }: { count: number }) {
+  const color = count === 0 ? 'default' : count <= 5 ? 'blue' : 'purple';
+  return <Tag color={color}><AppstoreOutlined /> {count} feature{count !== 1 ? 's' : ''}</Tag>;
+}
 
 export function PresetsCard() {
   const [presets, setPresets] = useState<PresetInfo[]>([]);
@@ -24,7 +47,9 @@ export function PresetsCard() {
   const [applying, setApplying] = useState<string | null>(null);
   const [pulling, setPulling] = useState<Set<string>>(new Set());
   const [ollamaUrl, setOllamaUrl] = useState('http://host.docker.internal:11435');
+  const [cloudApiKey, setCloudApiKey] = useState('');
   const [showUrlModal, setShowUrlModal] = useState(false);
+  const [showCloudModal, setShowCloudModal] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<string | null>(null);
 
   async function loadData() {
@@ -85,21 +110,26 @@ export function PresetsCard() {
     }
   }
 
-  async function handleApply(presetId: string) {
+  async function handleApply(presetId: string, isCloud: boolean) {
     setApplying(presetId);
     try {
-      await applyPreset(presetId, ollamaUrl);
+      await applyPreset(presetId, ollamaUrl, isCloud ? cloudApiKey : undefined);
       message.success('Preset applied! Switch to other tabs to see updated settings.');
-    } catch {
-      message.error('Failed to apply preset');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to apply preset';
+      message.error(msg);
     } finally {
       setApplying(null);
     }
   }
 
-  function confirmApply(presetId: string) {
-    setPendingPreset(presetId);
-    setShowUrlModal(true);
+  function confirmApply(preset: PresetInfo) {
+    setPendingPreset(preset.id);
+    if (preset.provider_type === 'cloud') {
+      setShowCloudModal(true);
+    } else {
+      setShowUrlModal(true);
+    }
   }
 
   if (loading) return <Spin />;
@@ -107,26 +137,34 @@ export function PresetsCard() {
   const chatPresets = presets.filter(p => p.category === 'chat');
   const docPresets = presets.filter(p => p.category === 'document');
 
+  const ollamaChatPresets = chatPresets.filter(p => p.provider_type === 'ollama');
+  const cloudChatPresets = chatPresets.filter(p => p.provider_type === 'cloud');
+  const ollamaDocPresets = docPresets.filter(p => p.provider_type === 'ollama');
+  const cloudDocPresets = docPresets.filter(p => p.provider_type === 'cloud');
+
   function renderPresetCard(preset: PresetInfo) {
+    const isCloud = preset.provider_type === 'cloud';
     const { available, total } = getAvailableCount(preset);
-    const allReady = available === total;
+    const allReady = isCloud || available === total;
 
     return (
       <Card
         key={preset.id}
         size="small"
         title={
-          <Space>
-            <Typography.Text strong>{preset.name}</Typography.Text>
-            <Badge
-              count={`${available}/${total} models`}
-              style={{ backgroundColor: allReady ? '#52c41a' : '#faad14' }}
-            />
+          <Space wrap>
+            <Text strong>{preset.name}</Text>
+            {!isCloud && (
+              <Badge
+                count={`${available}/${total} models`}
+                style={{ backgroundColor: allReady ? '#52c41a' : '#faad14' }}
+              />
+            )}
           </Space>
         }
         extra={
           <Space>
-            {!allReady && (
+            {!isCloud && !allReady && (
               <Tooltip title="Pull all missing models">
                 <Button
                   size="small"
@@ -141,7 +179,7 @@ export function PresetsCard() {
             <Popconfirm
               title="Apply this preset?"
               description={`This will override your current ${preset.category === 'chat' ? 'chat pipeline' : 'document processing'} settings.`}
-              onConfirm={() => confirmApply(preset.id)}
+              onConfirm={() => confirmApply(preset)}
             >
               <Button
                 type="primary"
@@ -160,25 +198,32 @@ export function PresetsCard() {
           {preset.description}
         </Typography.Paragraph>
 
+        <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          <CostTag cost={preset.estimated_cost_per_query} />
+          <LatencyTag latency={preset.estimated_latency} />
+          <CallsTag calls={preset.llm_calls_per_query} />
+          <FeatureTag count={preset.feature_count} />
+        </div>
+
         <Table<PresetModelInfo>
           dataSource={preset.required_models}
           rowKey="model"
           size="small"
           pagination={false}
           columns={[
-            {
+            ...(isCloud ? [] : [{
               title: 'Status',
               width: 60,
-              render: (_, r) => isModelAvailable(r.model)
+              render: (_: unknown, r: PresetModelInfo) => isModelAvailable(r.model)
                 ? <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />
                 : pulling.has(r.model)
                   ? <Spin size="small" />
                   : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />,
-            },
+            }]),
             {
               title: 'Model',
               dataIndex: 'model',
-              render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
+              render: (v: string) => <Text code>{v}</Text>,
             },
             {
               title: 'Role',
@@ -193,12 +238,12 @@ export function PresetsCard() {
             {
               title: 'Description',
               dataIndex: 'description',
-              responsive: ['md'],
+              responsive: ['md'] as const,
             },
-            {
+            ...(isCloud ? [] : [{
               title: '',
               width: 80,
-              render: (_, r) => !isModelAvailable(r.model) && (
+              render: (_: unknown, r: PresetModelInfo) => !isModelAvailable(r.model) && (
                 <Button
                   size="small"
                   icon={<DownloadOutlined />}
@@ -208,20 +253,48 @@ export function PresetsCard() {
                   Pull
                 </Button>
               ),
-            },
+            }]),
           ]}
         />
 
         {preset.settings_summary?.length > 0 && (
           <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
             {preset.settings_summary.map((item: SettingsSummaryItem) => (
-              <Typography.Text key={item.label} style={{ fontSize: 12 }} type="secondary">
+              <Text key={item.label} style={{ fontSize: 12 }} type="secondary">
                 <strong>{item.label}:</strong> {item.value}
-              </Typography.Text>
+              </Text>
             ))}
           </div>
         )}
       </Card>
+    );
+  }
+
+  function renderProviderSection(
+    label: string,
+    icon: React.ReactNode,
+    ollamaPresets: PresetInfo[],
+    cloudPresets: PresetInfo[],
+  ) {
+    return (
+      <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        {ollamaPresets.length > 0 && (
+          <>
+            <Divider orientation="left" style={{ margin: '4px 0' }}>
+              <Space><DesktopOutlined /> Local (Ollama) — Free, runs on your GPU</Space>
+            </Divider>
+            {ollamaPresets.map(renderPresetCard)}
+          </>
+        )}
+        {cloudPresets.length > 0 && (
+          <>
+            <Divider orientation="left" style={{ margin: '4px 0' }}>
+              <Space><CloudOutlined /> Cloud (API Key) — Fast, pay per query</Space>
+            </Divider>
+            {cloudPresets.map(renderPresetCard)}
+          </>
+        )}
+      </Space>
     );
   }
 
@@ -237,7 +310,8 @@ export function PresetsCard() {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Pick one preset from each section. Chat and Document presets are independent — applying one won't affect the other."
+        message="Local presets run free on your GPU (Ollama) but are slower with many features. Cloud presets use API keys (OpenAI) for faster responses at a per-query cost."
+        description="Pick one preset from each section. Chat and Document presets are independent."
       />
 
       <Collapse
@@ -246,30 +320,23 @@ export function PresetsCard() {
           {
             key: 'chat-presets',
             label: <Space><MessageOutlined /> Chat & Response Pipeline</Space>,
-            children: (
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                {chatPresets.map(renderPresetCard)}
-              </Space>
-            ),
+            children: renderProviderSection('Chat', <MessageOutlined />, ollamaChatPresets, cloudChatPresets),
           },
           {
             key: 'doc-presets',
             label: <Space><FileTextOutlined /> Document Processing</Space>,
-            children: (
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                {docPresets.map(renderPresetCard)}
-              </Space>
-            ),
+            children: renderProviderSection('Document', <FileTextOutlined />, ollamaDocPresets, cloudDocPresets),
           },
         ]}
       />
 
+      {/* Ollama URL modal (for local presets) */}
       <Modal
         title="Ollama Connection"
         open={showUrlModal}
         onOk={() => {
           setShowUrlModal(false);
-          if (pendingPreset) handleApply(pendingPreset);
+          if (pendingPreset) handleApply(pendingPreset, false);
           setPendingPreset(null);
         }}
         onCancel={() => { setShowUrlModal(false); setPendingPreset(null); }}
@@ -287,6 +354,36 @@ export function PresetsCard() {
           <strong>Docker Desktop (Mac/Windows):</strong> http://host.docker.internal:11435<br />
           <strong>Linux:</strong> http://172.17.0.1:11434 or http://host.docker.internal:11435<br />
           <strong>Same machine:</strong> http://localhost:11434
+        </Typography.Paragraph>
+      </Modal>
+
+      {/* API Key modal (for cloud presets) */}
+      <Modal
+        title="Cloud API Key"
+        open={showCloudModal}
+        onOk={() => {
+          if (!cloudApiKey.trim()) {
+            message.warning('Please enter an API key');
+            return;
+          }
+          setShowCloudModal(false);
+          if (pendingPreset) handleApply(pendingPreset, true);
+          setPendingPreset(null);
+        }}
+        onCancel={() => { setShowCloudModal(false); setPendingPreset(null); }}
+        okText="Apply Preset"
+      >
+        <Typography.Paragraph>
+          Enter your OpenAI API key. This will be stored in ThaiRAG settings and used for all cloud LLM calls.
+        </Typography.Paragraph>
+        <Input.Password
+          value={cloudApiKey}
+          onChange={e => setCloudApiKey(e.target.value)}
+          placeholder="sk-..."
+          style={{ width: '100%' }}
+        />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
+          Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a>. Embedding still uses local FastEmbed (free) — only LLM calls use the API key.
         </Typography.Paragraph>
       </Modal>
     </Card>

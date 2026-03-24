@@ -3224,6 +3224,13 @@ pub struct PresetInfo {
     pub required_models: Vec<PresetModelInfo>,
     /// Non-model settings summary (e.g. reranker, chunk size, tuning params)
     pub settings_summary: Vec<SettingsSummaryItem>,
+    /// Cost/performance metadata for UI display
+    pub estimated_cost_per_query: String,
+    pub estimated_latency: String,
+    pub llm_calls_per_query: String,
+    pub feature_count: u32,
+    /// "ollama" or "cloud"
+    pub provider_type: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -3272,6 +3279,11 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 s("Agents", "5 core agents (no orchestrator)"),
                 s("Features", "None (minimal setup)"),
             ],
+            estimated_cost_per_query: "Free".into(),
+            estimated_latency: "15-30s".into(),
+            llm_calls_per_query: "5 calls".into(),
+            feature_count: 0,
+            provider_type: "ollama".into(),
         },
         PresetInfo {
             id: "thai-recommended".into(),
@@ -3292,11 +3304,16 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 s("Agents", "6 agents (all core + orchestrator)"),
                 s("Features", "Conversation Memory, ColBERT, Active Learning"),
             ],
+            estimated_cost_per_query: "Free".into(),
+            estimated_latency: "30-60s".into(),
+            llm_calls_per_query: "5-7 calls".into(),
+            feature_count: 3,
+            provider_type: "ollama".into(),
         },
         PresetInfo {
             id: "thai-max".into(),
             name: "Thai Maximum (สูงสุด)".into(),
-            description: "All features with dedicated models per task. Best quality, highest resource usage.".into(),
+            description: "All features with dedicated models per task. Best quality, highest resource usage. Requires 128GB+ VRAM.".into(),
             category: "chat".into(),
             required_models: vec![
                 PresetModelInfo { model: "qwen3:32b".into(), role: "Main LLM (Heavy)".into(), task_weight: "heavy".into(), description: "Best Thai quality — response generation, quality guard, curation".into() },
@@ -3313,8 +3330,87 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 s("Quality Guard", "Threshold 0.7 / 2 retries"),
                 s("Orchestrator", "Enabled (max 5 calls)"),
                 s("Agents", "6 agents (all core + orchestrator)"),
-                s("Features", "All 13 features enabled (Memory, Self-RAG, Graph RAG, CRAG, ColBERT, RAPTOR, Compression, Multimodal, Map-Reduce, RAGAS, Active Learning, Tool Use, Adaptive Threshold)"),
+                s("Features", "All 13+ features enabled"),
             ],
+            estimated_cost_per_query: "Free".into(),
+            estimated_latency: "2-5 min".into(),
+            llm_calls_per_query: "10-15 calls".into(),
+            feature_count: 16,
+            provider_type: "ollama".into(),
+        },
+        // ── Cloud Chat presets (OpenAI API) ──
+        PresetInfo {
+            id: "cloud-basic".into(),
+            name: "Cloud Basic".into(),
+            description: "Fast and affordable cloud RAG with GPT-4.1 Mini. No GPU needed — just an OpenAI API key.".into(),
+            category: "chat".into(),
+            required_models: vec![
+                PresetModelInfo { model: "gpt-4.1-mini".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "Fast, affordable — chat, curation, quality guard".into() },
+            ],
+            settings_summary: vec![
+                s("LLM Mode", "Shared (single model)"),
+                s("Embedding", "FastEmbed (local, no API key)"),
+                s("Context Window", "4,096 tokens"),
+                s("Agent Max Tokens", "2,048"),
+                s("Quality Guard", "Threshold 0.6 / No retry"),
+                s("Agents", "5 core agents (no orchestrator)"),
+                s("Features", "None (minimal setup)"),
+            ],
+            estimated_cost_per_query: "~$0.003".into(),
+            estimated_latency: "2-5s".into(),
+            llm_calls_per_query: "5 calls".into(),
+            feature_count: 0,
+            provider_type: "cloud".into(),
+        },
+        PresetInfo {
+            id: "cloud-recommended".into(),
+            name: "Cloud Recommended".into(),
+            description: "Best balance of cost and quality. GPT-4.1 Mini with orchestrator, memory, and smart features.".into(),
+            category: "chat".into(),
+            required_models: vec![
+                PresetModelInfo { model: "gpt-4.1-mini".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "Shared LLM for all agents".into() },
+            ],
+            settings_summary: vec![
+                s("LLM Mode", "Shared (single model)"),
+                s("Embedding", "FastEmbed (local, no API key)"),
+                s("Context Window", "4,096 tokens"),
+                s("Agent Max Tokens", "2,048"),
+                s("Quality Guard", "Threshold 0.6 / 1 retry"),
+                s("Orchestrator", "Enabled (max 3 calls)"),
+                s("Agents", "6 agents (all core + orchestrator)"),
+                s("Features", "Memory, ColBERT, Active Learning, Adaptive Threshold"),
+            ],
+            estimated_cost_per_query: "~$0.01".into(),
+            estimated_latency: "3-8s".into(),
+            llm_calls_per_query: "5-7 calls".into(),
+            feature_count: 4,
+            provider_type: "cloud".into(),
+        },
+        PresetInfo {
+            id: "cloud-max".into(),
+            name: "Cloud Maximum".into(),
+            description: "Full power with dedicated cloud models per task. GPT-4.1 for heavy work, Mini for medium, Nano for light tasks.".into(),
+            category: "chat".into(),
+            required_models: vec![
+                PresetModelInfo { model: "gpt-4.1".into(), role: "Main LLM (Heavy)".into(), task_weight: "heavy".into(), description: "Response generation, quality guard, curation".into() },
+                PresetModelInfo { model: "gpt-4.1-mini".into(), role: "Agent LLM (Medium)".into(), task_weight: "medium".into(), description: "Graph RAG, CRAG, RAPTOR, compression, memory".into() },
+                PresetModelInfo { model: "gpt-4.1-nano".into(), role: "Light LLM".into(), task_weight: "light".into(), description: "Query analysis, rewriting, language adapter".into() },
+            ],
+            settings_summary: vec![
+                s("LLM Mode", "Per-agent (dedicated models)"),
+                s("Embedding", "FastEmbed (local, no API key)"),
+                s("Context Window", "8,192 tokens"),
+                s("Agent Max Tokens", "4,096"),
+                s("Quality Guard", "Threshold 0.7 / 2 retries"),
+                s("Orchestrator", "Enabled (max 5 calls)"),
+                s("Agents", "6 agents (all core + orchestrator)"),
+                s("Features", "All 13+ features enabled"),
+            ],
+            estimated_cost_per_query: "~$0.05-0.15".into(),
+            estimated_latency: "5-15s".into(),
+            llm_calls_per_query: "10-15 calls".into(),
+            feature_count: 16,
+            provider_type: "cloud".into(),
         },
         // ── Document Processing presets ──
         PresetInfo {
@@ -3335,6 +3431,11 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 s("Enricher", "Enabled"),
                 s("Orchestrator", "Disabled"),
             ],
+            estimated_cost_per_query: "Free".into(),
+            estimated_latency: "5-15s/page".into(),
+            llm_calls_per_query: "2-3 calls/page".into(),
+            feature_count: 1,
+            provider_type: "ollama".into(),
         },
         PresetInfo {
             id: "thai-doc-recommended".into(),
@@ -3355,6 +3456,59 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 s("Enricher", "Enabled"),
                 s("Orchestrator", "Enabled (auto budget, max 3 calls)"),
             ],
+            estimated_cost_per_query: "Free".into(),
+            estimated_latency: "10-30s/page".into(),
+            llm_calls_per_query: "3-5 calls/page".into(),
+            feature_count: 2,
+            provider_type: "ollama".into(),
+        },
+        // ── Cloud Document Processing presets ──
+        PresetInfo {
+            id: "cloud-doc-basic".into(),
+            name: "Cloud Doc Basic".into(),
+            description: "Fast document processing with GPT-4.1 Mini. No GPU needed.".into(),
+            category: "document".into(),
+            required_models: vec![
+                PresetModelInfo { model: "gpt-4.1-mini".into(), role: "Document AI + Enricher".into(), task_weight: "light".into(), description: "Analysis, chunking, enrichment".into() },
+            ],
+            settings_summary: vec![
+                s("Chunk Size", "512 chars / 64 overlap"),
+                s("Embedding", "FastEmbed (local, no API key)"),
+                s("AI Agent Tokens", "1,024"),
+                s("Max LLM Input", "4,000 chars"),
+                s("Quality Threshold", "0.5"),
+                s("Enricher", "Enabled"),
+                s("Orchestrator", "Disabled"),
+            ],
+            estimated_cost_per_query: "~$0.005/page".into(),
+            estimated_latency: "1-3s/page".into(),
+            llm_calls_per_query: "2-3 calls/page".into(),
+            feature_count: 1,
+            provider_type: "cloud".into(),
+        },
+        PresetInfo {
+            id: "cloud-doc-recommended".into(),
+            name: "Cloud Doc Recommended".into(),
+            description: "Best cloud document processing — GPT-4.1 for analysis + Mini for enrichment.".into(),
+            category: "document".into(),
+            required_models: vec![
+                PresetModelInfo { model: "gpt-4.1".into(), role: "Document AI".into(), task_weight: "heavy".into(), description: "Analysis, conversion, quality check".into() },
+                PresetModelInfo { model: "gpt-4.1-mini".into(), role: "Enricher".into(), task_weight: "light".into(), description: "Metadata enrichment".into() },
+            ],
+            settings_summary: vec![
+                s("Chunk Size", "1,024 chars / 128 overlap"),
+                s("Embedding", "FastEmbed (local, no API key)"),
+                s("AI Agent Tokens", "2,048"),
+                s("Max LLM Input", "8,000 chars"),
+                s("Quality Threshold", "0.7"),
+                s("Enricher", "Enabled"),
+                s("Orchestrator", "Enabled (auto budget, max 3 calls)"),
+            ],
+            estimated_cost_per_query: "~$0.02/page".into(),
+            estimated_latency: "2-5s/page".into(),
+            llm_calls_per_query: "3-5 calls/page".into(),
+            feature_count: 2,
+            provider_type: "cloud".into(),
         },
     ]
 }
@@ -3365,6 +3519,9 @@ pub struct ApplyPresetRequest {
     /// Ollama base URL to use for all LLM configs
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
+    /// API key for cloud presets (OpenAI, etc.)
+    #[serde(default)]
+    pub api_key: String,
 }
 
 fn default_ollama_url() -> String {
@@ -3380,6 +3537,7 @@ pub async fn apply_preset(
     require_super_admin(&claims, &state)?;
 
     let url = req.ollama_url.clone();
+    let api_key = req.api_key.clone();
     let store = &state.km_store;
 
     fn ollama_llm(model: &str, url: &str) -> String {
@@ -3388,6 +3546,16 @@ pub async fn apply_preset(
             "model": model,
             "base_url": url,
             "api_key": ""
+        })
+        .to_string()
+    }
+
+    fn cloud_llm(model: &str, api_key: &str) -> String {
+        serde_json::json!({
+            "kind": "openai",
+            "model": model,
+            "base_url": "",
+            "api_key": api_key
         })
         .to_string()
     }
@@ -3709,9 +3877,347 @@ pub async fn apply_preset(
             store.set_setting("providers.embedding.base_url", &url);
             store.set_setting("providers.embedding.dimensions", "4096");
         }
+        // ── Cloud Chat presets ──
+        "cloud-basic" => {
+            if api_key.is_empty() {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "API key is required for cloud presets".into(),
+                )));
+            }
+            store.set_setting("chat_pipeline.enabled", "true");
+            store.set_setting("chat_pipeline.llm_mode", "shared");
+            store.set_setting("chat_pipeline.llm", &cloud_llm("gpt-4.1-mini", &api_key));
+            // ── Agents ──
+            store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
+            store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
+            store.set_setting("chat_pipeline.context_curator_enabled", "true");
+            store.set_setting("chat_pipeline.quality_guard_enabled", "true");
+            store.set_setting("chat_pipeline.language_adapter_enabled", "true");
+            store.set_setting("chat_pipeline.orchestrator_enabled", "false");
+            // ── Embedding: FastEmbed (local, no API key needed) ──
+            store.set_setting("providers.embedding.kind", "fastembed");
+            store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
+            store.set_setting("providers.embedding.dimensions", "384");
+            // ── Reranker: passthrough ──
+            store.set_setting("providers.reranker.kind", "passthrough");
+            // ── Tuning ──
+            store.set_setting("chat_pipeline.max_context_tokens", "4096");
+            store.set_setting("chat_pipeline.agent_max_tokens", "2048");
+            store.set_setting("chat_pipeline.quality_guard_threshold", "0.6");
+            store.set_setting("chat_pipeline.quality_guard_max_retries", "0");
+            // ── Disable all advanced features ──
+            for feat in &[
+                "conversation_memory",
+                "retrieval_refinement",
+                "tool_use",
+                "adaptive_threshold",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "speculative_rag",
+                "map_reduce",
+                "ragas",
+                "compression",
+                "multimodal",
+                "raptor",
+                "colbert",
+                "active_learning",
+            ] {
+                store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "false");
+            }
+        }
+        "cloud-recommended" => {
+            if api_key.is_empty() {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "API key is required for cloud presets".into(),
+                )));
+            }
+            store.set_setting("chat_pipeline.enabled", "true");
+            store.set_setting("chat_pipeline.llm_mode", "shared");
+            store.set_setting("chat_pipeline.llm", &cloud_llm("gpt-4.1-mini", &api_key));
+            // ── Agents ──
+            store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
+            store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
+            store.set_setting("chat_pipeline.context_curator_enabled", "true");
+            store.set_setting("chat_pipeline.quality_guard_enabled", "true");
+            store.set_setting("chat_pipeline.language_adapter_enabled", "true");
+            store.set_setting("chat_pipeline.orchestrator_enabled", "true");
+            // ── Embedding: FastEmbed ──
+            store.set_setting("providers.embedding.kind", "fastembed");
+            store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
+            store.set_setting("providers.embedding.dimensions", "384");
+            // ── Reranker: passthrough ──
+            store.set_setting("providers.reranker.kind", "passthrough");
+            // ── Tuning ──
+            store.set_setting("chat_pipeline.max_context_tokens", "4096");
+            store.set_setting("chat_pipeline.agent_max_tokens", "2048");
+            store.set_setting("chat_pipeline.quality_guard_threshold", "0.6");
+            store.set_setting("chat_pipeline.quality_guard_max_retries", "1");
+            store.set_setting("chat_pipeline.max_orchestrator_calls", "3");
+            // ── Enable key features ──
+            store.set_setting("chat_pipeline.conversation_memory_enabled", "true");
+            store.set_setting("chat_pipeline.memory_max_summaries", "10");
+            store.set_setting("chat_pipeline.memory_summary_max_tokens", "256");
+            store.set_setting("chat_pipeline.active_learning_enabled", "true");
+            store.set_setting("chat_pipeline.colbert_enabled", "true");
+            store.set_setting("chat_pipeline.colbert_top_n", "5");
+            store.set_setting("chat_pipeline.adaptive_threshold_enabled", "true");
+            // ── Disable heavy features ──
+            for feat in &[
+                "retrieval_refinement",
+                "tool_use",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "speculative_rag",
+                "map_reduce",
+                "ragas",
+                "compression",
+                "multimodal",
+                "raptor",
+            ] {
+                store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "false");
+            }
+        }
+        "cloud-max" => {
+            if api_key.is_empty() {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "API key is required for cloud presets".into(),
+                )));
+            }
+            store.set_setting("chat_pipeline.enabled", "true");
+            store.set_setting("chat_pipeline.llm_mode", "per-agent");
+            // Heavy tasks: gpt-4.1
+            store.set_setting(
+                "chat_pipeline.response_generator_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.quality_guard_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.context_curator_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            // Medium tasks: gpt-4.1-mini
+            store.set_setting(
+                "chat_pipeline.orchestrator_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.graph_rag_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.crag_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.raptor_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.colbert_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.compression_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.self_rag_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.map_reduce_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.memory_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.ragas_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.tool_use_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            // Light tasks: gpt-4.1-nano
+            store.set_setting(
+                "chat_pipeline.query_analyzer_llm",
+                &cloud_llm("gpt-4.1-nano", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.query_rewriter_llm",
+                &cloud_llm("gpt-4.1-nano", &api_key),
+            );
+            store.set_setting(
+                "chat_pipeline.language_adapter_llm",
+                &cloud_llm("gpt-4.1-nano", &api_key),
+            );
+            // ── Embedding: FastEmbed ──
+            store.set_setting("providers.embedding.kind", "fastembed");
+            store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
+            store.set_setting("providers.embedding.dimensions", "384");
+            // ── Reranker: passthrough ──
+            store.set_setting("providers.reranker.kind", "passthrough");
+            // ── Tuning ──
+            store.set_setting("chat_pipeline.max_context_tokens", "8192");
+            store.set_setting("chat_pipeline.agent_max_tokens", "4096");
+            store.set_setting("chat_pipeline.quality_guard_threshold", "0.7");
+            store.set_setting("chat_pipeline.quality_guard_max_retries", "2");
+            store.set_setting("chat_pipeline.max_orchestrator_calls", "5");
+            // Feature params
+            store.set_setting("chat_pipeline.memory_max_summaries", "20");
+            store.set_setting("chat_pipeline.memory_summary_max_tokens", "512");
+            store.set_setting("chat_pipeline.colbert_top_n", "10");
+            store.set_setting("chat_pipeline.self_rag_threshold", "0.7");
+            store.set_setting("chat_pipeline.graph_rag_max_entities", "50");
+            store.set_setting("chat_pipeline.graph_rag_max_depth", "3");
+            store.set_setting("chat_pipeline.crag_relevance_threshold", "0.5");
+            store.set_setting("chat_pipeline.crag_max_web_results", "3");
+            store.set_setting("chat_pipeline.compression_target_ratio", "0.5");
+            store.set_setting("chat_pipeline.raptor_max_depth", "3");
+            store.set_setting("chat_pipeline.raptor_group_size", "5");
+            store.set_setting("chat_pipeline.map_reduce_max_chunks", "10");
+            store.set_setting("chat_pipeline.ragas_sample_rate", "0.1");
+            store.set_setting("chat_pipeline.tool_use_max_calls", "5");
+            store.set_setting("chat_pipeline.refinement_min_relevance", "0.3");
+            store.set_setting("chat_pipeline.refinement_max_retries", "2");
+            store.set_setting("chat_pipeline.adaptive_min_samples", "20");
+            store.set_setting("chat_pipeline.feedback_decay_days", "30");
+            store.set_setting("chat_pipeline.active_learning_min_interactions", "50");
+            store.set_setting("chat_pipeline.active_learning_max_low_confidence", "10");
+            // ── Enable all agents and features ──
+            for agent in &[
+                "query_analyzer",
+                "query_rewriter",
+                "context_curator",
+                "quality_guard",
+                "language_adapter",
+                "orchestrator",
+            ] {
+                store.set_setting(&format!("chat_pipeline.{agent}_enabled"), "true");
+            }
+            for feat in &[
+                "conversation_memory",
+                "retrieval_refinement",
+                "tool_use",
+                "adaptive_threshold",
+                "self_rag",
+                "graph_rag",
+                "crag",
+                "compression",
+                "raptor",
+                "colbert",
+                "active_learning",
+                "map_reduce",
+                "ragas",
+            ] {
+                store.set_setting(&format!("chat_pipeline.{feat}_enabled"), "true");
+            }
+            store.set_setting("chat_pipeline.speculative_rag_enabled", "false");
+            store.set_setting("chat_pipeline.multimodal_enabled", "false"); // no vision model in cloud preset
+        }
+        // ── Cloud Document presets ──
+        "cloud-doc-basic" => {
+            if api_key.is_empty() {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "API key is required for cloud presets".into(),
+                )));
+            }
+            store.set_setting("ai_preprocessing.enabled", "true");
+            store.set_setting("ai_preprocessing.auto_params", "true");
+            store.set_setting("ai_preprocessing.llm", &cloud_llm("gpt-4.1-mini", &api_key));
+            store.set_setting(
+                "ai_preprocessing.analyzer_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.converter_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.quality_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.chunker_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.enricher_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.orchestrator_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting("ai_preprocessing.enricher_enabled", "true");
+            store.set_setting("ai_preprocessing.orchestrator_enabled", "false");
+            store.set_setting("ai_preprocessing.agent_max_tokens", "1024");
+            store.set_setting("ai_preprocessing.max_llm_input_chars", "4000");
+            store.set_setting("ai_preprocessing.quality_threshold", "0.5");
+            store.set_setting("document.max_chunk_size", "512");
+            store.set_setting("document.chunk_overlap", "64");
+            // ── Embedding: FastEmbed ──
+            store.set_setting("providers.embedding.kind", "fastembed");
+            store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
+            store.set_setting("providers.embedding.dimensions", "384");
+        }
+        "cloud-doc-recommended" => {
+            if api_key.is_empty() {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "API key is required for cloud presets".into(),
+                )));
+            }
+            store.set_setting("ai_preprocessing.enabled", "true");
+            store.set_setting("ai_preprocessing.auto_params", "true");
+            store.set_setting("ai_preprocessing.llm", &cloud_llm("gpt-4.1", &api_key));
+            store.set_setting(
+                "ai_preprocessing.analyzer_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.converter_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.quality_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.chunker_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.enricher_llm",
+                &cloud_llm("gpt-4.1-mini", &api_key),
+            );
+            store.set_setting(
+                "ai_preprocessing.orchestrator_llm",
+                &cloud_llm("gpt-4.1", &api_key),
+            );
+            store.set_setting("ai_preprocessing.enricher_enabled", "true");
+            store.set_setting("ai_preprocessing.orchestrator_enabled", "true");
+            store.set_setting("ai_preprocessing.agent_max_tokens", "2048");
+            store.set_setting("ai_preprocessing.max_llm_input_chars", "8000");
+            store.set_setting("ai_preprocessing.quality_threshold", "0.7");
+            store.set_setting("ai_preprocessing.max_orchestrator_calls", "3");
+            store.set_setting("ai_preprocessing.auto_orchestrator_budget", "true");
+            store.set_setting("document.max_chunk_size", "1024");
+            store.set_setting("document.chunk_overlap", "128");
+            // ── Embedding: FastEmbed ──
+            store.set_setting("providers.embedding.kind", "fastembed");
+            store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
+            store.set_setting("providers.embedding.dimensions", "384");
+        }
         _ => {
             return Err(ApiError(ThaiRagError::Validation(format!(
-                "Unknown preset: {}. Available: thai-basic, thai-recommended, thai-max, thai-doc-basic, thai-doc-recommended",
+                "Unknown preset: {}. Available: thai-basic, thai-recommended, thai-max, cloud-basic, cloud-recommended, cloud-max, thai-doc-basic, thai-doc-recommended, cloud-doc-basic, cloud-doc-recommended",
                 req.preset_id
             ))));
         }
