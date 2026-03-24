@@ -75,24 +75,37 @@ services:
     depends_on:
       - thairag
 
-  # ── Open WebUI (optional chat interface) ─────────────────────────────
-  # Uncomment to add a chat UI. Set THAIRAG__AUTH__API_KEYS in .env.
-  #open-webui:
-  #  image: ghcr.io/open-webui/open-webui:v0.8.10
-  #  ports:
-  #    - "3000:8080"
-  #  volumes:
-  #    - open-webui-data:/app/backend/data
-  #  environment:
-  #    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-  #    OPENAI_API_KEYS: "${THAIRAG__AUTH__API_KEYS:-sk-thairag}"
-  #    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-  #    AIOHTTP_CLIENT_TIMEOUT: "600"
-  #  depends_on:
-  #    - thairag
+  # ── Open WebUI (chat interface) ──────────────────────────────────────
+  # Set THAIRAG__AUTH__API_KEYS in .env to authenticate with ThaiRAG.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.8.10
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
+      OPENAI_API_KEYS: "${THAIRAG__AUTH__API_KEYS:-sk-thairag}"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      AIOHTTP_CLIENT_TIMEOUT: "600"
+      # ── Speed up startup: disable built-in RAG (ThaiRAG handles this) ──
+      RAG_EMBEDDING_MODEL: ""
+      RAG_RERANKING_MODEL: ""
+      RAG_EMBEDDING_ENGINE: ""
+      ENABLE_RAG_WEB_SEARCH: "false"
+      ENABLE_RAG_LOCAL_WEB_FETCH: "false"
+      # ── Disable features that cause slow first-boot downloads ──
+      AUDIO_STT_ENGINE: ""
+      AUDIO_TTS_ENGINE: ""
+      ENABLE_IMAGE_GENERATION: "false"
+      # ── Misc performance ──
+      SAFE_MODE: "true"
+      WEBUI_AUTH: "false"
+    depends_on:
+      - thairag
 
 volumes:
   postgres-data:
   thairag-data:
   qdrant-data:
-  #open-webui-data:
+  open-webui-data:
