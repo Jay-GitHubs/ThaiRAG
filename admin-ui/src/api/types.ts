@@ -91,6 +91,7 @@ export interface PresetInfo {
   llm_calls_per_query: string;
   feature_count: number;
   provider_type: 'ollama' | 'cloud';
+  features: string[];
 }
 
 export interface OllamaPullResponse {

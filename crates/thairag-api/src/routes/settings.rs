@@ -3231,6 +3231,8 @@ pub struct PresetInfo {
     pub feature_count: u32,
     /// "ollama" or "cloud"
     pub provider_type: String,
+    /// List of enabled feature names (e.g. "Conversation Memory", "Graph RAG")
+    pub features: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -3284,6 +3286,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "5 calls".into(),
             feature_count: 0,
             provider_type: "ollama".into(),
+            features: vec![],
         },
         PresetInfo {
             id: "thai-recommended".into(),
@@ -3309,6 +3312,11 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "5-7 calls".into(),
             feature_count: 3,
             provider_type: "ollama".into(),
+            features: vec![
+                "Conversation Memory".into(),
+                "ColBERT Reranking".into(),
+                "Active Learning".into(),
+            ],
         },
         PresetInfo {
             id: "thai-max".into(),
@@ -3337,6 +3345,24 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "10-15 calls".into(),
             feature_count: 16,
             provider_type: "ollama".into(),
+            features: vec![
+                "Conversation Memory".into(),
+                "Retrieval Refinement".into(),
+                "Agentic Tool Use".into(),
+                "Adaptive Threshold".into(),
+                "Self-RAG".into(),
+                "Graph RAG".into(),
+                "Corrective RAG (CRAG)".into(),
+                "Contextual Compression".into(),
+                "Multimodal RAG".into(),
+                "RAPTOR Summaries".into(),
+                "ColBERT Reranking".into(),
+                "Active Learning".into(),
+                "Map-Reduce RAG".into(),
+                "RAGAS Evaluation".into(),
+                "Personal Memory".into(),
+                "Live Source Retrieval".into(),
+            ],
         },
         // ── Cloud Chat presets (OpenAI API) ──
         PresetInfo {
@@ -3361,6 +3387,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "5 calls".into(),
             feature_count: 0,
             provider_type: "cloud".into(),
+            features: vec![],
         },
         PresetInfo {
             id: "cloud-recommended".into(),
@@ -3385,6 +3412,12 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "5-7 calls".into(),
             feature_count: 4,
             provider_type: "cloud".into(),
+            features: vec![
+                "Conversation Memory".into(),
+                "ColBERT Reranking".into(),
+                "Active Learning".into(),
+                "Adaptive Threshold".into(),
+            ],
         },
         PresetInfo {
             id: "cloud-max".into(),
@@ -3411,6 +3444,24 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "10-15 calls".into(),
             feature_count: 16,
             provider_type: "cloud".into(),
+            features: vec![
+                "Conversation Memory".into(),
+                "Retrieval Refinement".into(),
+                "Agentic Tool Use".into(),
+                "Adaptive Threshold".into(),
+                "Self-RAG".into(),
+                "Graph RAG".into(),
+                "Corrective RAG (CRAG)".into(),
+                "Contextual Compression".into(),
+                "Multimodal RAG".into(),
+                "RAPTOR Summaries".into(),
+                "ColBERT Reranking".into(),
+                "Active Learning".into(),
+                "Map-Reduce RAG".into(),
+                "RAGAS Evaluation".into(),
+                "Personal Memory".into(),
+                "Live Source Retrieval".into(),
+            ],
         },
         // ── Document Processing presets ──
         PresetInfo {
@@ -3436,6 +3487,9 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "2-3 calls/page".into(),
             feature_count: 1,
             provider_type: "ollama".into(),
+            features: vec![
+                "AI Enrichment".into(),
+            ],
         },
         PresetInfo {
             id: "thai-doc-recommended".into(),
@@ -3461,6 +3515,10 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "3-5 calls/page".into(),
             feature_count: 2,
             provider_type: "ollama".into(),
+            features: vec![
+                "AI Enrichment".into(),
+                "Orchestrator".into(),
+            ],
         },
         // ── Cloud Document Processing presets ──
         PresetInfo {
@@ -3485,6 +3543,9 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "2-3 calls/page".into(),
             feature_count: 1,
             provider_type: "cloud".into(),
+            features: vec![
+                "AI Enrichment".into(),
+            ],
         },
         PresetInfo {
             id: "cloud-doc-recommended".into(),
@@ -3509,6 +3570,10 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             llm_calls_per_query: "3-5 calls/page".into(),
             feature_count: 2,
             provider_type: "cloud".into(),
+            features: vec![
+                "AI Enrichment".into(),
+                "Orchestrator".into(),
+            ],
         },
     ]
 }
