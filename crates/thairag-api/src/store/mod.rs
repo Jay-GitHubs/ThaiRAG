@@ -56,6 +56,32 @@ pub struct UserRecord {
     pub password_hash: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct VaultKeyRow {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub encrypted_key: String,
+    pub key_prefix: String,
+    pub key_suffix: String,
+    pub base_url: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmProfileRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub model: String,
+    pub base_url: String,
+    pub vault_key_id: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
     // ── Organization ────────────────────────────────────────────────
@@ -233,6 +259,18 @@ pub trait KmStoreTrait: Send + Sync {
         &self,
         connector_id: ConnectorId,
     ) -> Option<thairag_core::types::SyncRun>;
+
+    // ── API Key Vault ───────────────────────────────────────────────
+    fn list_vault_keys(&self) -> Vec<VaultKeyRow>;
+    fn get_vault_key(&self, id: &str) -> Option<VaultKeyRow>;
+    fn upsert_vault_key(&self, row: &VaultKeyRow);
+    fn delete_vault_key(&self, id: &str);
+
+    // ── LLM Profiles ────────────────────────────────────────────────
+    fn list_llm_profiles(&self) -> Vec<LlmProfileRow>;
+    fn get_llm_profile(&self, id: &str) -> Option<LlmProfileRow>;
+    fn upsert_llm_profile(&self, row: &LlmProfileRow);
+    fn delete_llm_profile(&self, id: &str);
 }
 
 /// Factory function to create the appropriate KM store.

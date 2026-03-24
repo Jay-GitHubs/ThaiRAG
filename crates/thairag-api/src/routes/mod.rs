@@ -8,6 +8,7 @@ pub mod km;
 pub mod models;
 pub mod settings;
 pub mod test_query;
+pub mod vault;
 
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderValue, Request};
@@ -278,7 +279,9 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/connectors/{id}/sync-runs",
             get(connectors::list_sync_runs),
         )
-        .route("/connectors/{id}/test", post(connectors::test_connection));
+        .route("/connectors/{id}/test", post(connectors::test_connection))
+        // API Key Vault + LLM Profiles
+        .nest("/settings/vault", vault::routes());
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let server_timeout = std::time::Duration::from_secs(state.config.server.request_timeout_secs);

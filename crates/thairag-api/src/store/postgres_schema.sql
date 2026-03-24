@@ -162,3 +162,29 @@ CREATE TABLE IF NOT EXISTS mcp_sync_runs (
     error_message    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_sync_runs_connector_id ON mcp_sync_runs(connector_id);
+
+-- API Key Vault
+CREATE TABLE IF NOT EXISTS api_key_vault (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    provider    TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    key_prefix  TEXT NOT NULL DEFAULT '',
+    key_suffix  TEXT NOT NULL DEFAULT '',
+    base_url    TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL
+);
+
+-- LLM Profiles
+CREATE TABLE IF NOT EXISTS llm_profiles (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    base_url    TEXT NOT NULL DEFAULT '',
+    vault_key_id TEXT REFERENCES api_key_vault(id) ON DELETE SET NULL,
+    max_tokens  INTEGER,
+    created_at  TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL
+);

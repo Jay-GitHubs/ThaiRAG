@@ -1782,6 +1782,154 @@ impl KmStoreTrait for SqliteKmStore {
         )
         .ok()
     }
+
+    // ── API Key Vault ───────────────────────────────────────────────
+
+    fn list_vault_keys(&self) -> Vec<super::VaultKeyRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at FROM api_key_vault ORDER BY created_at DESC")
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(super::VaultKeyRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                provider: row.get(2)?,
+                encrypted_key: row.get(3)?,
+                key_prefix: row.get(4)?,
+                key_suffix: row.get(5)?,
+                base_url: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_vault_key(&self, id: &str) -> Option<super::VaultKeyRow> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at FROM api_key_vault WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(super::VaultKeyRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    provider: row.get(2)?,
+                    encrypted_key: row.get(3)?,
+                    key_prefix: row.get(4)?,
+                    key_suffix: row.get(5)?,
+                    base_url: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            },
+        )
+        .ok()
+    }
+
+    fn upsert_vault_key(&self, row: &super::VaultKeyRow) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO api_key_vault (id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, provider = ?3, encrypted_key = ?4, key_prefix = ?5, key_suffix = ?6, base_url = ?7, updated_at = ?9",
+            params![
+                row.id,
+                row.name,
+                row.provider,
+                row.encrypted_key,
+                row.key_prefix,
+                row.key_suffix,
+                row.base_url,
+                row.created_at,
+                row.updated_at,
+            ],
+        )
+        .ok();
+    }
+
+    fn delete_vault_key(&self, id: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM api_key_vault WHERE id = ?1", params![id])
+            .ok();
+    }
+
+    // ── LLM Profiles ────────────────────────────────────────────────
+
+    fn list_llm_profiles(&self) -> Vec<super::LlmProfileRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at FROM llm_profiles ORDER BY created_at DESC")
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(super::LlmProfileRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                model: row.get(3)?,
+                base_url: row.get(4)?,
+                vault_key_id: row.get(5)?,
+                max_tokens: row.get::<_, Option<i32>>(6)?.map(|v| v as u32),
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_llm_profile(&self, id: &str) -> Option<super::LlmProfileRow> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at FROM llm_profiles WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(super::LlmProfileRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                    model: row.get(3)?,
+                    base_url: row.get(4)?,
+                    vault_key_id: row.get(5)?,
+                    max_tokens: row.get::<_, Option<i32>>(6)?.map(|v| v as u32),
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            },
+        )
+        .ok()
+    }
+
+    fn upsert_llm_profile(&self, row: &super::LlmProfileRow) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO llm_profiles (id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, kind = ?3, model = ?4, base_url = ?5, vault_key_id = ?6, max_tokens = ?7, updated_at = ?9",
+            params![
+                row.id,
+                row.name,
+                row.kind,
+                row.model,
+                row.base_url,
+                row.vault_key_id,
+                row.max_tokens.map(|v| v as i32),
+                row.created_at,
+                row.updated_at,
+            ],
+        )
+        .ok();
+    }
+
+    fn delete_llm_profile(&self, id: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM llm_profiles WHERE id = ?1", params![id])
+            .ok();
+    }
 }
 
 #[cfg(test)]

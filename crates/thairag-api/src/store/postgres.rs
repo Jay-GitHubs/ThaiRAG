@@ -1723,4 +1723,168 @@ impl KmStoreTrait for PostgresKmStore {
             pg_row_to_sync_run(id, cid, started, completed, status, disc, crea, upd, skip, fail, err)
         })
     }
+
+    // ── API Key Vault ───────────────────────────────────────────────
+
+    fn list_vault_keys(&self) -> Vec<super::VaultKeyRow> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, String, String, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at FROM api_key_vault ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at)| {
+            super::VaultKeyRow {
+                id,
+                name,
+                provider,
+                encrypted_key,
+                key_prefix,
+                key_suffix,
+                base_url,
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+        .collect()
+    }
+
+    fn get_vault_key(&self, id: &str) -> Option<super::VaultKeyRow> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, String, String, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at FROM api_key_vault WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at)| {
+            super::VaultKeyRow {
+                id,
+                name,
+                provider,
+                encrypted_key,
+                key_prefix,
+                key_suffix,
+                base_url,
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+    }
+
+    fn upsert_vault_key(&self, row: &super::VaultKeyRow) {
+        let created_at: DateTime<Utc> = row.created_at.parse().unwrap_or_else(|_| Utc::now());
+        let updated_at: DateTime<Utc> = row.updated_at.parse().unwrap_or_else(|_| Utc::now());
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO api_key_vault (id, name, provider, encrypted_key, key_prefix, key_suffix, base_url, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (id) DO UPDATE SET name = $2, provider = $3, encrypted_key = $4, key_prefix = $5, key_suffix = $6, base_url = $7, updated_at = $9",
+            )
+            .bind(&row.id)
+            .bind(&row.name)
+            .bind(&row.provider)
+            .bind(&row.encrypted_key)
+            .bind(&row.key_prefix)
+            .bind(&row.key_suffix)
+            .bind(&row.base_url)
+            .bind(created_at)
+            .bind(updated_at)
+            .execute(&self.pool),
+        );
+    }
+
+    fn delete_vault_key(&self, id: &str) {
+        let _ = block_on(
+            sqlx::query("DELETE FROM api_key_vault WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool),
+        );
+    }
+
+    // ── LLM Profiles ────────────────────────────────────────────────
+
+    fn list_llm_profiles(&self) -> Vec<super::LlmProfileRow> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, Option<String>, Option<i32>, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at FROM llm_profiles ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at)| {
+            super::LlmProfileRow {
+                id,
+                name,
+                kind,
+                model,
+                base_url,
+                vault_key_id,
+                max_tokens: max_tokens.map(|v| v as u32),
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+        .collect()
+    }
+
+    fn get_llm_profile(&self, id: &str) -> Option<super::LlmProfileRow> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, Option<String>, Option<i32>, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at FROM llm_profiles WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at)| {
+            super::LlmProfileRow {
+                id,
+                name,
+                kind,
+                model,
+                base_url,
+                vault_key_id,
+                max_tokens: max_tokens.map(|v| v as u32),
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+    }
+
+    fn upsert_llm_profile(&self, row: &super::LlmProfileRow) {
+        let created_at: DateTime<Utc> = row.created_at.parse().unwrap_or_else(|_| Utc::now());
+        let updated_at: DateTime<Utc> = row.updated_at.parse().unwrap_or_else(|_| Utc::now());
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO llm_profiles (id, name, kind, model, base_url, vault_key_id, max_tokens, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (id) DO UPDATE SET name = $2, kind = $3, model = $4, base_url = $5, vault_key_id = $6, max_tokens = $7, updated_at = $9",
+            )
+            .bind(&row.id)
+            .bind(&row.name)
+            .bind(&row.kind)
+            .bind(&row.model)
+            .bind(&row.base_url)
+            .bind(&row.vault_key_id)
+            .bind(row.max_tokens.map(|v| v as i32))
+            .bind(created_at)
+            .bind(updated_at)
+            .execute(&self.pool),
+        );
+    }
+
+    fn delete_llm_profile(&self, id: &str) {
+        let _ = block_on(
+            sqlx::query("DELETE FROM llm_profiles WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool),
+        );
+    }
 }

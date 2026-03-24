@@ -1,15 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createIdentityProvider,
+  createLlmProfile,
+  createVaultKey,
   deleteIdentityProvider,
+  deleteLlmProfile,
+  deleteVaultKey,
   getProviderConfig,
   listAvailableModels,
   listIdentityProviders,
+  listLlmProfiles,
+  listVaultKeys,
   testIdpConnection,
+  testVaultKey,
   updateIdentityProvider,
+  updateLlmProfile,
   updateProviderConfig,
+  updateVaultKey,
 } from '../api/settings';
-import type { CreateIdpRequest, UpdateIdpRequest, UpdateProviderConfigRequest } from '../api/types';
+import type {
+  CreateIdpRequest,
+  CreateLlmProfileRequest,
+  CreateVaultKeyRequest,
+  UpdateIdpRequest,
+  UpdateLlmProfileRequest,
+  UpdateProviderConfigRequest,
+  UpdateVaultKeyRequest,
+} from '../api/types';
 
 export function useIdentityProviders() {
   return useQuery({
@@ -71,5 +88,79 @@ export function useAvailableModels() {
   return useQuery({
     queryKey: ['available-models'],
     queryFn: () => listAvailableModels(),
+  });
+}
+
+// ── API Key Vault ──────────────────────────────────────────────────
+
+export function useVaultKeys() {
+  return useQuery({
+    queryKey: ['vault-keys'],
+    queryFn: () => listVaultKeys(),
+  });
+}
+
+export function useCreateVaultKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateVaultKeyRequest) => createVaultKey(data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vault-keys'] }),
+  });
+}
+
+export function useUpdateVaultKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateVaultKeyRequest }) =>
+      updateVaultKey(id, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vault-keys'] }),
+  });
+}
+
+export function useDeleteVaultKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteVaultKey(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vault-keys'] }),
+  });
+}
+
+export function useTestVaultKey() {
+  return useMutation({
+    mutationFn: (id: string) => testVaultKey(id),
+  });
+}
+
+// ── LLM Profiles ──────────────────────────────────────────────────
+
+export function useLlmProfiles() {
+  return useQuery({
+    queryKey: ['llm-profiles'],
+    queryFn: () => listLlmProfiles(),
+  });
+}
+
+export function useCreateLlmProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateLlmProfileRequest) => createLlmProfile(data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['llm-profiles'] }),
+  });
+}
+
+export function useUpdateLlmProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateLlmProfileRequest }) =>
+      updateLlmProfile(id, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['llm-profiles'] }),
+  });
+}
+
+export function useDeleteLlmProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteLlmProfile(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['llm-profiles'] }),
   });
 }

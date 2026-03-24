@@ -39,6 +39,8 @@ pub struct MemoryKmStore {
     sync_states: RwLock<HashMap<(ConnectorId, String), SyncState>>,
     sync_runs: RwLock<Vec<SyncRun>>,
     chunks: RwLock<Vec<thairag_core::types::DocumentChunk>>,
+    vault_keys: RwLock<HashMap<String, super::VaultKeyRow>>,
+    llm_profiles: RwLock<HashMap<String, super::LlmProfileRow>>,
 }
 
 impl Default for MemoryKmStore {
@@ -64,6 +66,8 @@ impl MemoryKmStore {
             sync_states: RwLock::new(HashMap::new()),
             sync_runs: RwLock::new(Vec::new()),
             chunks: RwLock::new(Vec::new()),
+            vault_keys: RwLock::new(HashMap::new()),
+            llm_profiles: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -955,6 +959,54 @@ impl KmStoreTrait for MemoryKmStore {
             .filter(|r| r.connector_id == connector_id)
             .max_by_key(|r| r.started_at)
             .cloned()
+    }
+
+    // ── API Key Vault ───────────────────────────────────────────────
+
+    fn list_vault_keys(&self) -> Vec<super::VaultKeyRow> {
+        let map = self.vault_keys.read().unwrap();
+        let mut keys: Vec<_> = map.values().cloned().collect();
+        keys.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        keys
+    }
+
+    fn get_vault_key(&self, id: &str) -> Option<super::VaultKeyRow> {
+        self.vault_keys.read().unwrap().get(id).cloned()
+    }
+
+    fn upsert_vault_key(&self, row: &super::VaultKeyRow) {
+        self.vault_keys
+            .write()
+            .unwrap()
+            .insert(row.id.clone(), row.clone());
+    }
+
+    fn delete_vault_key(&self, id: &str) {
+        self.vault_keys.write().unwrap().remove(id);
+    }
+
+    // ── LLM Profiles ────────────────────────────────────────────────
+
+    fn list_llm_profiles(&self) -> Vec<super::LlmProfileRow> {
+        let map = self.llm_profiles.read().unwrap();
+        let mut profiles: Vec<_> = map.values().cloned().collect();
+        profiles.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        profiles
+    }
+
+    fn get_llm_profile(&self, id: &str) -> Option<super::LlmProfileRow> {
+        self.llm_profiles.read().unwrap().get(id).cloned()
+    }
+
+    fn upsert_llm_profile(&self, row: &super::LlmProfileRow) {
+        self.llm_profiles
+            .write()
+            .unwrap()
+            .insert(row.id.clone(), row.clone());
+    }
+
+    fn delete_llm_profile(&self, id: &str) {
+        self.llm_profiles.write().unwrap().remove(id);
     }
 }
 

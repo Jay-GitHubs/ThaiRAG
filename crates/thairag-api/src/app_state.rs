@@ -42,6 +42,43 @@ use crate::metrics::MetricsState;
 use crate::oidc::OidcStateCache;
 use crate::session::SessionStore;
 use crate::store::{KmStoreTrait, create_km_store};
+use crate::vault::Vault;
+
+/// Resolve a `LlmConfig` through the vault profile system.
+///
+/// If the config has a `profile_id`, we look up the corresponding
+/// `LlmProfileRow` in the store, decrypt the API key from the vault,
+/// and return a fully resolved `LlmConfig`. Otherwise we return a clone.
+fn resolve_profile(
+    config: &thairag_config::schema::LlmConfig,
+    store: Option<&dyn KmStoreTrait>,
+    vault: &Vault,
+) -> thairag_config::schema::LlmConfig {
+    if let Some(ref pid) = config.profile_id
+        && let Some(store) = store
+        && let Some(profile) = store.get_llm_profile(pid)
+    {
+        let api_key = profile
+            .vault_key_id
+            .as_deref()
+            .and_then(|kid| store.get_vault_key(kid))
+            .map(|vk| vault.decrypt(&vk.encrypted_key).unwrap_or_default())
+            .unwrap_or_default();
+
+        let kind =
+            crate::routes::settings::parse_llm_kind(&profile.kind).unwrap_or(config.kind.clone());
+
+        return thairag_config::schema::LlmConfig {
+            kind,
+            model: profile.model,
+            base_url: profile.base_url,
+            api_key,
+            max_tokens: profile.max_tokens.or(config.max_tokens),
+            profile_id: Some(pid.clone()),
+        };
+    }
+    config.clone()
+}
 
 /// Dynamic provider state that can be hot-swapped by super admin.
 #[derive(Clone)]
@@ -80,7 +117,7 @@ impl ProviderBundle {
         chat: &ChatPipelineConfig,
         prompts: Arc<thairag_core::PromptRegistry>,
     ) -> Self {
-        Self::build_full(providers, search, doc, chat, prompts, None)
+        Self::build_full(providers, search, doc, chat, prompts, None, None)
     }
 
     pub fn build_full(
@@ -90,6 +127,7 @@ impl ProviderBundle {
         chat: &ChatPipelineConfig,
         prompts: Arc<thairag_core::PromptRegistry>,
         km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
+        vault: Option<&Vault>,
     ) -> Self {
         let ollama_ka = &chat.ollama_keep_alive;
         let ka_opt = if ollama_ka.is_empty() {
@@ -97,8 +135,15 @@ impl ProviderBundle {
         } else {
             Some(ollama_ka.as_str())
         };
+
+        // Resolve the main LLM config through the vault profile system
+        let resolved_llm_cfg = if let Some(v) = vault {
+            resolve_profile(&providers.llm, km_store.as_ref().map(|s| s.as_ref()), v)
+        } else {
+            providers.llm.clone()
+        };
         let llm: Arc<dyn LlmProvider> = Arc::from(create_llm_provider_with_options(
-            &providers.llm,
+            &resolved_llm_cfg,
             120,
             ka_opt,
         ));
@@ -135,15 +180,26 @@ impl ProviderBundle {
         //   agent-specific config → shared preprocessing LLM → main chat LLM
         let shared_preprocessing_llm: Arc<dyn LlmProvider> =
             if let Some(ref cfg) = doc.ai_preprocessing.llm {
-                Arc::from(create_llm_provider(cfg))
+                let resolved = if let Some(v) = vault {
+                    resolve_profile(cfg, km_store.as_ref().map(|s| s.as_ref()), v)
+                } else {
+                    cfg.clone()
+                };
+                Arc::from(create_llm_provider(&resolved))
             } else {
                 Arc::clone(&llm)
             };
 
+        let store_ref = km_store.as_ref().map(|s| s.as_ref());
         let resolve_agent_llm =
             |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
                 if let Some(cfg) = agent_cfg {
-                    Arc::from(create_llm_provider(cfg))
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
+                    Arc::from(create_llm_provider(&resolved))
                 } else {
                     Arc::clone(&shared_preprocessing_llm)
                 }
@@ -181,7 +237,16 @@ impl ProviderBundle {
         let chat_pipeline = if chat.enabled {
             let chat_timeout = chat.request_timeout_secs;
             let chat_shared_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = chat.llm {
-                Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
+                let resolved = if let Some(v) = vault {
+                    resolve_profile(cfg, store_ref, v)
+                } else {
+                    cfg.clone()
+                };
+                Arc::from(create_llm_provider_with_options(
+                    &resolved,
+                    chat_timeout,
+                    ka_opt,
+                ))
             } else {
                 Arc::clone(&llm)
             };
@@ -190,13 +255,22 @@ impl ProviderBundle {
                                           agent_cfg: &Option<thairag_config::schema::LlmConfig>|
              -> Arc<dyn LlmProvider> {
                 if let Some(cfg) = agent_cfg {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
                     tracing::info!(
                         agent = agent_name,
-                        kind = ?cfg.kind,
-                        model = %cfg.model,
+                        kind = ?resolved.kind,
+                        model = %resolved.model,
                         "Chat agent: using per-agent LLM"
                     );
-                    Arc::from(create_llm_provider_with_options(cfg, chat_timeout, ka_opt))
+                    Arc::from(create_llm_provider_with_options(
+                        &resolved,
+                        chat_timeout,
+                        ka_opt,
+                    ))
                 } else {
                     tracing::info!(
                         agent = agent_name,
@@ -551,7 +625,12 @@ impl ProviderBundle {
         // ── Context Compaction ──
         let context_compactor = if chat.context_compaction_enabled {
             let compactor_llm = if let Some(ref cfg) = chat.personal_memory_llm {
-                Arc::from(create_llm_provider(cfg))
+                let resolved = if let Some(v) = vault {
+                    resolve_profile(cfg, store_ref, v)
+                } else {
+                    cfg.clone()
+                };
+                Arc::from(create_llm_provider(&resolved))
             } else {
                 Arc::clone(&llm)
             };
@@ -661,6 +740,7 @@ pub struct AppState {
     pub user_request_limiter: UserRequestLimiter,
     /// Per-user token-bucket rate limiter (applied after auth).
     pub user_rate_limiter: crate::rate_limit::UserRateLimiter,
+    pub vault: Arc<Vault>,
     providers: Arc<RwLock<ProviderBundle>>,
 }
 
@@ -690,6 +770,7 @@ impl AppState {
             chat,
             Arc::clone(&self.prompt_registry),
             Some(Arc::clone(&self.km_store)),
+            Some(&*self.vault),
         )
     }
 
@@ -704,6 +785,14 @@ impl AppState {
             config.auth.max_login_attempts,
             config.auth.lockout_duration_secs,
         );
+
+        // Use a temporary directory for the test vault encryption key
+        let test_vault_dir =
+            std::env::temp_dir().join(format!("thairag-test-vault-{}", std::process::id()));
+        let vault = Arc::new(Vault::init(
+            test_vault_dir.to_str().unwrap_or("/tmp/thairag-test-vault"),
+        ));
+
         Self {
             config,
             jwt,
@@ -716,6 +805,7 @@ impl AppState {
             prompt_registry: Arc::new(PromptRegistry::new()),
             user_request_limiter: UserRequestLimiter::new(5),
             user_rate_limiter: crate::rate_limit::UserRateLimiter::new(10, 20),
+            vault,
             providers: Arc::new(RwLock::new(bundle)),
         }
     }
@@ -801,6 +891,8 @@ impl AppState {
             tracing::info!(count = api_keys.len(), "Loaded static API keys");
         }
 
+        let vault = Arc::new(Vault::init("/data"));
+
         // Re-build the provider bundle now that km_store is available, so DB-stored
         // per-agent LLM configs (from presets) are picked up on restart.
         let bundle = {
@@ -822,6 +914,7 @@ impl AppState {
                 &eff_chat,
                 Arc::clone(&prompt_registry),
                 Some(Arc::clone(&km_store)),
+                Some(&*vault),
             )
         };
 
@@ -847,6 +940,7 @@ impl AppState {
             prompt_registry,
             user_request_limiter,
             user_rate_limiter,
+            vault,
             providers: Arc::new(RwLock::new(bundle)),
         }
     }
