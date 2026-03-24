@@ -35,9 +35,20 @@ function CallsTag({ calls }: { calls: string }) {
   return <Tag><ApiOutlined /> {calls}</Tag>;
 }
 
-function FeatureTag({ count }: { count: number }) {
-  const color = count === 0 ? 'default' : count <= 5 ? 'blue' : 'purple';
-  return <Tag color={color}><AppstoreOutlined /> {count} feature{count !== 1 ? 's' : ''}</Tag>;
+function FeatureTags({ features }: { features: string[] }) {
+  if (features.length === 0) {
+    return <Tag color="default"><AppstoreOutlined /> No extra features</Tag>;
+  }
+  return (
+    <>
+      <Tag color={features.length <= 5 ? 'blue' : 'purple'}>
+        <AppstoreOutlined /> {features.length} feature{features.length !== 1 ? 's' : ''}
+      </Tag>
+      {features.map(f => (
+        <Tag key={f} style={{ fontSize: 11 }}>{f}</Tag>
+      ))}
+    </>
+  );
 }
 
 export function PresetsCard() {
@@ -202,7 +213,7 @@ export function PresetsCard() {
           <CostTag cost={preset.estimated_cost_per_query} />
           <LatencyTag latency={preset.estimated_latency} />
           <CallsTag calls={preset.llm_calls_per_query} />
-          <FeatureTag count={preset.feature_count} />
+          <FeatureTags features={preset.features || []} />
         </div>
 
         <Table<PresetModelInfo>
