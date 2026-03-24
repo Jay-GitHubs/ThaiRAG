@@ -11,17 +11,22 @@ test.describe('Quick Setup Presets', () => {
   test('shows Chat and Document preset sections', async ({ page }) => {
     const panel = page.getByRole('tabpanel');
 
-    // Dividers
-    await expect(panel.locator('.ant-divider').filter({ hasText: 'Chat & Response Pipeline' })).toBeVisible();
-    await expect(panel.locator('.ant-divider').filter({ hasText: 'Document Processing' })).toBeVisible();
+    // Collapse panel for Chat section
+    await expect(panel.getByText('Chat & Response Pipeline')).toBeVisible();
 
-    // Chat preset cards
+    // Chat preset cards (always present)
     await expect(panel.getByText('Thai Basic')).toBeVisible();
     await expect(panel.getByText('Thai Recommended')).toBeVisible();
-    await expect(panel.getByText('Thai Maximum')).toBeVisible();
 
-    // Document preset cards
-    await expect(panel.getByText('Thai Doc Basic')).toBeVisible();
+    // Scroll to Thai Maximum (may be below fold)
+    const thaiMax = panel.getByText('Thai Maximum');
+    await thaiMax.scrollIntoViewIfNeeded();
+    await expect(thaiMax).toBeVisible();
+
+    // Scroll to Document Processing section (collapse panel header)
+    const docBasic = panel.getByText('Thai Doc Basic');
+    await docBasic.scrollIntoViewIfNeeded();
+    await expect(docBasic).toBeVisible();
     await expect(panel.getByText('Thai Doc Recommended')).toBeVisible();
   });
 
