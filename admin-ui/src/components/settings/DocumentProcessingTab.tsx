@@ -31,6 +31,7 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { getDocumentConfig, updateDocumentConfig, syncModels, getProviderConfig, updateProviderConfig, syncEmbeddingModels } from '../../api/settings';
+import { useLlmProfiles } from '../../hooks/useSettings';
 import type {
   AiPreprocessingConfig,
   AvailableModel,
@@ -131,6 +132,7 @@ interface LlmFormState {
   model: string;
   base_url: string;
   api_key: string;
+  profile_id?: string;
 }
 
 const defaultLlmForm: LlmFormState = {
@@ -146,6 +148,7 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     model: info.model,
     base_url: info.base_url || (info.kind === 'Ollama' ? 'http://localhost:11435' : ''),
     api_key: '',
+    profile_id: info.profile_id,
   };
 }
 
@@ -175,6 +178,10 @@ interface LlmConfigFormProps {
 function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requireVision, onModelsLoaded }: LlmConfigFormProps) {
   const [syncedModels, setSyncedModels] = useState<AvailableModel[] | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const { data: profiles } = useLlmProfiles();
+  const profileList = profiles ?? [];
+  const isProfileMode = !!form.profile_id;
+  const selectedProfile = profileList.find((p) => p.id === form.profile_id);
 
   useEffect(() => {
     setSyncedModels(null);
@@ -246,97 +253,145 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap }}>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 180, flex: compact ? '0 0 180px' : '0 0 220px' }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>Provider</Text>
+      {profileList.length > 0 && (
+        <Segmented
+          size="small"
+          options={[
+            { label: 'Custom', value: 'custom' },
+            { label: 'Profile', value: 'profile' },
+          ]}
+          value={isProfileMode ? 'profile' : 'custom'}
+          onChange={(v) => {
+            if (v === 'profile') {
+              const first = profileList[0];
+              onChange({ ...form, profile_id: first.id, kind: first.kind, model: first.model });
+            } else {
+              onChange({ ...form, profile_id: undefined });
+            }
+          }}
+        />
+      )}
+
+      {isProfileMode ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Select
             size={compact ? 'small' : 'middle'}
-            style={{ width: '100%', marginTop: 2 }}
-            value={form.kind}
-            onChange={(v) =>
-              onChange({
-                kind: v,
-                model: '',
-                base_url: v === 'Ollama' ? 'http://localhost:11435' : '',
-                api_key: '',
-              })
-            }
-            options={providerOptions}
+            value={form.profile_id}
+            onChange={(id) => {
+              const p = profileList.find((pp) => pp.id === id);
+              if (p) onChange({ ...form, profile_id: p.id, kind: p.kind, model: p.model });
+            }}
+            style={{ maxWidth: 400 }}
+            options={profileList.map((p) => ({
+              label: `${p.name} (${p.kind} / ${p.model})`,
+              value: p.id,
+            }))}
           />
+          {selectedProfile && (
+            <div style={{ fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Tag>{selectedProfile.kind}</Tag>
+              <Tag color="blue">{selectedProfile.model}</Tag>
+              {selectedProfile.vault_key_name && (
+                <Tag color="green">Key: {selectedProfile.vault_key_name}</Tag>
+              )}
+            </div>
+          )}
         </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>Model</Text>
-          <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
-            {useModelSelect ? (
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 180, flex: compact ? '0 0 180px' : '0 0 220px' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>Provider</Text>
               <Select
                 size={compact ? 'small' : 'middle'}
-                showSearch
-                optionFilterProp="label"
-                options={modelOptions}
-                value={form.model || undefined}
-                onChange={(v) => onChange({ ...form, model: v })}
-                placeholder="Select a model"
-                style={{ flex: 1 }}
-                allowClear={false}
-              />
-            ) : (
-              <Input
-                size={compact ? 'small' : 'middle'}
-                value={form.model}
-                onChange={(e) => onChange({ ...form, model: e.target.value })}
-                placeholder={
-                  form.kind === 'Ollama'
-                    ? 'Sync to discover, or type e.g. llama3.2'
-                    : form.kind === 'OpenAiCompatible'
-                    ? 'e.g. deepseek-chat'
-                    : 'Enter model name'
+                style={{ width: '100%', marginTop: 2 }}
+                value={form.kind}
+                onChange={(v) =>
+                  onChange({
+                    kind: v,
+                    model: '',
+                    base_url: v === 'Ollama' ? 'http://localhost:11435' : '',
+                    api_key: '',
+                  })
                 }
-                style={{ flex: 1 }}
+                options={providerOptions}
               />
-            )}
-            <Tooltip title="Fetch available models from provider">
-              <Button
-                size={compact ? 'small' : 'middle'}
-                icon={<SyncOutlined spin={syncing} />}
-                onClick={handleSync}
-                loading={syncing}
-              />
-            </Tooltip>
+            </div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>Model</Text>
+              <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+                {useModelSelect ? (
+                  <Select
+                    size={compact ? 'small' : 'middle'}
+                    showSearch
+                    optionFilterProp="label"
+                    options={modelOptions}
+                    value={form.model || undefined}
+                    onChange={(v) => onChange({ ...form, model: v })}
+                    placeholder="Select a model"
+                    style={{ flex: 1 }}
+                    allowClear={false}
+                  />
+                ) : (
+                  <Input
+                    size={compact ? 'small' : 'middle'}
+                    value={form.model}
+                    onChange={(e) => onChange({ ...form, model: e.target.value })}
+                    placeholder={
+                      form.kind === 'Ollama'
+                        ? 'Sync to discover, or type e.g. llama3.2'
+                        : form.kind === 'OpenAiCompatible'
+                        ? 'e.g. deepseek-chat'
+                        : 'Enter model name'
+                    }
+                    style={{ flex: 1 }}
+                  />
+                )}
+                <Tooltip title="Fetch available models from provider">
+                  <Button
+                    size={compact ? 'small' : 'middle'}
+                    icon={<SyncOutlined spin={syncing} />}
+                    onClick={handleSync}
+                    loading={syncing}
+                  />
+                </Tooltip>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {(needsBaseUrl || needsApiKey) && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {needsBaseUrl && (
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>Base URL</Text>
-              <Input
-                size={compact ? 'small' : 'middle'}
-                style={{ marginTop: 2 }}
-                value={form.base_url}
-                onChange={(e) => onChange({ ...form, base_url: e.target.value })}
-                placeholder={
-                  form.kind === 'Ollama'
-                    ? 'http://localhost:11435'
-                    : 'e.g. https://api.groq.com/openai'
-                }
-              />
+          {(needsBaseUrl || needsApiKey) && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {needsBaseUrl && (
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Base URL</Text>
+                  <Input
+                    size={compact ? 'small' : 'middle'}
+                    style={{ marginTop: 2 }}
+                    value={form.base_url}
+                    onChange={(e) => onChange({ ...form, base_url: e.target.value })}
+                    placeholder={
+                      form.kind === 'Ollama'
+                        ? 'http://localhost:11435'
+                        : 'e.g. https://api.groq.com/openai'
+                    }
+                  />
+                </div>
+              )}
+              {needsApiKey && (
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>API Key</Text>
+                  <Input.Password
+                    size={compact ? 'small' : 'middle'}
+                    style={{ marginTop: 2 }}
+                    value={form.api_key}
+                    onChange={(e) => onChange({ ...form, api_key: e.target.value })}
+                    placeholder={existingKey ? '(unchanged)' : 'Enter API key'}
+                  />
+                </div>
+              )}
             </div>
           )}
-          {needsApiKey && (
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>API Key</Text>
-              <Input.Password
-                size={compact ? 'small' : 'middle'}
-                style={{ marginTop: 2 }}
-                value={form.api_key}
-                onChange={(e) => onChange({ ...form, api_key: e.target.value })}
-                placeholder={existingKey ? '(unchanged)' : 'Enter API key'}
-              />
-            </div>
-          )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -673,6 +728,7 @@ export function DocumentProcessingTab() {
   }
 
   function validateLlmForm(form: LlmFormState, label: string, existingKey?: boolean): string | null {
+    if (form.profile_id) return null; // Profile mode — no validation needed
     if (!form.model.trim()) return `Please select or enter a model for ${label}`;
     const needsKey = ['Claude', 'OpenAi', 'Gemini'].includes(form.kind);
     if (needsKey && !form.api_key && !existingKey) return `API key is required for ${label}`;
@@ -681,13 +737,20 @@ export function DocumentProcessingTab() {
     return null;
   }
 
-  function buildLlmUpdate(form: LlmFormState): LlmConfigUpdate {
-    return {
+  function buildLlmUpdate(form: LlmFormState, hadProfileBefore?: boolean): LlmConfigUpdate {
+    if (form.profile_id) {
+      return { profile_id: form.profile_id };
+    }
+    const update: LlmConfigUpdate = {
       kind: form.kind,
       model: form.model.trim(),
       base_url: form.base_url.trim() || undefined,
       api_key: form.api_key || undefined,
     };
+    if (hadProfileBefore) {
+      update.clear_profile = true;
+    }
+    return update;
   }
 
   async function handleSavePipeline() {
@@ -757,7 +820,7 @@ export function DocumentProcessingTab() {
       const ai = req.ai_preprocessing!;
 
       if (llmMode === 'shared') {
-        ai.llm = buildLlmUpdate(llmForm);
+        ai.llm = buildLlmUpdate(llmForm, !!aiConfig.llm?.profile_id);
         // Remove per-agent overrides
         for (const agent of ['analyzer', 'converter', 'quality', 'chunker', 'enricher', 'orchestrator'] as const) {
           (ai as Record<string, unknown>)[`remove_${agent}_llm`] = true;
@@ -767,8 +830,10 @@ export function DocumentProcessingTab() {
         for (const agent of ['analyzer', 'converter', 'quality', 'chunker', 'enricher', 'orchestrator'] as const) {
           const state = agentLlms[agent];
           if (state.enabled) {
+            const existingKey = `${agent}_llm` as keyof AiPreprocessingConfig;
+            const existingInfo = aiConfig[existingKey] as LlmProviderInfo | undefined;
             (ai as Record<string, unknown>)[`${agent}_llm`] = {
-              ...buildLlmUpdate(state.form),
+              ...buildLlmUpdate(state.form, !!existingInfo?.profile_id),
               max_tokens: state.max_tokens,
             };
           } else {
@@ -1153,7 +1218,10 @@ export function DocumentProcessingTab() {
                           )}
                           <Text type="secondary" style={{ fontSize: 12, flex: 1 }}>
                             {state.enabled
-                              ? `${state.form.kind} / ${state.form.model || '...'}`
+                              ? (state.form.profile_id
+                                ? `Profile: ${state.form.kind} / ${state.form.model || '...'}`
+                                : `${state.form.kind} / ${state.form.model || '...'}`)
+
                               : 'Uses Chat LLM'}
                           </Text>
                         </div>

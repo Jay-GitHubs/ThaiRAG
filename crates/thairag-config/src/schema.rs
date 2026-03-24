@@ -245,7 +245,7 @@ pub struct ProvidersConfig {
     pub reranker: RerankerConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 pub struct LlmConfig {
     pub kind: LlmKind,
     pub model: String,
@@ -256,6 +256,30 @@ pub struct LlmConfig {
     /// Per-agent max output tokens. None = use global `agent_max_tokens`.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Optional vault profile ID. When set, the profile's stored credentials
+    /// are resolved at provider-build time via the Vault.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("kind", &self.kind)
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "(none)"
+                } else {
+                    "***"
+                },
+            )
+            .field("max_tokens", &self.max_tokens)
+            .field("profile_id", &self.profile_id)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -1066,6 +1090,7 @@ mod tests {
                     base_url: "http://localhost:11435".into(),
                     api_key: String::new(),
                     max_tokens: None,
+                    profile_id: None,
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,

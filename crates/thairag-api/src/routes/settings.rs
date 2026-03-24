@@ -15,7 +15,7 @@ use crate::audit::{self, AuditEntry};
 use crate::error::{ApiError, AppJson};
 
 /// Parse an LLM kind string accepting both PascalCase (from UI) and snake_case (from serde).
-fn parse_llm_kind(s: &str) -> Result<thairag_core::types::LlmKind, String> {
+pub fn parse_llm_kind(s: &str) -> Result<thairag_core::types::LlmKind, String> {
     use thairag_core::types::LlmKind;
     match s {
         "Ollama" | "ollama" => Ok(LlmKind::Ollama),
@@ -100,6 +100,8 @@ pub struct LlmProviderInfo {
     pub supports_vision: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -199,7 +201,7 @@ pub struct TestConnectionResponse {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn require_super_admin(claims: &AuthClaims, state: &AppState) -> Result<(), ApiError> {
+pub fn require_super_admin(claims: &AuthClaims, state: &AppState) -> Result<(), ApiError> {
     if claims.sub == "anonymous" {
         return Ok(());
     }
@@ -330,6 +332,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             has_api_key: !p.llm.api_key.is_empty(),
             supports_vision: is_vision_model(&p.llm.kind, &p.llm.model),
             max_tokens: None,
+            profile_id: p.llm.profile_id.clone(),
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -383,6 +386,10 @@ pub struct UpdateLlmConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub max_tokens: Option<u32>,
+    /// Set a vault profile ID to resolve credentials from the vault.
+    pub profile_id: Option<String>,
+    /// When true, clear the current profile_id (set to None).
+    pub clear_profile: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1448,6 +1455,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         has_api_key: !llm.api_key.is_empty(),
         supports_vision: is_vision_model(&llm.kind, &llm.model),
         max_tokens: llm.max_tokens,
+        profile_id: llm.profile_id.clone(),
     }
 }
 
@@ -2942,6 +2950,12 @@ pub async fn update_chat_pipeline_config(
         if let Some(max_tokens) = update.max_tokens {
             cfg.max_tokens = Some(max_tokens);
         }
+        // Profile ID management
+        if update.clear_profile == Some(true) {
+            cfg.profile_id = None;
+        } else if let Some(ref pid) = update.profile_id {
+            cfg.profile_id = Some(pid.clone());
+        }
         let json = serde_json::to_string(&cfg)
             .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize: {e}"))))?;
         state.km_store.set_setting(key, &json);
@@ -3636,6 +3650,7 @@ pub async fn apply_preset(
         .to_string()
     }
 
+    #[allow(dead_code)] // kept for backward compatibility
     fn cloud_llm(model: &str, api_key: &str) -> String {
         serde_json::json!({
             "kind": "openai",
@@ -3645,6 +3660,104 @@ pub async fn apply_preset(
         })
         .to_string()
     }
+
+    // ── Vault-backed cloud helpers ─────────────────────────────────
+    // Ensure a single vault key exists for the provider, returning its ID.
+    let ensure_vault_key = |api_key: &str, provider_name: &str| -> String {
+        let now = chrono::Utc::now().to_rfc3339();
+        let existing = store.list_vault_keys();
+        let existing_row = existing.iter().find(|k| k.name == provider_name);
+
+        let key_prefix = if api_key.len() >= 4 {
+            api_key[..4].to_string()
+        } else {
+            api_key.to_string()
+        };
+        let key_suffix = if api_key.len() >= 4 {
+            api_key[api_key.len() - 4..].to_string()
+        } else {
+            api_key.to_string()
+        };
+        let encrypted = state.vault.encrypt(api_key);
+
+        if let Some(row) = existing_row {
+            // Update the existing vault key with the new encrypted key
+            let updated = crate::store::VaultKeyRow {
+                id: row.id.clone(),
+                name: provider_name.to_string(),
+                provider: "openai".to_string(),
+                encrypted_key: encrypted,
+                key_prefix,
+                key_suffix,
+                base_url: String::new(),
+                created_at: row.created_at.clone(),
+                updated_at: now,
+            };
+            store.upsert_vault_key(&updated);
+            row.id.clone()
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let row = crate::store::VaultKeyRow {
+                id: id.clone(),
+                name: provider_name.to_string(),
+                provider: "openai".to_string(),
+                encrypted_key: encrypted,
+                key_prefix,
+                key_suffix,
+                base_url: String::new(),
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            store.upsert_vault_key(&row);
+            id
+        }
+    };
+
+    // Ensure an LLM profile exists for the given model, returning a JSON
+    // config string with profile_id instead of raw api_key.
+    let ensure_llm_profile = |vault_key_id: &str, name: &str, model: &str| -> String {
+        let now = chrono::Utc::now().to_rfc3339();
+        let existing = store.list_llm_profiles();
+        let existing_row = existing.iter().find(|p| p.name == name);
+
+        let profile_id = if let Some(row) = existing_row {
+            let updated = crate::store::LlmProfileRow {
+                id: row.id.clone(),
+                name: name.to_string(),
+                kind: "openai".to_string(),
+                model: model.to_string(),
+                base_url: String::new(),
+                vault_key_id: Some(vault_key_id.to_string()),
+                max_tokens: None,
+                created_at: row.created_at.clone(),
+                updated_at: now,
+            };
+            store.upsert_llm_profile(&updated);
+            row.id.clone()
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let row = crate::store::LlmProfileRow {
+                id: id.clone(),
+                name: name.to_string(),
+                kind: "openai".to_string(),
+                model: model.to_string(),
+                base_url: String::new(),
+                vault_key_id: Some(vault_key_id.to_string()),
+                max_tokens: None,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            store.upsert_llm_profile(&row);
+            id
+        };
+
+        serde_json::json!({
+            "kind": "openai",
+            "model": model,
+            "profile_id": profile_id
+        })
+        .to_string()
+    };
 
     match req.preset_id.as_str() {
         "thai-basic" => {
@@ -3970,9 +4083,11 @@ pub async fn apply_preset(
                     "API key is required for cloud presets".into(),
                 )));
             }
+            let vk_id = ensure_vault_key(&api_key, "OpenAI (Preset)");
+            let mini_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Mini (Preset)", "gpt-4.1-mini");
             store.set_setting("chat_pipeline.enabled", "true");
             store.set_setting("chat_pipeline.llm_mode", "shared");
-            store.set_setting("chat_pipeline.llm", &cloud_llm("gpt-4.1-mini", &api_key));
+            store.set_setting("chat_pipeline.llm", &mini_cfg);
             // ── Agents ──
             store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
             store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
@@ -4018,9 +4133,11 @@ pub async fn apply_preset(
                     "API key is required for cloud presets".into(),
                 )));
             }
+            let vk_id = ensure_vault_key(&api_key, "OpenAI (Preset)");
+            let mini_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Mini (Preset)", "gpt-4.1-mini");
             store.set_setting("chat_pipeline.enabled", "true");
             store.set_setting("chat_pipeline.llm_mode", "shared");
-            store.set_setting("chat_pipeline.llm", &cloud_llm("gpt-4.1-mini", &api_key));
+            store.set_setting("chat_pipeline.llm", &mini_cfg);
             // ── Agents ──
             store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
             store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
@@ -4071,79 +4188,32 @@ pub async fn apply_preset(
                     "API key is required for cloud presets".into(),
                 )));
             }
+            let vk_id = ensure_vault_key(&api_key, "OpenAI (Preset)");
+            let full_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 (Preset)", "gpt-4.1");
+            let mini_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Mini (Preset)", "gpt-4.1-mini");
+            let nano_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Nano (Preset)", "gpt-4.1-nano");
             store.set_setting("chat_pipeline.enabled", "true");
             store.set_setting("chat_pipeline.llm_mode", "per-agent");
             // Heavy tasks: gpt-4.1
-            store.set_setting(
-                "chat_pipeline.response_generator_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.quality_guard_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.context_curator_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
+            store.set_setting("chat_pipeline.response_generator_llm", &full_cfg);
+            store.set_setting("chat_pipeline.quality_guard_llm", &full_cfg);
+            store.set_setting("chat_pipeline.context_curator_llm", &full_cfg);
             // Medium tasks: gpt-4.1-mini
-            store.set_setting(
-                "chat_pipeline.orchestrator_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.graph_rag_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.crag_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.raptor_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.colbert_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.compression_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.self_rag_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.map_reduce_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.memory_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.ragas_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.tool_use_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
+            store.set_setting("chat_pipeline.orchestrator_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.graph_rag_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.crag_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.raptor_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.colbert_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.compression_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.self_rag_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.map_reduce_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.memory_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.ragas_llm", &mini_cfg);
+            store.set_setting("chat_pipeline.tool_use_llm", &mini_cfg);
             // Light tasks: gpt-4.1-nano
-            store.set_setting(
-                "chat_pipeline.query_analyzer_llm",
-                &cloud_llm("gpt-4.1-nano", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.query_rewriter_llm",
-                &cloud_llm("gpt-4.1-nano", &api_key),
-            );
-            store.set_setting(
-                "chat_pipeline.language_adapter_llm",
-                &cloud_llm("gpt-4.1-nano", &api_key),
-            );
+            store.set_setting("chat_pipeline.query_analyzer_llm", &nano_cfg);
+            store.set_setting("chat_pipeline.query_rewriter_llm", &nano_cfg);
+            store.set_setting("chat_pipeline.language_adapter_llm", &nano_cfg);
             // ── Embedding: FastEmbed ──
             store.set_setting("providers.embedding.kind", "fastembed");
             store.set_setting("providers.embedding.model", "BAAI/bge-small-en-v1.5");
@@ -4215,33 +4285,17 @@ pub async fn apply_preset(
                     "API key is required for cloud presets".into(),
                 )));
             }
+            let vk_id = ensure_vault_key(&api_key, "OpenAI (Preset)");
+            let mini_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Mini (Preset)", "gpt-4.1-mini");
             store.set_setting("ai_preprocessing.enabled", "true");
             store.set_setting("ai_preprocessing.auto_params", "true");
-            store.set_setting("ai_preprocessing.llm", &cloud_llm("gpt-4.1-mini", &api_key));
-            store.set_setting(
-                "ai_preprocessing.analyzer_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.converter_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.quality_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.chunker_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.enricher_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.orchestrator_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
+            store.set_setting("ai_preprocessing.llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.analyzer_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.converter_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.quality_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.chunker_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.enricher_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.orchestrator_llm", &mini_cfg);
             store.set_setting("ai_preprocessing.enricher_enabled", "true");
             store.set_setting("ai_preprocessing.orchestrator_enabled", "false");
             store.set_setting("ai_preprocessing.agent_max_tokens", "1024");
@@ -4260,33 +4314,18 @@ pub async fn apply_preset(
                     "API key is required for cloud presets".into(),
                 )));
             }
+            let vk_id = ensure_vault_key(&api_key, "OpenAI (Preset)");
+            let full_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 (Preset)", "gpt-4.1");
+            let mini_cfg = ensure_llm_profile(&vk_id, "GPT-4.1 Mini (Preset)", "gpt-4.1-mini");
             store.set_setting("ai_preprocessing.enabled", "true");
             store.set_setting("ai_preprocessing.auto_params", "true");
-            store.set_setting("ai_preprocessing.llm", &cloud_llm("gpt-4.1", &api_key));
-            store.set_setting(
-                "ai_preprocessing.analyzer_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.converter_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.quality_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.chunker_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.enricher_llm",
-                &cloud_llm("gpt-4.1-mini", &api_key),
-            );
-            store.set_setting(
-                "ai_preprocessing.orchestrator_llm",
-                &cloud_llm("gpt-4.1", &api_key),
-            );
+            store.set_setting("ai_preprocessing.llm", &full_cfg);
+            store.set_setting("ai_preprocessing.analyzer_llm", &full_cfg);
+            store.set_setting("ai_preprocessing.converter_llm", &full_cfg);
+            store.set_setting("ai_preprocessing.quality_llm", &full_cfg);
+            store.set_setting("ai_preprocessing.chunker_llm", &full_cfg);
+            store.set_setting("ai_preprocessing.enricher_llm", &mini_cfg);
+            store.set_setting("ai_preprocessing.orchestrator_llm", &full_cfg);
             store.set_setting("ai_preprocessing.enricher_enabled", "true");
             store.set_setting("ai_preprocessing.orchestrator_enabled", "true");
             store.set_setting("ai_preprocessing.agent_max_tokens", "2048");

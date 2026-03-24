@@ -180,6 +180,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
                 base_url: "".into(),
                 api_key: "".into(),
                 max_tokens: None,
+                profile_id: None,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
@@ -1595,6 +1596,7 @@ fn build_streaming_test_app() -> Router {
                 base_url: "".into(),
                 api_key: "".into(),
                 max_tokens: None,
+                profile_id: None,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
