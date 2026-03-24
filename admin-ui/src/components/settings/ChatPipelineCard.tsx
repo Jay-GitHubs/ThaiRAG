@@ -432,7 +432,7 @@ function LlmConfigForm({
       <Space wrap>
         <Select
           value={form.kind}
-          onChange={(v) => onChange({ ...form, kind: v, model: '' })}
+          onChange={(v) => onChange({ ...form, kind: v, model: '', base_url: '', api_key: '' })}
           style={{ width: 160 }}
           options={[
             { label: 'Ollama', value: 'Ollama' },
