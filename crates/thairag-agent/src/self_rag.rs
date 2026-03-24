@@ -107,7 +107,8 @@ impl SelfRag {
             .await
         {
             Ok(resp) => {
-                let json_str = thairag_core::extract_json(resp.content.trim());
+                let text = resp.content.trim();
+                let json_str = thairag_core::extract_json(text);
                 match serde_json::from_str::<SelfRagOutput>(json_str) {
                     Ok(output) => {
                         debug!(
@@ -126,8 +127,20 @@ impl SelfRag {
                         }
                     }
                     Err(e) => {
-                        warn!(error = %e, "Self-RAG parse failed, defaulting to retrieve");
-                        Ok(RetrievalDecision::Retrieve)
+                        // Fallback: try to detect intent from raw text
+                        let lower = text.to_lowercase();
+                        if lower.contains("\"needs_retrieval\": false")
+                            || lower.contains("\"needs_retrieval\":false")
+                            || lower.contains("no retrieval needed")
+                        {
+                            debug!(
+                                "Self-RAG: JSON parse failed but detected no-retrieval from text"
+                            );
+                            Ok(RetrievalDecision::NoRetrieve { confidence: 0.7 })
+                        } else {
+                            warn!(error = %e, "Self-RAG parse failed, defaulting to retrieve");
+                            Ok(RetrievalDecision::Retrieve)
+                        }
                     }
                 }
             }
@@ -141,10 +154,16 @@ impl SelfRag {
 
 #[derive(serde::Deserialize)]
 struct SelfRagOutput {
+    #[serde(alias = "retrieval_needed", alias = "requires_retrieval")]
     needs_retrieval: bool,
+    #[serde(default = "default_confidence")]
     confidence: f32,
     #[serde(default)]
     reason: String,
+}
+
+fn default_confidence() -> f32 {
+    0.8
 }
 
 fn truncate(s: &str, max: usize) -> &str {
