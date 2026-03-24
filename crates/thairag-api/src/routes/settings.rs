@@ -2088,6 +2088,8 @@ pub struct ChatPipelineConfigResponse {
     // Speculative RAG
     pub speculative_rag_enabled: bool,
     pub speculative_candidates: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speculative_rag_llm: Option<LlmProviderInfo>,
     // Map-Reduce RAG
     pub map_reduce_enabled: bool,
     pub map_reduce_max_chunks: usize,
@@ -2210,6 +2212,8 @@ pub struct UpdateChatPipelineRequest {
     // Speculative RAG
     pub speculative_rag_enabled: Option<bool>,
     pub speculative_candidates: Option<u32>,
+    pub speculative_rag_llm: Option<UpdateLlmConfig>,
+    pub remove_speculative_rag_llm: Option<bool>,
     // Map-Reduce RAG
     pub map_reduce_enabled: Option<bool>,
     pub map_reduce_max_chunks: Option<usize>,
@@ -2425,6 +2429,9 @@ pub fn get_effective_chat_pipeline_with_store(
         speculative_candidates: s("chat_pipeline.speculative_candidates")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.speculative_candidates),
+        speculative_rag_llm: s("chat_pipeline.speculative_rag_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.speculative_rag_llm.clone()),
         // Map-Reduce RAG
         map_reduce_enabled: s("chat_pipeline.map_reduce_enabled")
             .and_then(|v| v.parse().ok())
@@ -2624,6 +2631,7 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         // Speculative RAG
         speculative_rag_enabled: eff.speculative_rag_enabled,
         speculative_candidates: eff.speculative_candidates,
+        speculative_rag_llm: eff.speculative_rag_llm.as_ref().map(llm_config_to_info),
         // Map-Reduce RAG
         map_reduce_enabled: eff.map_reduce_enabled,
         map_reduce_max_chunks: eff.map_reduce_max_chunks,
@@ -3041,6 +3049,14 @@ pub async fn update_chat_pipeline_config(
             eff.map_reduce_llm.clone(),
         )?;
     }
+    if let Some(ref u) = req.speculative_rag_llm {
+        persist_chat_llm(
+            &state,
+            "chat_pipeline.speculative_rag_llm",
+            u,
+            eff.speculative_rag_llm.clone(),
+        )?;
+    }
     if let Some(ref u) = req.ragas_llm {
         persist_chat_llm(&state, "chat_pipeline.ragas_llm", u, eff.ragas_llm.clone())?;
     }
@@ -3180,6 +3196,11 @@ pub async fn update_chat_pipeline_config(
         live_retrieval_llm,
         remove_live_retrieval_llm,
         "chat_pipeline.live_retrieval_llm"
+    );
+    remove_llm!(
+        speculative_rag_llm,
+        remove_speculative_rag_llm,
+        "chat_pipeline.speculative_rag_llm"
     );
 
     // Hot-reload

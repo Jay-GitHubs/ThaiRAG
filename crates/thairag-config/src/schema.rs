@@ -592,6 +592,8 @@ pub struct ChatPipelineConfig {
     pub speculative_rag_enabled: bool,
     #[serde(default = "default_speculative_candidates")]
     pub speculative_candidates: u32,
+    #[serde(default)]
+    pub speculative_rag_llm: Option<LlmConfig>,
 
     // ── Feature: Map-Reduce RAG ──
     #[serde(default)]
@@ -880,6 +882,7 @@ impl Default for ChatPipelineConfig {
             // Speculative RAG
             speculative_rag_enabled: false,
             speculative_candidates: default_speculative_candidates(),
+            speculative_rag_llm: None,
             // Map-Reduce RAG
             map_reduce_enabled: false,
             map_reduce_max_chunks: default_map_reduce_max_chunks(),
