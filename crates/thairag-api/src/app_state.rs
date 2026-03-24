@@ -353,7 +353,7 @@ impl ProviderBundle {
             // Feature 8: Speculative RAG
             let sp = if chat.speculative_rag_enabled {
                 Some(SpeculativeRag::new_with_prompts(
-                    Arc::clone(&chat_shared_llm),
+                    resolve_chat_agent_llm("speculative_rag", &chat.speculative_rag_llm),
                     chat.speculative_candidates,
                     max_tok,
                     Arc::clone(&prompts),

@@ -46,9 +46,13 @@ async fn main() {
     // compaction, personal memory) that were enabled via the Admin UI.
     {
         let effective_chat = thairag_api::routes::settings::get_effective_chat_pipeline(&state);
+        let rg_llm_summary = effective_chat
+            .response_generator_llm
+            .as_ref()
+            .map(|c| format!("{:?}/{}", c.kind, c.model));
         tracing::info!(
             chat_pipeline_enabled = effective_chat.enabled,
-            response_generator_llm = ?effective_chat.response_generator_llm,
+            response_generator_llm = ?rg_llm_summary,
             llm_mode = ?state.km_store.get_setting("chat_pipeline.llm_mode"),
             "Effective chat pipeline config"
         );

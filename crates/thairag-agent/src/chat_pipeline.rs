@@ -223,9 +223,9 @@ impl ChatPipeline {
             "language_adapter" => cfg.language_adapter_llm.as_ref(),
             "pipeline_orchestrator" => cfg.orchestrator_llm.as_ref(),
             "live_retrieval" => cfg.live_retrieval_llm.as_ref(),
+            "speculative_rag" => cfg.speculative_rag_llm.as_ref(),
             "self_rag_gate"
             | "corrective_rag"
-            | "speculative_rag"
             | "graph_rag"
             | "map_reduce"
             | "contextual_compression" => cfg.llm.as_ref(),

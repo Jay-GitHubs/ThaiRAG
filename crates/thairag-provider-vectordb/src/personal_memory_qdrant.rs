@@ -46,26 +46,60 @@ impl QdrantPersonalMemoryStore {
             .await
             .map_err(|e| ThaiRagError::VectorStore(format!("Failed to check collection: {e}")))?;
 
-        if !exists {
-            self.client
-                .create_collection(
-                    CreateCollectionBuilder::new(COLLECTION_NAME).vectors_config(
-                        VectorParamsBuilder::new(self.dimension as u64, Distance::Cosine),
-                    ),
-                )
-                .await
-                .map_err(|e| {
-                    ThaiRagError::VectorStore(format!("Failed to create collection: {e}"))
-                })?;
+        if exists {
+            // Check if existing collection dimension matches current embedding dimension
+            let needs_recreate = match self.client.collection_info(COLLECTION_NAME).await {
+                Ok(info) => {
+                    let existing_dim = info
+                        .result
+                        .and_then(|r| r.config)
+                        .and_then(|c| c.params)
+                        .and_then(|p| p.vectors_config)
+                        .and_then(|vc| match vc.config {
+                            Some(qdrant_client::qdrant::vectors_config::Config::Params(params)) => {
+                                Some(params.size)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    existing_dim != self.dimension as u64
+                }
+                Err(_) => false,
+            };
 
-            info!(
-                collection = COLLECTION_NAME,
-                dimension = self.dimension,
-                "Created personal memory collection"
-            );
+            if needs_recreate {
+                tracing::warn!(
+                    collection = COLLECTION_NAME,
+                    expected_dim = self.dimension,
+                    "Personal memory collection has wrong dimension, recreating \
+                     (old memories will be lost — they are incompatible with the new embedding model)"
+                );
+                let _ = self.client.delete_collection(COLLECTION_NAME).await;
+                self.create_collection().await?;
+            }
+        } else {
+            self.create_collection().await?;
         }
 
         self.collection_ready.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn create_collection(&self) -> Result<()> {
+        self.client
+            .create_collection(
+                CreateCollectionBuilder::new(COLLECTION_NAME).vectors_config(
+                    VectorParamsBuilder::new(self.dimension as u64, Distance::Cosine),
+                ),
+            )
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Failed to create collection: {e}")))?;
+
+        info!(
+            collection = COLLECTION_NAME,
+            dimension = self.dimension,
+            "Created personal memory collection"
+        );
         Ok(())
     }
 }
