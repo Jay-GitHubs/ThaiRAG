@@ -96,8 +96,12 @@ http-body-util = "0.1"
 # Concurrency
 dashmap = "6.1"
 
+# Encryption
+aes-gcm = "0.10"
+
 # Encoding
 base64 = "0.22"
+hex = "0.4"
 
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }

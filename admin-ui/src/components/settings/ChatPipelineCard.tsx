@@ -27,6 +27,7 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { getChatPipelineConfig, updateChatPipelineConfig, syncModels, getFeedbackStats } from '../../api/settings';
+import { useLlmProfiles } from '../../hooks/useSettings';
 import type {
   ChatPipelineConfigResponse,
   AvailableModel,
@@ -166,6 +167,7 @@ interface LlmFormState {
   model: string;
   base_url: string;
   api_key: string;
+  profile_id?: string;
 }
 
 const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '' };
@@ -176,11 +178,20 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     model: info.model,
     base_url: info.base_url || '',
     api_key: '',
+    profile_id: info.profile_id,
   };
 }
 
-function formToUpdate(form: LlmFormState, hasExistingKey: boolean): LlmConfigUpdate {
+function formToUpdate(form: LlmFormState, hasExistingKey: boolean, hadProfileBefore?: boolean): LlmConfigUpdate {
+  // If using a profile, just send the profile_id
+  if (form.profile_id) {
+    return { profile_id: form.profile_id };
+  }
   const update: LlmConfigUpdate = { kind: form.kind, model: form.model };
+  // If switching away from a profile, tell the backend to clear it
+  if (hadProfileBefore) {
+    update.clear_profile = true;
+  }
   // Always send base_url for providers that need it (Ollama defaults to localhost)
   const needsBaseUrl = form.kind === 'Ollama' || form.kind === 'OpenAiCompatible';
   if (needsBaseUrl) {
@@ -287,6 +298,16 @@ const featureLlmRecommendations: Record<string, FeatureLlmInfo> = {
       { provider: 'Ollama', model: 'qwen3:14b', note: 'Free, good NER' },
       { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
       { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong extraction' },
+      { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
+    ],
+  },
+  speculative_rag: {
+    llmTip: 'Generates multiple response candidates in parallel, then ranks them. Heavy workload (N+1 LLM calls).',
+    taskWeight: 'Heavy',
+    recommended: [
+      { provider: 'Ollama', model: 'gemma3:12b', note: 'Free, decent quality' },
+      { provider: 'OpenAI', model: 'gpt-4.1-mini', note: 'Best value' },
+      { provider: 'Claude', model: 'claude-sonnet-4-20250514', note: 'Strong reasoning' },
       { provider: 'Gemini', model: 'gemini-2.5-flash', note: 'Fast & capable' },
     ],
   },
@@ -424,65 +445,119 @@ function LlmConfigForm({
   onSync: (kind: string, baseUrl: string, apiKey: string) => void;
   syncing: boolean;
 }) {
+  const { data: profiles } = useLlmProfiles();
+  const profileList = profiles ?? [];
+  const isProfileMode = !!form.profile_id;
+  const selectedProfile = profileList.find((p) => p.id === form.profile_id);
+
   const needsBaseUrl = form.kind === 'Ollama' || form.kind === 'OpenAiCompatible';
   const needsApiKey = form.kind !== 'Ollama';
 
   return (
     <Space direction="vertical" size="small" style={{ width: '100%' }}>
-      <Space wrap>
-        <Select
-          value={form.kind}
-          onChange={(v) => onChange({ ...form, kind: v, model: '', base_url: '', api_key: '' })}
-          style={{ width: 160 }}
-          options={[
-            { label: 'Ollama', value: 'Ollama' },
-            { label: 'Claude', value: 'Claude' },
-            { label: 'OpenAI', value: 'OpenAi' },
-            { label: 'Gemini', value: 'Gemini' },
-            { label: 'OpenAI-Compatible', value: 'OpenAiCompatible' },
-          ]}
-        />
-        {syncedModels ? (
-          <Select
-            value={form.model || undefined}
-            onChange={(v) => onChange({ ...form, model: v })}
-            placeholder="Select model"
-            style={{ width: 240 }}
-            showSearch
-            options={syncedModels.map((m) => ({ label: m.name || m.id, value: m.id }))}
-          />
-        ) : (
-          <Input
-            value={form.model}
-            onChange={(e) => onChange({ ...form, model: e.target.value })}
-            placeholder="Model name"
-            style={{ width: 240 }}
-          />
-        )}
-        <Button
-          icon={<SyncOutlined spin={syncing} />}
+      {profileList.length > 0 && (
+        <Segmented
           size="small"
-          onClick={() => onSync(form.kind, form.base_url, form.api_key)}
-          loading={syncing}
-        >
-          Sync
-        </Button>
-      </Space>
-      {needsBaseUrl && (
-        <Input
-          value={form.base_url}
-          onChange={(e) => onChange({ ...form, base_url: e.target.value })}
-          placeholder="Base URL (e.g., http://localhost:11435)"
-          style={{ width: 400 }}
+          options={[
+            { label: 'Custom', value: 'custom' },
+            { label: 'Profile', value: 'profile' },
+          ]}
+          value={isProfileMode ? 'profile' : 'custom'}
+          onChange={(v) => {
+            if (v === 'profile') {
+              // Switch to profile mode — pick the first profile by default
+              const first = profileList[0];
+              onChange({ ...form, profile_id: first.id, kind: first.kind, model: first.model });
+            } else {
+              // Switch to custom mode — clear profile_id
+              onChange({ ...form, profile_id: undefined });
+            }
+          }}
         />
       )}
-      {needsApiKey && (
-        <Input.Password
-          value={form.api_key}
-          onChange={(e) => onChange({ ...form, api_key: e.target.value })}
-          placeholder="API Key (leave empty to keep existing)"
-          style={{ width: 400 }}
-        />
+
+      {isProfileMode ? (
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Select
+            value={form.profile_id}
+            onChange={(id) => {
+              const p = profileList.find((pp) => pp.id === id);
+              if (p) onChange({ ...form, profile_id: p.id, kind: p.kind, model: p.model });
+            }}
+            style={{ width: 320 }}
+            options={profileList.map((p) => ({
+              label: `${p.name} (${p.kind} / ${p.model})`,
+              value: p.id,
+            }))}
+          />
+          {selectedProfile && (
+            <div style={{ fontSize: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Tag>{selectedProfile.kind}</Tag>
+              <Tag color="blue">{selectedProfile.model}</Tag>
+              {selectedProfile.vault_key_name && (
+                <Tag color="green">Key: {selectedProfile.vault_key_name}</Tag>
+              )}
+            </div>
+          )}
+        </Space>
+      ) : (
+        <>
+          <Space wrap>
+            <Select
+              value={form.kind}
+              onChange={(v) => onChange({ ...form, kind: v, model: '', base_url: '', api_key: '', profile_id: undefined })}
+              style={{ width: 160 }}
+              options={[
+                { label: 'Ollama', value: 'Ollama' },
+                { label: 'Claude', value: 'Claude' },
+                { label: 'OpenAI', value: 'OpenAi' },
+                { label: 'Gemini', value: 'Gemini' },
+                { label: 'OpenAI-Compatible', value: 'OpenAiCompatible' },
+              ]}
+            />
+            {syncedModels ? (
+              <Select
+                value={form.model || undefined}
+                onChange={(v) => onChange({ ...form, model: v })}
+                placeholder="Select model"
+                style={{ width: 240 }}
+                showSearch
+                options={syncedModels.map((m) => ({ label: m.name || m.id, value: m.id }))}
+              />
+            ) : (
+              <Input
+                value={form.model}
+                onChange={(e) => onChange({ ...form, model: e.target.value })}
+                placeholder="Model name"
+                style={{ width: 240 }}
+              />
+            )}
+            <Button
+              icon={<SyncOutlined spin={syncing} />}
+              size="small"
+              onClick={() => onSync(form.kind, form.base_url, form.api_key)}
+              loading={syncing}
+            >
+              Sync
+            </Button>
+          </Space>
+          {needsBaseUrl && (
+            <Input
+              value={form.base_url}
+              onChange={(e) => onChange({ ...form, base_url: e.target.value })}
+              placeholder="Base URL (e.g., http://localhost:11435)"
+              style={{ width: 400 }}
+            />
+          )}
+          {needsApiKey && (
+            <Input.Password
+              value={form.api_key}
+              onChange={(e) => onChange({ ...form, api_key: e.target.value })}
+              placeholder="API Key (leave empty to keep existing)"
+              style={{ width: 400 }}
+            />
+          )}
+        </>
       )}
     </Space>
   );
@@ -671,7 +746,7 @@ export function ChatPipelineCard() {
       // Load feature LLMs
       const fLlms: Record<string, LlmFormState> = {};
       const featureLlmKeys = [
-        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'speculative_rag', 'map_reduce',
         'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
         'live_retrieval',
       ] as const;
@@ -840,7 +915,7 @@ export function ChatPipelineCard() {
 
       // LLM configs based on mode
       if (llmMode === 'shared') {
-        req.llm = formToUpdate(sharedLlm, !!config?.llm?.has_api_key);
+        req.llm = formToUpdate(sharedLlm, !!config?.llm?.has_api_key, !!config?.llm?.profile_id);
         req.remove_query_analyzer_llm = true;
         req.remove_query_rewriter_llm = true;
         req.remove_context_curator_llm = true;
@@ -853,18 +928,18 @@ export function ChatPipelineCard() {
         const agents = ['query_analyzer', 'query_rewriter', 'context_curator', 'response_generator', 'quality_guard', 'language_adapter'] as const;
         for (const a of agents) {
           const form = agentLlms[a];
-          if (form && form.model) {
+          if (form && (form.model || form.profile_id)) {
             const key = `${a}_llm` as keyof UpdateChatPipelineRequest;
             const configKey = `${a}_llm` as keyof ChatPipelineConfigResponse;
             const existing = config?.[configKey] as LlmProviderInfo | undefined;
-            (req as Record<string, unknown>)[key] = formToUpdate(form, !!existing?.has_api_key);
+            (req as Record<string, unknown>)[key] = formToUpdate(form, !!existing?.has_api_key, !!existing?.profile_id);
           }
         }
         // Orchestrator LLM
         const orchForm = agentLlms.pipeline_orchestrator;
-        if (orchForm && orchForm.model) {
+        if (orchForm && (orchForm.model || orchForm.profile_id)) {
           const existing = config?.orchestrator_llm;
-          req.orchestrator_llm = formToUpdate(orchForm, !!existing?.has_api_key);
+          req.orchestrator_llm = formToUpdate(orchForm, !!existing?.has_api_key, !!existing?.profile_id);
         }
       } else {
         // Chat mode: remove all overrides
@@ -880,7 +955,7 @@ export function ChatPipelineCard() {
 
       // Save feature LLMs (independent of LLM mode — features always have their own LLM config)
       const featureLlmKeys = [
-        'memory', 'tool_use', 'self_rag', 'graph_rag', 'map_reduce',
+        'memory', 'tool_use', 'self_rag', 'graph_rag', 'speculative_rag', 'map_reduce',
         'ragas', 'compression', 'multimodal', 'raptor', 'colbert', 'personal_memory',
         'live_retrieval',
       ] as const;
@@ -888,9 +963,9 @@ export function ChatPipelineCard() {
         const form = featureLlms[stateKey];
         const reqKey = `${stateKey}_llm` as keyof UpdateChatPipelineRequest;
         const configKey = `${stateKey}_llm` as keyof ChatPipelineConfigResponse;
-        if (form && form.model) {
+        if (form && (form.model || form.profile_id)) {
           const existing = config?.[configKey] as LlmProviderInfo | undefined;
-          (req as Record<string, unknown>)[reqKey] = formToUpdate(form, !!existing?.has_api_key);
+          (req as Record<string, unknown>)[reqKey] = formToUpdate(form, !!existing?.has_api_key, !!existing?.profile_id);
         } else {
           const removeKey = `remove_${stateKey}_llm` as keyof UpdateChatPipelineRequest;
           (req as Record<string, unknown>)[removeKey] = true;
@@ -1135,6 +1210,9 @@ export function ChatPipelineCard() {
                     </Tag>
                     {llmMode === 'per-agent' && isOn && (() => {
                       const form = agentLlms[key];
+                      if (form?.profile_id) {
+                        return <Tag color="cyan" style={{ fontSize: 11 }}>Profile: {form.kind}/{form.model}</Tag>;
+                      }
                       const model = form?.model;
                       return model ? (
                         <Tag color="purple" style={{ fontSize: 11 }}>{form?.kind}: {model}</Tag>
@@ -1583,6 +1661,7 @@ export function ChatPipelineCard() {
                     <span>Speculative RAG</span>
                     <Switch size="small" checked={speculativeRagEnabled} onChange={setSpeculativeRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={speculativeRagEnabled ? 'green' : 'default'}>{speculativeRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    {featureModelTag('speculative_rag', speculativeRagEnabled)}
                   </Space>
                 ),
                 children: (
@@ -1593,12 +1672,15 @@ export function ChatPipelineCard() {
                       Higher quality but uses more LLM calls.
                     </Paragraph>
                     {speculativeRagEnabled && (
-                      <Tooltip title="Number of parallel response candidates. More = better quality but higher cost.">
-                        <Space direction="vertical" size={2}>
-                          <Text type="secondary">Candidates <QuestionCircleOutlined /></Text>
-                          <InputNumber min={2} max={5} value={speculativeCandidates} onChange={(v) => v && setSpeculativeCandidates(v)} style={{ width: 100 }} />
-                        </Space>
-                      </Tooltip>
+                      <>
+                        <Tooltip title="Number of parallel response candidates. More = better quality but higher cost.">
+                          <Space direction="vertical" size={2}>
+                            <Text type="secondary">Candidates <QuestionCircleOutlined /></Text>
+                            <InputNumber min={2} max={5} value={speculativeCandidates} onChange={(v) => v && setSpeculativeCandidates(v)} style={{ width: 100 }} />
+                          </Space>
+                        </Tooltip>
+                        {featureLlmForm('speculative_rag', speculativeRagEnabled)}
+                      </>
                     )}
                   </Space>
                 ),

@@ -3,6 +3,8 @@ import type {
   ChatPipelineConfigResponse,
   CreateGoldenExampleRequest,
   CreateIdpRequest,
+  CreateLlmProfileRequest,
+  CreateVaultKeyRequest,
   DocumentBoost,
   DocumentConfigResponse,
   FeedbackListResponse,
@@ -10,6 +12,7 @@ import type {
   GoldenExample,
   IdentityProvider,
   ListResponse,
+  LlmProfileInfo,
   ModelsResponse,
   OllamaPullResponse,
   PresetInfo,
@@ -21,12 +24,16 @@ import type {
   UpdateChatPipelineRequest,
   UpdateDocumentConfigRequest,
   UpdateIdpRequest,
+  UpdateLlmProfileRequest,
   UpdatePromptRequest,
   UpdateProviderConfigRequest,
   UpdateRetrievalParamsRequest,
+  UpdateVaultKeyRequest,
   UsageStatsResponse,
   ConfigSnapshot,
   SnapshotListItem,
+  VaultKeyInfo,
+  VaultTestResult,
   VectorDbClearResponse,
   VectorDbInfo,
 } from './types';
@@ -271,4 +278,51 @@ export async function restoreSnapshot(
 
 export async function deleteSnapshot(id: string) {
   await client.delete(`/api/km/settings/snapshots/${id}`);
+}
+
+// ── API Key Vault ──────────────────────────────────────────────────
+
+export async function listVaultKeys() {
+  const res = await client.get<VaultKeyInfo[]>('/api/km/settings/vault/keys');
+  return res.data;
+}
+
+export async function createVaultKey(data: CreateVaultKeyRequest) {
+  const res = await client.post<VaultKeyInfo>('/api/km/settings/vault/keys', data);
+  return res.data;
+}
+
+export async function updateVaultKey(id: string, data: UpdateVaultKeyRequest) {
+  const res = await client.put<VaultKeyInfo>(`/api/km/settings/vault/keys/${id}`, data);
+  return res.data;
+}
+
+export async function deleteVaultKey(id: string) {
+  await client.delete(`/api/km/settings/vault/keys/${id}`);
+}
+
+export async function testVaultKey(id: string) {
+  const res = await client.post<VaultTestResult>(`/api/km/settings/vault/keys/${id}/test`);
+  return res.data;
+}
+
+// ── LLM Profiles ──────────────────────────────────────────────────
+
+export async function listLlmProfiles() {
+  const res = await client.get<LlmProfileInfo[]>('/api/km/settings/vault/profiles');
+  return res.data;
+}
+
+export async function createLlmProfile(data: CreateLlmProfileRequest) {
+  const res = await client.post<LlmProfileInfo>('/api/km/settings/vault/profiles', data);
+  return res.data;
+}
+
+export async function updateLlmProfile(id: string, data: UpdateLlmProfileRequest) {
+  const res = await client.put<LlmProfileInfo>(`/api/km/settings/vault/profiles/${id}`, data);
+  return res.data;
+}
+
+export async function deleteLlmProfile(id: string) {
+  await client.delete(`/api/km/settings/vault/profiles/${id}`);
 }

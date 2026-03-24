@@ -41,6 +41,8 @@ openidconnect = { workspace = true }
 urlencoding = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
+aes-gcm = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

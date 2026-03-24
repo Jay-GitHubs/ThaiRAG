@@ -243,6 +243,8 @@ export interface LlmProviderInfo {
   has_api_key: boolean;
   supports_vision: boolean;
   max_tokens?: number;
+  profile_id?: string;
+  profile_name?: string;
 }
 
 export interface EmbeddingProviderInfo {
@@ -336,7 +338,68 @@ export interface DocumentConfigResponse {
   ai_preprocessing: AiPreprocessingConfig;
 }
 
-export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number };
+export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean };
+
+// ── API Key Vault ──────────────────────────────────────────────────
+export interface VaultKeyInfo {
+  id: string;
+  name: string;
+  provider: string;
+  key_masked: string;
+  base_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateVaultKeyRequest {
+  name: string;
+  provider: string;
+  api_key: string;
+  base_url?: string;
+}
+
+export interface UpdateVaultKeyRequest {
+  name?: string;
+  api_key?: string;
+  base_url?: string;
+}
+
+export interface LlmProfileInfo {
+  id: string;
+  name: string;
+  kind: string;
+  model: string;
+  base_url: string;
+  vault_key_id?: string;
+  vault_key_name?: string;
+  max_tokens?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateLlmProfileRequest {
+  name: string;
+  kind: string;
+  model: string;
+  base_url?: string;
+  vault_key_id?: string;
+  max_tokens?: number;
+}
+
+export interface UpdateLlmProfileRequest {
+  name?: string;
+  kind?: string;
+  model?: string;
+  base_url?: string;
+  vault_key_id?: string;
+  remove_vault_key?: boolean;
+  max_tokens?: number;
+}
+
+export interface VaultTestResult {
+  status: string;
+  message?: string;
+}
 
 export interface UpdateDocumentConfigRequest {
   max_chunk_size?: number;
@@ -426,6 +489,7 @@ export interface ChatPipelineConfigResponse {
   // Speculative RAG
   speculative_rag_enabled: boolean;
   speculative_candidates: number;
+  speculative_rag_llm?: LlmProviderInfo;
   // Map-Reduce RAG
   map_reduce_enabled: boolean;
   map_reduce_max_chunks: number;
@@ -545,6 +609,8 @@ export interface UpdateChatPipelineRequest {
   // Speculative RAG
   speculative_rag_enabled?: boolean;
   speculative_candidates?: number;
+  speculative_rag_llm?: LlmConfigUpdate;
+  remove_speculative_rag_llm?: boolean;
   // Map-Reduce RAG
   map_reduce_enabled?: boolean;
   map_reduce_max_chunks?: number;
