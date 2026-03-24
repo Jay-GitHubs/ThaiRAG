@@ -2900,9 +2900,25 @@ pub async fn update_chat_pipeline_config(
         update: &UpdateLlmConfig,
         current: Option<thairag_config::schema::LlmConfig>,
     ) -> Result<(), ApiError> {
+        use thairag_core::types::LlmKind;
+
         let mut cfg = current.unwrap_or_else(|| state.config.providers.llm.clone());
         if let Some(kind) = &update.kind {
-            cfg.kind = parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            let new_kind =
+                parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            // When provider kind changes, reset base_url and api_key to avoid
+            // sending requests to the wrong endpoint (e.g. Ollama URL for OpenAI).
+            if new_kind != cfg.kind {
+                cfg.kind = new_kind;
+                cfg.base_url = String::new(); // let each provider use its default
+                cfg.api_key = match cfg.kind {
+                    LlmKind::OpenAi
+                    | LlmKind::OpenAiCompatible
+                    | LlmKind::Claude
+                    | LlmKind::Gemini => state.config.providers.llm.api_key.clone(),
+                    LlmKind::Ollama => String::new(),
+                };
+            }
         }
         if let Some(model) = &update.model {
             cfg.model = model.clone();
