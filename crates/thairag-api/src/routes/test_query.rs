@@ -235,9 +235,11 @@ pub async fn test_query(
     });
 
     let available_scopes = build_searchable_scopes(&state, &scope);
+    let settings_scope = state.resolve_scope_for_workspace(ws_id);
+    let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
-    let llm_resp = if let Some(ref pipeline) = p.chat_pipeline {
+    let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         pipeline
             .process(&messages, &scope, &[], &available_scopes, Some(progress_tx))
             .await
