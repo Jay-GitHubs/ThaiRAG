@@ -74,9 +74,12 @@ CREATE TABLE IF NOT EXISTS identity_providers (
 );
 
 CREATE TABLE IF NOT EXISTS settings (
-    key         TEXT PRIMARY KEY,
+    key         TEXT NOT NULL,
+    scope_type  TEXT NOT NULL DEFAULT 'global',
+    scope_id    TEXT NOT NULL DEFAULT '',
     value       TEXT NOT NULL,
-    updated_at  TIMESTAMPTZ NOT NULL
+    updated_at  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (key, scope_type, scope_id)
 );
 
 CREATE TABLE IF NOT EXISTS permissions (
@@ -91,6 +94,20 @@ CREATE TABLE IF NOT EXISTS permissions (
 );
 CREATE INDEX IF NOT EXISTS idx_permissions_user_id ON permissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_permissions_org_id ON permissions(org_id);
+
+-- Migration: settings table from single-PK to composite-PK for scoped settings
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'settings' AND column_name = 'scope_type'
+    ) THEN
+        ALTER TABLE settings ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global';
+        ALTER TABLE settings ADD COLUMN scope_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE settings DROP CONSTRAINT settings_pkey;
+        ALTER TABLE settings ADD PRIMARY KEY (key, scope_type, scope_id);
+    END IF;
+END $$;
 
 -- Document content storage (original file + converted markdown)
 CREATE TABLE IF NOT EXISTS document_blobs (

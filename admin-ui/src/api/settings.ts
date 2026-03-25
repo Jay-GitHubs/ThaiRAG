@@ -20,6 +20,8 @@ import type {
   ProviderConfigResponse,
   PublicIdpInfo,
   RetrievalParams,
+  ScopeInfoResponse,
+  SettingsScopeParam,
   TestConnectionResponse,
   UpdateChatPipelineRequest,
   UpdateDocumentConfigRequest,
@@ -37,6 +39,11 @@ import type {
   VectorDbClearResponse,
   VectorDbInfo,
 } from './types';
+
+function scopeParams(scope?: SettingsScopeParam): Record<string, string> {
+  if (!scope || scope.scope_type === 'global') return {};
+  return { scope_type: scope.scope_type, scope_id: scope.scope_id };
+}
 
 export async function listIdentityProviders() {
   const res = await client.get<ListResponse<IdentityProvider>>(
@@ -114,13 +121,31 @@ export async function updateDocumentConfig(data: UpdateDocumentConfigRequest) {
   return res.data;
 }
 
-export async function getChatPipelineConfig() {
-  const res = await client.get<ChatPipelineConfigResponse>('/api/km/settings/chat-pipeline');
+export async function getChatPipelineConfig(scope?: SettingsScopeParam) {
+  const res = await client.get<ChatPipelineConfigResponse>('/api/km/settings/chat-pipeline', {
+    params: scopeParams(scope),
+  });
   return res.data;
 }
 
-export async function updateChatPipelineConfig(data: UpdateChatPipelineRequest) {
-  const res = await client.put<ChatPipelineConfigResponse>('/api/km/settings/chat-pipeline', data);
+export async function updateChatPipelineConfig(data: UpdateChatPipelineRequest, scope?: SettingsScopeParam) {
+  const res = await client.put<ChatPipelineConfigResponse>('/api/km/settings/chat-pipeline', data, {
+    params: scopeParams(scope),
+  });
+  return res.data;
+}
+
+export async function getScopeInfo(scope?: SettingsScopeParam) {
+  const res = await client.get<ScopeInfoResponse>('/api/km/settings/scope-info', {
+    params: scopeParams(scope),
+  });
+  return res.data;
+}
+
+export async function resetScopedSetting(scope: SettingsScopeParam, key?: string) {
+  const params: Record<string, string> = { ...scopeParams(scope) };
+  if (key) params.key = key;
+  const res = await client.delete('/api/km/settings/scoped', { params });
   return res.data;
 }
 

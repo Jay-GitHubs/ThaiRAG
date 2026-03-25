@@ -50,6 +50,34 @@ impl SqliteKmStore {
             "UPDATE users SET role = 'super_admin' WHERE is_super_admin = 1 AND role = 'viewer'",
         );
 
+        // Migrate settings table: add scope_type + scope_id columns for multi-tenant support.
+        // Check if the old single-column PK schema is in use and migrate to composite PK.
+        let needs_settings_migration: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('settings') WHERE name = 'scope_type'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(1)
+            == 0;
+        if needs_settings_migration {
+            conn.execute_batch(
+                "CREATE TABLE settings_v2 (
+                    key         TEXT NOT NULL,
+                    scope_type  TEXT NOT NULL DEFAULT 'global',
+                    scope_id    TEXT NOT NULL DEFAULT '',
+                    value       TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL,
+                    PRIMARY KEY (key, scope_type, scope_id)
+                );
+                INSERT OR IGNORE INTO settings_v2 (key, scope_type, scope_id, value, updated_at)
+                    SELECT key, 'global', '', value, updated_at FROM settings;
+                DROP TABLE settings;
+                ALTER TABLE settings_v2 RENAME TO settings;",
+            )
+            .map_err(|e| ThaiRagError::Config(format!("Settings migration failed: {e}")))?;
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -1480,36 +1508,21 @@ impl KmStoreTrait for SqliteKmStore {
     }
 
     fn get_setting(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            params![key],
-            |row| row.get(0),
-        )
-        .ok()
+        self.get_scoped_setting(key, "global", "")
     }
 
     fn set_setting(&self, key: &str, value: &str) {
-        let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
-            params![key, value, now],
-        )
-        .ok();
+        self.set_scoped_setting(key, "global", "", value);
     }
 
     fn delete_setting(&self, key: &str) {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM settings WHERE key = ?1", params![key])
-            .ok();
+        self.delete_scoped_setting(key, "global", "");
     }
 
     fn list_all_settings(&self) -> Vec<(String, String)> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT key, value FROM settings WHERE key NOT LIKE 'snapshot.%' AND key NOT LIKE '\\_snapshot\\_index%' ESCAPE '\\' AND key NOT LIKE '\\_embedding\\_fingerprint%' ESCAPE '\\'")
+            .prepare("SELECT key, value FROM settings WHERE scope_type = 'global' AND scope_id = '' AND key NOT LIKE 'snapshot.%' AND key NOT LIKE '\\_snapshot\\_index%' ESCAPE '\\' AND key NOT LIKE '\\_embedding\\_fingerprint%' ESCAPE '\\'")
             .unwrap();
         stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1517,6 +1530,74 @@ impl KmStoreTrait for SqliteKmStore {
         .unwrap()
         .filter_map(|r| r.ok())
         .collect()
+    }
+
+    fn get_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1 AND scope_type = ?2 AND scope_id = ?3",
+            params![key, scope_type, scope_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    fn set_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str, value: &str) {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO settings (key, scope_type, scope_id, value, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(key, scope_type, scope_id) DO UPDATE SET value = ?4, updated_at = ?5",
+            params![key, scope_type, scope_id, value, now],
+        )
+        .ok();
+    }
+
+    fn delete_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE key = ?1 AND scope_type = ?2 AND scope_id = ?3",
+            params![key, scope_type, scope_id],
+        )
+        .ok();
+    }
+
+    fn list_scoped_settings(&self, scope_type: &str, scope_id: &str) -> Vec<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, value FROM settings WHERE scope_type = ?1 AND scope_id = ?2 \
+                 AND key NOT LIKE 'snapshot.%' \
+                 AND key NOT LIKE '\\_snapshot\\_index%' ESCAPE '\\' \
+                 AND key NOT LIKE '\\_embedding\\_fingerprint%' ESCAPE '\\'",
+            )
+            .unwrap();
+        stmt.query_map(params![scope_type, scope_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn list_override_keys(&self, scope_type: &str, scope_id: &str) -> Vec<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT key FROM settings WHERE scope_type = ?1 AND scope_id = ?2")
+            .unwrap();
+        stmt.query_map(params![scope_type, scope_id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    fn delete_all_scoped_settings(&self, scope_type: &str, scope_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE scope_type = ?1 AND scope_id = ?2",
+            params![scope_type, scope_id],
+        )
+        .ok();
     }
 
     // ── MCP Connectors ───────────────────────────────────────────────

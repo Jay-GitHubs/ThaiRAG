@@ -1008,3 +1008,16 @@ export interface SnapshotListItem {
   embedding_fingerprint: string;
   settings_count: number;
 }
+
+// ── Scoped Settings ──────────────────────────────────────────────────
+
+export interface SettingsScopeParam {
+  scope_type: string;
+  scope_id: string;
+}
+
+export interface ScopeInfoResponse {
+  scope_type: string;
+  scope_id: string;
+  overrides: Record<string, string[]>;
+}
