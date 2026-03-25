@@ -34,6 +34,7 @@ import type {
   FeedbackStats,
   LlmConfigUpdate,
   LlmProviderInfo,
+  SettingsScopeParam,
   UpdateChatPipelineRequest,
 } from '../../api/types';
 
@@ -565,7 +566,7 @@ function LlmConfigForm({
 
 // ── Main Component ──────────────────────────────────────────────────
 
-export function ChatPipelineCard() {
+export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<ChatPipelineConfigResponse | null>(null);
@@ -701,11 +702,11 @@ export function ChatPipelineCard() {
   const [syncedModels, setSyncedModels] = useState<AvailableModel[] | null>(null);
   const [syncing, setSyncing] = useState(false);
 
-  useEffect(() => { loadConfig(); }, []);
+  useEffect(() => { loadConfig(); }, [scope?.scope_type, scope?.scope_id]);
 
   async function loadConfig() {
     try {
-      const data = await getChatPipelineConfig();
+      const data = await getChatPipelineConfig(scope);
       setConfig(data);
       setEnabled(data.enabled);
       setQualityMaxRetries(data.quality_guard_max_retries);
@@ -972,7 +973,7 @@ export function ChatPipelineCard() {
         }
       }
 
-      const resp = await updateChatPipelineConfig(req);
+      const resp = await updateChatPipelineConfig(req, scope);
       setConfig(resp);
       message.success('Chat pipeline settings saved');
     } catch {

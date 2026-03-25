@@ -58,9 +58,12 @@ CREATE TABLE IF NOT EXISTS identity_providers (
 );
 
 CREATE TABLE IF NOT EXISTS settings (
-    key         TEXT PRIMARY KEY,
+    key         TEXT NOT NULL,
+    scope_type  TEXT NOT NULL DEFAULT 'global',
+    scope_id    TEXT NOT NULL DEFAULT '',
     value       TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (key, scope_type, scope_id)
 );
 
 -- Document content storage (original file + converted markdown)

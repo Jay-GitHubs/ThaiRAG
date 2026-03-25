@@ -149,6 +149,9 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/chat-pipeline",
             get(settings::get_chat_pipeline_config).put(settings::update_chat_pipeline_config),
         )
+        // Settings — scoped settings
+        .route("/settings/scope-info", get(settings::get_scope_info))
+        .route("/settings/scoped", delete(settings::reset_scoped_setting))
         // Settings — presets
         .route("/settings/presets", get(settings::list_presets))
         .route("/settings/presets/apply", post(settings::apply_preset))
