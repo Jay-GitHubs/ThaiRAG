@@ -1,4 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use thairag_agent::active_learning::ActiveLearning;
 use thairag_agent::colbert_reranker::ColbertReranker;
@@ -726,6 +729,54 @@ impl Drop for UserRequestGuard {
     }
 }
 
+/// Cache of scoped chat pipelines, keyed by a hash of the effective
+/// `ChatPipelineConfig`.  Entries expire after `ttl` seconds to pick up
+/// settings changes without requiring explicit invalidation.
+#[derive(Clone)]
+pub struct ScopedPipelineCache {
+    cache: Arc<dashmap::DashMap<u64, (Arc<ChatPipeline>, Instant)>>,
+    ttl: std::time::Duration,
+}
+
+impl ScopedPipelineCache {
+    pub fn new(ttl_secs: u64) -> Self {
+        Self {
+            cache: Arc::new(dashmap::DashMap::new()),
+            ttl: std::time::Duration::from_secs(ttl_secs),
+        }
+    }
+
+    /// Get a cached pipeline if it exists and hasn't expired.
+    pub fn get(&self, key: u64) -> Option<Arc<ChatPipeline>> {
+        if let Some(entry) = self.cache.get(&key) {
+            if entry.1.elapsed() < self.ttl {
+                return Some(Arc::clone(&entry.0));
+            }
+            drop(entry);
+            self.cache.remove(&key);
+        }
+        None
+    }
+
+    /// Insert a pipeline into the cache.
+    pub fn insert(&self, key: u64, pipeline: Arc<ChatPipeline>) {
+        self.cache.insert(key, (pipeline, Instant::now()));
+    }
+
+    /// Invalidate all cached pipelines (e.g. after global settings change).
+    pub fn clear(&self) {
+        self.cache.clear();
+    }
+}
+
+/// Hash a `ChatPipelineConfig` by serializing it to JSON, then hashing the bytes.
+pub fn hash_chat_pipeline_config(cfg: &ChatPipelineConfig) -> u64 {
+    let json = serde_json::to_string(cfg).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
@@ -742,6 +793,7 @@ pub struct AppState {
     pub user_rate_limiter: crate::rate_limit::UserRateLimiter,
     pub vault: Arc<Vault>,
     providers: Arc<RwLock<ProviderBundle>>,
+    pub scoped_pipeline_cache: ScopedPipelineCache,
 }
 
 impl AppState {
@@ -751,8 +803,107 @@ impl AppState {
     }
 
     /// Hot-swap the dynamic providers with a new bundle.
+    /// Also clears the scoped pipeline cache since global config changed.
     pub fn reload_providers(&self, bundle: ProviderBundle) {
         *self.providers.write().unwrap() = bundle;
+        self.scoped_pipeline_cache.clear();
+    }
+
+    /// Resolve a workspace ID to a full `SettingsScope` by walking
+    /// workspace → dept → org.  Returns `Global` on any lookup failure.
+    pub fn resolve_scope_for_workspace(
+        &self,
+        workspace_id: thairag_core::types::WorkspaceId,
+    ) -> crate::store::SettingsScope {
+        let ws = match self.km_store.get_workspace(workspace_id) {
+            Ok(ws) => ws,
+            Err(_) => return crate::store::SettingsScope::Global,
+        };
+        let dept = match self.km_store.get_dept(ws.dept_id) {
+            Ok(d) => d,
+            Err(_) => return crate::store::SettingsScope::Global,
+        };
+        crate::store::SettingsScope::Workspace {
+            org_id: dept.org_id,
+            dept_id: ws.dept_id,
+            workspace_id,
+        }
+    }
+
+    /// Get a `ChatPipeline` appropriate for the given settings scope.
+    ///
+    /// - If scope is `Global` or has no overrides, returns the global pipeline.
+    /// - Otherwise builds a scoped pipeline (or returns a cached one).
+    pub fn get_scoped_pipeline(
+        &self,
+        scope: &crate::store::SettingsScope,
+    ) -> Option<Arc<ChatPipeline>> {
+        let global_bundle = self.providers();
+
+        // Fast path: global scope → use global pipeline directly
+        if matches!(scope, crate::store::SettingsScope::Global) {
+            return global_bundle.chat_pipeline;
+        }
+
+        // Check if there are any overrides at this scope
+        let override_keys = {
+            let chain = scope.inheritance_chain();
+            let mut has_overrides = false;
+            for (st, sid) in &chain {
+                if *st != "global" && !self.km_store.list_override_keys(st, sid).is_empty() {
+                    has_overrides = true;
+                    break;
+                }
+            }
+            has_overrides
+        };
+
+        // No overrides → use global pipeline (zero overhead)
+        if !override_keys {
+            return global_bundle.chat_pipeline;
+        }
+
+        // Resolve effective scoped config
+        let scoped_config = crate::routes::settings::get_effective_chat_pipeline_scoped(
+            &self.config,
+            &*self.km_store,
+            scope,
+        );
+
+        // Check if scoped config is same as global (hash comparison)
+        let scoped_hash = hash_chat_pipeline_config(&scoped_config);
+        let global_hash = hash_chat_pipeline_config(&global_bundle.chat_pipeline_config);
+        if scoped_hash == global_hash {
+            return global_bundle.chat_pipeline;
+        }
+
+        // Check cache
+        if let Some(cached) = self.scoped_pipeline_cache.get(scoped_hash) {
+            return Some(cached);
+        }
+
+        // Build a new pipeline with the scoped config but shared infrastructure
+        let scoped_bundle = ProviderBundle::build_full(
+            &global_bundle.providers_config,
+            &self.config.search,
+            &self.config.document,
+            &scoped_config,
+            Arc::clone(&self.prompt_registry),
+            Some(Arc::clone(&self.km_store)),
+            Some(&*self.vault),
+        );
+
+        if let Some(ref pipeline) = scoped_bundle.chat_pipeline {
+            self.scoped_pipeline_cache
+                .insert(scoped_hash, Arc::clone(pipeline));
+            tracing::info!(
+                scope = ?scope,
+                hash = scoped_hash,
+                "Built and cached scoped chat pipeline"
+            );
+        }
+
+        scoped_bundle.chat_pipeline
     }
 
     /// Build a new `ProviderBundle` with doc-title resolver and prompt registry.
@@ -807,6 +958,7 @@ impl AppState {
             user_rate_limiter: crate::rate_limit::UserRateLimiter::new(10, 20),
             vault,
             providers: Arc::new(RwLock::new(bundle)),
+            scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }
     }
 
@@ -942,6 +1094,7 @@ impl AppState {
             user_rate_limiter,
             vault,
             providers: Arc::new(RwLock::new(bundle)),
+            scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }
     }
 }

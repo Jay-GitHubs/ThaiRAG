@@ -167,6 +167,13 @@ pub async fn chat_completions(
         AccessScope::none()
     };
 
+    // ── Resolve settings scope for multi-tenant LLM config ─────────
+    let settings_scope = scope
+        .workspace_ids
+        .first()
+        .map(|ws_id| state.resolve_scope_for_workspace(*ws_id))
+        .unwrap_or(crate::store::SettingsScope::Global);
+
     // ── Load conversation memories (Feature 1) ─────────────────────
     let memories = load_memories(&state, user_id);
 
@@ -190,6 +197,7 @@ pub async fn chat_completions(
             available_scopes,
             user_id,
             personal_memories,
+            settings_scope,
         )
         .await
     } else {
@@ -203,6 +211,7 @@ pub async fn chat_completions(
             available_scopes,
             user_id,
             personal_memories,
+            settings_scope,
         )
         .await
     }
@@ -420,6 +429,7 @@ async fn handle_non_stream(
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
+    settings_scope: crate::store::SettingsScope,
 ) -> Result<Response, ApiError> {
     // Inject personal memory context
     let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
@@ -446,9 +456,10 @@ async fn handle_non_stream(
     };
 
     let p = state.providers();
+    let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
-    let llm_resp = if let Some(ref pipeline) = p.chat_pipeline {
+    let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         pipeline
             .process(
                 &augmented_messages,
@@ -600,6 +611,7 @@ async fn handle_stream(
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
+    settings_scope: crate::store::SettingsScope,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -639,7 +651,8 @@ async fn handle_stream(
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
 
     let p = state.providers();
-    let pipeline_for_memory = p.chat_pipeline.clone();
+    let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
+    let pipeline_for_memory = scoped_pipeline.clone();
 
     // Clone what the spawned task needs
     let augmented_messages_clone = augmented_messages.clone();
@@ -648,7 +661,7 @@ async fn handle_stream(
     let available_scopes_clone = available_scopes.clone();
 
     let pipeline_handle = tokio::spawn(async move {
-        if let Some(ref pipeline) = p.chat_pipeline {
+        if let Some(ref pipeline) = scoped_pipeline {
             pipeline
                 .process_stream(
                     &augmented_messages_clone,
