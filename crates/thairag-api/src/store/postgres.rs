@@ -1402,45 +1402,106 @@ impl KmStoreTrait for PostgresKmStore {
     }
 
     fn get_setting(&self, key: &str) -> Option<String> {
+        self.get_scoped_setting(key, "global", "")
+    }
+
+    fn set_setting(&self, key: &str, value: &str) {
+        self.set_scoped_setting(key, "global", "", value);
+    }
+
+    fn delete_setting(&self, key: &str) {
+        self.delete_scoped_setting(key, "global", "");
+    }
+
+    fn list_all_settings(&self) -> Vec<(String, String)> {
         block_on(
-            sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
-                .bind(key)
-                .fetch_optional(&self.pool),
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT key, value FROM settings WHERE scope_type = 'global' AND scope_id = '' \
+                 AND key NOT LIKE 'snapshot.%' \
+                 AND key NOT LIKE '\\_snapshot\\_index%' \
+                 AND key NOT LIKE '\\_embedding\\_fingerprint%'",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+    }
+
+    fn get_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) -> Option<String> {
+        block_on(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM settings WHERE key = $1 AND scope_type = $2 AND scope_id = $3",
+            )
+            .bind(key)
+            .bind(scope_type)
+            .bind(scope_id)
+            .fetch_optional(&self.pool),
         )
         .ok()
         .flatten()
     }
 
-    fn set_setting(&self, key: &str, value: &str) {
+    fn set_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str, value: &str) {
         let now = chrono::Utc::now();
         let _ = block_on(
             sqlx::query(
-                "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
-                 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3",
+                "INSERT INTO settings (key, scope_type, scope_id, value, updated_at) VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (key, scope_type, scope_id) DO UPDATE SET value = $4, updated_at = $5",
             )
             .bind(key)
+            .bind(scope_type)
+            .bind(scope_id)
             .bind(value)
             .bind(now)
             .execute(&self.pool),
         );
     }
 
-    fn delete_setting(&self, key: &str) {
+    fn delete_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) {
         let _ = block_on(
-            sqlx::query("DELETE FROM settings WHERE key = $1")
-                .bind(key)
-                .execute(&self.pool),
+            sqlx::query(
+                "DELETE FROM settings WHERE key = $1 AND scope_type = $2 AND scope_id = $3",
+            )
+            .bind(key)
+            .bind(scope_type)
+            .bind(scope_id)
+            .execute(&self.pool),
         );
     }
 
-    fn list_all_settings(&self) -> Vec<(String, String)> {
+    fn list_scoped_settings(&self, scope_type: &str, scope_id: &str) -> Vec<(String, String)> {
         block_on(
             sqlx::query_as::<_, (String, String)>(
-                "SELECT key, value FROM settings WHERE key NOT LIKE 'snapshot.%' AND key NOT LIKE '\\_snapshot\\_index%' AND key NOT LIKE '\\_embedding\\_fingerprint%'",
+                "SELECT key, value FROM settings WHERE scope_type = $1 AND scope_id = $2 \
+                 AND key NOT LIKE 'snapshot.%' \
+                 AND key NOT LIKE '\\_snapshot\\_index%' \
+                 AND key NOT LIKE '\\_embedding\\_fingerprint%'",
             )
+            .bind(scope_type)
+            .bind(scope_id)
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
+    }
+
+    fn list_override_keys(&self, scope_type: &str, scope_id: &str) -> Vec<String> {
+        block_on(
+            sqlx::query_scalar::<_, String>(
+                "SELECT key FROM settings WHERE scope_type = $1 AND scope_id = $2",
+            )
+            .bind(scope_type)
+            .bind(scope_id)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+    }
+
+    fn delete_all_scoped_settings(&self, scope_type: &str, scope_id: &str) {
+        let _ = block_on(
+            sqlx::query("DELETE FROM settings WHERE scope_type = $1 AND scope_id = $2")
+                .bind(scope_type)
+                .bind(scope_id)
+                .execute(&self.pool),
+        );
     }
 
     // ── MCP Connectors ───────────────────────────────────────────────

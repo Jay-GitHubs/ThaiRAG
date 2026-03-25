@@ -34,7 +34,7 @@ pub struct MemoryKmStore {
     user_by_email: RwLock<HashMap<String, UserId>>,
     permissions: RwLock<Vec<UserPermission>>,
     identity_providers: RwLock<HashMap<IdpId, IdentityProvider>>,
-    settings: RwLock<HashMap<String, String>>,
+    settings: RwLock<HashMap<(String, String, String), String>>,
     connectors: RwLock<HashMap<ConnectorId, McpConnectorConfig>>,
     sync_states: RwLock<HashMap<(ConnectorId, String), SyncState>>,
     sync_runs: RwLock<Vec<SyncRun>>,
@@ -782,18 +782,15 @@ impl KmStoreTrait for MemoryKmStore {
     }
 
     fn get_setting(&self, key: &str) -> Option<String> {
-        self.settings.read().unwrap().get(key).cloned()
+        self.get_scoped_setting(key, "global", "")
     }
 
     fn set_setting(&self, key: &str, value: &str) {
-        self.settings
-            .write()
-            .unwrap()
-            .insert(key.to_string(), value.to_string());
+        self.set_scoped_setting(key, "global", "", value);
     }
 
     fn delete_setting(&self, key: &str) {
-        self.settings.write().unwrap().remove(key);
+        self.delete_scoped_setting(key, "global", "");
     }
 
     fn list_all_settings(&self) -> Vec<(String, String)> {
@@ -801,13 +798,79 @@ impl KmStoreTrait for MemoryKmStore {
             .read()
             .unwrap()
             .iter()
-            .filter(|(k, _)| {
-                !k.starts_with("snapshot.")
-                    && !k.starts_with("_snapshot_index")
-                    && !k.starts_with("_embedding_fingerprint")
+            .filter(|((key, st, si), _)| {
+                st == "global"
+                    && si.is_empty()
+                    && !key.starts_with("snapshot.")
+                    && !key.starts_with("_snapshot_index")
+                    && !key.starts_with("_embedding_fingerprint")
             })
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|((k, _, _), v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    fn get_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) -> Option<String> {
+        self.settings
+            .read()
+            .unwrap()
+            .get(&(
+                key.to_string(),
+                scope_type.to_string(),
+                scope_id.to_string(),
+            ))
+            .cloned()
+    }
+
+    fn set_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str, value: &str) {
+        self.settings.write().unwrap().insert(
+            (
+                key.to_string(),
+                scope_type.to_string(),
+                scope_id.to_string(),
+            ),
+            value.to_string(),
+        );
+    }
+
+    fn delete_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) {
+        self.settings.write().unwrap().remove(&(
+            key.to_string(),
+            scope_type.to_string(),
+            scope_id.to_string(),
+        ));
+    }
+
+    fn list_scoped_settings(&self, scope_type: &str, scope_id: &str) -> Vec<(String, String)> {
+        self.settings
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|((key, st, si), _)| {
+                st == scope_type
+                    && si == scope_id
+                    && !key.starts_with("snapshot.")
+                    && !key.starts_with("_snapshot_index")
+                    && !key.starts_with("_embedding_fingerprint")
+            })
+            .map(|((k, _, _), v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn list_override_keys(&self, scope_type: &str, scope_id: &str) -> Vec<String> {
+        self.settings
+            .read()
+            .unwrap()
+            .keys()
+            .filter(|(_, st, si)| st == scope_type && si == scope_id)
+            .map(|(k, _, _)| k.clone())
+            .collect()
+    }
+
+    fn delete_all_scoped_settings(&self, scope_type: &str, scope_id: &str) {
+        self.settings
+            .write()
+            .unwrap()
+            .retain(|(_, st, si), _| !(st == scope_type && si == scope_id));
     }
 
     // ── MCP Connectors ───────────────────────────────────────────────

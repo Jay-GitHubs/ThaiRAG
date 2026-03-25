@@ -24,7 +24,7 @@ import {
   useUpdateProviderConfig,
 } from '../../hooks/useSettings';
 import { syncModels, syncEmbeddingModels, syncRerankerModels } from '../../api/settings';
-import type { AvailableModel, ProviderConfigResponse } from '../../api/types';
+import type { AvailableModel, ProviderConfigResponse, SettingsScopeParam } from '../../api/types';
 import { ChatPipelineCard } from './ChatPipelineCard';
 
 const kindColors: Record<string, string> = {
@@ -598,7 +598,7 @@ function AvailableModelsPanel({
   );
 }
 
-export function ProvidersTab() {
+export function ProvidersTab({ scope }: { scope?: SettingsScopeParam }) {
   const config = useProviderConfig();
   const models = useAvailableModels();
   const updateMut = useUpdateProviderConfig();
@@ -648,7 +648,7 @@ export function ProvidersTab() {
 
       <AvailableModelsPanel config={p} llmModels={models} onRefreshLlm={() => models.refetch()} />
 
-      <ChatPipelineCard />
+      <ChatPipelineCard scope={scope} />
     </Space>
   );
 }

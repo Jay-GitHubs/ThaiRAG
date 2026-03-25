@@ -13,6 +13,60 @@ use thairag_core::types::IdpId;
 use crate::app_state::AppState;
 use crate::audit::{self, AuditEntry};
 use crate::error::{ApiError, AppJson};
+use crate::store::SettingsScope;
+
+/// Query parameter for scoped settings endpoints.
+#[derive(Deserialize, Default, Debug)]
+pub struct ScopeQuery {
+    pub scope_type: Option<String>,
+    pub scope_id: Option<String>,
+}
+
+/// Parse a ScopeQuery into a SettingsScope, validating that scope_id exists.
+fn parse_scope_query(
+    sq: &ScopeQuery,
+    store: &dyn crate::store::KmStoreTrait,
+) -> Result<SettingsScope, ApiError> {
+    use thairag_core::types::{DeptId, OrgId, WorkspaceId};
+
+    match (sq.scope_type.as_deref(), sq.scope_id.as_deref()) {
+        (None, _) | (Some("global"), _) => Ok(SettingsScope::Global),
+        (Some("org"), Some(id)) => {
+            let org_id = OrgId(
+                id.parse()
+                    .map_err(|_| ApiError(ThaiRagError::Validation("Invalid org UUID".into())))?,
+            );
+            store.get_org(org_id)?;
+            Ok(SettingsScope::Org(org_id))
+        }
+        (Some("dept"), Some(id)) => {
+            let dept_id = DeptId(
+                id.parse()
+                    .map_err(|_| ApiError(ThaiRagError::Validation("Invalid dept UUID".into())))?,
+            );
+            let dept = store.get_dept(dept_id)?;
+            Ok(SettingsScope::Dept {
+                org_id: dept.org_id,
+                dept_id,
+            })
+        }
+        (Some("workspace"), Some(id)) => {
+            let ws_id = WorkspaceId(id.parse().map_err(|_| {
+                ApiError(ThaiRagError::Validation("Invalid workspace UUID".into()))
+            })?);
+            let ws = store.get_workspace(ws_id)?;
+            let dept = store.get_dept(ws.dept_id)?;
+            Ok(SettingsScope::Workspace {
+                org_id: dept.org_id,
+                dept_id: ws.dept_id,
+                workspace_id: ws_id,
+            })
+        }
+        (Some(st), _) => Err(ApiError(ThaiRagError::Validation(format!(
+            "Invalid scope_type: {st}. Use 'global', 'org', 'dept', or 'workspace'"
+        )))),
+    }
+}
 
 /// Parse an LLM kind string accepting both PascalCase (from UI) and snake_case (from serde).
 pub fn parse_llm_kind(s: &str) -> Result<thairag_core::types::LlmKind, String> {
@@ -2283,6 +2337,32 @@ pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::
     get_effective_chat_pipeline_with_store(&state.config, &*state.km_store)
 }
 
+/// Get effective chat pipeline config for a specific scope.
+/// Uses batch resolution (at most 4 DB queries) instead of individual reads.
+pub fn get_effective_chat_pipeline_scoped(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+    scope: &SettingsScope,
+) -> thairag_config::schema::ChatPipelineConfig {
+    if matches!(scope, SettingsScope::Global) {
+        return get_effective_chat_pipeline_with_store(config, store);
+    }
+    let settings = crate::store::resolve_all_settings(store, scope);
+    get_effective_chat_pipeline_from_map(config, &settings)
+}
+
+/// Build `ChatPipelineConfig` from a pre-resolved settings map (used by scoped resolution).
+fn get_effective_chat_pipeline_from_map(
+    config: &thairag_config::AppConfig,
+    settings: &std::collections::HashMap<String, String>,
+) -> thairag_config::schema::ChatPipelineConfig {
+    let cp = &config.chat_pipeline;
+    let s = |key: &str| settings.get(key).cloned();
+
+    // Reuse the exact same field resolution logic as get_effective_chat_pipeline_with_store
+    get_effective_chat_pipeline_from_getter(cp, s)
+}
+
 /// Same as `get_effective_chat_pipeline` but takes raw parts — usable before AppState exists.
 pub fn get_effective_chat_pipeline_with_store(
     config: &thairag_config::AppConfig,
@@ -2290,7 +2370,17 @@ pub fn get_effective_chat_pipeline_with_store(
 ) -> thairag_config::schema::ChatPipelineConfig {
     let cp = &config.chat_pipeline;
     let s = |key: &str| store.get_setting(key);
+    get_effective_chat_pipeline_from_getter(cp, s)
+}
 
+/// Internal: builds ChatPipelineConfig from a getter function.
+fn get_effective_chat_pipeline_from_getter<F>(
+    cp: &thairag_config::schema::ChatPipelineConfig,
+    s: F,
+) -> thairag_config::schema::ChatPipelineConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
     thairag_config::schema::ChatPipelineConfig {
         enabled: s("chat_pipeline.enabled")
             .and_then(|v| v.parse().ok())
@@ -2575,8 +2665,10 @@ pub fn get_effective_chat_pipeline_with_store(
     }
 }
 
-fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse {
-    let eff = get_effective_chat_pipeline(state);
+fn build_chat_pipeline_response_from_config(
+    state: &AppState,
+    eff: &thairag_config::schema::ChatPipelineConfig,
+) -> ChatPipelineConfigResponse {
     let llm_mode = state
         .km_store
         .get_setting("chat_pipeline.llm_mode")
@@ -2605,83 +2697,65 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
         agent_max_tokens: eff.agent_max_tokens,
         request_timeout_secs: eff.request_timeout_secs,
         ollama_keep_alive: eff.ollama_keep_alive.clone(),
-        // Feature: Conversation Memory
         conversation_memory_enabled: eff.conversation_memory_enabled,
         memory_max_summaries: eff.memory_max_summaries,
         memory_summary_max_tokens: eff.memory_summary_max_tokens,
         memory_llm: eff.memory_llm.as_ref().map(llm_config_to_info),
-        // Feature: Multi-turn Retrieval Refinement
         retrieval_refinement_enabled: eff.retrieval_refinement_enabled,
         refinement_min_relevance: eff.refinement_min_relevance,
         refinement_max_retries: eff.refinement_max_retries,
-        // Feature: Agentic Tool Use
         tool_use_enabled: eff.tool_use_enabled,
         tool_use_max_calls: eff.tool_use_max_calls,
         tool_use_llm: eff.tool_use_llm.as_ref().map(llm_config_to_info),
-        // Feature: Adaptive Quality Thresholds
         adaptive_threshold_enabled: eff.adaptive_threshold_enabled,
         feedback_decay_days: eff.feedback_decay_days,
         adaptive_min_samples: eff.adaptive_min_samples,
-        // Self-RAG
         self_rag_enabled: eff.self_rag_enabled,
         self_rag_threshold: eff.self_rag_threshold,
         self_rag_llm: eff.self_rag_llm.as_ref().map(llm_config_to_info),
-        // Graph RAG
         graph_rag_enabled: eff.graph_rag_enabled,
         graph_rag_max_entities: eff.graph_rag_max_entities,
         graph_rag_max_depth: eff.graph_rag_max_depth,
         graph_rag_llm: eff.graph_rag_llm.as_ref().map(llm_config_to_info),
-        // CRAG
         crag_enabled: eff.crag_enabled,
         crag_relevance_threshold: eff.crag_relevance_threshold,
         crag_web_search_url: eff.crag_web_search_url.clone(),
         crag_max_web_results: eff.crag_max_web_results,
-        // Speculative RAG
         speculative_rag_enabled: eff.speculative_rag_enabled,
         speculative_candidates: eff.speculative_candidates,
         speculative_rag_llm: eff.speculative_rag_llm.as_ref().map(llm_config_to_info),
-        // Map-Reduce RAG
         map_reduce_enabled: eff.map_reduce_enabled,
         map_reduce_max_chunks: eff.map_reduce_max_chunks,
         map_reduce_llm: eff.map_reduce_llm.as_ref().map(llm_config_to_info),
-        // RAGAS
         ragas_enabled: eff.ragas_enabled,
         ragas_sample_rate: eff.ragas_sample_rate,
         ragas_llm: eff.ragas_llm.as_ref().map(llm_config_to_info),
-        // Contextual Compression
         compression_enabled: eff.compression_enabled,
         compression_target_ratio: eff.compression_target_ratio,
         compression_llm: eff.compression_llm.as_ref().map(llm_config_to_info),
-        // Multi-modal RAG
         multimodal_enabled: eff.multimodal_enabled,
         multimodal_max_images: eff.multimodal_max_images,
         multimodal_llm: eff.multimodal_llm.as_ref().map(llm_config_to_info),
-        // RAPTOR
         raptor_enabled: eff.raptor_enabled,
         raptor_max_depth: eff.raptor_max_depth,
         raptor_group_size: eff.raptor_group_size,
         raptor_llm: eff.raptor_llm.as_ref().map(llm_config_to_info),
-        // ColBERT
         colbert_enabled: eff.colbert_enabled,
         colbert_top_n: eff.colbert_top_n,
         colbert_llm: eff.colbert_llm.as_ref().map(llm_config_to_info),
-        // Active Learning
         active_learning_enabled: eff.active_learning_enabled,
         active_learning_min_interactions: eff.active_learning_min_interactions,
         active_learning_max_low_confidence: eff.active_learning_max_low_confidence,
-        // Context Compaction
         context_compaction_enabled: eff.context_compaction_enabled,
         model_context_window: eff.model_context_window,
         compaction_threshold: eff.compaction_threshold,
         compaction_keep_recent: eff.compaction_keep_recent,
-        // Personal Memory
         personal_memory_enabled: eff.personal_memory_enabled,
         personal_memory_top_k: eff.personal_memory_top_k,
         personal_memory_max_per_user: eff.personal_memory_max_per_user,
         personal_memory_decay_factor: eff.personal_memory_decay_factor,
         personal_memory_min_relevance: eff.personal_memory_min_relevance,
         personal_memory_llm: eff.personal_memory_llm.as_ref().map(llm_config_to_info),
-        // Live Source Retrieval
         live_retrieval_enabled: eff.live_retrieval_enabled,
         live_retrieval_timeout_secs: eff.live_retrieval_timeout_secs,
         live_retrieval_max_connectors: eff.live_retrieval_max_connectors,
@@ -2690,39 +2764,59 @@ fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse 
     }
 }
 
+fn build_chat_pipeline_response(state: &AppState) -> ChatPipelineConfigResponse {
+    let eff = get_effective_chat_pipeline(state);
+    build_chat_pipeline_response_from_config(state, &eff)
+}
+
 pub async fn get_chat_pipeline_config(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ScopeQuery>,
 ) -> Result<Json<ChatPipelineConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
-    Ok(Json(build_chat_pipeline_response(&state)))
+    let scope = parse_scope_query(&sq, &*state.km_store)?;
+    if matches!(scope, SettingsScope::Global) {
+        return Ok(Json(build_chat_pipeline_response(&state)));
+    }
+    let eff = get_effective_chat_pipeline_scoped(&state.config, &*state.km_store, &scope);
+    Ok(Json(build_chat_pipeline_response_from_config(&state, &eff)))
 }
 
 pub async fn update_chat_pipeline_config(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ScopeQuery>,
     AppJson(req): AppJson<UpdateChatPipelineRequest>,
 ) -> Result<Json<ChatPipelineConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
+    let scope = parse_scope_query(&sq, &*state.km_store)?;
+    let (scope_type, scope_id) = scope.as_pair();
 
-    // Persist scalar settings
+    // Persist scalar settings (scoped)
     macro_rules! persist_bool {
         ($field:ident, $key:expr) => {
             if let Some(v) = req.$field {
-                state.km_store.set_setting($key, &v.to_string());
+                state
+                    .km_store
+                    .set_scoped_setting($key, scope_type, &scope_id, &v.to_string());
             }
         };
     }
     macro_rules! persist_num {
         ($field:ident, $key:expr) => {
             if let Some(v) = req.$field {
-                state.km_store.set_setting($key, &v.to_string());
+                state
+                    .km_store
+                    .set_scoped_setting($key, scope_type, &scope_id, &v.to_string());
             }
         };
     }
 
     if let Some(ref mode) = req.llm_mode {
-        state.km_store.set_setting("chat_pipeline.llm_mode", mode);
+        state
+            .km_store
+            .set_scoped_setting("chat_pipeline.llm_mode", scope_type, &scope_id, mode);
     }
     persist_bool!(enabled, "chat_pipeline.enabled");
     persist_bool!(
@@ -2759,9 +2853,12 @@ pub async fn update_chat_pipeline_config(
     persist_num!(agent_max_tokens, "chat_pipeline.agent_max_tokens");
     persist_num!(request_timeout_secs, "chat_pipeline.request_timeout_secs");
     if let Some(ref ka) = req.ollama_keep_alive {
-        state
-            .km_store
-            .set_setting("chat_pipeline.ollama_keep_alive", ka);
+        state.km_store.set_scoped_setting(
+            "chat_pipeline.ollama_keep_alive",
+            scope_type,
+            &scope_id,
+            ka,
+        );
     }
     // Feature: Conversation Memory
     persist_bool!(
@@ -2814,9 +2911,12 @@ pub async fn update_chat_pipeline_config(
     );
     persist_num!(crag_max_web_results, "chat_pipeline.crag_max_web_results");
     if let Some(ref url) = req.crag_web_search_url {
-        state
-            .km_store
-            .set_setting("chat_pipeline.crag_web_search_url", url);
+        state.km_store.set_scoped_setting(
+            "chat_pipeline.crag_web_search_url",
+            scope_type,
+            &scope_id,
+            url,
+        );
     }
     // Speculative RAG
     persist_bool!(
@@ -2909,12 +3009,14 @@ pub async fn update_chat_pipeline_config(
         "chat_pipeline.live_retrieval_max_content_chars"
     );
 
-    // Helper: persist LLM config
+    // Helper: persist LLM config (scoped)
     fn persist_chat_llm(
         state: &AppState,
         key: &str,
         update: &UpdateLlmConfig,
         current: Option<thairag_config::schema::LlmConfig>,
+        scope_type: &str,
+        scope_id: &str,
     ) -> Result<(), ApiError> {
         use thairag_core::types::LlmKind;
 
@@ -2958,176 +3060,126 @@ pub async fn update_chat_pipeline_config(
         }
         let json = serde_json::to_string(&cfg)
             .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize: {e}"))))?;
-        state.km_store.set_setting(key, &json);
+        state
+            .km_store
+            .set_scoped_setting(key, scope_type, scope_id, &json);
         Ok(())
     }
 
-    // Persist LLM configs
+    // Persist LLM configs (scoped)
     let eff = get_effective_chat_pipeline(&state);
-    if let Some(ref u) = req.llm {
-        persist_chat_llm(&state, "chat_pipeline.llm", u, eff.llm.clone())?;
+    macro_rules! persist_llm {
+        ($field:ident, $key:expr, $eff_field:expr) => {
+            if let Some(ref u) = req.$field {
+                persist_chat_llm(&state, $key, u, $eff_field, scope_type, &scope_id)?;
+            }
+        };
     }
-    if let Some(ref u) = req.query_analyzer_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.query_analyzer_llm",
-            u,
-            eff.query_analyzer_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.query_rewriter_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.query_rewriter_llm",
-            u,
-            eff.query_rewriter_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.context_curator_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.context_curator_llm",
-            u,
-            eff.context_curator_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.response_generator_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.response_generator_llm",
-            u,
-            eff.response_generator_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.quality_guard_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.quality_guard_llm",
-            u,
-            eff.quality_guard_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.language_adapter_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.language_adapter_llm",
-            u,
-            eff.language_adapter_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.orchestrator_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.orchestrator_llm",
-            u,
-            eff.orchestrator_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.memory_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.memory_llm",
-            u,
-            eff.memory_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.tool_use_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.tool_use_llm",
-            u,
-            eff.tool_use_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.self_rag_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.self_rag_llm",
-            u,
-            eff.self_rag_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.graph_rag_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.graph_rag_llm",
-            u,
-            eff.graph_rag_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.map_reduce_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.map_reduce_llm",
-            u,
-            eff.map_reduce_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.speculative_rag_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.speculative_rag_llm",
-            u,
-            eff.speculative_rag_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.ragas_llm {
-        persist_chat_llm(&state, "chat_pipeline.ragas_llm", u, eff.ragas_llm.clone())?;
-    }
-    if let Some(ref u) = req.compression_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.compression_llm",
-            u,
-            eff.compression_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.multimodal_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.multimodal_llm",
-            u,
-            eff.multimodal_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.raptor_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.raptor_llm",
-            u,
-            eff.raptor_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.colbert_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.colbert_llm",
-            u,
-            eff.colbert_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.personal_memory_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.personal_memory_llm",
-            u,
-            eff.personal_memory_llm.clone(),
-        )?;
-    }
-    if let Some(ref u) = req.live_retrieval_llm {
-        persist_chat_llm(
-            &state,
-            "chat_pipeline.live_retrieval_llm",
-            u,
-            eff.live_retrieval_llm.clone(),
-        )?;
-    }
+    persist_llm!(llm, "chat_pipeline.llm", eff.llm.clone());
+    persist_llm!(
+        query_analyzer_llm,
+        "chat_pipeline.query_analyzer_llm",
+        eff.query_analyzer_llm.clone()
+    );
+    persist_llm!(
+        query_rewriter_llm,
+        "chat_pipeline.query_rewriter_llm",
+        eff.query_rewriter_llm.clone()
+    );
+    persist_llm!(
+        context_curator_llm,
+        "chat_pipeline.context_curator_llm",
+        eff.context_curator_llm.clone()
+    );
+    persist_llm!(
+        response_generator_llm,
+        "chat_pipeline.response_generator_llm",
+        eff.response_generator_llm.clone()
+    );
+    persist_llm!(
+        quality_guard_llm,
+        "chat_pipeline.quality_guard_llm",
+        eff.quality_guard_llm.clone()
+    );
+    persist_llm!(
+        language_adapter_llm,
+        "chat_pipeline.language_adapter_llm",
+        eff.language_adapter_llm.clone()
+    );
+    persist_llm!(
+        orchestrator_llm,
+        "chat_pipeline.orchestrator_llm",
+        eff.orchestrator_llm.clone()
+    );
+    persist_llm!(
+        memory_llm,
+        "chat_pipeline.memory_llm",
+        eff.memory_llm.clone()
+    );
+    persist_llm!(
+        tool_use_llm,
+        "chat_pipeline.tool_use_llm",
+        eff.tool_use_llm.clone()
+    );
+    persist_llm!(
+        self_rag_llm,
+        "chat_pipeline.self_rag_llm",
+        eff.self_rag_llm.clone()
+    );
+    persist_llm!(
+        graph_rag_llm,
+        "chat_pipeline.graph_rag_llm",
+        eff.graph_rag_llm.clone()
+    );
+    persist_llm!(
+        map_reduce_llm,
+        "chat_pipeline.map_reduce_llm",
+        eff.map_reduce_llm.clone()
+    );
+    persist_llm!(
+        speculative_rag_llm,
+        "chat_pipeline.speculative_rag_llm",
+        eff.speculative_rag_llm.clone()
+    );
+    persist_llm!(ragas_llm, "chat_pipeline.ragas_llm", eff.ragas_llm.clone());
+    persist_llm!(
+        compression_llm,
+        "chat_pipeline.compression_llm",
+        eff.compression_llm.clone()
+    );
+    persist_llm!(
+        multimodal_llm,
+        "chat_pipeline.multimodal_llm",
+        eff.multimodal_llm.clone()
+    );
+    persist_llm!(
+        raptor_llm,
+        "chat_pipeline.raptor_llm",
+        eff.raptor_llm.clone()
+    );
+    persist_llm!(
+        colbert_llm,
+        "chat_pipeline.colbert_llm",
+        eff.colbert_llm.clone()
+    );
+    persist_llm!(
+        personal_memory_llm,
+        "chat_pipeline.personal_memory_llm",
+        eff.personal_memory_llm.clone()
+    );
+    persist_llm!(
+        live_retrieval_llm,
+        "chat_pipeline.live_retrieval_llm",
+        eff.live_retrieval_llm.clone()
+    );
 
-    // Handle removal of LLM overrides
+    // Handle removal of LLM overrides (scoped)
     macro_rules! remove_llm {
         ($llm_field:ident, $remove_field:ident, $key:expr) => {
             if req.$llm_field.is_none() && req.$remove_field.unwrap_or(false) {
-                state.km_store.delete_setting($key);
+                state
+                    .km_store
+                    .delete_scoped_setting($key, scope_type, &scope_id);
             }
         };
     }
@@ -3217,26 +3269,107 @@ pub async fn update_chat_pipeline_config(
         "chat_pipeline.speculative_rag_llm"
     );
 
-    // Hot-reload
-    let eff_chat = get_effective_chat_pipeline(&state);
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        state.build_provider_bundle(
-            &state.providers().providers_config,
-            &state.config.search,
-            &state.config.document,
-            &eff_chat,
-        )
-    })) {
-        Ok(bundle) => {
-            state.reload_providers(bundle);
-            tracing::info!("Chat pipeline config updated and hot-reloaded");
-        }
-        Err(e) => {
-            tracing::warn!("Hot-reload failed after chat pipeline save: {:?}", e);
+    // Hot-reload only for global scope (scoped settings are resolved at request time)
+    if matches!(scope, SettingsScope::Global) {
+        let eff_chat = get_effective_chat_pipeline(&state);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.build_provider_bundle(
+                &state.providers().providers_config,
+                &state.config.search,
+                &state.config.document,
+                &eff_chat,
+            )
+        })) {
+            Ok(bundle) => {
+                state.reload_providers(bundle);
+                tracing::info!("Chat pipeline config updated and hot-reloaded");
+            }
+            Err(e) => {
+                tracing::warn!("Hot-reload failed after chat pipeline save: {:?}", e);
+            }
         }
     }
 
-    Ok(Json(build_chat_pipeline_response(&state)))
+    let eff_response = get_effective_chat_pipeline_scoped(&state.config, &*state.km_store, &scope);
+    Ok(Json(build_chat_pipeline_response_from_config(
+        &state,
+        &eff_response,
+    )))
+}
+
+// ── Scoped Settings Info ─────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ScopeInfoResponse {
+    pub scope_type: String,
+    pub scope_id: String,
+    pub overrides: std::collections::HashMap<String, Vec<String>>,
+}
+
+pub async fn get_scope_info(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ScopeQuery>,
+) -> Result<Json<ScopeInfoResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let scope = parse_scope_query(&sq, &*state.km_store)?;
+    let (st, si) = scope.as_pair();
+
+    let mut overrides = std::collections::HashMap::new();
+    for (scope_type, scope_id) in scope.inheritance_chain() {
+        let keys = state.km_store.list_override_keys(scope_type, &scope_id);
+        overrides.insert(scope_type.to_string(), keys);
+    }
+
+    Ok(Json(ScopeInfoResponse {
+        scope_type: st.to_string(),
+        scope_id: si,
+        overrides,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct ResetScopeQuery {
+    pub scope_type: Option<String>,
+    pub scope_id: Option<String>,
+    pub key: Option<String>,
+}
+
+pub async fn reset_scoped_setting(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ResetScopeQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let scope = parse_scope_query(
+        &ScopeQuery {
+            scope_type: sq.scope_type,
+            scope_id: sq.scope_id,
+        },
+        &*state.km_store,
+    )?;
+
+    if matches!(scope, SettingsScope::Global) {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Cannot reset global scope settings. Use the specific PUT endpoint instead.".into(),
+        )));
+    }
+
+    let (scope_type, scope_id) = scope.as_pair();
+
+    if let Some(key) = &sq.key {
+        state
+            .km_store
+            .delete_scoped_setting(key, scope_type, &scope_id);
+        Ok(Json(serde_json::json!({ "status": "reset", "key": key })))
+    } else {
+        state
+            .km_store
+            .delete_all_scoped_settings(scope_type, &scope_id);
+        Ok(Json(
+            serde_json::json!({ "status": "reset_all", "scope_type": scope_type, "scope_id": scope_id }),
+        ))
+    }
 }
 
 // ── Presets ──────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@ pub mod memory;
 pub mod postgres;
 pub mod sqlite;
 
+use std::collections::HashMap;
+
 use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
@@ -11,6 +13,96 @@ use thairag_core::permission::Role;
 use thairag_core::types::{ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
+
+// ── Scoped Settings ──────────────────────────────────────────────────
+
+/// Hierarchical scope for settings with inheritance:
+/// Workspace → Dept → Org → Global.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SettingsScope {
+    Global,
+    Org(OrgId),
+    Dept {
+        org_id: OrgId,
+        dept_id: DeptId,
+    },
+    Workspace {
+        org_id: OrgId,
+        dept_id: DeptId,
+        workspace_id: WorkspaceId,
+    },
+}
+
+impl SettingsScope {
+    /// Returns the inheritance chain from most-specific to global.
+    /// Each element is `(scope_type, scope_id)` matching DB columns.
+    pub fn inheritance_chain(&self) -> Vec<(&str, String)> {
+        match self {
+            SettingsScope::Global => vec![("global", String::new())],
+            SettingsScope::Org(org_id) => {
+                vec![("org", org_id.0.to_string()), ("global", String::new())]
+            }
+            SettingsScope::Dept { org_id, dept_id } => vec![
+                ("dept", dept_id.0.to_string()),
+                ("org", org_id.0.to_string()),
+                ("global", String::new()),
+            ],
+            SettingsScope::Workspace {
+                org_id,
+                dept_id,
+                workspace_id,
+            } => vec![
+                ("workspace", workspace_id.0.to_string()),
+                ("dept", dept_id.0.to_string()),
+                ("org", org_id.0.to_string()),
+                ("global", String::new()),
+            ],
+        }
+    }
+
+    /// Returns `(scope_type, scope_id)` for the current level only (no parents).
+    pub fn as_pair(&self) -> (&str, String) {
+        match self {
+            SettingsScope::Global => ("global", String::new()),
+            SettingsScope::Org(org_id) => ("org", org_id.0.to_string()),
+            SettingsScope::Dept { dept_id, .. } => ("dept", dept_id.0.to_string()),
+            SettingsScope::Workspace { workspace_id, .. } => {
+                ("workspace", workspace_id.0.to_string())
+            }
+        }
+    }
+}
+
+/// Resolve a single setting by walking the inheritance chain (most-specific first).
+pub fn resolve_setting(
+    store: &dyn KmStoreTrait,
+    key: &str,
+    scope: &SettingsScope,
+) -> Option<String> {
+    for (scope_type, scope_id) in scope.inheritance_chain() {
+        if let Some(val) = store.get_scoped_setting(key, scope_type, &scope_id) {
+            return Some(val);
+        }
+    }
+    None
+}
+
+/// Batch-resolve all settings by merging from global (least specific) up to the
+/// most specific scope level. At most 4 DB queries regardless of key count.
+pub fn resolve_all_settings(
+    store: &dyn KmStoreTrait,
+    scope: &SettingsScope,
+) -> HashMap<String, String> {
+    let chain = scope.inheritance_chain();
+    let mut merged = HashMap::new();
+    // Walk from global → most-specific, so more-specific values overwrite
+    for (scope_type, scope_id) in chain.into_iter().rev() {
+        for (key, value) in store.list_scoped_settings(scope_type, &scope_id) {
+            merged.insert(key, value);
+        }
+    }
+    merged
+}
 
 /// Check whether two `PermissionScope` values target the same entity.
 pub fn scopes_match(a: &PermissionScope, b: &PermissionScope) -> bool {
@@ -212,11 +304,28 @@ pub trait KmStoreTrait: Send + Sync {
     fn cascade_delete_org(&self, org_id: OrgId) -> Result<Vec<DocId>>;
 
     // ── Settings (key-value store) ───────────────────────────────────
+    /// Get a global-scope setting (backward-compatible shortcut).
     fn get_setting(&self, key: &str) -> Option<String>;
+    /// Set a global-scope setting (backward-compatible shortcut).
     fn set_setting(&self, key: &str, value: &str);
+    /// Delete a global-scope setting (backward-compatible shortcut).
     fn delete_setting(&self, key: &str);
-    /// List all settings, excluding internal keys (snapshot.*, _snapshot_index, _embedding_fingerprint).
+    /// List all global-scope settings, excluding internal keys.
     fn list_all_settings(&self) -> Vec<(String, String)>;
+
+    // ── Scoped Settings ───────────────────────────────────────────────
+    /// Get a setting at a specific scope level.
+    fn get_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str) -> Option<String>;
+    /// Set a setting at a specific scope level.
+    fn set_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str, value: &str);
+    /// Delete a setting at a specific scope level.
+    fn delete_scoped_setting(&self, key: &str, scope_type: &str, scope_id: &str);
+    /// List all settings at a specific scope level.
+    fn list_scoped_settings(&self, scope_type: &str, scope_id: &str) -> Vec<(String, String)>;
+    /// List which keys have overrides at a specific scope level.
+    fn list_override_keys(&self, scope_type: &str, scope_id: &str) -> Vec<String>;
+    /// Delete all settings at a specific scope level.
+    fn delete_all_scoped_settings(&self, scope_type: &str, scope_id: &str);
 
     // ── MCP Connectors ───────────────────────────────────────────────
     fn insert_connector(
