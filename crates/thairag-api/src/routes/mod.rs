@@ -32,7 +32,7 @@ use crate::rate_limit::{RateLimitLayer, RateLimiter};
 async fn metrics_handler(State(state): State<AppState>) -> String {
     state
         .metrics
-        .set_active_sessions(state.session_store.count());
+        .set_active_sessions(state.session_store.count().await);
     state.metrics.encode()
 }
 
@@ -257,6 +257,12 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/documents/reprocess-all",
             post(documents::reprocess_all_documents),
+        )
+        // Jobs
+        .route("/workspaces/{workspace_id}/jobs", get(documents::list_jobs))
+        .route(
+            "/workspaces/{workspace_id}/jobs/{job_id}",
+            get(documents::get_job).delete(documents::cancel_job),
         )
         // Test query (search + RAG for a workspace)
         .route(

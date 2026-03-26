@@ -23,9 +23,7 @@ use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
 use thairag_api::app_state::{AppState, ProviderBundle};
-use thairag_api::metrics::MetricsState;
 use thairag_api::routes::build_router;
-use thairag_api::session::SessionStore;
 use thairag_api::store::KmStoreTrait;
 use thairag_api::store::memory::MemoryKmStore;
 
@@ -221,6 +219,10 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         },
         chat_pipeline: Default::default(),
         mcp: Default::default(),
+        session: Default::default(),
+        embedding_cache: Default::default(),
+        job_queue: Default::default(),
+        redis: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1637,6 +1639,10 @@ fn build_streaming_test_app() -> Router {
         },
         chat_pipeline: Default::default(),
         mcp: Default::default(),
+        session: Default::default(),
+        embedding_cache: Default::default(),
+        job_queue: Default::default(),
+        redis: Default::default(),
     };
 
     let bundle = ProviderBundle {

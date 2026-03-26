@@ -16,6 +16,7 @@ thairag-provider-search = { path = "../thairag-provider-search" }
 thairag-provider-reranker = { path = "../thairag-provider-reranker" }
 thairag-document = { workspace = true }
 thairag-mcp = { workspace = true }
+thairag-provider-redis = { workspace = true }
 
 axum = { workspace = true }
 tower = { workspace = true }

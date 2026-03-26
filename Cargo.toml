@@ -14,6 +14,7 @@ members = [
     "crates/thairag-search",
     "crates/thairag-agent",
     "crates/thairag-mcp",
+    "crates/thairag-provider-redis",
     "crates/thairag-api",
 ]
 
@@ -130,3 +131,7 @@ thairag-document = { path = "crates/thairag-document" }
 thairag-search = { path = "crates/thairag-search" }
 thairag-agent = { path = "crates/thairag-agent" }
 thairag-mcp = { path = "crates/thairag-mcp" }
+thairag-provider-redis = { path = "crates/thairag-provider-redis" }
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }

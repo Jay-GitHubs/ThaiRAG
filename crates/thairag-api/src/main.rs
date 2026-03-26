@@ -36,7 +36,7 @@ async fn main() {
     let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
 
     // Build app state with all providers wired
-    let state = AppState::build(config.clone());
+    let state = AppState::build(config.clone()).await;
 
     // Seed super admin from env vars
     seed_super_admin(&*state.km_store);
@@ -149,8 +149,21 @@ async fn main() {
             let mut interval = tokio::time::interval(Duration::from_secs(600));
             loop {
                 interval.tick().await;
-                session_store.cleanup_stale(Duration::from_secs(3600));
+                session_store.cleanup_stale(Duration::from_secs(3600)).await;
                 oidc_cache.cleanup_stale(Duration::from_secs(600));
+            }
+        });
+    }
+
+    // Spawn job queue cleanup task
+    {
+        let job_queue = state.job_queue.clone();
+        let retention = Duration::from_secs(config.job_queue.retention_secs);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                job_queue.cleanup(retention).await;
             }
         });
     }

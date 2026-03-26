@@ -682,7 +682,7 @@ fn grant_permission_inner(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn revoke_permission_inner(
+async fn revoke_permission_inner(
     state: &AppState,
     perm: &PermCheck,
     org_id: OrgId,
@@ -717,7 +717,10 @@ fn revoke_permission_inner(
     // stale context from leaking revoked document content (session history,
     // context compaction summaries, and conversation memories may contain
     // information from workspaces the user no longer has access to).
-    let cleared = state.session_store.clear_user_sessions(target.user.id);
+    let cleared = state
+        .session_store
+        .clear_user_sessions(target.user.id)
+        .await;
     let memory_key = format!("memory:{}", target.user.id.0);
     state.km_store.delete_setting(&memory_key);
     if cleared > 0 {
@@ -783,7 +786,7 @@ pub async fn revoke_dept_permission(
     let dept_id = DeptId(dept_id);
     let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     let scope = PermissionScope::Dept { org_id, dept_id };
-    revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
+    revoke_permission_inner(&state, &perm, org_id, scope, &body.email).await
 }
 
 // ── Workspace-scoped permission handlers ────────────────────────────
@@ -840,7 +843,7 @@ pub async fn revoke_workspace_permission(
         dept_id,
         workspace_id: WorkspaceId(ws_id),
     };
-    revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
+    revoke_permission_inner(&state, &perm, org_id, scope, &body.email).await
 }
 
 // ── Users handler ───────────────────────────────────────────────────

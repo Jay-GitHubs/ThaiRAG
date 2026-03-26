@@ -1,7 +1,10 @@
 pub mod app_state;
 pub mod audit;
+pub mod cached_embedding;
 pub mod csrf;
+pub mod embedding_cache;
 pub mod error;
+pub mod job_queue;
 pub mod login_tracker;
 pub mod metrics;
 pub mod oidc;

@@ -48,6 +48,7 @@ define_id!(IdpId);
 define_id!(MemoryId);
 define_id!(ConnectorId);
 define_id!(SyncRunId);
+define_id!(JobId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -722,6 +723,76 @@ pub struct CompactionResult {
     pub messages_compacted: usize,
     /// Number of messages kept intact (recent).
     pub messages_kept: usize,
+}
+
+// ── Job Queue Types ──────────────────────────────────────────────────
+
+/// The kind of background job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// Process a newly uploaded document (convert → chunk → embed → index).
+    DocumentIngestion,
+    /// Reprocess an existing document (re-chunk + re-embed).
+    DocumentReprocess,
+    /// Reprocess all documents in a workspace.
+    BatchReprocess,
+}
+
+impl std::fmt::Display for JobKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DocumentIngestion => write!(f, "document_ingestion"),
+            Self::DocumentReprocess => write!(f, "document_reprocess"),
+            Self::BatchReprocess => write!(f, "batch_reprocess"),
+        }
+    }
+}
+
+/// Status of a background job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+/// A background job tracked by the job queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    pub id: JobId,
+    pub kind: JobKind,
+    pub status: JobStatus,
+    pub workspace_id: WorkspaceId,
+    /// Related document ID (if applicable).
+    pub doc_id: Option<DocId>,
+    /// Human-readable description.
+    pub description: String,
+    /// Unix timestamp (seconds) when the job was created.
+    pub created_at: i64,
+    /// Unix timestamp when the job started running.
+    pub started_at: Option<i64>,
+    /// Unix timestamp when the job completed/failed.
+    pub completed_at: Option<i64>,
+    /// Error message if the job failed.
+    pub error: Option<String>,
+    /// Number of items processed (e.g., chunks indexed).
+    pub items_processed: usize,
 }
 
 /// Estimate tokens for a string using heuristic: Thai ~2 chars/token, EN ~4 chars/token.

@@ -7,7 +7,7 @@ use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::models::{DocStatus, Document};
 use thairag_core::permission::Role;
-use thairag_core::types::{DocId, WorkspaceId};
+use thairag_core::types::{DocId, Job, JobId, JobKind, JobStatus, WorkspaceId};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -78,7 +78,7 @@ fn require_doc(
 
 /// Process document (convert → chunk → embed → index).
 /// Small documents (< 1MB) are processed inline for immediate response.
-/// Large documents are spawned as background tasks.
+/// Large documents are submitted to the job queue for background processing.
 async fn process_document(
     state: AppState,
     doc_id: DocId,
@@ -88,9 +88,31 @@ async fn process_document(
     is_large: bool,
 ) -> usize {
     if is_large {
-        // Large file: process in background, return immediately
+        // Large file: submit to job queue
+        let job = Job {
+            id: JobId(Uuid::new_v4()),
+            kind: JobKind::DocumentIngestion,
+            status: JobStatus::Queued,
+            workspace_id,
+            doc_id: Some(doc_id),
+            description: format!("Ingest document {doc_id}"),
+            created_at: now_ts(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+            items_processed: 0,
+        };
+        let job_id = state.job_queue.enqueue(job).await;
+        let jq = state.job_queue.clone();
         tokio::spawn(async move {
-            process_document_inner(state, doc_id, workspace_id, bytes, mime_type).await;
+            jq.mark_running(&job_id).await;
+            let (chunks, error) =
+                process_document_inner(state, doc_id, workspace_id, bytes, mime_type).await;
+            if let Some(err) = error {
+                jq.mark_failed(&job_id, err).await;
+            } else {
+                jq.mark_completed(&job_id, chunks).await;
+            }
         });
         0 // chunk count unknown yet
     } else {
@@ -102,6 +124,13 @@ async fn process_document(
         }
         chunk_count
     }
+}
+
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 async fn process_document_inner(
@@ -653,14 +682,37 @@ pub async fn reprocess_document(
 
     info!(%doc_id, "Reprocessing document");
 
-    // Reprocess in background
+    // Reprocess via job queue
     let mime = doc.mime_type.clone();
+    let job = Job {
+        id: JobId(Uuid::new_v4()),
+        kind: JobKind::DocumentReprocess,
+        status: JobStatus::Queued,
+        workspace_id,
+        doc_id: Some(doc_id_typed),
+        description: format!("Reprocess document {doc_id}"),
+        created_at: now_ts(),
+        started_at: None,
+        completed_at: None,
+        error: None,
+        items_processed: 0,
+    };
+    let job_id = state.job_queue.enqueue(job).await;
+    let jq = state.job_queue.clone();
     tokio::spawn(async move {
-        process_document_inner(state, doc_id_typed, workspace_id, file_bytes, mime).await;
+        jq.mark_running(&job_id).await;
+        let (chunks, error) =
+            process_document_inner(state, doc_id_typed, workspace_id, file_bytes, mime).await;
+        if let Some(err) = error {
+            jq.mark_failed(&job_id, err).await;
+        } else {
+            jq.mark_completed(&job_id, chunks).await;
+        }
     });
 
     Ok(Json(serde_json::json!({
         "doc_id": doc_id,
+        "job_id": job_id.0,
         "status": "processing",
         "message": "Document reprocessing started"
     })))
@@ -693,7 +745,24 @@ pub async fn reprocess_all_documents(
 
     let count = ready_docs.len();
 
-    // Process each document in background
+    // Create a batch job for tracking
+    let batch_job = Job {
+        id: JobId(Uuid::new_v4()),
+        kind: JobKind::BatchReprocess,
+        status: JobStatus::Running,
+        workspace_id,
+        doc_id: None,
+        description: format!("Batch reprocess {count} documents"),
+        created_at: now_ts(),
+        started_at: Some(now_ts()),
+        completed_at: None,
+        error: None,
+        items_processed: 0,
+    };
+    let batch_job_id = state.job_queue.enqueue(batch_job).await;
+
+    // Process each document in background via job queue
+    let mut queued = 0;
     for doc in ready_docs {
         let doc_id = doc.id;
         let mime = doc.mime_type.clone();
@@ -713,17 +782,44 @@ pub async fn reprocess_all_documents(
             .km_store
             .update_document_status(doc_id, DocStatus::Processing, 0, None);
 
+        let job = Job {
+            id: JobId(Uuid::new_v4()),
+            kind: JobKind::DocumentReprocess,
+            status: JobStatus::Queued,
+            workspace_id,
+            doc_id: Some(doc_id),
+            description: format!("Reprocess document {doc_id}"),
+            created_at: now_ts(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+            items_processed: 0,
+        };
+        let job_id = state.job_queue.enqueue(job).await;
+        let jq = state.job_queue.clone();
         let s = state.clone();
         tokio::spawn(async move {
-            process_document_inner(s, doc_id, workspace_id, file_bytes, mime).await;
+            jq.mark_running(&job_id).await;
+            let (chunks, error) =
+                process_document_inner(s, doc_id, workspace_id, file_bytes, mime).await;
+            if let Some(err) = error {
+                jq.mark_failed(&job_id, err).await;
+            } else {
+                jq.mark_completed(&job_id, chunks).await;
+            }
         });
+        queued += 1;
     }
 
-    info!(%workspace_id, count, "Reprocessing all documents in workspace");
+    // Mark batch job completed (individual sub-jobs track their own status)
+    state.job_queue.mark_completed(&batch_job_id, queued).await;
+
+    info!(%workspace_id, count = queued, "Reprocessing all documents in workspace");
 
     Ok(Json(serde_json::json!({
-        "queued": count,
-        "message": format!("{count} documents queued for reprocessing")
+        "queued": queued,
+        "batch_job_id": batch_job_id.0,
+        "message": format!("{queued} documents queued for reprocessing")
     })))
 }
 
@@ -749,4 +845,74 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
         "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         _ => None,
     }
+}
+
+// ── Job Queue Handlers ──────────────────────────────────────────────
+
+/// List jobs for a workspace.
+pub async fn list_jobs(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_read, "list jobs")?;
+
+    let jobs = state.job_queue.list_by_workspace(&workspace_id).await;
+    Ok(Json(serde_json::json!({ "jobs": jobs })))
+}
+
+/// Get a single job by ID.
+pub async fn get_job(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((workspace_id, job_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_read, "get job")?;
+
+    let job_id = JobId(job_id);
+    let job = state
+        .job_queue
+        .get(&job_id)
+        .await
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Job not found".into())))?;
+
+    // Verify job belongs to the requested workspace
+    if job.workspace_id != workspace_id {
+        return Err(ApiError(ThaiRagError::NotFound("Job not found".into())));
+    }
+
+    Ok(Json(serde_json::json!(job)))
+}
+
+/// Cancel a job.
+pub async fn cancel_job(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((workspace_id, job_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "cancel job")?;
+
+    let job_id = JobId(job_id);
+
+    // Verify job exists and belongs to workspace
+    let job = state
+        .job_queue
+        .get(&job_id)
+        .await
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Job not found".into())))?;
+    if job.workspace_id != workspace_id {
+        return Err(ApiError(ThaiRagError::NotFound("Job not found".into())));
+    }
+
+    let cancelled = state.job_queue.cancel(&job_id).await;
+    Ok(Json(serde_json::json!({
+        "cancelled": cancelled,
+        "job_id": job_id.0,
+    })))
 }
