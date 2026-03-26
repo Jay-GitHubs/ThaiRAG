@@ -1124,6 +1124,21 @@ impl KmStoreTrait for MemoryKmStore {
                 {
                     return false;
                 }
+                if let Some(ref intent) = filter.intent
+                    && e.intent.as_deref() != Some(intent.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref response_id) = filter.response_id
+                    && e.response_id != *response_id
+                {
+                    return false;
+                }
+                if let Some(ref session_id) = filter.session_id
+                    && e.session_id.as_deref() != Some(session_id.as_str())
+                {
+                    return false;
+                }
                 true
             })
             .cloned()
@@ -1149,6 +1164,9 @@ impl KmStoreTrait for MemoryKmStore {
             to_timestamp: filter.to_timestamp.clone(),
             status: filter.status.clone(),
             llm_model: filter.llm_model.clone(),
+            intent: filter.intent.clone(),
+            response_id: filter.response_id.clone(),
+            session_id: filter.session_id.clone(),
             limit: 0,
             offset: 0,
         };
@@ -1306,6 +1324,115 @@ impl KmStoreTrait for MemoryKmStore {
         if let Some(entry) = logs.iter_mut().find(|e| e.response_id == response_id) {
             entry.feedback_score = Some(score);
         }
+    }
+
+    fn delete_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let mut logs = self.inference_logs.write().unwrap();
+        let before = logs.len();
+        logs.retain(|e| {
+            if let Some(ref ws) = filter.workspace_id
+                && e.workspace_id.as_deref() != Some(ws.as_str())
+            {
+                return true;
+            }
+            if let Some(ref uid) = filter.user_id
+                && e.user_id.as_deref() != Some(uid.as_str())
+            {
+                return true;
+            }
+            if let Some(ref from) = filter.from_timestamp
+                && e.timestamp.as_str() < from.as_str()
+            {
+                return true;
+            }
+            if let Some(ref to) = filter.to_timestamp
+                && e.timestamp.as_str() > to.as_str()
+            {
+                return true;
+            }
+            if let Some(ref status) = filter.status
+                && e.status != *status
+            {
+                return true;
+            }
+            if let Some(ref model) = filter.llm_model
+                && e.llm_model != *model
+            {
+                return true;
+            }
+            if let Some(ref intent) = filter.intent
+                && e.intent.as_deref() != Some(intent.as_str())
+            {
+                return true;
+            }
+            if let Some(ref response_id) = filter.response_id
+                && e.response_id != *response_id
+            {
+                return true;
+            }
+            if let Some(ref session_id) = filter.session_id
+                && e.session_id.as_deref() != Some(session_id.as_str())
+            {
+                return true;
+            }
+            // All filter criteria matched — remove this entry
+            false
+        });
+        (before - logs.len()) as u64
+    }
+
+    fn count_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let logs = self.inference_logs.read().unwrap();
+        logs.iter()
+            .filter(|e| {
+                if let Some(ref ws) = filter.workspace_id
+                    && e.workspace_id.as_deref() != Some(ws.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref uid) = filter.user_id
+                    && e.user_id.as_deref() != Some(uid.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref from) = filter.from_timestamp
+                    && e.timestamp.as_str() < from.as_str()
+                {
+                    return false;
+                }
+                if let Some(ref to) = filter.to_timestamp
+                    && e.timestamp.as_str() > to.as_str()
+                {
+                    return false;
+                }
+                if let Some(ref status) = filter.status
+                    && e.status != *status
+                {
+                    return false;
+                }
+                if let Some(ref model) = filter.llm_model
+                    && e.llm_model != *model
+                {
+                    return false;
+                }
+                if let Some(ref intent) = filter.intent
+                    && e.intent.as_deref() != Some(intent.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref response_id) = filter.response_id
+                    && e.response_id != *response_id
+                {
+                    return false;
+                }
+                if let Some(ref session_id) = filter.session_id
+                    && e.session_id.as_deref() != Some(session_id.as_str())
+                {
+                    return false;
+                }
+                true
+            })
+            .count() as u64
     }
 }
 
