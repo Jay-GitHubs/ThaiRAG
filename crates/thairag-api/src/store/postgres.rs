@@ -1948,4 +1948,401 @@ impl KmStoreTrait for PostgresKmStore {
                 .execute(&self.pool),
         );
     }
+
+    // ── Inference Logs ────────────────────────────────────────────────
+
+    fn insert_inference_log(&self, entry: &super::InferenceLogEntry) {
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO inference_logs (
+                    id, timestamp, user_id, workspace_id, org_id, dept_id, session_id, response_id,
+                    query_text, detected_language, intent, complexity,
+                    llm_kind, llm_model, settings_scope,
+                    prompt_tokens, completion_tokens,
+                    total_ms, search_ms, generation_ms,
+                    chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
+                    quality_guard_pass, relevance_score, hallucination_score, completeness_score,
+                    pipeline_route, agents_used,
+                    status, error_message, response_length,
+                    feedback_score
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8,
+                    $9, $10, $11, $12,
+                    $13, $14, $15,
+                    $16, $17,
+                    $18, $19, $20,
+                    $21, $22, $23, $24,
+                    $25, $26, $27, $28,
+                    $29, $30,
+                    $31, $32, $33,
+                    $34
+                )",
+            )
+            .bind(&entry.id)
+            .bind(&entry.timestamp)
+            .bind(&entry.user_id)
+            .bind(&entry.workspace_id)
+            .bind(&entry.org_id)
+            .bind(&entry.dept_id)
+            .bind(&entry.session_id)
+            .bind(&entry.response_id)
+            .bind(&entry.query_text)
+            .bind(&entry.detected_language)
+            .bind(&entry.intent)
+            .bind(&entry.complexity)
+            .bind(&entry.llm_kind)
+            .bind(&entry.llm_model)
+            .bind(&entry.settings_scope)
+            .bind(entry.prompt_tokens as i32)
+            .bind(entry.completion_tokens as i32)
+            .bind(entry.total_ms as i64)
+            .bind(entry.search_ms.map(|v| v as i64))
+            .bind(entry.generation_ms.map(|v| v as i64))
+            .bind(entry.chunks_retrieved.map(|v| v as i32))
+            .bind(entry.avg_chunk_score)
+            .bind(&entry.self_rag_decision)
+            .bind(entry.self_rag_confidence)
+            .bind(entry.quality_guard_pass)
+            .bind(entry.relevance_score)
+            .bind(entry.hallucination_score)
+            .bind(entry.completeness_score)
+            .bind(&entry.pipeline_route)
+            .bind(&entry.agents_used)
+            .bind(&entry.status)
+            .bind(&entry.error_message)
+            .bind(entry.response_length as i32)
+            .bind(entry.feedback_score.map(|v| v as i16))
+            .execute(&self.pool),
+        );
+
+        // Log retention: if count exceeds 50000, delete oldest 10%
+        let count: i64 = block_on(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM inference_logs")
+                .fetch_one(&self.pool),
+        )
+        .unwrap_or(0);
+        if count > 50_000 {
+            let to_delete = count / 10;
+            let _ = block_on(
+                sqlx::query(
+                    "DELETE FROM inference_logs WHERE id IN (
+                        SELECT id FROM inference_logs ORDER BY timestamp ASC LIMIT $1
+                    )",
+                )
+                .bind(to_delete)
+                .execute(&self.pool),
+            );
+        }
+    }
+
+    fn list_inference_logs(
+        &self,
+        filter: &super::InferenceLogFilter,
+    ) -> Vec<super::InferenceLogEntry> {
+        let mut sql = String::from(
+            "SELECT id, timestamp, user_id, workspace_id, org_id, dept_id, session_id, response_id,
+                    query_text, detected_language, intent, complexity,
+                    llm_kind, llm_model, settings_scope,
+                    prompt_tokens, completion_tokens,
+                    total_ms, search_ms, generation_ms,
+                    chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
+                    quality_guard_pass, relevance_score, hallucination_score, completeness_score,
+                    pipeline_route, agents_used,
+                    status, error_message, response_length,
+                    feedback_score
+             FROM inference_logs WHERE 1=1",
+        );
+        let mut param_idx: usize = 1;
+        let mut params_ws = None;
+        let mut params_user = None;
+        let mut params_from = None;
+        let mut params_to = None;
+        let mut params_status = None;
+        let mut params_model = None;
+
+        if let Some(ref ws) = filter.workspace_id {
+            sql.push_str(&format!(" AND workspace_id = ${param_idx}"));
+            params_ws = Some(ws.clone());
+            param_idx += 1;
+        }
+        if let Some(ref u) = filter.user_id {
+            sql.push_str(&format!(" AND user_id = ${param_idx}"));
+            params_user = Some(u.clone());
+            param_idx += 1;
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            sql.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            params_from = Some(from.clone());
+            param_idx += 1;
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            sql.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            params_to = Some(to.clone());
+            param_idx += 1;
+        }
+        if let Some(ref st) = filter.status {
+            sql.push_str(&format!(" AND status = ${param_idx}"));
+            params_status = Some(st.clone());
+            param_idx += 1;
+        }
+        if let Some(ref model) = filter.llm_model {
+            sql.push_str(&format!(" AND llm_model = ${param_idx}"));
+            params_model = Some(model.clone());
+            param_idx += 1;
+        }
+
+        sql.push_str(&format!(
+            " ORDER BY timestamp DESC LIMIT ${} OFFSET ${}",
+            param_idx,
+            param_idx + 1
+        ));
+
+        block_on(async {
+            let mut q = sqlx::query(&sql);
+            if let Some(ref v) = params_ws {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_user {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_from {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_to {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_status {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_model {
+                q = q.bind(v);
+            }
+            q = q.bind(filter.limit as i64);
+            q = q.bind(filter.offset as i64);
+
+            q.fetch_all(&self.pool).await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let feedback_raw: Option<i16> = row.get("feedback_score");
+            super::InferenceLogEntry {
+                id: row.get("id"),
+                timestamp: row.get("timestamp"),
+                user_id: row.get("user_id"),
+                workspace_id: row.get("workspace_id"),
+                org_id: row.get("org_id"),
+                dept_id: row.get("dept_id"),
+                session_id: row.get("session_id"),
+                response_id: row.get("response_id"),
+                query_text: row.get("query_text"),
+                detected_language: row.get("detected_language"),
+                intent: row.get("intent"),
+                complexity: row.get("complexity"),
+                llm_kind: row.get("llm_kind"),
+                llm_model: row.get("llm_model"),
+                settings_scope: row.get("settings_scope"),
+                prompt_tokens: row.get::<i32, _>("prompt_tokens") as u32,
+                completion_tokens: row.get::<i32, _>("completion_tokens") as u32,
+                total_ms: row.get::<i64, _>("total_ms") as u64,
+                search_ms: row.get::<Option<i64>, _>("search_ms").map(|v| v as u64),
+                generation_ms: row.get::<Option<i64>, _>("generation_ms").map(|v| v as u64),
+                chunks_retrieved: row
+                    .get::<Option<i32>, _>("chunks_retrieved")
+                    .map(|v| v as u32),
+                avg_chunk_score: row.get("avg_chunk_score"),
+                self_rag_decision: row.get("self_rag_decision"),
+                self_rag_confidence: row.get("self_rag_confidence"),
+                quality_guard_pass: row.get("quality_guard_pass"),
+                relevance_score: row.get("relevance_score"),
+                hallucination_score: row.get("hallucination_score"),
+                completeness_score: row.get("completeness_score"),
+                pipeline_route: row.get("pipeline_route"),
+                agents_used: row.get("agents_used"),
+                status: row.get("status"),
+                error_message: row.get("error_message"),
+                response_length: row.get::<i32, _>("response_length") as u32,
+                feedback_score: feedback_raw.map(|v| v as i8),
+            }
+        })
+        .collect()
+    }
+
+    fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
+        // Build the WHERE clause shared by all sub-queries
+        let mut where_clause = String::from("WHERE 1=1");
+        let mut param_idx: usize = 1;
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            where_clause.push_str(&format!(" AND workspace_id = ${param_idx}"));
+            params.push(ws.clone());
+            param_idx += 1;
+        }
+        if let Some(ref u) = filter.user_id {
+            where_clause.push_str(&format!(" AND user_id = ${param_idx}"));
+            params.push(u.clone());
+            param_idx += 1;
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            where_clause.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            params.push(from.clone());
+            param_idx += 1;
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            where_clause.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            params.push(to.clone());
+            param_idx += 1;
+        }
+        if let Some(ref st) = filter.status {
+            where_clause.push_str(&format!(" AND status = ${param_idx}"));
+            params.push(st.clone());
+            param_idx += 1;
+        }
+        if let Some(ref model) = filter.llm_model {
+            where_clause.push_str(&format!(" AND llm_model = ${param_idx}"));
+            params.push(model.clone());
+            param_idx += 1;
+        }
+        let _ = param_idx; // suppress unused warning
+
+        // Aggregate query
+        let agg_sql = format!(
+            "SELECT
+                COUNT(*)::BIGINT AS total_requests,
+                COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_total_ms,
+                COALESCE(AVG(search_ms), 0)::FLOAT8 AS avg_search_ms,
+                COALESCE(AVG(generation_ms), 0)::FLOAT8 AS avg_generation_ms,
+                COALESCE(AVG(relevance_score), 0)::FLOAT8 AS avg_relevance_score,
+                COALESCE(SUM(prompt_tokens), 0)::BIGINT AS total_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0)::BIGINT AS total_completion_tokens,
+                CASE WHEN COUNT(*) > 0
+                    THEN COUNT(*) FILTER (WHERE status = 'success')::FLOAT8 / COUNT(*)::FLOAT8
+                    ELSE 0 END AS success_rate,
+                CASE WHEN COUNT(*) FILTER (WHERE quality_guard_pass IS NOT NULL) > 0
+                    THEN COUNT(*) FILTER (WHERE quality_guard_pass = TRUE)::FLOAT8
+                         / COUNT(*) FILTER (WHERE quality_guard_pass IS NOT NULL)::FLOAT8
+                    ELSE 0 END AS quality_pass_rate,
+                CASE WHEN COUNT(*) FILTER (WHERE feedback_score IS NOT NULL) > 0
+                    THEN COUNT(*) FILTER (WHERE feedback_score > 0)::FLOAT8
+                         / COUNT(*) FILTER (WHERE feedback_score IS NOT NULL)::FLOAT8
+                    ELSE 0 END AS feedback_positive_rate
+             FROM inference_logs {where_clause}"
+        );
+
+        let agg_row = block_on(async {
+            let mut q = sqlx::query(&agg_sql);
+            for p in &params {
+                q = q.bind(p);
+            }
+            q.fetch_one(&self.pool).await
+        });
+
+        let (
+            total_requests,
+            avg_total_ms,
+            avg_search_ms,
+            avg_generation_ms,
+            avg_relevance_score,
+            total_prompt_tokens,
+            total_completion_tokens,
+            success_rate,
+            quality_pass_rate,
+            feedback_positive_rate,
+        ) = match agg_row {
+            Ok(row) => (
+                row.get::<i64, _>("total_requests") as u64,
+                row.get::<f64, _>("avg_total_ms"),
+                row.get::<f64, _>("avg_search_ms"),
+                row.get::<f64, _>("avg_generation_ms"),
+                row.get::<f64, _>("avg_relevance_score"),
+                row.get::<i64, _>("total_prompt_tokens") as u64,
+                row.get::<i64, _>("total_completion_tokens") as u64,
+                row.get::<f64, _>("success_rate"),
+                row.get::<f64, _>("quality_pass_rate"),
+                row.get::<f64, _>("feedback_positive_rate"),
+            ),
+            Err(_) => (0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0),
+        };
+
+        // By model
+        let model_sql = format!(
+            "SELECT llm_model,
+                    COUNT(*)::BIGINT AS count,
+                    COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_ms,
+                    COALESCE(AVG(relevance_score), 0)::FLOAT8 AS avg_quality,
+                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)::BIGINT AS total_tokens
+             FROM inference_logs {where_clause}
+             GROUP BY llm_model ORDER BY count DESC"
+        );
+
+        let by_model = block_on(async {
+            let mut q = sqlx::query(&model_sql);
+            for p in &params {
+                q = q.bind(p);
+            }
+            q.fetch_all(&self.pool).await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| super::ModelStats {
+            model: row.get("llm_model"),
+            count: row.get::<i64, _>("count") as u64,
+            avg_ms: row.get::<f64, _>("avg_ms"),
+            avg_quality: row.get::<f64, _>("avg_quality"),
+            total_tokens: row.get::<i64, _>("total_tokens") as u64,
+        })
+        .collect();
+
+        // By workspace
+        let ws_sql = format!(
+            "SELECT COALESCE(workspace_id, '') AS workspace_id,
+                    COUNT(*)::BIGINT AS count,
+                    COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_ms,
+                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)::BIGINT AS total_tokens
+             FROM inference_logs {where_clause}
+             GROUP BY workspace_id ORDER BY count DESC"
+        );
+
+        let by_workspace = block_on(async {
+            let mut q = sqlx::query(&ws_sql);
+            for p in &params {
+                q = q.bind(p);
+            }
+            q.fetch_all(&self.pool).await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| super::WorkspaceStats {
+            workspace_id: row.get("workspace_id"),
+            count: row.get::<i64, _>("count") as u64,
+            avg_ms: row.get::<f64, _>("avg_ms"),
+            total_tokens: row.get::<i64, _>("total_tokens") as u64,
+        })
+        .collect();
+
+        super::InferenceStats {
+            total_requests,
+            avg_total_ms,
+            avg_search_ms,
+            avg_generation_ms,
+            avg_relevance_score,
+            total_prompt_tokens,
+            total_completion_tokens,
+            success_rate,
+            quality_pass_rate,
+            feedback_positive_rate,
+            by_model,
+            by_workspace,
+        }
+    }
+
+    fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
+        let _ = block_on(
+            sqlx::query("UPDATE inference_logs SET feedback_score = $1 WHERE response_id = $2")
+                .bind(score as i16)
+                .bind(response_id)
+                .execute(&self.pool),
+        );
+    }
 }

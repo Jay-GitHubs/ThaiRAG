@@ -209,6 +209,15 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/settings/audit-log", get(settings::get_audit_log))
         // Settings — usage stats
         .route("/settings/usage", get(settings::get_usage_stats))
+        // Settings — inference logs
+        .route(
+            "/settings/inference-logs",
+            get(settings::list_inference_logs),
+        )
+        .route(
+            "/settings/inference-analytics",
+            get(settings::get_inference_analytics),
+        )
         // Documents
         .route(
             "/workspaces/{workspace_id}/documents",

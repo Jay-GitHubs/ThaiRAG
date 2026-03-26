@@ -205,3 +205,44 @@ CREATE TABLE IF NOT EXISTS llm_profiles (
     created_at  TIMESTAMPTZ NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL
 );
+
+-- Inference Logs (per-request LLM call telemetry)
+CREATE TABLE IF NOT EXISTS inference_logs (
+    id                TEXT PRIMARY KEY,
+    timestamp         TIMESTAMPTZ NOT NULL,
+    user_id           TEXT,
+    workspace_id      TEXT,
+    org_id            TEXT,
+    dept_id           TEXT,
+    session_id        TEXT,
+    response_id       TEXT NOT NULL,
+    query_text        TEXT NOT NULL,
+    detected_language TEXT,
+    intent            TEXT,
+    complexity        TEXT,
+    llm_kind          TEXT NOT NULL,
+    llm_model         TEXT NOT NULL,
+    settings_scope    TEXT NOT NULL DEFAULT 'global',
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_ms          INTEGER NOT NULL DEFAULT 0,
+    search_ms         INTEGER,
+    generation_ms     INTEGER,
+    chunks_retrieved  INTEGER,
+    avg_chunk_score   REAL,
+    self_rag_decision TEXT,
+    self_rag_confidence REAL,
+    quality_guard_pass BOOLEAN,
+    relevance_score    REAL,
+    hallucination_score REAL,
+    completeness_score REAL,
+    pipeline_route    TEXT,
+    agents_used       TEXT NOT NULL DEFAULT '[]',
+    status            TEXT NOT NULL DEFAULT 'success',
+    error_message     TEXT,
+    response_length   INTEGER NOT NULL DEFAULT 0,
+    feedback_score    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_inference_logs_timestamp ON inference_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_inference_logs_workspace_id ON inference_logs(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_inference_logs_response_id ON inference_logs(response_id);
