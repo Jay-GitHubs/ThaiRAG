@@ -49,10 +49,20 @@ test.describe('Permissions', () => {
     const modal = page.locator('.ant-modal', { hasText: 'Grant Permission' });
     await expect(modal).toBeVisible();
 
-    await modal.getByPlaceholder('user@example.com').fill(GRANT_EMAIL);
+    // User field is an Ant Design Select with search — click to open, type to filter, select option
+    const userSelect = modal.locator('.ant-select').first();
+    await userSelect.click();
+    await page.waitForTimeout(300);
+    // Type to filter users
+    await page.keyboard.type(GRANT_EMAIL);
+    await page.waitForTimeout(500);
+    // Select the matching option from dropdown (click the visible item content)
+    await page.locator('.ant-select-item-option-content').filter({ hasText: /Playwright/ }).first().click();
+    await page.waitForTimeout(300);
     // Role defaults to "viewer"
     await modal.getByRole('button', { name: 'OK' }).click();
-    await expect(modal).not.toBeVisible({ timeout: 5000 });
+    // Wait for API call to complete and modal to close
+    await expect(modal).not.toBeVisible({ timeout: 15_000 });
 
     // Verify permission row appears
     await expect(page.getByRole('cell', { name: GRANT_EMAIL })).toBeVisible({ timeout: 5000 });

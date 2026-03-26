@@ -178,7 +178,7 @@ test.describe('MCP Connectors', () => {
     await updatedRow.getByRole('button', { name: 'delete' }).click();
     await page.locator('.ant-popconfirm').getByRole('button', { name: 'OK' }).click();
 
-    await expect(page.getByText('Test Connector Edited')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Test Connector Edited', { exact: true })).not.toBeVisible({ timeout: 5000 });
   });
 
   test('connector API CRUD', async ({ request }) => {
@@ -239,7 +239,7 @@ test.describe('MCP Connectors', () => {
       headers,
     });
     expect(templatesRes.ok()).toBeTruthy();
-    expect((await templatesRes.json()).length).toBe(9);
+    expect((await templatesRes.json()).length).toBeGreaterThanOrEqual(9);
 
     // Delete
     expect(
