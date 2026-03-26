@@ -2011,6 +2011,349 @@ impl KmStoreTrait for SqliteKmStore {
         conn.execute("DELETE FROM llm_profiles WHERE id = ?1", params![id])
             .ok();
     }
+
+    // ── Inference Logs ────────────────────────────────────────────────
+
+    fn insert_inference_log(&self, entry: &super::InferenceLogEntry) {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute(
+            "INSERT INTO inference_logs (
+                id, timestamp, user_id, workspace_id, org_id, dept_id, session_id,
+                response_id, query_text, detected_language, intent, complexity,
+                llm_kind, llm_model, settings_scope,
+                prompt_tokens, completion_tokens, total_ms, search_ms, generation_ms,
+                chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
+                quality_guard_pass, relevance_score, hallucination_score, completeness_score,
+                pipeline_route, agents_used, status, error_message, response_length,
+                feedback_score
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28,
+                ?29, ?30, ?31, ?32, ?33, ?34
+            )",
+            params![
+                entry.id,
+                entry.timestamp,
+                entry.user_id,
+                entry.workspace_id,
+                entry.org_id,
+                entry.dept_id,
+                entry.session_id,
+                entry.response_id,
+                entry.query_text,
+                entry.detected_language,
+                entry.intent,
+                entry.complexity,
+                entry.llm_kind,
+                entry.llm_model,
+                entry.settings_scope,
+                entry.prompt_tokens,
+                entry.completion_tokens,
+                entry.total_ms as i64,
+                entry.search_ms.map(|v| v as i64),
+                entry.generation_ms.map(|v| v as i64),
+                entry.chunks_retrieved.map(|v| v as i32),
+                entry.avg_chunk_score,
+                entry.self_rag_decision,
+                entry.self_rag_confidence,
+                entry.quality_guard_pass.map(|v| v as i32),
+                entry.relevance_score,
+                entry.hallucination_score,
+                entry.completeness_score,
+                entry.pipeline_route,
+                entry.agents_used,
+                entry.status,
+                entry.error_message,
+                entry.response_length as i32,
+                entry.feedback_score.map(|v| v as i32),
+            ],
+        )
+        .ok();
+
+        // Log retention: if count exceeds 50000, delete oldest 10%
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM inference_logs", [], |row| row.get(0))
+            .unwrap_or(0);
+        if count > 50_000 {
+            let to_delete = count / 10;
+            tx.execute(
+                "DELETE FROM inference_logs WHERE id IN (
+                    SELECT id FROM inference_logs ORDER BY timestamp ASC LIMIT ?1
+                )",
+                params![to_delete],
+            )
+            .ok();
+        }
+        tx.commit().ok();
+    }
+
+    fn list_inference_logs(
+        &self,
+        filter: &super::InferenceLogFilter,
+    ) -> Vec<super::InferenceLogEntry> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            param_values.push(Box::new(ws.clone()));
+            conditions.push(format!("workspace_id = ?{}", param_values.len()));
+        }
+        if let Some(ref uid) = filter.user_id {
+            param_values.push(Box::new(uid.clone()));
+            conditions.push(format!("user_id = ?{}", param_values.len()));
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            param_values.push(Box::new(from.clone()));
+            conditions.push(format!("timestamp >= ?{}", param_values.len()));
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            param_values.push(Box::new(to.clone()));
+            conditions.push(format!("timestamp <= ?{}", param_values.len()));
+        }
+        if let Some(ref status) = filter.status {
+            param_values.push(Box::new(status.clone()));
+            conditions.push(format!("status = ?{}", param_values.len()));
+        }
+        if let Some(ref model) = filter.llm_model {
+            param_values.push(Box::new(model.clone()));
+            conditions.push(format!("llm_model = ?{}", param_values.len()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let limit = if filter.limit == 0 { 100 } else { filter.limit };
+        param_values.push(Box::new(limit as i64));
+        let limit_idx = param_values.len();
+        param_values.push(Box::new(filter.offset as i64));
+        let offset_idx = param_values.len();
+
+        let sql = format!(
+            "SELECT id, timestamp, user_id, workspace_id, org_id, dept_id, session_id,
+                    response_id, query_text, detected_language, intent, complexity,
+                    llm_kind, llm_model, settings_scope,
+                    prompt_tokens, completion_tokens, total_ms, search_ms, generation_ms,
+                    chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
+                    quality_guard_pass, relevance_score, hallucination_score, completeness_score,
+                    pipeline_route, agents_used, status, error_message, response_length,
+                    feedback_score
+             FROM inference_logs {where_clause}
+             ORDER BY timestamp DESC
+             LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+        );
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(super::InferenceLogEntry {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                user_id: row.get(2)?,
+                workspace_id: row.get(3)?,
+                org_id: row.get(4)?,
+                dept_id: row.get(5)?,
+                session_id: row.get(6)?,
+                response_id: row.get(7)?,
+                query_text: row.get(8)?,
+                detected_language: row.get(9)?,
+                intent: row.get(10)?,
+                complexity: row.get(11)?,
+                llm_kind: row.get(12)?,
+                llm_model: row.get(13)?,
+                settings_scope: row.get(14)?,
+                prompt_tokens: row.get::<_, i32>(15)? as u32,
+                completion_tokens: row.get::<_, i32>(16)? as u32,
+                total_ms: row.get::<_, i64>(17)? as u64,
+                search_ms: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
+                generation_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                chunks_retrieved: row.get::<_, Option<i32>>(20)?.map(|v| v as u32),
+                avg_chunk_score: row.get(21)?,
+                self_rag_decision: row.get(22)?,
+                self_rag_confidence: row.get(23)?,
+                quality_guard_pass: row.get::<_, Option<i32>>(24)?.map(|v| v != 0),
+                relevance_score: row.get(25)?,
+                hallucination_score: row.get(26)?,
+                completeness_score: row.get(27)?,
+                pipeline_route: row.get(28)?,
+                agents_used: row.get(29)?,
+                status: row.get(30)?,
+                error_message: row.get(31)?,
+                response_length: row.get::<_, i32>(32)? as u32,
+                feedback_score: row.get::<_, Option<i32>>(33)?.map(|v| v as i8),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
+        let conn = self.conn.lock().unwrap();
+
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            param_values.push(Box::new(ws.clone()));
+            conditions.push(format!("workspace_id = ?{}", param_values.len()));
+        }
+        if let Some(ref uid) = filter.user_id {
+            param_values.push(Box::new(uid.clone()));
+            conditions.push(format!("user_id = ?{}", param_values.len()));
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            param_values.push(Box::new(from.clone()));
+            conditions.push(format!("timestamp >= ?{}", param_values.len()));
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            param_values.push(Box::new(to.clone()));
+            conditions.push(format!("timestamp <= ?{}", param_values.len()));
+        }
+        if let Some(ref status) = filter.status {
+            param_values.push(Box::new(status.clone()));
+            conditions.push(format!("status = ?{}", param_values.len()));
+        }
+        if let Some(ref model) = filter.llm_model {
+            param_values.push(Box::new(model.clone()));
+            conditions.push(format!("llm_model = ?{}", param_values.len()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        // Aggregate stats
+        let sql = format!(
+            "SELECT
+                COUNT(*),
+                COALESCE(AVG(total_ms), 0),
+                COALESCE(AVG(search_ms), 0),
+                COALESCE(AVG(generation_ms), 0),
+                COALESCE(AVG(relevance_score), 0),
+                COALESCE(SUM(prompt_tokens), 0),
+                COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(CASE WHEN status = 'success' THEN 1.0 ELSE 0.0 END) / NULLIF(COUNT(*), 0), 0),
+                COALESCE(SUM(CASE WHEN quality_guard_pass = 1 THEN 1.0 ELSE 0.0 END) / NULLIF(SUM(CASE WHEN quality_guard_pass IS NOT NULL THEN 1 ELSE 0 END), 0), 0),
+                COALESCE(SUM(CASE WHEN feedback_score > 0 THEN 1.0 ELSE 0.0 END) / NULLIF(SUM(CASE WHEN feedback_score IS NOT NULL THEN 1 ELSE 0 END), 0), 0)
+             FROM inference_logs {where_clause}"
+        );
+
+        let (
+            total_requests,
+            avg_total_ms,
+            avg_search_ms,
+            avg_generation_ms,
+            avg_relevance_score,
+            total_prompt_tokens,
+            total_completion_tokens,
+            success_rate,
+            quality_pass_rate,
+            feedback_positive_rate,
+        ) = conn
+            .query_row(&sql, params_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u64,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, i64>(5)? as u64,
+                    row.get::<_, i64>(6)? as u64,
+                    row.get::<_, f64>(7)?,
+                    row.get::<_, f64>(8)?,
+                    row.get::<_, f64>(9)?,
+                ))
+            })
+            .unwrap_or((0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0));
+
+        // By model
+        let model_sql = format!(
+            "SELECT llm_model, COUNT(*), COALESCE(AVG(total_ms), 0),
+                    COALESCE(AVG(relevance_score), 0),
+                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
+             FROM inference_logs {where_clause}
+             GROUP BY llm_model ORDER BY COUNT(*) DESC"
+        );
+        let by_model = {
+            let mut stmt = conn.prepare(&model_sql).unwrap();
+            stmt.query_map(params_refs.as_slice(), |row| {
+                Ok(super::ModelStats {
+                    model: row.get(0)?,
+                    count: row.get::<_, i64>(1)? as u64,
+                    avg_ms: row.get(2)?,
+                    avg_quality: row.get(3)?,
+                    total_tokens: row.get::<_, i64>(4)? as u64,
+                })
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
+        // By workspace
+        let ws_sql = format!(
+            "SELECT COALESCE(workspace_id, ''), COUNT(*), COALESCE(AVG(total_ms), 0),
+                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
+             FROM inference_logs {where_clause}
+             GROUP BY workspace_id ORDER BY COUNT(*) DESC"
+        );
+        let by_workspace = {
+            let mut stmt = conn.prepare(&ws_sql).unwrap();
+            stmt.query_map(params_refs.as_slice(), |row| {
+                Ok(super::WorkspaceStats {
+                    workspace_id: row.get(0)?,
+                    count: row.get::<_, i64>(1)? as u64,
+                    avg_ms: row.get(2)?,
+                    total_tokens: row.get::<_, i64>(3)? as u64,
+                })
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+
+        super::InferenceStats {
+            total_requests,
+            avg_total_ms,
+            avg_search_ms,
+            avg_generation_ms,
+            avg_relevance_score,
+            total_prompt_tokens,
+            total_completion_tokens,
+            success_rate,
+            quality_pass_rate,
+            feedback_positive_rate,
+            by_model,
+            by_workspace,
+        }
+    }
+
+    fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE inference_logs SET feedback_score = ?1 WHERE response_id = ?2",
+            params![score as i32, response_id],
+        )
+        .ok();
+    }
 }
 
 #[cfg(test)]

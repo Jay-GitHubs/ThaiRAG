@@ -5245,3 +5245,54 @@ pub async fn delete_snapshot(
 
     Ok(Json(serde_json::json!({"status": "deleted"})))
 }
+
+// ── Inference Logs ──────────────────────────────────────────────────
+
+/// GET /api/km/settings/inference-logs
+/// Query inference logs with filtering.
+pub async fn list_inference_logs(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Vec<crate::store::InferenceLogEntry>> {
+    let filter = crate::store::InferenceLogFilter {
+        workspace_id: params.get("workspace_id").cloned(),
+        user_id: params.get("user_id").cloned(),
+        from_timestamp: params.get("from").cloned(),
+        to_timestamp: params.get("to").cloned(),
+        status: params.get("status").cloned(),
+        llm_model: params.get("llm_model").cloned(),
+        limit: params
+            .get("limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100),
+        offset: params
+            .get("offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+    };
+    Json(state.km_store.list_inference_logs(&filter))
+}
+
+/// GET /api/km/settings/inference-analytics
+/// Get aggregated inference statistics.
+pub async fn get_inference_analytics(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<crate::store::InferenceStats> {
+    let filter = crate::store::InferenceLogFilter {
+        workspace_id: params.get("workspace_id").cloned(),
+        user_id: params.get("user_id").cloned(),
+        from_timestamp: params.get("from").cloned(),
+        to_timestamp: params.get("to").cloned(),
+        status: params.get("status").cloned(),
+        llm_model: params.get("llm_model").cloned(),
+        limit: params
+            .get("limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10000),
+        offset: 0,
+    };
+    Json(state.km_store.get_inference_stats(&filter))
+}

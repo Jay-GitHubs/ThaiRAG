@@ -163,6 +163,29 @@ pub enum StageStatus {
 /// Sender half for pipeline progress events.
 pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<PipelineProgress>;
 
+/// Side-channel for rich pipeline metadata, populated incrementally
+/// by `ChatPipeline::process()` and consumed by the inference logger.
+pub type MetadataCell = Arc<Mutex<PipelineMetadata>>;
+
+/// Metadata collected during pipeline execution for inference logging.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PipelineMetadata {
+    pub intent: Option<String>,
+    pub language: Option<String>,
+    pub complexity: Option<String>,
+    pub pipeline_route: Option<String>,
+    pub self_rag_decision: Option<String>,
+    pub self_rag_confidence: Option<f32>,
+    pub chunks_retrieved: Option<u32>,
+    pub avg_chunk_score: Option<f32>,
+    pub quality_guard_pass: Option<bool>,
+    pub relevance_score: Option<f32>,
+    pub hallucination_score: Option<f32>,
+    pub completeness_score: Option<f32>,
+    pub search_ms: Option<u64>,
+    pub generation_ms: Option<u64>,
+}
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -174,6 +174,100 @@ pub struct LlmProfileRow {
     pub updated_at: String,
 }
 
+// ── Inference Log Types ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InferenceLogEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub user_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub org_id: Option<String>,
+    pub dept_id: Option<String>,
+    pub session_id: Option<String>,
+    pub response_id: String,
+    // Query
+    pub query_text: String,
+    pub detected_language: Option<String>,
+    pub intent: Option<String>,
+    pub complexity: Option<String>,
+    // Model
+    pub llm_kind: String,
+    pub llm_model: String,
+    pub settings_scope: String,
+    // Tokens
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    // Timing
+    pub total_ms: u64,
+    pub search_ms: Option<u64>,
+    pub generation_ms: Option<u64>,
+    // Search
+    pub chunks_retrieved: Option<u32>,
+    pub avg_chunk_score: Option<f32>,
+    pub self_rag_decision: Option<String>,
+    pub self_rag_confidence: Option<f32>,
+    // Quality
+    pub quality_guard_pass: Option<bool>,
+    pub relevance_score: Option<f32>,
+    pub hallucination_score: Option<f32>,
+    pub completeness_score: Option<f32>,
+    // Pipeline
+    pub pipeline_route: Option<String>,
+    pub agents_used: String,
+    // Result
+    pub status: String,
+    pub error_message: Option<String>,
+    pub response_length: u32,
+    // Feedback (updated later)
+    pub feedback_score: Option<i8>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InferenceLogFilter {
+    pub workspace_id: Option<String>,
+    pub user_id: Option<String>,
+    pub from_timestamp: Option<String>,
+    pub to_timestamp: Option<String>,
+    pub status: Option<String>,
+    pub llm_model: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InferenceStats {
+    pub total_requests: u64,
+    pub avg_total_ms: f64,
+    pub avg_search_ms: f64,
+    pub avg_generation_ms: f64,
+    pub avg_relevance_score: f64,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub success_rate: f64,
+    pub quality_pass_rate: f64,
+    pub feedback_positive_rate: f64,
+    pub by_model: Vec<ModelStats>,
+    pub by_workspace: Vec<WorkspaceStats>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelStats {
+    pub model: String,
+    pub count: u64,
+    pub avg_ms: f64,
+    pub avg_quality: f64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceStats {
+    pub workspace_id: String,
+    pub count: u64,
+    pub avg_ms: f64,
+    pub total_tokens: u64,
+}
+
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
     // ── Organization ────────────────────────────────────────────────
@@ -380,6 +474,12 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_llm_profile(&self, id: &str) -> Option<LlmProfileRow>;
     fn upsert_llm_profile(&self, row: &LlmProfileRow);
     fn delete_llm_profile(&self, id: &str);
+
+    // ── Inference Logs ────────────────────────────────────────────────
+    fn insert_inference_log(&self, entry: &InferenceLogEntry);
+    fn list_inference_logs(&self, filter: &InferenceLogFilter) -> Vec<InferenceLogEntry>;
+    fn get_inference_stats(&self, filter: &InferenceLogFilter) -> InferenceStats;
+    fn update_inference_log_feedback(&self, response_id: &str, score: i8);
 }
 
 /// Factory function to create the appropriate KM store.

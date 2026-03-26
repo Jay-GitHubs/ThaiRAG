@@ -41,6 +41,7 @@ pub struct MemoryKmStore {
     chunks: RwLock<Vec<thairag_core::types::DocumentChunk>>,
     vault_keys: RwLock<HashMap<String, super::VaultKeyRow>>,
     llm_profiles: RwLock<HashMap<String, super::LlmProfileRow>>,
+    inference_logs: RwLock<Vec<super::InferenceLogEntry>>,
 }
 
 impl Default for MemoryKmStore {
@@ -68,6 +69,7 @@ impl MemoryKmStore {
             chunks: RwLock::new(Vec::new()),
             vault_keys: RwLock::new(HashMap::new()),
             llm_profiles: RwLock::new(HashMap::new()),
+            inference_logs: RwLock::new(Vec::new()),
         }
     }
 }
@@ -1070,6 +1072,240 @@ impl KmStoreTrait for MemoryKmStore {
 
     fn delete_llm_profile(&self, id: &str) {
         self.llm_profiles.write().unwrap().remove(id);
+    }
+
+    // ── Inference Logs ────────────────────────────────────────────────
+
+    fn insert_inference_log(&self, entry: &super::InferenceLogEntry) {
+        let mut logs = self.inference_logs.write().unwrap();
+        logs.push(entry.clone());
+        // Cap at 50,000 entries — drain oldest 10% when exceeded
+        if logs.len() > 50_000 {
+            let drain_count = logs.len() / 10;
+            logs.drain(..drain_count);
+        }
+    }
+
+    fn list_inference_logs(
+        &self,
+        filter: &super::InferenceLogFilter,
+    ) -> Vec<super::InferenceLogEntry> {
+        let logs = self.inference_logs.read().unwrap();
+        let mut filtered: Vec<super::InferenceLogEntry> = logs
+            .iter()
+            .filter(|e| {
+                if let Some(ref ws) = filter.workspace_id
+                    && e.workspace_id.as_deref() != Some(ws.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref uid) = filter.user_id
+                    && e.user_id.as_deref() != Some(uid.as_str())
+                {
+                    return false;
+                }
+                if let Some(ref from) = filter.from_timestamp
+                    && e.timestamp.as_str() < from.as_str()
+                {
+                    return false;
+                }
+                if let Some(ref to) = filter.to_timestamp
+                    && e.timestamp.as_str() > to.as_str()
+                {
+                    return false;
+                }
+                if let Some(ref status) = filter.status
+                    && e.status != *status
+                {
+                    return false;
+                }
+                if let Some(ref model) = filter.llm_model
+                    && e.llm_model != *model
+                {
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        // Sort by timestamp DESC
+        filtered.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        // Apply offset and limit
+        let start = filter.offset.min(filtered.len());
+        let end = if filter.limit > 0 {
+            (start + filter.limit).min(filtered.len())
+        } else {
+            filtered.len()
+        };
+        filtered[start..end].to_vec()
+    }
+
+    fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
+        // Re-use the same filtering logic but without limit/offset
+        let no_limit_filter = super::InferenceLogFilter {
+            workspace_id: filter.workspace_id.clone(),
+            user_id: filter.user_id.clone(),
+            from_timestamp: filter.from_timestamp.clone(),
+            to_timestamp: filter.to_timestamp.clone(),
+            status: filter.status.clone(),
+            llm_model: filter.llm_model.clone(),
+            limit: 0,
+            offset: 0,
+        };
+        let entries = self.list_inference_logs(&no_limit_filter);
+        let total = entries.len() as u64;
+
+        if total == 0 {
+            return super::InferenceStats {
+                total_requests: 0,
+                avg_total_ms: 0.0,
+                avg_search_ms: 0.0,
+                avg_generation_ms: 0.0,
+                avg_relevance_score: 0.0,
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                success_rate: 0.0,
+                quality_pass_rate: 0.0,
+                feedback_positive_rate: 0.0,
+                by_model: Vec::new(),
+                by_workspace: Vec::new(),
+            };
+        }
+
+        let total_f = total as f64;
+        let sum_total_ms: u64 = entries.iter().map(|e| e.total_ms).sum();
+        let sum_search_ms: u64 = entries.iter().filter_map(|e| e.search_ms).sum();
+        let search_count = entries.iter().filter(|e| e.search_ms.is_some()).count() as f64;
+        let sum_gen_ms: u64 = entries.iter().filter_map(|e| e.generation_ms).sum();
+        let gen_count = entries.iter().filter(|e| e.generation_ms.is_some()).count() as f64;
+        let sum_relevance: f64 = entries
+            .iter()
+            .filter_map(|e| e.relevance_score)
+            .map(|s| s as f64)
+            .sum();
+        let relevance_count = entries
+            .iter()
+            .filter(|e| e.relevance_score.is_some())
+            .count() as f64;
+        let total_prompt: u64 = entries.iter().map(|e| e.prompt_tokens as u64).sum();
+        let total_completion: u64 = entries.iter().map(|e| e.completion_tokens as u64).sum();
+        let success_count = entries.iter().filter(|e| e.status == "success").count() as f64;
+        let quality_pass_count = entries
+            .iter()
+            .filter(|e| e.quality_guard_pass == Some(true))
+            .count() as f64;
+        let quality_total = entries
+            .iter()
+            .filter(|e| e.quality_guard_pass.is_some())
+            .count() as f64;
+        let feedback_positive = entries
+            .iter()
+            .filter(|e| e.feedback_score.is_some_and(|s| s > 0))
+            .count() as f64;
+        let feedback_total = entries
+            .iter()
+            .filter(|e| e.feedback_score.is_some())
+            .count() as f64;
+
+        // Group by model
+        let mut model_map: HashMap<String, Vec<&super::InferenceLogEntry>> = HashMap::new();
+        for e in &entries {
+            model_map.entry(e.llm_model.clone()).or_default().push(e);
+        }
+        let by_model: Vec<super::ModelStats> = model_map
+            .into_iter()
+            .map(|(model, es)| {
+                let count = es.len() as u64;
+                let avg_ms = es.iter().map(|e| e.total_ms).sum::<u64>() as f64 / count as f64;
+                let rel_scores: Vec<f64> = es
+                    .iter()
+                    .filter_map(|e| e.relevance_score.map(|s| s as f64))
+                    .collect();
+                let avg_quality = if rel_scores.is_empty() {
+                    0.0
+                } else {
+                    rel_scores.iter().sum::<f64>() / rel_scores.len() as f64
+                };
+                let total_tokens = es
+                    .iter()
+                    .map(|e| (e.prompt_tokens + e.completion_tokens) as u64)
+                    .sum();
+                super::ModelStats {
+                    model,
+                    count,
+                    avg_ms,
+                    avg_quality,
+                    total_tokens,
+                }
+            })
+            .collect();
+
+        // Group by workspace
+        let mut ws_map: HashMap<String, Vec<&super::InferenceLogEntry>> = HashMap::new();
+        for e in &entries {
+            if let Some(ref ws_id) = e.workspace_id {
+                ws_map.entry(ws_id.clone()).or_default().push(e);
+            }
+        }
+        let by_workspace: Vec<super::WorkspaceStats> = ws_map
+            .into_iter()
+            .map(|(workspace_id, es)| {
+                let count = es.len() as u64;
+                let avg_ms = es.iter().map(|e| e.total_ms).sum::<u64>() as f64 / count as f64;
+                let total_tokens = es
+                    .iter()
+                    .map(|e| (e.prompt_tokens + e.completion_tokens) as u64)
+                    .sum();
+                super::WorkspaceStats {
+                    workspace_id,
+                    count,
+                    avg_ms,
+                    total_tokens,
+                }
+            })
+            .collect();
+
+        super::InferenceStats {
+            total_requests: total,
+            avg_total_ms: sum_total_ms as f64 / total_f,
+            avg_search_ms: if search_count > 0.0 {
+                sum_search_ms as f64 / search_count
+            } else {
+                0.0
+            },
+            avg_generation_ms: if gen_count > 0.0 {
+                sum_gen_ms as f64 / gen_count
+            } else {
+                0.0
+            },
+            avg_relevance_score: if relevance_count > 0.0 {
+                sum_relevance / relevance_count
+            } else {
+                0.0
+            },
+            total_prompt_tokens: total_prompt,
+            total_completion_tokens: total_completion,
+            success_rate: success_count / total_f,
+            quality_pass_rate: if quality_total > 0.0 {
+                quality_pass_count / quality_total
+            } else {
+                0.0
+            },
+            feedback_positive_rate: if feedback_total > 0.0 {
+                feedback_positive / feedback_total
+            } else {
+                0.0
+            },
+            by_model,
+            by_workspace,
+        }
+    }
+
+    fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
+        let mut logs = self.inference_logs.write().unwrap();
+        if let Some(entry) = logs.iter_mut().find(|e| e.response_id == response_id) {
+            entry.feedback_score = Some(score);
+        }
     }
 }
 

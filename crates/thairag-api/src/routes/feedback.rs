@@ -118,6 +118,12 @@ pub async fn submit_feedback(
     // Recompute document boost scores
     recompute_document_boosts(&state, &entries);
 
+    // Correlate feedback with inference log
+    let feedback_score = if req.thumbs_up { 1i8 } else { -1i8 };
+    state
+        .km_store
+        .update_inference_log_feedback(&req.response_id, feedback_score);
+
     Ok(Json(FeedbackResponse { ok: true }))
 }
 
