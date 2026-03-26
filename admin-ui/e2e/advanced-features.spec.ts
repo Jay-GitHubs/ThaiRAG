@@ -25,7 +25,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
 
     // Should have a switch and a tag (ON or OFF)
     await expect(panel.locator('.ant-switch')).toBeVisible();
-    await expect(panel.locator('.ant-tag')).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header .ant-tag')).toBeVisible();
   });
 
   test('toggling context compaction shows parameter inputs', async ({ page }) => {
@@ -88,28 +88,28 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     }
 
     // Tag should show "ON"
-    await expect(panel.locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header .ant-tag').filter({ hasText: 'ON' })).toBeVisible();
 
     // Turn OFF
     await toggle.click();
     await page.waitForTimeout(300);
 
     // Tag should show "OFF"
-    await expect(panel.locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header .ant-tag').filter({ hasText: 'OFF' })).toBeVisible();
   });
 
   // ── Personal Memory ───────────────────────────────────────────────
 
   test('personal memory panel is visible with toggle and status tag', async ({ page }) => {
-    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     await expect(panel).toBeVisible();
 
     await expect(panel.locator('.ant-switch')).toBeVisible();
-    await expect(panel.locator('.ant-tag')).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header').first().locator('.ant-tag')).toBeVisible();
   });
 
   test('toggling personal memory shows parameter inputs', async ({ page }) => {
-    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     const toggle = panel.locator('.ant-switch');
 
     // Turn ON if not already
@@ -120,7 +120,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     }
 
     // Expand the panel
-    await panel.locator('.ant-collapse-header').click();
+    await panel.locator('.ant-collapse-header').first().click();
     await page.waitForTimeout(300);
 
     // Should show description
@@ -134,7 +134,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
   });
 
   test('personal memory parameters are hidden when disabled', async ({ page }) => {
-    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     const toggle = panel.locator('.ant-switch');
 
     // Turn OFF
@@ -145,7 +145,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     }
 
     // Expand the panel
-    await panel.locator('.ant-collapse-header').click();
+    await panel.locator('.ant-collapse-header').first().click();
     await page.waitForTimeout(300);
 
     // Description should still be visible
@@ -159,7 +159,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
   });
 
   test('personal memory tag shows ON/OFF status', async ({ page }) => {
-    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     const toggle = panel.locator('.ant-switch');
 
     // Turn ON
@@ -169,13 +169,13 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
       await page.waitForTimeout(300);
     }
 
-    await expect(panel.locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header').first().locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible();
 
     // Turn OFF
     await toggle.click();
     await page.waitForTimeout(300);
 
-    await expect(panel.locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible();
+    await expect(panel.locator('.ant-collapse-header').first().locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible();
   });
 
   // ── Persistence ───────────────────────────────────────────────────
@@ -191,7 +191,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     }
 
     // Enable personal memory
-    const pmPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const pmPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     const pmToggle = pmPanel.locator('.ant-switch');
     const pmChecked = await pmToggle.getAttribute('aria-checked');
     if (pmChecked !== 'true') {
@@ -213,10 +213,10 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
 
     // Both should show ON tags (persisted)
     const ccPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Context Compaction' });
-    await expect(ccPanelAfter.locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible({ timeout: 5000 });
+    await expect(ccPanelAfter.locator('.ant-collapse-header .ant-tag').filter({ hasText: 'ON' })).toBeVisible({ timeout: 5000 });
 
-    const pmPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
-    await expect(pmPanelAfter.locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible({ timeout: 5000 });
+    const pmPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
+    await expect(pmPanelAfter.locator('.ant-collapse-header').first().locator('.ant-tag').filter({ hasText: 'ON' })).toBeVisible({ timeout: 5000 });
   });
 
   test('disabling features persists after save and reload', async ({ page }) => {
@@ -230,7 +230,7 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     }
 
     // Disable personal memory
-    const pmPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
+    const pmPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
     const pmToggle = pmPanel.locator('.ant-switch');
     const pmChecked = await pmToggle.getAttribute('aria-checked');
     if (pmChecked === 'true') {
@@ -252,9 +252,9 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
 
     // Both should show OFF tags
     const ccPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Context Compaction' });
-    await expect(ccPanelAfter.locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible({ timeout: 5000 });
+    await expect(ccPanelAfter.locator('.ant-collapse-header .ant-tag').filter({ hasText: 'OFF' })).toBeVisible({ timeout: 5000 });
 
-    const pmPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' });
-    await expect(pmPanelAfter.locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible({ timeout: 5000 });
+    const pmPanelAfter = page.locator('.ant-collapse-item').filter({ hasText: 'Personal Memory' }).last();
+    await expect(pmPanelAfter.locator('.ant-collapse-header').first().locator('.ant-tag').filter({ hasText: 'OFF' })).toBeVisible({ timeout: 5000 });
   });
 });

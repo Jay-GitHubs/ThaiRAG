@@ -24,9 +24,14 @@ test.describe('Chat & Response Pipeline Tab', () => {
     // Pipeline flow diagram should be visible
     await expect(page.getByText('Pipeline flow')).toBeVisible();
 
-    // Parameters should be visible
-    await expect(page.getByText('Max Context Tokens')).toBeVisible();
-    await expect(page.getByText('Agent Max Tokens')).toBeVisible();
+    // Scroll pipeline flow into view to ensure parameters are visible
+    const pipelineFlow = page.getByText('Pipeline flow');
+    await pipelineFlow.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+
+    // Parameters should be visible (use locator with visible filter to skip hidden tooltip triggers)
+    await expect(page.locator('.ant-typography:visible', { hasText: 'Max Context Tokens' }).first()).toBeVisible();
+    await expect(page.locator('.ant-typography:visible', { hasText: 'Agent Max Tokens' }).first()).toBeVisible();
 
     // Agent LLM Configuration section
     await expect(page.getByText('Agent LLM Configuration')).toBeVisible();
@@ -162,7 +167,7 @@ test.describe('Chat & Response Pipeline Tab', () => {
     }
 
     // Expand orchestrator panel
-    await orchPanel.locator('.ant-collapse-header').click();
+    await orchPanel.locator('.ant-collapse-header').first().click();
     await page.waitForTimeout(300);
 
     // Should show max LLM calls setting
@@ -178,8 +183,9 @@ test.describe('Chat & Response Pipeline Tab', () => {
     }
 
     // Enable quality guard if needed
-    const qgPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Quality Guard' });
+    const qgPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Quality Guard' }).last();
     const qgSwitch = qgPanel.locator('.ant-switch');
+    await qgPanel.scrollIntoViewIfNeeded();
     const qgChecked = await qgSwitch.getAttribute('aria-checked');
     if (qgChecked !== 'true') {
       await qgSwitch.click();
@@ -187,7 +193,7 @@ test.describe('Chat & Response Pipeline Tab', () => {
     }
 
     // Expand quality guard panel
-    await qgPanel.locator('.ant-collapse-header').click();
+    await qgPanel.locator('.ant-collapse-header').first().click();
     await page.waitForTimeout(300);
 
     // Should show threshold and retries
@@ -238,7 +244,7 @@ test.describe('Chat & Response Pipeline Tab', () => {
 
     // Expand Response Generator panel
     const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Response Generator' });
-    await panel.locator('.ant-collapse-header').click();
+    await panel.locator('.ant-collapse-header').first().click();
     await page.waitForTimeout(300);
 
     // Should show "Agent LLM Override" with form

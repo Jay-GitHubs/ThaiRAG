@@ -855,6 +855,65 @@ pub async fn list_users(
     Json(ListResponse { data, total })
 }
 
+// ── Update user role ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpdateUserRoleRequest {
+    pub role: String,
+}
+
+pub async fn update_user_role(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(user_id): Path<Uuid>,
+    AppJson(body): AppJson<UpdateUserRoleRequest>,
+) -> Result<Json<User>, ApiError> {
+    // Only super_admin can change roles
+    let caller_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| ApiError(ThaiRagError::Validation("Invalid user ID".into())))?;
+    let caller = state.km_store.get_user(UserId(caller_id))?;
+    if !caller.is_super_admin && caller.role != "super_admin" {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Only super admins can update user roles".into(),
+        )));
+    }
+
+    let valid_roles = ["viewer", "editor", "admin", "super_admin"];
+    if !valid_roles.contains(&body.role.as_str()) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Invalid role '{}'. Must be one of: {}",
+            body.role,
+            valid_roles.join(", ")
+        ))));
+    }
+
+    let is_super = body.role == "super_admin";
+    let target = state.km_store.get_user(UserId(user_id))?;
+    let record = state.km_store.get_user_by_email(&target.email)?;
+
+    state.km_store.upsert_user_by_email(
+        target.email.clone(),
+        target.name.clone(),
+        record.password_hash.clone(),
+        is_super,
+        body.role.clone(),
+    )?;
+
+    let updated = state.km_store.get_user(UserId(user_id))?;
+    audit_log(
+        &state.km_store,
+        &claims.sub,
+        AuditAction::SettingsChanged,
+        &format!("User {} role changed to {}", target.email, body.role),
+        true,
+        None,
+    );
+    tracing::info!(%user_id, role = %body.role, "User role updated");
+    Ok(Json(updated))
+}
+
 pub async fn delete_user(
     State(state): State<AppState>,
     Extension(_claims): Extension<AuthClaims>,

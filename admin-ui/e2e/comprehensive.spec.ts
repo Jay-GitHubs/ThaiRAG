@@ -264,7 +264,7 @@ test.describe('Health Page', () => {
     await expect(page.getByText('Prometheus Metrics')).toBeVisible();
 
     // Health status should show ok
-    await expect(page.getByText('ok')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('ok', { exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   test('deep health check works', async ({ page }) => {

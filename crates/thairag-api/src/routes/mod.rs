@@ -13,7 +13,7 @@ pub mod vault;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderValue, Request};
 use axum::middleware;
-use axum::{Router, routing::delete, routing::get, routing::post};
+use axum::{Router, routing::delete, routing::get, routing::post, routing::put};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -103,6 +103,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Users
         .route("/users", get(km::list_users))
         .route("/users/{user_id}", delete(km::delete_user))
+        .route("/users/{user_id}/role", put(km::update_user_role))
         // Settings — identity providers
         .route(
             "/settings/identity-providers",
