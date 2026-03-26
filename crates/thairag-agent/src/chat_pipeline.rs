@@ -8,8 +8,8 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{
-    ChatMessage, DocId, LlmResponse, LlmStreamResponse, LlmUsage, PipelineProgress, ProgressSender,
-    QueryIntent, SearchQuery, StageStatus,
+    ChatMessage, DocId, LlmResponse, LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata,
+    PipelineProgress, ProgressSender, QueryIntent, SearchQuery, StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -244,6 +244,15 @@ impl ChatPipeline {
         }
     }
 
+    /// Update pipeline metadata if the cell is present.
+    fn update_metadata(cell: &Option<MetadataCell>, f: impl FnOnce(&mut PipelineMetadata)) {
+        if let Some(cell) = cell
+            && let Ok(mut meta) = cell.lock()
+        {
+            f(&mut meta);
+        }
+    }
+
     /// Non-streaming pipeline: orchestrator decides which agents to run.
     pub async fn process(
         &self,
@@ -252,6 +261,7 @@ impl ChatPipeline {
         memories: &[MemoryEntry],
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
+        metadata: Option<MetadataCell>,
     ) -> Result<LlmResponse> {
         let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
@@ -301,6 +311,22 @@ impl ChatPipeline {
             duration_ms = analyzer_ms,
             "Pipeline stage complete"
         );
+        Self::update_metadata(&metadata, |m| {
+            m.intent = Some(format!("{:?}", analysis.intent));
+            m.language = Some(format!("{:?}", analysis.language));
+            m.complexity = Some(format!("{:?}", analysis.complexity));
+        });
+        if let Some(ref decision) = self_rag_decision {
+            Self::update_metadata(&metadata, |m| match decision {
+                RetrievalDecision::NoRetrieve { confidence } => {
+                    m.self_rag_decision = Some("no_retrieve".into());
+                    m.self_rag_confidence = Some(*confidence);
+                }
+                RetrievalDecision::Retrieve => {
+                    m.self_rag_decision = Some("retrieve".into());
+                }
+            });
+        }
         debug!(intent = ?analysis.intent, language = ?analysis.language, "Pipeline: analyzed");
 
         // ── Handle Self-RAG decision ──
@@ -325,6 +351,10 @@ impl ChatPipeline {
             self.maybe_run_ragas(user_query, &CuratedContext::default(), &response.content)
                 .await;
             let result = self.maybe_adapt(response, &analysis).await;
+            Self::update_metadata(&metadata, |m| {
+                m.pipeline_route = Some("direct_llm".into());
+                m.generation_ms = Some(gen_ms);
+            });
             info!(
                 total_ms = pipeline_start.elapsed().as_millis() as u64,
                 remaining_budget = budget.remaining(),
@@ -373,6 +403,9 @@ impl ChatPipeline {
             route
         };
 
+        Self::update_metadata(&metadata, |m| {
+            m.pipeline_route = Some(format!("{:?}", route));
+        });
         info!(route = ?route, remaining_budget = budget.remaining(), "Pipeline: orchestrator decided");
 
         let result = match route {
@@ -397,6 +430,9 @@ impl ChatPipeline {
                         duration_ms = gen_ms,
                         "Pipeline stage complete"
                     );
+                    Self::update_metadata(&metadata, |m| {
+                        m.generation_ms = Some(gen_ms);
+                    });
                     Ok(resp)
                 }
             },
@@ -415,6 +451,15 @@ impl ChatPipeline {
                     "Pipeline stage complete"
                 );
                 debug!(results = results.len(), "Pipeline(simple): searched");
+                Self::update_metadata(&metadata, |m| {
+                    m.search_ms = Some(search_ms);
+                    m.chunks_retrieved = Some(results.len() as u32);
+                    m.avg_chunk_score = if results.is_empty() {
+                        None
+                    } else {
+                        Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
+                    };
+                });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
                 let t = Instant::now();
@@ -467,6 +512,9 @@ impl ChatPipeline {
                     duration_ms = gen_ms,
                     "Pipeline stage complete"
                 );
+                Self::update_metadata(&metadata, |m| {
+                    m.generation_ms = Some(gen_ms);
+                });
                 self.maybe_adapt(response, &analysis).await
             }
             PipelineRoute::FullPipeline => {
@@ -479,6 +527,7 @@ impl ChatPipeline {
                     available_scopes,
                     &progress,
                     &budget,
+                    &metadata,
                 )
                 .await
             }
@@ -492,6 +541,7 @@ impl ChatPipeline {
                     available_scopes,
                     &progress,
                     &budget,
+                    &metadata,
                 )
                 .await
             }
@@ -516,6 +566,7 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
         progress: &Option<ProgressSender>,
         budget: &LlmBudget,
+        metadata: &Option<MetadataCell>,
     ) -> Result<LlmResponse> {
         // ── Agent 2: Query Rewriter ──
         self.emit_progress(progress, "query_rewriter", StageStatus::Started, None);
@@ -551,6 +602,15 @@ impl ChatPipeline {
             "Pipeline stage complete"
         );
         debug!(results = results.len(), "Pipeline: searched");
+        Self::update_metadata(metadata, |m| {
+            m.search_ms = Some(search_ms);
+            m.chunks_retrieved = Some(results.len() as u32);
+            m.avg_chunk_score = if results.is_empty() {
+                None
+            } else {
+                Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
+            };
+        });
 
         // ── ColBERT reranking (skip if budget low — needs at least 3 more calls) ──
         if let Some(ref colbert) = self.colbert_reranker {
@@ -691,6 +751,7 @@ impl ChatPipeline {
             force_quality_guard,
             progress,
             budget,
+            metadata,
         )
         .await
     }
@@ -708,6 +769,7 @@ impl ChatPipeline {
         force_quality_guard: bool,
         progress: &Option<ProgressSender>,
         budget: &LlmBudget,
+        metadata: &Option<MetadataCell>,
     ) -> Result<LlmResponse> {
         // ── CRAG: check context quality (skip if budget low) ──
         let context =
@@ -876,6 +938,9 @@ impl ChatPipeline {
             "Pipeline stage complete"
         );
         debug!(len = response.content.len(), "Pipeline: generated");
+        Self::update_metadata(metadata, |m| {
+            m.generation_ms = Some(gen_ms);
+        });
 
         // ── Agent 5: Quality Guard (budget-aware retry loop) ──
         let threshold = self.effective_threshold();
@@ -891,6 +956,9 @@ impl ChatPipeline {
                     .check_with_threshold(user_query, &response.content, &context, threshold)
                     .await?;
                 if verdict.pass {
+                    Self::update_metadata(metadata, |m| {
+                        m.quality_guard_pass = Some(true);
+                    });
                     debug!(attempt, "Pipeline: quality passed");
                     break;
                 }
@@ -904,6 +972,9 @@ impl ChatPipeline {
                         .generate_with_feedback(analysis, &context, messages, &feedback, None)
                         .await?;
                 } else {
+                    Self::update_metadata(metadata, |m| {
+                        m.quality_guard_pass = Some(false);
+                    });
                     warn!(
                         "Pipeline: quality guard exhausted retries or budget, using last response"
                     );
@@ -1103,6 +1174,7 @@ impl ChatPipeline {
         memories: &[MemoryEntry],
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
+        metadata: Option<MetadataCell>,
     ) -> Result<LlmStreamResponse> {
         let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
@@ -1151,11 +1223,30 @@ impl ChatPipeline {
             duration_ms = analyzer_ms,
             "Pipeline stage complete"
         );
+        Self::update_metadata(&metadata, |m| {
+            m.intent = Some(format!("{:?}", analysis.intent));
+            m.language = Some(format!("{:?}", analysis.language));
+            m.complexity = Some(format!("{:?}", analysis.complexity));
+        });
+        if let Some(ref decision) = self_rag_decision {
+            Self::update_metadata(&metadata, |m| match decision {
+                RetrievalDecision::NoRetrieve { confidence } => {
+                    m.self_rag_decision = Some("no_retrieve".into());
+                    m.self_rag_confidence = Some(*confidence);
+                }
+                RetrievalDecision::Retrieve => {
+                    m.self_rag_decision = Some("retrieve".into());
+                }
+            });
+        }
 
         // ── Handle Self-RAG decision (streaming) ──
         if let Some(RetrievalDecision::NoRetrieve { confidence }) = self_rag_decision.as_ref() {
             info!(confidence, "Self-RAG(stream): skipping retrieval");
             self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+            Self::update_metadata(&metadata, |m| {
+                m.pipeline_route = Some("direct_llm".into());
+            });
             info!(
                 total_ms = pipeline_start.elapsed().as_millis() as u64,
                 remaining_budget = budget.remaining(),
@@ -1202,6 +1293,9 @@ impl ChatPipeline {
             route
         };
 
+        Self::update_metadata(&metadata, |m| {
+            m.pipeline_route = Some(format!("{:?}", route));
+        });
         debug!(route = ?route, remaining_budget = budget.remaining(), "Pipeline(stream): orchestrator decided");
 
         match route {
@@ -1242,6 +1336,15 @@ impl ChatPipeline {
                     duration_ms = search_ms,
                     "Pipeline stage complete"
                 );
+                Self::update_metadata(&metadata, |m| {
+                    m.search_ms = Some(search_ms);
+                    m.chunks_retrieved = Some(results.len() as u32);
+                    m.avg_chunk_score = if results.is_empty() {
+                        None
+                    } else {
+                        Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
+                    };
+                });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
                 let t = Instant::now();
@@ -1328,6 +1431,15 @@ impl ChatPipeline {
                     duration_ms = search_ms,
                     "Pipeline stage complete"
                 );
+                Self::update_metadata(&metadata, |m| {
+                    m.search_ms = Some(search_ms);
+                    m.chunks_retrieved = Some(results.len() as u32);
+                    m.avg_chunk_score = if results.is_empty() {
+                        None
+                    } else {
+                        Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
+                    };
+                });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
                 let t = Instant::now();

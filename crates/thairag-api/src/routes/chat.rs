@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -17,13 +18,14 @@ use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
 use thairag_core::types::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, PersonalMemory, SessionId,
-    UserId,
+    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, MetadataCell,
+    PersonalMemory, PipelineMetadata, SessionId, UserId,
 };
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::routes::feedback;
+use crate::store::InferenceLogEntry;
 
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -456,6 +458,8 @@ async fn handle_non_stream(
     };
 
     let p = state.providers();
+    let request_start = Instant::now();
+    let metadata_cell: MetadataCell = Arc::new(Mutex::new(PipelineMetadata::default()));
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
@@ -467,6 +471,7 @@ async fn handle_non_stream(
                 &memories,
                 &available_scopes,
                 Some(progress_tx),
+                Some(metadata_cell.clone()),
             )
             .await
             .map_err(ApiError::from)?
@@ -513,9 +518,63 @@ async fn handle_non_stream(
     }
 
     let response_id = format!("chatcmpl-{}", Uuid::new_v4());
+    let response_length = llm_resp.content.len() as u32;
 
-    // Feature 4: Store quality info for feedback correlation
-    // (response_id is returned to client for feedback submission)
+    // ── Inference Logging ──────────────────────────────────────────
+    {
+        let total_ms = request_start.elapsed().as_millis() as u64;
+        let meta = metadata_cell.lock().unwrap().clone();
+        let user_query = req
+            .messages
+            .last()
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        let pp = state.providers();
+        let (llm_kind, llm_model) = resolve_llm_info(&pp);
+        let entry = InferenceLogEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            user_id: user_id.map(|u| u.0.to_string()),
+            workspace_id: scope.workspace_ids.first().map(|w| w.0.to_string()),
+            org_id: None,
+            dept_id: None,
+            session_id: session_id.map(|s| s.0.to_string()),
+            response_id: response_id.clone(),
+            query_text: user_query.chars().take(2000).collect(),
+            detected_language: meta.language,
+            intent: meta.intent,
+            complexity: meta.complexity,
+            llm_kind,
+            llm_model,
+            settings_scope: format!("{:?}", settings_scope),
+            prompt_tokens: llm_resp.usage.prompt_tokens,
+            completion_tokens: llm_resp.usage.completion_tokens,
+            total_ms,
+            search_ms: meta.search_ms,
+            generation_ms: meta.generation_ms,
+            chunks_retrieved: meta.chunks_retrieved,
+            avg_chunk_score: meta.avg_chunk_score,
+            self_rag_decision: meta.self_rag_decision,
+            self_rag_confidence: meta.self_rag_confidence,
+            quality_guard_pass: meta.quality_guard_pass,
+            relevance_score: meta.relevance_score,
+            hallucination_score: meta.hallucination_score,
+            completeness_score: meta.completeness_score,
+            pipeline_route: meta.pipeline_route,
+            agents_used: serde_json::to_string(
+                &pipeline_stages.iter().map(|s| &s.stage).collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".into()),
+            status: "success".into(),
+            error_message: None,
+            response_length,
+            feedback_score: None,
+        };
+        let store = state.km_store.clone();
+        tokio::spawn(async move {
+            store.insert_inference_log(&entry);
+        });
+    }
 
     let mut response = serde_json::to_value(ChatCompletionResponse {
         id: response_id,
@@ -651,6 +710,9 @@ async fn handle_stream(
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
 
     let p = state.providers();
+    let request_start = Instant::now();
+    let metadata_cell: MetadataCell = Arc::new(Mutex::new(PipelineMetadata::default()));
+    let metadata_cell_clone = metadata_cell.clone();
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let pipeline_for_memory = scoped_pipeline.clone();
 
@@ -669,6 +731,7 @@ async fn handle_stream(
                     &memories_clone,
                     &available_scopes_clone,
                     Some(progress_tx),
+                    Some(metadata_cell_clone),
                 )
                 .await
         } else {
@@ -683,12 +746,18 @@ async fn handle_stream(
         // Stream progress events in real-time while pipeline runs in background
         let mut pipeline_handle = pipeline_handle;
         let pipeline_result;
+        let mut stage_names: Vec<String> = Vec::new();
 
         loop {
             tokio::select! {
                 evt = progress_rx.recv() => {
                     match evt {
                         Some(progress) => {
+                            if progress.status == thairag_core::types::StageStatus::Done
+                                || progress.status == thairag_core::types::StageStatus::Error
+                            {
+                                stage_names.push(progress.stage.clone());
+                            }
                             let data = serde_json::to_string(&progress).unwrap();
                             yield Ok::<_, std::convert::Infallible>(
                                 Event::default().event("progress").data(data)
@@ -702,6 +771,11 @@ async fn handle_stream(
                 result = &mut pipeline_handle => {
                     // Drain any remaining progress events
                     while let Ok(evt) = progress_rx.try_recv() {
+                        if evt.status == thairag_core::types::StageStatus::Done
+                            || evt.status == thairag_core::types::StageStatus::Error
+                        {
+                            stage_names.push(evt.stage.clone());
+                        }
                         let data = serde_json::to_string(&evt).unwrap();
                         yield Ok::<_, std::convert::Infallible>(
                             Event::default().event("progress").data(data)
@@ -787,15 +861,18 @@ async fn handle_stream(
             }
         }
 
+        // Capture response length before content is moved
+        let response_length = accumulated_content.len() as u32;
+
         // Save to session after stream completes
         if let Some(sid) = session_id
-            && let Some(user_msg) = last_user_msg
+            && let Some(ref user_msg) = last_user_msg
         {
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
-                content: accumulated_content,
+                content: accumulated_content.clone(),
             };
-            state.session_store.append_with_user(sid, user_msg, assistant_msg, user_id);
+            state.session_store.append_with_user(sid, user_msg.clone(), assistant_msg, user_id);
 
             // Feature 1: Async memory summarization
             if let Some(uid) = user_id {
@@ -841,6 +918,59 @@ async fn handle_stream(
         };
         yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap()));
 
+        // Inference logging
+        {
+            let total_ms = request_start.elapsed().as_millis() as u64;
+            let meta = metadata_cell.lock().unwrap().clone();
+            let pp = state.providers();
+            let (llm_kind, llm_model) = resolve_llm_info(&pp);
+            let user_query_text: String = last_user_msg
+                .as_ref()
+                .map(|m| m.content.chars().take(2000).collect())
+                .unwrap_or_default();
+            let entry = InferenceLogEntry {
+                id: Uuid::new_v4().to_string(),
+                timestamp: Utc::now().to_rfc3339(),
+                user_id: user_id.map(|u| u.0.to_string()),
+                workspace_id: scope.workspace_ids.first().map(|w| w.0.to_string()),
+                org_id: None,
+                dept_id: None,
+                session_id: session_id.map(|s| s.0.to_string()),
+                response_id: id.clone(),
+                query_text: user_query_text,
+                detected_language: meta.language,
+                intent: meta.intent,
+                complexity: meta.complexity,
+                llm_kind,
+                llm_model,
+                settings_scope: format!("{:?}", settings_scope),
+                prompt_tokens: llm_usage.prompt_tokens,
+                completion_tokens: llm_usage.completion_tokens,
+                total_ms,
+                search_ms: meta.search_ms,
+                generation_ms: meta.generation_ms,
+                chunks_retrieved: meta.chunks_retrieved,
+                avg_chunk_score: meta.avg_chunk_score,
+                self_rag_decision: meta.self_rag_decision,
+                self_rag_confidence: meta.self_rag_confidence,
+                quality_guard_pass: meta.quality_guard_pass,
+                relevance_score: meta.relevance_score,
+                hallucination_score: meta.hallucination_score,
+                completeness_score: meta.completeness_score,
+                pipeline_route: meta.pipeline_route,
+                agents_used: serde_json::to_string(&stage_names)
+                    .unwrap_or_else(|_| "[]".into()),
+                status: "success".into(),
+                error_message: None,
+                response_length,
+                feedback_score: None,
+            };
+            let store = state.km_store.clone();
+            tokio::spawn(async move {
+                store.insert_inference_log(&entry);
+            });
+        }
+
         // [DONE] sentinel
         yield Ok(Event::default().data("[DONE]"));
     };
@@ -864,4 +994,21 @@ async fn handle_stream(
     );
 
     Ok(response)
+}
+
+/// Extract the LLM kind/model from the provider config.
+fn resolve_llm_info(p: &crate::app_state::ProviderBundle) -> (String, String) {
+    if let Some(ref rg) = p.chat_pipeline_config.response_generator_llm {
+        (format!("{:?}", rg.kind).to_lowercase(), rg.model.clone())
+    } else if let Some(ref shared) = p.chat_pipeline_config.llm {
+        (
+            format!("{:?}", shared.kind).to_lowercase(),
+            shared.model.clone(),
+        )
+    } else {
+        (
+            format!("{:?}", p.providers_config.llm.kind).to_lowercase(),
+            p.providers_config.llm.model.clone(),
+        )
+    }
 }

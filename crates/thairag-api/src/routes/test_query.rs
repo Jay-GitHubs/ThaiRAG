@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::time::Instant;
 
 use axum::extract::{Path, State};
@@ -10,12 +11,13 @@ use uuid::Uuid;
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
-use thairag_core::types::{ChatMessage, SearchQuery, WorkspaceId};
+use thairag_core::types::{ChatMessage, MetadataCell, PipelineMetadata, SearchQuery, WorkspaceId};
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::routes::chat::build_searchable_scopes;
 use crate::routes::feedback;
+use crate::store::InferenceLogEntry;
 
 #[derive(Deserialize)]
 pub struct TestQueryRequest {
@@ -237,11 +239,19 @@ pub async fn test_query(
     let available_scopes = build_searchable_scopes(&state, &scope);
     let settings_scope = state.resolve_scope_for_workspace(ws_id);
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
+    let metadata_cell: MetadataCell = std::sync::Arc::new(Mutex::new(PipelineMetadata::default()));
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
     let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         pipeline
-            .process(&messages, &scope, &[], &available_scopes, Some(progress_tx))
+            .process(
+                &messages,
+                &scope,
+                &[],
+                &available_scopes,
+                Some(progress_tx),
+                Some(metadata_cell.clone()),
+            )
             .await
             .map_err(ApiError::from)?
     } else {
@@ -288,14 +298,68 @@ pub async fn test_query(
             p.providers_config.llm.model.clone(),
         )
     };
+
+    let response_id = Uuid::new_v4().to_string();
+    let response_length = llm_resp.content.len() as u32;
+
+    // ── Inference Logging ──
+    {
+        let meta = metadata_cell.lock().unwrap().clone();
+        let entry = InferenceLogEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            user_id: claims.sub.parse::<Uuid>().ok().map(|u| u.to_string()),
+            workspace_id: Some(workspace_id.to_string()),
+            org_id: None,
+            dept_id: None,
+            session_id: None,
+            response_id: response_id.clone(),
+            query_text: req.query.chars().take(2000).collect::<String>(),
+            detected_language: meta.language.clone(),
+            intent: meta.intent.clone(),
+            complexity: meta.complexity.clone(),
+            llm_kind: llm_kind.clone(),
+            llm_model: llm_model.clone(),
+            settings_scope: format!("{:?}", settings_scope),
+            prompt_tokens: llm_resp.usage.prompt_tokens,
+            completion_tokens: llm_resp.usage.completion_tokens,
+            total_ms,
+            search_ms: meta.search_ms.or(Some(search_ms)),
+            generation_ms: meta.generation_ms.or(Some(generation_ms)),
+            chunks_retrieved: meta.chunks_retrieved.or(Some(chunks_retrieved as u32)),
+            avg_chunk_score: meta.avg_chunk_score.or(if chunks.is_empty() {
+                None
+            } else {
+                Some(chunks.iter().map(|c| c.score).sum::<f32>() / chunks.len() as f32)
+            }),
+            self_rag_decision: meta.self_rag_decision.clone(),
+            self_rag_confidence: meta.self_rag_confidence,
+            quality_guard_pass: meta.quality_guard_pass,
+            relevance_score: meta.relevance_score,
+            hallucination_score: meta.hallucination_score,
+            completeness_score: meta.completeness_score,
+            pipeline_route: meta.pipeline_route.clone(),
+            agents_used: serde_json::to_string(
+                &pipeline_stages.iter().map(|s| &s.stage).collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".into()),
+            status: "success".into(),
+            error_message: None,
+            response_length,
+            feedback_score: None,
+        };
+        let store = state.km_store.clone();
+        tokio::spawn(async move {
+            store.insert_inference_log(&entry);
+        });
+    }
+
     let provider_info = ProviderInfo {
         llm_kind,
         llm_model,
         embedding_kind: format!("{:?}", p.providers_config.embedding.kind).to_lowercase(),
         embedding_model: p.providers_config.embedding.model.clone(),
     };
-
-    let response_id = Uuid::new_v4().to_string();
 
     Ok(Json(TestQueryResponse {
         response_id,
@@ -504,7 +568,7 @@ pub async fn test_query_stream(
             let scope = scope_clone.clone();
             let scopes = available_scopes.clone();
             tokio::spawn(async move {
-                pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx)).await
+                pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), None).await
             })
         } else {
             // Fallback: legacy orchestrator — emit basic progress events
