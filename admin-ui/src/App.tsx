@@ -15,6 +15,7 @@ import { TestChatPage } from './pages/TestChatPage';
 import { UsagePage } from './pages/UsagePage';
 import { FeedbackPage } from './pages/FeedbackPage';
 import { ConnectorsPage } from './pages/ConnectorsPage';
+import InferenceLogsPage from './pages/InferenceLogsPage';
 
 export function App() {
   return (
@@ -39,6 +40,7 @@ export function App() {
           <Route path="/usage" element={<RoleRoute minRole="admin"><UsagePage /></RoleRoute>} />
           <Route path="/feedback" element={<RoleRoute minRole="admin"><FeedbackPage /></RoleRoute>} />
           <Route path="/connectors" element={<RoleRoute minRole="super_admin"><ConnectorsPage /></RoleRoute>} />
+          <Route path="/inference-logs" element={<RoleRoute minRole="super_admin"><InferenceLogsPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>

@@ -1021,3 +1021,96 @@ export interface ScopeInfoResponse {
   scope_id: string;
   overrides: Record<string, string[]>;
 }
+
+// ── Inference Logs ────────────────────────────────────────────────
+
+export interface InferenceLogEntry {
+  id: string;
+  timestamp: string;
+  user_id: string | null;
+  workspace_id: string | null;
+  org_id: string | null;
+  dept_id: string | null;
+  session_id: string | null;
+  response_id: string;
+  query_text: string;
+  detected_language: string | null;
+  intent: string | null;
+  complexity: string | null;
+  llm_kind: string;
+  llm_model: string;
+  settings_scope: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_ms: number;
+  search_ms: number | null;
+  generation_ms: number | null;
+  chunks_retrieved: number | null;
+  avg_chunk_score: number | null;
+  self_rag_decision: string | null;
+  self_rag_confidence: number | null;
+  quality_guard_pass: boolean | null;
+  relevance_score: number | null;
+  hallucination_score: number | null;
+  completeness_score: number | null;
+  pipeline_route: string | null;
+  agents_used: string;
+  status: string;
+  error_message: string | null;
+  response_length: number;
+  feedback_score: number | null;
+}
+
+export interface InferenceLogListResponse {
+  entries: InferenceLogEntry[];
+  total: number;
+}
+
+export interface InferenceLogFilter {
+  workspace_id?: string;
+  user_id?: string;
+  from?: string;
+  to?: string;
+  status?: string;
+  llm_model?: string;
+  intent?: string;
+  response_id?: string;
+  session_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface InferenceStats {
+  total_requests: number;
+  avg_total_ms: number;
+  avg_search_ms: number;
+  avg_generation_ms: number;
+  avg_relevance_score: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  success_rate: number;
+  quality_pass_rate: number;
+  feedback_positive_rate: number;
+  by_model: ModelStats[];
+  by_workspace: WorkspaceStats[];
+}
+
+export interface ModelStats {
+  model: string;
+  count: number;
+  avg_ms: number;
+  avg_quality: number;
+  total_tokens: number;
+}
+
+export interface WorkspaceStats {
+  workspace_id: string;
+  count: number;
+  avg_ms: number;
+  total_tokens: number;
+}
+
+export interface InferenceLogDeleteResponse {
+  ok: boolean;
+  deleted: number;
+}

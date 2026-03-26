@@ -5248,29 +5248,79 @@ pub async fn delete_snapshot(
 
 // ── Inference Logs ──────────────────────────────────────────────────
 
+/// Query parameters for inference log endpoints.
+#[derive(Debug, Deserialize, Default)]
+pub struct InferenceLogFilterQuery {
+    pub workspace_id: Option<String>,
+    pub user_id: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub status: Option<String>,
+    pub llm_model: Option<String>,
+    pub intent: Option<String>,
+    pub response_id: Option<String>,
+    pub session_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+impl InferenceLogFilterQuery {
+    fn to_filter(&self, default_limit: usize) -> crate::store::InferenceLogFilter {
+        crate::store::InferenceLogFilter {
+            workspace_id: self.workspace_id.clone(),
+            user_id: self.user_id.clone(),
+            from_timestamp: self.from.clone(),
+            to_timestamp: self.to.clone(),
+            status: self.status.clone(),
+            llm_model: self.llm_model.clone(),
+            intent: self.intent.clone(),
+            response_id: self.response_id.clone(),
+            session_id: self.session_id.clone(),
+            limit: self.limit.unwrap_or(default_limit),
+            offset: self.offset.unwrap_or(0),
+        }
+    }
+}
+
 /// GET /api/km/settings/inference-logs
 /// Query inference logs with filtering.
 pub async fn list_inference_logs(
     State(state): State<AppState>,
     Extension(_claims): Extension<AuthClaims>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Json<Vec<crate::store::InferenceLogEntry>> {
-    let filter = crate::store::InferenceLogFilter {
-        workspace_id: params.get("workspace_id").cloned(),
-        user_id: params.get("user_id").cloned(),
-        from_timestamp: params.get("from").cloned(),
-        to_timestamp: params.get("to").cloned(),
-        status: params.get("status").cloned(),
-        llm_model: params.get("llm_model").cloned(),
-        limit: params
-            .get("limit")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(100),
-        offset: params
-            .get("offset")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0),
+    Query(q): Query<InferenceLogFilterQuery>,
+) -> Json<crate::store::InferenceLogListResponse> {
+    let filter = q.to_filter(100);
+    let entries = state.km_store.list_inference_logs(&filter);
+    // Count with same filter but no limit/offset
+    let count_filter = crate::store::InferenceLogFilter {
+        limit: 0,
+        offset: 0,
+        ..filter
     };
+    let total = state.km_store.count_inference_logs(&count_filter);
+    Json(crate::store::InferenceLogListResponse { entries, total })
+}
+
+/// DELETE /api/km/settings/inference-logs
+/// Delete inference logs matching the filter.
+pub async fn delete_inference_logs(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    Query(q): Query<InferenceLogFilterQuery>,
+) -> Json<serde_json::Value> {
+    let filter = q.to_filter(0);
+    let deleted = state.km_store.delete_inference_logs(&filter);
+    Json(serde_json::json!({"ok": true, "deleted": deleted}))
+}
+
+/// GET /api/km/settings/inference-logs/export
+/// Export inference logs (up to 50,000) as a flat JSON array.
+pub async fn export_inference_logs(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<AuthClaims>,
+    Query(q): Query<InferenceLogFilterQuery>,
+) -> Json<Vec<crate::store::InferenceLogEntry>> {
+    let filter = q.to_filter(50000);
     Json(state.km_store.list_inference_logs(&filter))
 }
 
@@ -5279,20 +5329,8 @@ pub async fn list_inference_logs(
 pub async fn get_inference_analytics(
     State(state): State<AppState>,
     Extension(_claims): Extension<AuthClaims>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    Query(q): Query<InferenceLogFilterQuery>,
 ) -> Json<crate::store::InferenceStats> {
-    let filter = crate::store::InferenceLogFilter {
-        workspace_id: params.get("workspace_id").cloned(),
-        user_id: params.get("user_id").cloned(),
-        from_timestamp: params.get("from").cloned(),
-        to_timestamp: params.get("to").cloned(),
-        status: params.get("status").cloned(),
-        llm_model: params.get("llm_model").cloned(),
-        limit: params
-            .get("limit")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10000),
-        offset: 0,
-    };
+    let filter = q.to_filter(10000);
     Json(state.km_store.get_inference_stats(&filter))
 }

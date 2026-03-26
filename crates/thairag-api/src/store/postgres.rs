@@ -2059,6 +2059,9 @@ impl KmStoreTrait for PostgresKmStore {
         let mut params_to = None;
         let mut params_status = None;
         let mut params_model = None;
+        let mut params_intent = None;
+        let mut params_response_id = None;
+        let mut params_session_id = None;
 
         if let Some(ref ws) = filter.workspace_id {
             sql.push_str(&format!(" AND workspace_id = ${param_idx}"));
@@ -2090,6 +2093,21 @@ impl KmStoreTrait for PostgresKmStore {
             params_model = Some(model.clone());
             param_idx += 1;
         }
+        if let Some(ref intent) = filter.intent {
+            sql.push_str(&format!(" AND intent = ${param_idx}"));
+            params_intent = Some(intent.clone());
+            param_idx += 1;
+        }
+        if let Some(ref rid) = filter.response_id {
+            sql.push_str(&format!(" AND response_id = ${param_idx}"));
+            params_response_id = Some(rid.clone());
+            param_idx += 1;
+        }
+        if let Some(ref sid) = filter.session_id {
+            sql.push_str(&format!(" AND session_id = ${param_idx}"));
+            params_session_id = Some(sid.clone());
+            param_idx += 1;
+        }
 
         sql.push_str(&format!(
             " ORDER BY timestamp DESC LIMIT ${} OFFSET ${}",
@@ -2115,6 +2133,15 @@ impl KmStoreTrait for PostgresKmStore {
                 q = q.bind(v);
             }
             if let Some(ref v) = params_model {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_intent {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_response_id {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_session_id {
                 q = q.bind(v);
             }
             q = q.bind(filter.limit as i64);
@@ -2202,6 +2229,21 @@ impl KmStoreTrait for PostgresKmStore {
         if let Some(ref model) = filter.llm_model {
             where_clause.push_str(&format!(" AND llm_model = ${param_idx}"));
             params.push(model.clone());
+            param_idx += 1;
+        }
+        if let Some(ref intent) = filter.intent {
+            where_clause.push_str(&format!(" AND intent = ${param_idx}"));
+            params.push(intent.clone());
+            param_idx += 1;
+        }
+        if let Some(ref rid) = filter.response_id {
+            where_clause.push_str(&format!(" AND response_id = ${param_idx}"));
+            params.push(rid.clone());
+            param_idx += 1;
+        }
+        if let Some(ref sid) = filter.session_id {
+            where_clause.push_str(&format!(" AND session_id = ${param_idx}"));
+            params.push(sid.clone());
             param_idx += 1;
         }
         let _ = param_idx; // suppress unused warning
@@ -2344,5 +2386,130 @@ impl KmStoreTrait for PostgresKmStore {
                 .bind(response_id)
                 .execute(&self.pool),
         );
+    }
+
+    fn delete_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let mut sql = String::from("DELETE FROM inference_logs WHERE 1=1");
+        let mut param_idx: usize = 1;
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            sql.push_str(&format!(" AND workspace_id = ${param_idx}"));
+            params.push(ws.clone());
+            param_idx += 1;
+        }
+        if let Some(ref u) = filter.user_id {
+            sql.push_str(&format!(" AND user_id = ${param_idx}"));
+            params.push(u.clone());
+            param_idx += 1;
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            sql.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            params.push(from.clone());
+            param_idx += 1;
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            sql.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            params.push(to.clone());
+            param_idx += 1;
+        }
+        if let Some(ref st) = filter.status {
+            sql.push_str(&format!(" AND status = ${param_idx}"));
+            params.push(st.clone());
+            param_idx += 1;
+        }
+        if let Some(ref model) = filter.llm_model {
+            sql.push_str(&format!(" AND llm_model = ${param_idx}"));
+            params.push(model.clone());
+            param_idx += 1;
+        }
+        if let Some(ref intent) = filter.intent {
+            sql.push_str(&format!(" AND intent = ${param_idx}"));
+            params.push(intent.clone());
+            param_idx += 1;
+        }
+        if let Some(ref rid) = filter.response_id {
+            sql.push_str(&format!(" AND response_id = ${param_idx}"));
+            params.push(rid.clone());
+            param_idx += 1;
+        }
+        if let Some(ref sid) = filter.session_id {
+            sql.push_str(&format!(" AND session_id = ${param_idx}"));
+            params.push(sid.clone());
+            param_idx += 1;
+        }
+        let _ = param_idx;
+
+        block_on(async {
+            let mut q = sqlx::query(&sql);
+            for p in &params {
+                q = q.bind(p);
+            }
+            q.execute(&self.pool).await
+        })
+        .map(|r| r.rows_affected())
+        .unwrap_or(0)
+    }
+
+    fn count_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let mut sql = String::from("SELECT COUNT(*)::BIGINT FROM inference_logs WHERE 1=1");
+        let mut param_idx: usize = 1;
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            sql.push_str(&format!(" AND workspace_id = ${param_idx}"));
+            params.push(ws.clone());
+            param_idx += 1;
+        }
+        if let Some(ref u) = filter.user_id {
+            sql.push_str(&format!(" AND user_id = ${param_idx}"));
+            params.push(u.clone());
+            param_idx += 1;
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            sql.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            params.push(from.clone());
+            param_idx += 1;
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            sql.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            params.push(to.clone());
+            param_idx += 1;
+        }
+        if let Some(ref st) = filter.status {
+            sql.push_str(&format!(" AND status = ${param_idx}"));
+            params.push(st.clone());
+            param_idx += 1;
+        }
+        if let Some(ref model) = filter.llm_model {
+            sql.push_str(&format!(" AND llm_model = ${param_idx}"));
+            params.push(model.clone());
+            param_idx += 1;
+        }
+        if let Some(ref intent) = filter.intent {
+            sql.push_str(&format!(" AND intent = ${param_idx}"));
+            params.push(intent.clone());
+            param_idx += 1;
+        }
+        if let Some(ref rid) = filter.response_id {
+            sql.push_str(&format!(" AND response_id = ${param_idx}"));
+            params.push(rid.clone());
+            param_idx += 1;
+        }
+        if let Some(ref sid) = filter.session_id {
+            sql.push_str(&format!(" AND session_id = ${param_idx}"));
+            params.push(sid.clone());
+            param_idx += 1;
+        }
+        let _ = param_idx;
+
+        block_on(async {
+            let mut q = sqlx::query_scalar::<_, i64>(&sql);
+            for p in &params {
+                q = q.bind(p);
+            }
+            q.fetch_one(&self.pool).await
+        })
+        .unwrap_or(0) as u64
     }
 }

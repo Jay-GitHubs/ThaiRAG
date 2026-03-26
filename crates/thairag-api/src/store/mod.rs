@@ -231,8 +231,17 @@ pub struct InferenceLogFilter {
     pub to_timestamp: Option<String>,
     pub status: Option<String>,
     pub llm_model: Option<String>,
+    pub intent: Option<String>,
+    pub response_id: Option<String>,
+    pub session_id: Option<String>,
     pub limit: usize,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InferenceLogListResponse {
+    pub entries: Vec<InferenceLogEntry>,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -480,6 +489,8 @@ pub trait KmStoreTrait: Send + Sync {
     fn list_inference_logs(&self, filter: &InferenceLogFilter) -> Vec<InferenceLogEntry>;
     fn get_inference_stats(&self, filter: &InferenceLogFilter) -> InferenceStats;
     fn update_inference_log_feedback(&self, response_id: &str, score: i8);
+    fn delete_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
+    fn count_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
 }
 
 /// Factory function to create the appropriate KM store.

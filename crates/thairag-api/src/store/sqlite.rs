@@ -2122,6 +2122,18 @@ impl KmStoreTrait for SqliteKmStore {
             param_values.push(Box::new(model.clone()));
             conditions.push(format!("llm_model = ?{}", param_values.len()));
         }
+        if let Some(ref intent) = filter.intent {
+            param_values.push(Box::new(intent.clone()));
+            conditions.push(format!("intent = ?{}", param_values.len()));
+        }
+        if let Some(ref response_id) = filter.response_id {
+            param_values.push(Box::new(response_id.clone()));
+            conditions.push(format!("response_id = ?{}", param_values.len()));
+        }
+        if let Some(ref session_id) = filter.session_id {
+            param_values.push(Box::new(session_id.clone()));
+            conditions.push(format!("session_id = ?{}", param_values.len()));
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -2229,6 +2241,18 @@ impl KmStoreTrait for SqliteKmStore {
         if let Some(ref model) = filter.llm_model {
             param_values.push(Box::new(model.clone()));
             conditions.push(format!("llm_model = ?{}", param_values.len()));
+        }
+        if let Some(ref intent) = filter.intent {
+            param_values.push(Box::new(intent.clone()));
+            conditions.push(format!("intent = ?{}", param_values.len()));
+        }
+        if let Some(ref response_id) = filter.response_id {
+            param_values.push(Box::new(response_id.clone()));
+            conditions.push(format!("response_id = ?{}", param_values.len()));
+        }
+        if let Some(ref session_id) = filter.session_id {
+            param_values.push(Box::new(session_id.clone()));
+            conditions.push(format!("session_id = ?{}", param_values.len()));
         }
 
         let where_clause = if conditions.is_empty() {
@@ -2353,6 +2377,119 @@ impl KmStoreTrait for SqliteKmStore {
             params![score as i32, response_id],
         )
         .ok();
+    }
+
+    fn delete_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let conn = self.conn.lock().unwrap();
+
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            param_values.push(Box::new(ws.clone()));
+            conditions.push(format!("workspace_id = ?{}", param_values.len()));
+        }
+        if let Some(ref uid) = filter.user_id {
+            param_values.push(Box::new(uid.clone()));
+            conditions.push(format!("user_id = ?{}", param_values.len()));
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            param_values.push(Box::new(from.clone()));
+            conditions.push(format!("timestamp >= ?{}", param_values.len()));
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            param_values.push(Box::new(to.clone()));
+            conditions.push(format!("timestamp <= ?{}", param_values.len()));
+        }
+        if let Some(ref status) = filter.status {
+            param_values.push(Box::new(status.clone()));
+            conditions.push(format!("status = ?{}", param_values.len()));
+        }
+        if let Some(ref model) = filter.llm_model {
+            param_values.push(Box::new(model.clone()));
+            conditions.push(format!("llm_model = ?{}", param_values.len()));
+        }
+        if let Some(ref intent) = filter.intent {
+            param_values.push(Box::new(intent.clone()));
+            conditions.push(format!("intent = ?{}", param_values.len()));
+        }
+        if let Some(ref response_id) = filter.response_id {
+            param_values.push(Box::new(response_id.clone()));
+            conditions.push(format!("response_id = ?{}", param_values.len()));
+        }
+        if let Some(ref session_id) = filter.session_id {
+            param_values.push(Box::new(session_id.clone()));
+            conditions.push(format!("session_id = ?{}", param_values.len()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!("DELETE FROM inference_logs {where_clause}");
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        conn.execute(&sql, params_refs.as_slice()).unwrap_or(0) as u64
+    }
+
+    fn count_inference_logs(&self, filter: &super::InferenceLogFilter) -> u64 {
+        let conn = self.conn.lock().unwrap();
+
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref ws) = filter.workspace_id {
+            param_values.push(Box::new(ws.clone()));
+            conditions.push(format!("workspace_id = ?{}", param_values.len()));
+        }
+        if let Some(ref uid) = filter.user_id {
+            param_values.push(Box::new(uid.clone()));
+            conditions.push(format!("user_id = ?{}", param_values.len()));
+        }
+        if let Some(ref from) = filter.from_timestamp {
+            param_values.push(Box::new(from.clone()));
+            conditions.push(format!("timestamp >= ?{}", param_values.len()));
+        }
+        if let Some(ref to) = filter.to_timestamp {
+            param_values.push(Box::new(to.clone()));
+            conditions.push(format!("timestamp <= ?{}", param_values.len()));
+        }
+        if let Some(ref status) = filter.status {
+            param_values.push(Box::new(status.clone()));
+            conditions.push(format!("status = ?{}", param_values.len()));
+        }
+        if let Some(ref model) = filter.llm_model {
+            param_values.push(Box::new(model.clone()));
+            conditions.push(format!("llm_model = ?{}", param_values.len()));
+        }
+        if let Some(ref intent) = filter.intent {
+            param_values.push(Box::new(intent.clone()));
+            conditions.push(format!("intent = ?{}", param_values.len()));
+        }
+        if let Some(ref response_id) = filter.response_id {
+            param_values.push(Box::new(response_id.clone()));
+            conditions.push(format!("response_id = ?{}", param_values.len()));
+        }
+        if let Some(ref session_id) = filter.session_id {
+            param_values.push(Box::new(session_id.clone()));
+            conditions.push(format!("session_id = ?{}", param_values.len()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!("SELECT COUNT(*) FROM inference_logs {where_clause}");
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        conn.query_row(&sql, params_refs.as_slice(), |row| row.get::<_, i64>(0))
+            .unwrap_or(0) as u64
     }
 }
 

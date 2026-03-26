@@ -212,7 +212,11 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Settings — inference logs
         .route(
             "/settings/inference-logs",
-            get(settings::list_inference_logs),
+            get(settings::list_inference_logs).delete(settings::delete_inference_logs),
+        )
+        .route(
+            "/settings/inference-logs/export",
+            get(settings::export_inference_logs),
         )
         .route(
             "/settings/inference-analytics",
