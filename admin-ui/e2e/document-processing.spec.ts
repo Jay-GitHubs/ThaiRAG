@@ -10,7 +10,7 @@ test.describe('Document Processing Tab', () => {
   });
 
   test('shows pipeline settings (chunk size, overlap, upload limit)', async ({ page }) => {
-    await expect(page.getByText('Pipeline Settings')).toBeVisible();
+    await expect(page.getByText('Pipeline Settings').first()).toBeVisible();
     await expect(page.getByText('Max Chunk Size (chars)')).toBeVisible();
     await expect(page.getByText('Chunk Overlap (chars)')).toBeVisible();
     await expect(page.getByText('Max Upload Size (MB)')).toBeVisible();
@@ -214,14 +214,14 @@ test.describe('Document Processing Tab', () => {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
 
-    await expect(page.getByText('Embedding & Vector Store')).toBeVisible();
+    await expect(page.getByText('Embedding & Vector Store').first()).toBeVisible();
     await expect(page.getByText('Embedding Model', { exact: true })).toBeVisible();
-    await expect(page.getByText('Vector Database', { exact: true })).toBeVisible();
+    await expect(page.getByText('Vector Database', { exact: true }).first()).toBeVisible();
   });
 
   test('Embedding provider selector and model sync', async ({ page }) => {
     // Scroll to Embedding section
-    const embSection = page.getByText('Embedding & Vector Store');
+    const embSection = page.getByText('Embedding & Vector Store').first();
     await embSection.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
 
@@ -238,7 +238,7 @@ test.describe('Document Processing Tab', () => {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
 
-    await expect(page.getByText('Vector Database')).toBeVisible();
+    await expect(page.getByText('Vector Database').first()).toBeVisible();
 
     // The Vector Database card section should be visible
     const embCard = page.locator('.ant-card').filter({ hasText: 'Embedding & Vector Store' });
