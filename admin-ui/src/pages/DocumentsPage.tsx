@@ -4,6 +4,7 @@ import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { DocumentTable } from '../components/documents/DocumentTable';
+import { JobsTable } from '../components/documents/JobsTable';
 
 export function DocumentsPage() {
   const [orgId, setOrgId] = useState<string>();
@@ -69,7 +70,10 @@ export function DocumentsPage() {
       )}
 
       {wsId ? (
-        <DocumentTable workspaceId={wsId} />
+        <>
+          <JobsTable workspaceId={wsId} />
+          <DocumentTable workspaceId={wsId} />
+        </>
       ) : (
         <Typography.Text type="secondary">
           Select an organization, department, and workspace to view documents.

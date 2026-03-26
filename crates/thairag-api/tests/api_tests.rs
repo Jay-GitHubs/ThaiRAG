@@ -223,6 +223,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         embedding_cache: Default::default(),
         job_queue: Default::default(),
         redis: Default::default(),
+        otel: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1643,6 +1644,7 @@ fn build_streaming_test_app() -> Router {
         embedding_cache: Default::default(),
         job_queue: Default::default(),
         redis: Default::default(),
+        otel: Default::default(),
     };
 
     let bundle = ProviderBundle {

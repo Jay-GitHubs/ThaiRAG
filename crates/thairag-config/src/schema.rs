@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub job_queue: JobQueueConfig,
     #[serde(default)]
     pub redis: RedisConfig,
+    #[serde(default)]
+    pub otel: OtelConfig,
 }
 
 impl AppConfig {
@@ -1154,6 +1156,38 @@ impl Default for RedisConfig {
 fn default_redis_url() -> String {
     "redis://127.0.0.1:6379".to_string()
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtelConfig {
+    /// Whether OpenTelemetry tracing export is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// OTLP exporter endpoint (gRPC).
+    #[serde(default = "default_otel_endpoint")]
+    pub endpoint: String,
+    /// Service name reported in traces.
+    #[serde(default = "default_otel_service_name")]
+    pub service_name: String,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_otel_endpoint(),
+            service_name: default_otel_service_name(),
+        }
+    }
+}
+
+fn default_otel_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_otel_service_name() -> String {
+    "thairag".to_string()
+}
+
 fn default_memory_backend() -> String {
     "memory".to_string()
 }
@@ -1256,6 +1290,7 @@ mod tests {
             embedding_cache: EmbeddingCacheConfig::default(),
             job_queue: JobQueueConfig::default(),
             redis: RedisConfig::default(),
+            otel: OtelConfig::default(),
         }
     }
 

@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
@@ -19,13 +21,39 @@ async fn main() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let log_format = std::env::var("THAIRAG_LOG_FORMAT").unwrap_or_default();
 
+    // Build optional OpenTelemetry layer.
+    // Enabled when OTEL_EXPORTER_OTLP_ENDPOINT env var is set, or later via
+    // config (otel.enabled). We check the env var here because config hasn't
+    // been loaded yet at tracing-init time.
+    let otel_layer = if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        match init_otel_layer() {
+            Ok(layer) => {
+                eprintln!("OpenTelemetry tracing enabled");
+                Some(layer)
+            }
+            Err(e) => {
+                eprintln!("Failed to initialise OpenTelemetry: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Compose: registry + env-filter + optional otel + fmt (text or json).
+    // The otel layer is boxed so it can be used as Option<Box<dyn Layer<S>>>
+    // regardless of the concrete subscriber stack.
+    let registry = tracing_subscriber::registry().with(filter);
     if log_format == "json" {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(filter)
+        registry
+            .with(otel_layer)
+            .with(tracing_subscriber::fmt::layer().json())
             .init();
     } else {
-        tracing_subscriber::fmt().with_env_filter(filter).init();
+        registry
+            .with(otel_layer)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
     }
 
     // Load and validate config
@@ -232,7 +260,52 @@ async fn main() {
         scheduler.shutdown().await;
     }
 
+    // Flush any remaining OpenTelemetry spans.
+    // In OTel 0.28+, shutdown is done by dropping/shutting down the provider
+    // obtained from global. We replace the global with a noop to flush.
+    let _ = opentelemetry::global::set_tracer_provider(
+        opentelemetry_sdk::trace::SdkTracerProvider::builder().build(),
+    );
+
     tracing::info!("Server shutdown complete");
+}
+
+/// Initialise an OpenTelemetry tracing layer that exports spans via OTLP/gRPC.
+///
+/// Configuration is read from standard OTEL env vars:
+///   - `OTEL_EXPORTER_OTLP_ENDPOINT` — collector endpoint (default `http://localhost:4317`)
+///   - `OTEL_SERVICE_NAME` — service name (default `thairag`)
+fn init_otel_layer<S>() -> Result<
+    tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::SdkTracer>,
+    Box<dyn std::error::Error>,
+>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "thairag".into());
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()?;
+
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            opentelemetry_sdk::Resource::builder()
+                .with_service_name(service_name)
+                .build(),
+        )
+        .build();
+
+    let tracer = provider.tracer("thairag");
+
+    // Register as global provider so other parts of the app can access it.
+    opentelemetry::global::set_tracer_provider(provider);
+
+    Ok(tracing_opentelemetry::layer().with_tracer(tracer))
 }
 
 fn seed_super_admin(store: &dyn KmStoreTrait) {

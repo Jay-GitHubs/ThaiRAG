@@ -77,6 +77,11 @@ retention_secs = 86400          # 24 hours
 [redis]
 url = "redis://127.0.0.1:6379"
 
+[otel]
+enabled = false
+endpoint = "http://localhost:4317"
+service_name = "thairag"
+
 [mcp]
 enabled = false
 max_concurrent_syncs = 3
