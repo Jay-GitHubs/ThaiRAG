@@ -29,17 +29,25 @@ pub async fn auth_layer(
             }
         }
         Some(jwt_service) => {
-            let auth_header = req
+            // Try Authorization header first, then fall back to ?token= query
+            // parameter (needed for SSE EventSource which can't set headers).
+            let token = if let Some(auth_header) = req
                 .headers()
                 .get("authorization")
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| {
-                    AuthError(ThaiRagError::Auth("Missing authorization header".into()))
-                })?;
-
-            let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
-                AuthError(ThaiRagError::Auth("Invalid authorization format".into()))
-            })?;
+            {
+                auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+                    AuthError(ThaiRagError::Auth("Invalid authorization format".into()))
+                })?
+            } else {
+                // Fall back to query parameter for SSE endpoints
+                req.uri()
+                    .query()
+                    .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
+                    .ok_or_else(|| {
+                        AuthError(ThaiRagError::Auth("Missing authorization header".into()))
+                    })?
+            };
 
             // Check static API keys first
             if !api_keys.is_empty() && api_keys.contains(token) {

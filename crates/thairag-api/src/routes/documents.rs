@@ -1,5 +1,6 @@
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -915,4 +916,51 @@ pub async fn cancel_job(
         "cancelled": cancelled,
         "job_id": job_id.0,
     })))
+}
+
+/// Stream job updates for a workspace via Server-Sent Events.
+/// Polls the job queue every 2 seconds and sends the full job list
+/// as an SSE event whenever it changes (or periodically as a heartbeat).
+pub async fn stream_jobs(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError>
+{
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_read, "stream jobs")?;
+
+    let stream = async_stream::stream! {
+        let mut last_hash: u64 = 0;
+        loop {
+            let jobs = state.job_queue.list_by_workspace(&workspace_id).await;
+            let payload = serde_json::json!({ "jobs": jobs });
+
+            // Only send when data actually changed (content hash comparison)
+            let current_hash = {
+                use std::hash::{Hash, Hasher};
+                let json = serde_json::to_string(&payload).unwrap_or_default();
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                json.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            if current_hash != last_hash {
+                last_hash = current_hash;
+                let data = serde_json::to_string(&payload).unwrap_or_default();
+                yield Ok::<_, std::convert::Infallible>(
+                    Event::default().event("jobs").data(data)
+                );
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("ping"),
+    ))
 }

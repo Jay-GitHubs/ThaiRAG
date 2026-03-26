@@ -7,7 +7,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { useJobs, useCancelJob } from '../../hooks/useJobs';
+import { useJobsStream, useCancelJob } from '../../hooks/useJobs';
 import type { Job, JobKind, JobStatus } from '../../api/types';
 
 const statusConfig: Record<JobStatus, { color: string; icon: React.ReactNode; label: string }> = {
@@ -29,7 +29,7 @@ interface Props {
 }
 
 export function JobsTable({ workspaceId }: Props) {
-  const { data, isLoading } = useJobs(workspaceId);
+  const { data, isLoading } = useJobsStream(workspaceId);
   const cancelMut = useCancelJob();
 
   const handleCancel = async (jobId: string) => {

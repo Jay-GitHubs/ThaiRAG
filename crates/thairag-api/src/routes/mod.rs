@@ -261,6 +261,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Jobs
         .route("/workspaces/{workspace_id}/jobs", get(documents::list_jobs))
         .route(
+            "/workspaces/{workspace_id}/jobs/stream",
+            get(documents::stream_jobs),
+        )
+        .route(
             "/workspaces/{workspace_id}/jobs/{job_id}",
             get(documents::get_job).delete(documents::cancel_job),
         )

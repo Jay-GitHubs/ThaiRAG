@@ -1141,6 +1141,33 @@ impl AppState {
             }
         };
 
+        // ── Job queue backend selection ──
+        let job_queue: Arc<dyn thairag_core::traits::JobQueue> = match config
+            .job_queue
+            .backend
+            .as_str()
+        {
+            "redis" => {
+                match thairag_provider_redis::RedisConnection::new(&config.redis.url).await {
+                    Ok(conn) => {
+                        tracing::info!("Job queue: Redis");
+                        Arc::new(thairag_provider_redis::RedisJobQueue::new(
+                            conn,
+                            config.job_queue.retention_secs,
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to connect to Redis for job queue, falling back to memory");
+                        Arc::new(crate::job_queue::InMemoryJobQueue::new())
+                    }
+                }
+            }
+            _ => {
+                tracing::info!("Job queue: in-memory");
+                Arc::new(crate::job_queue::InMemoryJobQueue::new())
+            }
+        };
+
         // Re-build the provider bundle now that km_store is available, so DB-stored
         // per-agent LLM configs (from presets) are picked up on restart.
         let bundle = {
@@ -1191,7 +1218,7 @@ impl AppState {
             user_rate_limiter,
             vault,
             embedding_cache,
-            job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
+            job_queue,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }

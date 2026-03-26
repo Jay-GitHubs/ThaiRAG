@@ -1115,7 +1115,7 @@ fn default_cache_ttl() -> u64 {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JobQueueConfig {
-    /// Backend: "memory" (default). Redis job queue is not yet implemented.
+    /// Backend: "memory" (default) or "redis".
     #[serde(default = "default_memory_backend")]
     pub backend: String,
     /// How long to keep completed/failed jobs (seconds).
