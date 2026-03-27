@@ -1,9 +1,9 @@
 use std::time::Instant;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use thairag_auth::AuthClaims;
@@ -16,6 +16,7 @@ use thairag_core::types::{
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::eval;
+use crate::store::RegressionRun;
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -420,6 +421,163 @@ pub struct ImportCsvRequest {
     pub name: String,
     pub csv_data: String,
 }
+
+// ── Regression Check ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RegressionCheckRequest {
+    pub query_set_id: String,
+    pub baseline_score: f64,
+}
+
+#[derive(Serialize)]
+pub struct RegressionCheckResponse {
+    pub run: RegressionRun,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct RegressionHistoryQuery {
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize {
+    50
+}
+
+/// POST /api/km/eval/regression-check
+///
+/// Run the named query set and compare its score against the provided baseline.
+pub async fn run_regression_check(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(req): AppJson<RegressionCheckRequest>,
+) -> Result<Json<RegressionCheckResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    // Parse query_set_id
+    let set_uuid = Uuid::parse_str(&req.query_set_id)
+        .map_err(|_| ThaiRagError::Validation("Invalid query_set_id".into()))?;
+    let set_id = EvalSetId(set_uuid);
+
+    let key = eval_set_key(&set_id);
+    let json = state
+        .km_store
+        .get_setting(&key)
+        .ok_or_else(|| ThaiRagError::NotFound("Query set not found".into()))?;
+    let query_set: EvalQuerySet =
+        serde_json::from_str(&json).map_err(|e| ThaiRagError::Internal(e.to_string()))?;
+
+    let p = state.providers();
+    let mut per_query_results = Vec::new();
+
+    for eq in &query_set.queries {
+        let start = Instant::now();
+        let search_query = SearchQuery {
+            text: eq.query.clone(),
+            top_k: 10,
+            workspace_ids: vec![],
+            unrestricted: true,
+        };
+        let search_results = p
+            .search_engine
+            .search(&search_query)
+            .await
+            .map_err(ApiError::from)?;
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        let mut retrieved_doc_ids: Vec<DocId> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for sr in &search_results {
+            if seen.insert(sr.chunk.doc_id) {
+                retrieved_doc_ids.push(sr.chunk.doc_id);
+            }
+        }
+
+        let ndcg_at_10 = eval::compute_ndcg(
+            &retrieved_doc_ids,
+            &eq.relevant_doc_ids,
+            eq.relevance_scores.as_deref(),
+            10,
+        );
+        let mrr = eval::compute_mrr(&retrieved_doc_ids, &eq.relevant_doc_ids);
+
+        per_query_results.push(QueryEvalResult {
+            query: eq.query.clone(),
+            ndcg_at_5: 0.0,
+            ndcg_at_10,
+            mrr,
+            precision: 0.0,
+            recall: 0.0,
+            latency_ms,
+            retrieved_doc_ids,
+        });
+    }
+
+    let n = per_query_results.len() as f64;
+    let current_score = if n > 0.0 {
+        (per_query_results.iter().map(|r| r.ndcg_at_10).sum::<f64>()
+            + per_query_results.iter().map(|r| r.mrr).sum::<f64>())
+            / (2.0 * n)
+    } else {
+        0.0
+    };
+
+    let degradation = req.baseline_score - current_score;
+    let threshold = state.config.search_quality.regression_threshold;
+    let passed = degradation <= threshold;
+
+    let details = serde_json::json!({
+        "query_count": per_query_results.len(),
+        "threshold": threshold,
+        "per_query": per_query_results.iter().map(|r| serde_json::json!({
+            "query": r.query,
+            "ndcg_at_10": r.ndcg_at_10,
+            "mrr": r.mrr,
+        })).collect::<Vec<_>>(),
+    });
+
+    let run = RegressionRun {
+        id: Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        query_set_id: req.query_set_id.clone(),
+        baseline_score: req.baseline_score,
+        current_score,
+        degradation,
+        passed,
+        details: serde_json::to_string(&details).unwrap_or_else(|_| "{}".to_string()),
+    };
+
+    state.km_store.insert_regression_run(&run);
+
+    let message = if passed {
+        format!(
+            "PASSED: score {:.4} is within threshold ({:.4}) of baseline {:.4}",
+            current_score, threshold, req.baseline_score
+        )
+    } else {
+        format!(
+            "FAILED: score {:.4} degraded {:.4} from baseline {:.4} (threshold {:.4})",
+            current_score, degradation, req.baseline_score, threshold
+        )
+    };
+
+    Ok(Json(RegressionCheckResponse { run, message }))
+}
+
+/// GET /api/km/eval/regression-history
+pub async fn list_regression_history(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<RegressionHistoryQuery>,
+) -> Result<Json<Vec<RegressionRun>>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let runs = state.km_store.list_regression_runs(params.limit);
+    Ok(Json(runs))
+}
+
+// ── Import Query Set ────────────────────────────────────────────────
 
 pub async fn import_query_set(
     State(state): State<AppState>,

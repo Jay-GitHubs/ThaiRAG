@@ -16,6 +16,7 @@ members = [
     "crates/thairag-mcp",
     "crates/thairag-provider-redis",
     "crates/thairag-api",
+    "crates/thairag-cli",
 ]
 
 [workspace.package]

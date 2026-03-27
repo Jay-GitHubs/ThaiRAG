@@ -49,6 +49,22 @@ pub struct MemoryKmStore {
     relations: RwLock<Vec<thairag_core::types::Relation>>,
     workspace_acls: RwLock<Vec<WorkspaceAcl>>,
     document_acls: RwLock<Vec<DocumentAcl>>,
+    search_events: RwLock<Vec<super::SearchAnalyticsEvent>>,
+    lineage_records: RwLock<Vec<super::LineageRecord>>,
+    personal_memories: RwLock<Vec<super::PersonalMemoryRow>>,
+    tenants: RwLock<HashMap<String, super::Tenant>>,
+    tenant_quotas: RwLock<HashMap<String, super::TenantQuota>>,
+    tenant_org_mapping: RwLock<HashMap<String, String>>, // org_id -> tenant_id
+    custom_roles: RwLock<HashMap<String, super::CustomRole>>,
+    doc_comments: RwLock<Vec<super::DocumentComment>>,
+    doc_annotations: RwLock<Vec<super::DocumentAnnotation>>,
+    doc_reviews: RwLock<Vec<super::DocumentReview>>,
+    regression_runs: RwLock<Vec<super::RegressionRun>>,
+    prompt_templates: RwLock<HashMap<String, super::PromptTemplate>>,
+    prompt_ratings: RwLock<Vec<super::PromptRating>>,
+    training_datasets: RwLock<HashMap<String, super::TrainingDataset>>,
+    training_pairs: RwLock<Vec<super::TrainingPair>>,
+    finetune_jobs: RwLock<HashMap<String, super::FinetuneJob>>,
 }
 
 impl Default for MemoryKmStore {
@@ -84,6 +100,22 @@ impl MemoryKmStore {
             relations: RwLock::new(Vec::new()),
             workspace_acls: RwLock::new(Vec::new()),
             document_acls: RwLock::new(Vec::new()),
+            search_events: RwLock::new(Vec::new()),
+            lineage_records: RwLock::new(Vec::new()),
+            personal_memories: RwLock::new(Vec::new()),
+            tenants: RwLock::new(HashMap::new()),
+            tenant_quotas: RwLock::new(HashMap::new()),
+            tenant_org_mapping: RwLock::new(HashMap::new()),
+            custom_roles: RwLock::new(HashMap::new()),
+            doc_comments: RwLock::new(Vec::new()),
+            doc_annotations: RwLock::new(Vec::new()),
+            doc_reviews: RwLock::new(Vec::new()),
+            regression_runs: RwLock::new(Vec::new()),
+            prompt_templates: RwLock::new(HashMap::new()),
+            prompt_ratings: RwLock::new(Vec::new()),
+            training_datasets: RwLock::new(HashMap::new()),
+            training_pairs: RwLock::new(Vec::new()),
+            finetune_jobs: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -1950,6 +1982,894 @@ impl KmStoreTrait for MemoryKmStore {
             .iter()
             .find(|a| a.user_id == user_id && a.doc_id == doc_id)
             .map(|a| a.permission)
+    }
+
+    // ── Search Analytics ────────────────────────────────────────────────
+
+    fn insert_search_event(&self, event: &super::SearchAnalyticsEvent) {
+        self.search_events.write().unwrap().push(event.clone());
+    }
+
+    fn list_search_events(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> Vec<super::SearchAnalyticsEvent> {
+        let events = self.search_events.read().unwrap();
+        let mut result: Vec<super::SearchAnalyticsEvent> = events
+            .iter()
+            .filter(|e| {
+                if let Some(from) = &filter.from
+                    && e.timestamp < *from
+                {
+                    return false;
+                }
+                if let Some(to) = &filter.to
+                    && e.timestamp > *to
+                {
+                    return false;
+                }
+                if let Some(ws) = &filter.workspace_id
+                    && e.workspace_id.as_deref() != Some(ws.as_str())
+                {
+                    return false;
+                }
+                if let Some(uid) = &filter.user_id
+                    && e.user_id.as_deref() != Some(uid.as_str())
+                {
+                    return false;
+                }
+                if filter.zero_results_only && !e.zero_results {
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        let offset = filter.offset.unwrap_or(0);
+        if offset < result.len() {
+            result = result[offset..].to_vec();
+        } else {
+            result.clear();
+        }
+        if let Some(limit) = filter.limit {
+            result.truncate(limit);
+        }
+        result
+    }
+
+    fn get_popular_queries(&self, limit: usize) -> Vec<super::PopularQuery> {
+        use std::collections::HashMap;
+        let events = self.search_events.read().unwrap();
+        let mut map: HashMap<String, (u64, u64, u64)> = HashMap::new(); // (count, sum_results, sum_latency)
+        for e in events.iter() {
+            let entry = map.entry(e.query_text.clone()).or_insert((0, 0, 0));
+            entry.0 += 1;
+            entry.1 += e.result_count as u64;
+            entry.2 += e.latency_ms;
+        }
+        let mut queries: Vec<super::PopularQuery> = map
+            .into_iter()
+            .map(
+                |(query_text, (count, sum_results, sum_latency))| super::PopularQuery {
+                    query_text,
+                    count,
+                    avg_results: if count > 0 {
+                        sum_results as f64 / count as f64
+                    } else {
+                        0.0
+                    },
+                    avg_latency_ms: if count > 0 {
+                        sum_latency as f64 / count as f64
+                    } else {
+                        0.0
+                    },
+                },
+            )
+            .collect();
+        queries.sort_by(|a, b| b.count.cmp(&a.count));
+        queries.truncate(limit);
+        queries
+    }
+
+    fn get_search_analytics_summary(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> super::SearchAnalyticsSummary {
+        use std::collections::HashMap;
+        let events = self.list_search_events(filter);
+        let total = events.len() as u64;
+        let zero_result_count = events.iter().filter(|e| e.zero_results).count() as u64;
+        let avg_latency_ms = if total > 0 {
+            events.iter().map(|e| e.latency_ms as f64).sum::<f64>() / total as f64
+        } else {
+            0.0
+        };
+        let avg_results = if total > 0 {
+            events.iter().map(|e| e.result_count as f64).sum::<f64>() / total as f64
+        } else {
+            0.0
+        };
+        let mut by_day: HashMap<String, u64> = HashMap::new();
+        for e in &events {
+            let day = e.timestamp.get(..10).unwrap_or(&e.timestamp).to_string();
+            *by_day.entry(day).or_insert(0) += 1;
+        }
+        let mut searches_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
+        searches_per_day.sort_by(|a, b| a.0.cmp(&b.0));
+        super::SearchAnalyticsSummary {
+            total_searches: total,
+            zero_result_count,
+            avg_latency_ms,
+            avg_results,
+            searches_per_day,
+        }
+    }
+
+    // ── Document Lineage ────────────────────────────────────────────────
+
+    fn insert_lineage_record(&self, record: &super::LineageRecord) {
+        self.lineage_records.write().unwrap().push(record.clone());
+    }
+
+    fn get_lineage_for_response(&self, response_id: &str) -> Vec<super::LineageRecord> {
+        self.lineage_records
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| r.response_id == response_id)
+            .cloned()
+            .collect()
+    }
+
+    fn get_lineage_for_document(&self, doc_id: &str, limit: usize) -> Vec<super::LineageRecord> {
+        let mut records: Vec<super::LineageRecord> = self
+            .lineage_records
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| r.doc_id == doc_id)
+            .cloned()
+            .collect();
+        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        records.truncate(limit);
+        records
+    }
+
+    // ── Audit Export & Analytics ────────────────────────────────────────
+
+    fn export_audit_logs(&self, filter: &super::AuditLogFilter) -> Vec<serde_json::Value> {
+        // Audit log is stored as JSON in settings key "audit_log"
+        let raw: Vec<serde_json::Value> = self
+            .get_setting("audit_log")
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
+        let limit = filter.limit.unwrap_or(1000);
+        let offset = filter.offset.unwrap_or(0);
+
+        let mut filtered: Vec<serde_json::Value> = raw
+            .into_iter()
+            .filter(|e| {
+                if let Some(from) = &filter.from
+                    && e["timestamp"].as_str().unwrap_or("") < from.as_str()
+                {
+                    return false;
+                }
+                if let Some(to) = &filter.to
+                    && e["timestamp"].as_str().unwrap_or("") > to.as_str()
+                {
+                    return false;
+                }
+                if let Some(uid) = &filter.user_id
+                    && e["actor"].as_str().unwrap_or("") != uid.as_str()
+                {
+                    return false;
+                }
+                if let Some(action) = &filter.action
+                    && e["action"].as_str().unwrap_or("") != action.as_str()
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        filtered.reverse();
+        if offset < filtered.len() {
+            filtered = filtered[offset..].to_vec();
+        } else {
+            filtered.clear();
+        }
+        filtered.truncate(limit);
+        filtered
+    }
+
+    fn get_audit_analytics(&self, filter: &super::AuditLogFilter) -> super::AuditAnalytics {
+        use std::collections::HashMap;
+        let entries = self.export_audit_logs(&super::AuditLogFilter {
+            from: filter.from.clone(),
+            to: filter.to.clone(),
+            user_id: filter.user_id.clone(),
+            action: filter.action.clone(),
+            limit: None,
+            offset: None,
+        });
+
+        let total_events = entries.len() as u64;
+        let mut by_type: HashMap<String, u64> = HashMap::new();
+        let mut by_user: HashMap<String, u64> = HashMap::new();
+        let mut by_day: HashMap<String, u64> = HashMap::new();
+
+        for e in &entries {
+            let action = e["action"].as_str().unwrap_or("unknown").to_string();
+            *by_type.entry(action).or_insert(0) += 1;
+
+            let actor = e["actor"].as_str().unwrap_or("unknown").to_string();
+            *by_user.entry(actor).or_insert(0) += 1;
+
+            let ts = e["timestamp"].as_str().unwrap_or("");
+            let day = ts.get(..10).unwrap_or(ts).to_string();
+            *by_day.entry(day).or_insert(0) += 1;
+        }
+
+        let mut actions_by_type: Vec<(String, u64)> = by_type.into_iter().collect();
+        actions_by_type.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut actions_by_user: Vec<(String, u64)> = by_user.into_iter().collect();
+        actions_by_user.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut events_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
+        events_per_day.sort_by(|a, b| a.0.cmp(&b.0));
+
+        super::AuditAnalytics {
+            total_events,
+            actions_by_type,
+            actions_by_user,
+            events_per_day,
+        }
+    }
+
+    // ── Personal Memory Persistence ────────────────────────────────────
+
+    fn insert_personal_memory(&self, memory: &super::PersonalMemoryRow) {
+        self.personal_memories.write().unwrap().push(memory.clone());
+    }
+
+    fn list_personal_memories(&self, user_id: &str, limit: usize) -> Vec<super::PersonalMemoryRow> {
+        let mut memories: Vec<super::PersonalMemoryRow> = self
+            .personal_memories
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|m| m.user_id == user_id)
+            .cloned()
+            .collect();
+        memories.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        memories.truncate(limit);
+        memories
+    }
+
+    fn delete_personal_memory(&self, memory_id: &str) -> Result<()> {
+        let mut memories = self.personal_memories.write().unwrap();
+        let before = memories.len();
+        memories.retain(|m| m.id != memory_id);
+        if memories.len() == before {
+            Err(ThaiRagError::NotFound(format!(
+                "Memory {memory_id} not found"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn delete_all_personal_memories(&self, user_id: &str) -> Result<()> {
+        self.personal_memories
+            .write()
+            .unwrap()
+            .retain(|m| m.user_id != user_id);
+        Ok(())
+    }
+
+    fn count_personal_memories(&self, user_id: &str) -> usize {
+        self.personal_memories
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|m| m.user_id == user_id)
+            .count()
+    }
+
+    // ── Multi-tenancy ───────────────────────────────────────────────────
+
+    fn insert_tenant(&self, name: String, plan: String) -> Result<super::Tenant> {
+        let tenant = super::Tenant {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            plan,
+            is_active: true,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        self.tenants
+            .write()
+            .unwrap()
+            .insert(tenant.id.clone(), tenant.clone());
+        Ok(tenant)
+    }
+
+    fn get_tenant(&self, id: &str) -> Result<super::Tenant> {
+        self.tenants
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Tenant {id} not found")))
+    }
+
+    fn list_tenants(&self) -> Vec<super::Tenant> {
+        self.tenants.read().unwrap().values().cloned().collect()
+    }
+
+    fn update_tenant(&self, id: &str, name: String, plan: String) -> Result<super::Tenant> {
+        let mut tenants = self.tenants.write().unwrap();
+        let t = tenants
+            .get_mut(id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Tenant {id} not found")))?;
+        t.name = name;
+        t.plan = plan;
+        Ok(t.clone())
+    }
+
+    fn delete_tenant(&self, id: &str) -> Result<()> {
+        if self.tenants.write().unwrap().remove(id).is_none() {
+            return Err(ThaiRagError::NotFound(format!("Tenant {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn get_tenant_quota(&self, id: &str) -> super::TenantQuota {
+        self.tenant_quotas
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_tenant_quota(&self, id: &str, quota: &super::TenantQuota) -> Result<()> {
+        self.tenant_quotas
+            .write()
+            .unwrap()
+            .insert(id.to_string(), quota.clone());
+        Ok(())
+    }
+
+    fn get_tenant_usage(&self, id: &str) -> super::TenantUsage {
+        // Collect orgs that belong to this tenant
+        let mapping = self.tenant_org_mapping.read().unwrap();
+        let tenant_org_ids: Vec<OrgId> = mapping
+            .iter()
+            .filter(|(_, tid)| *tid == id)
+            .filter_map(|(oid, _)| oid.parse::<uuid::Uuid>().ok().map(OrgId))
+            .collect();
+        drop(mapping);
+
+        let workspaces = self.workspaces.read().unwrap();
+        let depts = self.depts.read().unwrap();
+        let documents = self.documents.read().unwrap();
+        let users = self.users.read().unwrap();
+
+        // Dept IDs belonging to tenant orgs
+        let dept_ids: Vec<DeptId> = depts
+            .values()
+            .filter(|d| tenant_org_ids.contains(&d.org_id))
+            .map(|d| d.id)
+            .collect();
+
+        let current_workspaces = workspaces
+            .values()
+            .filter(|w| dept_ids.contains(&w.dept_id))
+            .count() as u64;
+
+        let ws_ids: Vec<WorkspaceId> = workspaces
+            .values()
+            .filter(|w| dept_ids.contains(&w.dept_id))
+            .map(|w| w.id)
+            .collect();
+
+        let current_documents = documents
+            .values()
+            .filter(|d| ws_ids.contains(&d.workspace_id))
+            .count() as u64;
+
+        let current_storage_bytes: u64 = documents
+            .values()
+            .filter(|d| ws_ids.contains(&d.workspace_id))
+            .map(|d| d.size_bytes.max(0) as u64)
+            .sum();
+
+        let current_users = users.len() as u64;
+
+        super::TenantUsage {
+            current_documents,
+            current_storage_bytes,
+            queries_today: 0,
+            current_users,
+            current_workspaces,
+        }
+    }
+
+    fn assign_org_to_tenant(&self, org_id: OrgId, tenant_id: &str) -> Result<()> {
+        self.tenant_org_mapping
+            .write()
+            .unwrap()
+            .insert(org_id.0.to_string(), tenant_id.to_string());
+        Ok(())
+    }
+
+    fn get_tenant_for_org(&self, org_id: OrgId) -> Option<String> {
+        self.tenant_org_mapping
+            .read()
+            .unwrap()
+            .get(&org_id.0.to_string())
+            .cloned()
+    }
+
+    // ── RBAC v2 ─────────────────────────────────────────────────────────
+
+    fn insert_custom_role(&self, role: &super::CustomRole) -> Result<super::CustomRole> {
+        self.custom_roles
+            .write()
+            .unwrap()
+            .insert(role.id.clone(), role.clone());
+        Ok(role.clone())
+    }
+
+    fn get_custom_role(&self, id: &str) -> Result<super::CustomRole> {
+        self.custom_roles
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Custom role {id} not found")))
+    }
+
+    fn list_custom_roles(&self) -> Vec<super::CustomRole> {
+        self.custom_roles
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    fn update_custom_role(&self, role: &super::CustomRole) -> Result<()> {
+        let mut roles = self.custom_roles.write().unwrap();
+        if !roles.contains_key(&role.id) {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {} not found",
+                role.id
+            )));
+        }
+        roles.insert(role.id.clone(), role.clone());
+        Ok(())
+    }
+
+    fn delete_custom_role(&self, id: &str) -> Result<()> {
+        if self.custom_roles.write().unwrap().remove(id).is_none() {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    // ── Document Collaboration ──────────────────────────────────────────
+
+    fn insert_comment(&self, comment: &super::DocumentComment) -> Result<super::DocumentComment> {
+        self.doc_comments.write().unwrap().push(comment.clone());
+        Ok(comment.clone())
+    }
+
+    fn list_comments(&self, doc_id: &str) -> Vec<super::DocumentComment> {
+        self.doc_comments
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|c| c.doc_id == doc_id)
+            .cloned()
+            .collect()
+    }
+
+    fn delete_comment(&self, comment_id: &str) -> Result<()> {
+        let mut comments = self.doc_comments.write().unwrap();
+        let before = comments.len();
+        comments.retain(|c| c.id != comment_id);
+        if comments.len() == before {
+            return Err(ThaiRagError::NotFound(format!(
+                "Comment {comment_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_annotation(
+        &self,
+        annotation: &super::DocumentAnnotation,
+    ) -> Result<super::DocumentAnnotation> {
+        self.doc_annotations
+            .write()
+            .unwrap()
+            .push(annotation.clone());
+        Ok(annotation.clone())
+    }
+
+    fn list_annotations(&self, doc_id: &str) -> Vec<super::DocumentAnnotation> {
+        self.doc_annotations
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|a| a.doc_id == doc_id)
+            .cloned()
+            .collect()
+    }
+
+    fn delete_annotation(&self, annotation_id: &str) -> Result<()> {
+        let mut annotations = self.doc_annotations.write().unwrap();
+        let before = annotations.len();
+        annotations.retain(|a| a.id != annotation_id);
+        if annotations.len() == before {
+            return Err(ThaiRagError::NotFound(format!(
+                "Annotation {annotation_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_review(&self, review: &super::DocumentReview) -> Result<super::DocumentReview> {
+        self.doc_reviews.write().unwrap().push(review.clone());
+        Ok(review.clone())
+    }
+
+    fn list_reviews(&self, doc_id: &str) -> Vec<super::DocumentReview> {
+        self.doc_reviews
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| r.doc_id == doc_id)
+            .cloned()
+            .collect()
+    }
+
+    fn update_review_status(
+        &self,
+        review_id: &str,
+        status: &str,
+        comments: Option<&str>,
+    ) -> Result<()> {
+        let mut reviews = self.doc_reviews.write().unwrap();
+        let r = reviews
+            .iter_mut()
+            .find(|r| r.id == review_id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Review {review_id} not found")))?;
+        r.status = status.to_string();
+        if let Some(c) = comments {
+            r.comments = Some(c.to_string());
+        }
+        r.updated_at = Utc::now().to_rfc3339();
+        Ok(())
+    }
+
+    // ── Search Quality Regression ───────────────────────────────────────
+
+    fn insert_regression_run(&self, run: &super::RegressionRun) {
+        self.regression_runs.write().unwrap().push(run.clone());
+    }
+
+    fn list_regression_runs(&self, limit: usize) -> Vec<super::RegressionRun> {
+        let runs = self.regression_runs.read().unwrap();
+        let mut sorted: Vec<super::RegressionRun> = runs.clone();
+        sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        sorted.truncate(limit);
+        sorted
+    }
+
+    // ── Prompt Marketplace ──────────────────────────────────────────────
+
+    fn insert_prompt_template(
+        &self,
+        template: &super::PromptTemplate,
+    ) -> Result<super::PromptTemplate> {
+        self.prompt_templates
+            .write()
+            .unwrap()
+            .insert(template.id.clone(), template.clone());
+        Ok(template.clone())
+    }
+
+    fn list_prompt_templates(
+        &self,
+        filter: &super::PromptTemplateFilter,
+    ) -> Vec<super::PromptTemplate> {
+        let templates = self.prompt_templates.read().unwrap();
+        let mut results: Vec<super::PromptTemplate> = templates
+            .values()
+            .filter(|t| {
+                if filter
+                    .category
+                    .as_deref()
+                    .is_some_and(|cat| t.category != cat)
+                {
+                    return false;
+                }
+                if filter
+                    .is_public
+                    .is_some_and(|pub_flag| t.is_public != pub_flag)
+                {
+                    return false;
+                }
+                if filter
+                    .author_id
+                    .as_deref()
+                    .is_some_and(|aid| t.author_id.as_deref() != Some(aid))
+                {
+                    return false;
+                }
+                if let Some(ref s) = filter.search {
+                    let s_lower = s.to_lowercase();
+                    if !t.name.to_lowercase().contains(&s_lower)
+                        && !t.description.to_lowercase().contains(&s_lower)
+                        && !t.content.to_lowercase().contains(&s_lower)
+                    {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let offset = filter.offset.unwrap_or(0);
+        let limit = filter.limit.unwrap_or(100);
+        results.into_iter().skip(offset).take(limit).collect()
+    }
+
+    fn get_prompt_template(&self, id: &str) -> Result<super::PromptTemplate> {
+        self.prompt_templates
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Prompt template {id} not found")))
+    }
+
+    fn update_prompt_template(&self, template: &super::PromptTemplate) -> Result<()> {
+        let mut templates = self.prompt_templates.write().unwrap();
+        if !templates.contains_key(&template.id) {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {} not found",
+                template.id
+            )));
+        }
+        let mut updated = template.clone();
+        updated.updated_at = Utc::now().to_rfc3339();
+        templates.insert(template.id.clone(), updated);
+        Ok(())
+    }
+
+    fn delete_prompt_template(&self, id: &str) -> Result<()> {
+        if self.prompt_templates.write().unwrap().remove(id).is_none() {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn rate_prompt_template(&self, rating: &super::PromptRating) -> Result<()> {
+        {
+            let mut ratings = self.prompt_ratings.write().unwrap();
+            ratings
+                .retain(|r| !(r.template_id == rating.template_id && r.user_id == rating.user_id));
+            ratings.push(rating.clone());
+        }
+        // Recompute avg
+        let (avg, count) = {
+            let ratings = self.prompt_ratings.read().unwrap();
+            let relevant: Vec<&super::PromptRating> = ratings
+                .iter()
+                .filter(|r| r.template_id == rating.template_id)
+                .collect();
+            let count = relevant.len();
+            let avg = if count == 0 {
+                0.0
+            } else {
+                relevant.iter().map(|r| r.rating as f64).sum::<f64>() / count as f64
+            };
+            (avg, count)
+        };
+        let mut templates = self.prompt_templates.write().unwrap();
+        if let Some(t) = templates.get_mut(&rating.template_id) {
+            t.rating_avg = avg;
+            t.rating_count = count as u32;
+        }
+        Ok(())
+    }
+
+    fn fork_prompt_template(
+        &self,
+        id: &str,
+        user_id: &str,
+        user_name: &str,
+    ) -> Result<super::PromptTemplate> {
+        let original = self.get_prompt_template(id)?;
+        let now = Utc::now().to_rfc3339();
+        let forked = super::PromptTemplate {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("{} (fork)", original.name),
+            description: original.description.clone(),
+            category: original.category.clone(),
+            content: original.content.clone(),
+            variables: original.variables.clone(),
+            author_id: Some(user_id.to_string()),
+            author_name: Some(user_name.to_string()),
+            version: 1,
+            is_public: false,
+            rating_avg: 0.0,
+            rating_count: 0,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.insert_prompt_template(&forked)
+    }
+
+    // ── Embedding Fine-tuning ───────────────────────────────────────────
+
+    fn insert_training_dataset(
+        &self,
+        name: String,
+        description: String,
+    ) -> Result<super::TrainingDataset> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let ds = super::TrainingDataset {
+            id: id.clone(),
+            name,
+            description,
+            pair_count: 0,
+            created_at: now,
+        };
+        self.training_datasets
+            .write()
+            .unwrap()
+            .insert(id, ds.clone());
+        Ok(ds)
+    }
+
+    fn list_training_datasets(&self) -> Vec<super::TrainingDataset> {
+        let mut datasets: Vec<super::TrainingDataset> = self
+            .training_datasets
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        datasets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        datasets
+    }
+
+    fn get_training_dataset(&self, id: &str) -> Result<super::TrainingDataset> {
+        self.training_datasets
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("TrainingDataset {id} not found")))
+    }
+
+    fn delete_training_dataset(&self, id: &str) -> Result<()> {
+        if self.training_datasets.write().unwrap().remove(id).is_none() {
+            return Err(ThaiRagError::NotFound(format!(
+                "TrainingDataset {id} not found"
+            )));
+        }
+        // Cascade delete pairs
+        self.training_pairs
+            .write()
+            .unwrap()
+            .retain(|p| p.dataset_id != id);
+        Ok(())
+    }
+
+    fn insert_training_pair(&self, pair: &super::TrainingPair) -> Result<super::TrainingPair> {
+        self.training_pairs.write().unwrap().push(pair.clone());
+        // Increment pair_count on dataset
+        if let Some(ds) = self
+            .training_datasets
+            .write()
+            .unwrap()
+            .get_mut(&pair.dataset_id)
+        {
+            ds.pair_count += 1;
+        }
+        Ok(pair.clone())
+    }
+
+    fn list_training_pairs(&self, dataset_id: &str) -> Vec<super::TrainingPair> {
+        self.training_pairs
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|p| p.dataset_id == dataset_id)
+            .cloned()
+            .collect()
+    }
+
+    fn delete_training_pair(&self, pair_id: &str) -> Result<()> {
+        let mut pairs = self.training_pairs.write().unwrap();
+        let pos = pairs
+            .iter()
+            .position(|p| p.id == pair_id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("TrainingPair {pair_id} not found")))?;
+        let dataset_id = pairs[pos].dataset_id.clone();
+        pairs.remove(pos);
+        drop(pairs);
+        // Decrement pair_count
+        if let Some(ds) = self.training_datasets.write().unwrap().get_mut(&dataset_id) {
+            ds.pair_count = ds.pair_count.saturating_sub(1);
+        }
+        Ok(())
+    }
+
+    fn insert_finetune_job(&self, job: &super::FinetuneJob) -> Result<super::FinetuneJob> {
+        self.finetune_jobs
+            .write()
+            .unwrap()
+            .insert(job.id.clone(), job.clone());
+        Ok(job.clone())
+    }
+
+    fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
+        self.finetune_jobs
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))
+    }
+
+    fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
+        let mut jobs: Vec<super::FinetuneJob> = self
+            .finetune_jobs
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs
+    }
+
+    fn update_finetune_job_status(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+    ) -> Result<()> {
+        let mut jobs = self.finetune_jobs.write().unwrap();
+        let job = jobs
+            .get_mut(id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))?;
+        job.status = status.to_string();
+        if let Some(m) = metrics {
+            job.metrics = Some(m.to_string());
+        }
+        job.updated_at = Utc::now().to_rfc3339();
+        Ok(())
     }
 }
 

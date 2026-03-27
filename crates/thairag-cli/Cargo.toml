@@ -1,0 +1,17 @@
+[package]
+name = "thairag-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "thairag"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+colored = "2"
+chrono = { version = "0.4" }

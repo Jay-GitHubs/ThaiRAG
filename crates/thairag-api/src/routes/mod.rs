@@ -4,17 +4,25 @@ pub mod api_keys;
 pub mod auth;
 pub mod backup;
 pub mod chat;
+pub mod collaboration;
 pub mod connectors;
 pub mod documents;
 pub mod eval;
 pub mod feedback;
+pub mod finetune;
 pub mod health;
 pub mod km;
 pub mod knowledge_graph;
+pub mod lineage;
 pub mod models;
+pub mod personal_memory;
 pub mod plugins;
+pub mod prompt_marketplace;
 pub mod rate_limit_stats;
+pub mod rbac;
+pub mod search_analytics;
 pub mod settings;
+pub mod tenants;
 pub mod test_query;
 pub mod v2;
 pub mod vault;
@@ -369,6 +377,11 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/workspaces/{workspace_id}/test-query-stream",
             post(test_query::test_query_stream),
         )
+        // Streaming reranking search
+        .route(
+            "/workspaces/{workspace_id}/search-stream",
+            post(test_query::search_stream),
+        )
         // MCP Connectors
         .route(
             "/connectors",
@@ -450,6 +463,53 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route("/eval/query-sets/{id}/run", post(eval::run_evaluation))
         .route("/eval/query-sets/{id}/results", get(eval::list_results))
+        // Regression
+        .route("/eval/regression-check", post(eval::run_regression_check))
+        .route(
+            "/eval/regression-history",
+            get(eval::list_regression_history),
+        )
+        // Embedding Fine-tuning
+        .route(
+            "/finetune/datasets",
+            get(finetune::list_datasets).post(finetune::create_dataset),
+        )
+        .route(
+            "/finetune/datasets/{id}",
+            get(finetune::get_dataset).delete(finetune::delete_dataset),
+        )
+        .route(
+            "/finetune/datasets/{id}/pairs",
+            get(finetune::list_pairs).post(finetune::add_pair),
+        )
+        .route(
+            "/finetune/datasets/{id}/pairs/{pair_id}",
+            delete(finetune::delete_pair),
+        )
+        .route(
+            "/finetune/jobs",
+            get(finetune::list_jobs).post(finetune::create_job),
+        )
+        .route("/finetune/jobs/{id}", get(finetune::get_job))
+        // Prompt Marketplace
+        .route(
+            "/prompts/marketplace",
+            get(prompt_marketplace::list_templates).post(prompt_marketplace::create_template),
+        )
+        .route(
+            "/prompts/marketplace/{id}",
+            get(prompt_marketplace::get_template)
+                .put(prompt_marketplace::update_template)
+                .delete(prompt_marketplace::delete_template),
+        )
+        .route(
+            "/prompts/marketplace/{id}/rate",
+            post(prompt_marketplace::rate_template),
+        )
+        .route(
+            "/prompts/marketplace/{id}/fork",
+            post(prompt_marketplace::fork_template),
+        )
         // A/B Testing
         .route(
             "/ab-tests",
@@ -481,6 +541,98 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/extract",
             post(knowledge_graph::extract_from_document),
+        )
+        // Search Analytics
+        .route(
+            "/search-analytics/events",
+            get(search_analytics::list_search_events),
+        )
+        .route(
+            "/search-analytics/popular",
+            get(search_analytics::get_popular_queries),
+        )
+        .route(
+            "/search-analytics/summary",
+            get(search_analytics::get_search_summary),
+        )
+        // Document Lineage
+        .route(
+            "/lineage/response/{response_id}",
+            get(lineage::get_response_lineage),
+        )
+        .route(
+            "/lineage/document/{doc_id}",
+            get(lineage::get_document_lineage),
+        )
+        // Audit Log Export & Analytics
+        .route(
+            "/settings/audit-log/export",
+            get(settings::export_audit_logs),
+        )
+        .route(
+            "/settings/audit-log/analytics",
+            get(settings::get_audit_analytics),
+        )
+        // Personal Memory
+        .route(
+            "/users/{user_id}/memories",
+            get(personal_memory::list_memories).delete(personal_memory::delete_all_memories),
+        )
+        .route(
+            "/users/{user_id}/memories/{memory_id}",
+            delete(personal_memory::delete_memory),
+        )
+        // Multi-tenancy
+        .route(
+            "/tenants",
+            get(tenants::list_tenants).post(tenants::create_tenant),
+        )
+        .route(
+            "/tenants/{id}",
+            get(tenants::get_tenant)
+                .put(tenants::update_tenant)
+                .delete(tenants::delete_tenant),
+        )
+        .route(
+            "/tenants/{id}/quota",
+            get(tenants::get_quota).put(tenants::set_quota),
+        )
+        .route("/tenants/{id}/usage", get(tenants::get_usage))
+        .route("/tenants/{id}/assign-org", post(tenants::assign_org))
+        // RBAC v2
+        .route("/roles", get(rbac::list_roles).post(rbac::create_role))
+        .route(
+            "/roles/{id}",
+            get(rbac::get_role)
+                .put(rbac::update_role)
+                .delete(rbac::delete_role),
+        )
+        // Collaboration — Comments
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/comments",
+            get(collaboration::list_comments).post(collaboration::create_comment),
+        )
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/comments/{comment_id}",
+            delete(collaboration::delete_comment),
+        )
+        // Collaboration — Annotations
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/annotations",
+            get(collaboration::list_annotations).post(collaboration::create_annotation),
+        )
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/annotations/{annotation_id}",
+            delete(collaboration::delete_annotation),
+        )
+        // Collaboration — Reviews
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/reviews",
+            get(collaboration::list_reviews).post(collaboration::create_review),
+        )
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/reviews/{review_id}",
+            put(collaboration::update_review_status),
         );
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback

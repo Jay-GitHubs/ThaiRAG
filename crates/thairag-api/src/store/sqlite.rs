@@ -3372,6 +3372,1432 @@ impl KmStoreTrait for SqliteKmStore {
         )
         .ok()
     }
+
+    // ── Search Analytics ────────────────────────────────────────────────
+
+    fn insert_search_event(&self, event: &super::SearchAnalyticsEvent) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO search_analytics_events
+             (id, timestamp, query_text, user_id, workspace_id, result_count, latency_ms, zero_results)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.id,
+                event.timestamp,
+                event.query_text,
+                event.user_id,
+                event.workspace_id,
+                event.result_count as i64,
+                event.latency_ms as i64,
+                event.zero_results as i32,
+            ],
+        )
+        .ok();
+    }
+
+    fn list_search_events(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> Vec<super::SearchAnalyticsEvent> {
+        let conn = self.conn.lock().unwrap();
+        let mut conditions = Vec::<String>::new();
+        if let Some(from) = &filter.from {
+            conditions.push(format!("timestamp >= '{from}'"));
+        }
+        if let Some(to) = &filter.to {
+            conditions.push(format!("timestamp <= '{to}'"));
+        }
+        if let Some(ws) = &filter.workspace_id {
+            conditions.push(format!("workspace_id = '{ws}'"));
+        }
+        if let Some(uid) = &filter.user_id {
+            conditions.push(format!("user_id = '{uid}'"));
+        }
+        if filter.zero_results_only {
+            conditions.push("zero_results = 1".to_string());
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+        let limit = filter.limit.unwrap_or(1000);
+        let offset = filter.offset.unwrap_or(0);
+        let sql = format!(
+            "SELECT id, timestamp, query_text, user_id, workspace_id, result_count, latency_ms, zero_results
+             FROM search_analytics_events {where_clause}
+             ORDER BY timestamp DESC
+             LIMIT {limit} OFFSET {offset}"
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map([], |row| {
+            Ok(super::SearchAnalyticsEvent {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                query_text: row.get(2)?,
+                user_id: row.get(3)?,
+                workspace_id: row.get(4)?,
+                result_count: row.get::<_, i64>(5)? as u32,
+                latency_ms: row.get::<_, i64>(6)? as u64,
+                zero_results: row.get::<_, i32>(7)? != 0,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_popular_queries(&self, limit: usize) -> Vec<super::PopularQuery> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT query_text, COUNT(*) as cnt, AVG(CAST(result_count AS REAL)) as avg_results,
+             AVG(CAST(latency_ms AS REAL)) as avg_latency
+             FROM search_analytics_events
+             GROUP BY query_text
+             ORDER BY cnt DESC
+             LIMIT {limit}"
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map([], |row| {
+            Ok(super::PopularQuery {
+                query_text: row.get(0)?,
+                count: row.get::<_, i64>(1)? as u64,
+                avg_results: row.get(2)?,
+                avg_latency_ms: row.get(3)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_search_analytics_summary(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> super::SearchAnalyticsSummary {
+        let conn = self.conn.lock().unwrap();
+        let mut conditions = Vec::<String>::new();
+        if let Some(from) = &filter.from {
+            conditions.push(format!("timestamp >= '{from}'"));
+        }
+        if let Some(to) = &filter.to {
+            conditions.push(format!("timestamp <= '{to}'"));
+        }
+        if let Some(ws) = &filter.workspace_id {
+            conditions.push(format!("workspace_id = '{ws}'"));
+        }
+        if let Some(uid) = &filter.user_id {
+            conditions.push(format!("user_id = '{uid}'"));
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let (total_searches, zero_result_count, avg_latency_ms, avg_results): (u64, u64, f64, f64) =
+            conn.query_row(
+                &format!(
+                    "SELECT COUNT(*), SUM(CASE WHEN zero_results = 1 THEN 1 ELSE 0 END),
+                     AVG(CAST(latency_ms AS REAL)), AVG(CAST(result_count AS REAL))
+                     FROM search_analytics_events {where_clause}"
+                ),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0).unwrap_or(0) as u64,
+                        row.get::<_, i64>(1).unwrap_or(0) as u64,
+                        row.get::<_, f64>(2).unwrap_or(0.0),
+                        row.get::<_, f64>(3).unwrap_or(0.0),
+                    ))
+                },
+            )
+            .unwrap_or((0, 0, 0.0, 0.0));
+
+        let per_day_sql = format!(
+            "SELECT substr(timestamp, 1, 10) as day, COUNT(*) as cnt
+             FROM search_analytics_events {where_clause}
+             GROUP BY day ORDER BY day"
+        );
+        let searches_per_day: Vec<(String, u64)> =
+            if let Ok(mut per_day_stmt) = conn.prepare(&per_day_sql) {
+                per_day_stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                    })
+                    .unwrap()
+                    .filter_map(|r| r.ok())
+                    .collect()
+            } else {
+                vec![]
+            };
+
+        super::SearchAnalyticsSummary {
+            total_searches,
+            zero_result_count,
+            avg_latency_ms,
+            avg_results,
+            searches_per_day,
+        }
+    }
+
+    // ── Document Lineage ────────────────────────────────────────────────
+
+    fn insert_lineage_record(&self, record: &super::LineageRecord) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO lineage_records
+             (id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+              chunk_text_preview, score, rank, contributed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                record.id,
+                record.response_id,
+                record.timestamp,
+                record.query_text,
+                record.chunk_id,
+                record.doc_id,
+                record.doc_title,
+                record.chunk_text_preview,
+                record.score as f64,
+                record.rank as i64,
+                record.contributed as i32,
+            ],
+        )
+        .ok();
+    }
+
+    fn get_lineage_for_response(&self, response_id: &str) -> Vec<super::LineageRecord> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+             chunk_text_preview, score, rank, contributed
+             FROM lineage_records WHERE response_id = ?1 ORDER BY rank ASC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![response_id], |row| {
+            Ok(super::LineageRecord {
+                id: row.get(0)?,
+                response_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                query_text: row.get(3)?,
+                chunk_id: row.get(4)?,
+                doc_id: row.get(5)?,
+                doc_title: row.get(6)?,
+                chunk_text_preview: row.get(7)?,
+                score: row.get::<_, f64>(8)? as f32,
+                rank: row.get::<_, i64>(9)? as u32,
+                contributed: row.get::<_, i32>(10)? != 0,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_lineage_for_document(&self, doc_id: &str, limit: usize) -> Vec<super::LineageRecord> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+             chunk_text_preview, score, rank, contributed
+             FROM lineage_records WHERE doc_id = ?1 ORDER BY timestamp DESC LIMIT {limit}"
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![doc_id], |row| {
+            Ok(super::LineageRecord {
+                id: row.get(0)?,
+                response_id: row.get(1)?,
+                timestamp: row.get(2)?,
+                query_text: row.get(3)?,
+                chunk_id: row.get(4)?,
+                doc_id: row.get(5)?,
+                doc_title: row.get(6)?,
+                chunk_text_preview: row.get(7)?,
+                score: row.get::<_, f64>(8)? as f32,
+                rank: row.get::<_, i64>(9)? as u32,
+                contributed: row.get::<_, i32>(10)? != 0,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    // ── Audit Export & Analytics ────────────────────────────────────────
+
+    fn export_audit_logs(&self, filter: &super::AuditLogFilter) -> Vec<serde_json::Value> {
+        // Audit log is stored as JSON in settings key "audit_log"
+        let raw: Vec<serde_json::Value> = self
+            .get_setting("audit_log")
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
+        let limit = filter.limit.unwrap_or(1000);
+        let offset = filter.offset.unwrap_or(0);
+
+        let mut filtered: Vec<serde_json::Value> = raw
+            .into_iter()
+            .filter(|e| {
+                if let Some(from) = &filter.from
+                    && e["timestamp"].as_str().unwrap_or("") < from.as_str()
+                {
+                    return false;
+                }
+                if let Some(to) = &filter.to
+                    && e["timestamp"].as_str().unwrap_or("") > to.as_str()
+                {
+                    return false;
+                }
+                if let Some(uid) = &filter.user_id
+                    && e["actor"].as_str().unwrap_or("") != uid.as_str()
+                {
+                    return false;
+                }
+                if let Some(action) = &filter.action
+                    && e["action"].as_str().unwrap_or("") != action.as_str()
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        filtered.reverse();
+        if offset < filtered.len() {
+            filtered = filtered[offset..].to_vec();
+        } else {
+            filtered.clear();
+        }
+        filtered.truncate(limit);
+        filtered
+    }
+
+    fn get_audit_analytics(&self, filter: &super::AuditLogFilter) -> super::AuditAnalytics {
+        use std::collections::HashMap;
+        let entries = self.export_audit_logs(&super::AuditLogFilter {
+            from: filter.from.clone(),
+            to: filter.to.clone(),
+            user_id: filter.user_id.clone(),
+            action: filter.action.clone(),
+            limit: None,
+            offset: None,
+        });
+
+        let total_events = entries.len() as u64;
+        let mut by_type: HashMap<String, u64> = HashMap::new();
+        let mut by_user: HashMap<String, u64> = HashMap::new();
+        let mut by_day: HashMap<String, u64> = HashMap::new();
+
+        for e in &entries {
+            let action = e["action"].as_str().unwrap_or("unknown").to_string();
+            *by_type.entry(action).or_insert(0) += 1;
+            let actor = e["actor"].as_str().unwrap_or("unknown").to_string();
+            *by_user.entry(actor).or_insert(0) += 1;
+            let ts = e["timestamp"].as_str().unwrap_or("");
+            let day = ts.get(..10).unwrap_or(ts).to_string();
+            *by_day.entry(day).or_insert(0) += 1;
+        }
+
+        let mut actions_by_type: Vec<(String, u64)> = by_type.into_iter().collect();
+        actions_by_type.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut actions_by_user: Vec<(String, u64)> = by_user.into_iter().collect();
+        actions_by_user.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut events_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
+        events_per_day.sort_by(|a, b| a.0.cmp(&b.0));
+
+        super::AuditAnalytics {
+            total_events,
+            actions_by_type,
+            actions_by_user,
+            events_per_day,
+        }
+    }
+
+    // ── Personal Memory Persistence ────────────────────────────────────
+
+    fn insert_personal_memory(&self, memory: &super::PersonalMemoryRow) {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO personal_memories
+             (id, user_id, memory_type, summary, topics, importance, relevance_score, created_at, last_accessed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                memory.id,
+                memory.user_id,
+                memory.memory_type,
+                memory.summary,
+                memory.topics,
+                memory.importance as f64,
+                memory.relevance_score as f64,
+                memory.created_at,
+                memory.last_accessed_at,
+            ],
+        )
+        .ok();
+    }
+
+    fn list_personal_memories(&self, user_id: &str, limit: usize) -> Vec<super::PersonalMemoryRow> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT id, user_id, memory_type, summary, topics, importance, relevance_score,
+             created_at, last_accessed_at
+             FROM personal_memories WHERE user_id = ?1
+             ORDER BY importance DESC LIMIT {limit}"
+        );
+        let mut stmt = match conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![user_id], |row| {
+            Ok(super::PersonalMemoryRow {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                memory_type: row.get(2)?,
+                summary: row.get(3)?,
+                topics: row.get(4)?,
+                importance: row.get::<_, f64>(5)? as f32,
+                relevance_score: row.get::<_, f64>(6)? as f32,
+                created_at: row.get(7)?,
+                last_accessed_at: row.get(8)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn delete_personal_memory(&self, memory_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(
+                "DELETE FROM personal_memories WHERE id = ?1",
+                params![memory_id],
+            )
+            .map_err(|e| ThaiRagError::Internal(e.to_string()))?;
+        if rows == 0 {
+            Err(ThaiRagError::NotFound(format!(
+                "Memory {memory_id} not found"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn delete_all_personal_memories(&self, user_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM personal_memories WHERE user_id = ?1",
+            params![user_id],
+        )
+        .map_err(|e| ThaiRagError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    fn count_personal_memories(&self, user_id: &str) -> usize {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM personal_memories WHERE user_id = ?1",
+            params![user_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize
+    }
+
+    // ── Multi-tenancy ───────────────────────────────────────────────────
+
+    fn insert_tenant(&self, name: String, plan: String) -> Result<super::Tenant> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tenants (id, name, plan, is_active, created_at) VALUES (?1, ?2, ?3, 1, ?4)",
+            params![id, name, plan, now],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_tenant: {e}")))?;
+        Ok(super::Tenant {
+            id,
+            name,
+            plan,
+            is_active: true,
+            created_at: now,
+        })
+    }
+
+    fn get_tenant(&self, id: &str) -> Result<super::Tenant> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, plan, is_active, created_at FROM tenants WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(super::Tenant {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    plan: row.get(2)?,
+                    is_active: row.get::<_, i64>(3)? != 0,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Tenant {id} not found")))
+    }
+
+    fn list_tenants(&self) -> Vec<super::Tenant> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, plan, is_active, created_at FROM tenants ORDER BY created_at",
+            )
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(super::Tenant {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                plan: row.get(2)?,
+                is_active: row.get::<_, i64>(3)? != 0,
+                created_at: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn update_tenant(&self, id: &str, name: String, plan: String) -> Result<super::Tenant> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE tenants SET name = ?2, plan = ?3 WHERE id = ?1",
+                params![id, name, plan],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_tenant: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!("Tenant {id} not found")));
+        }
+        let created_at: String = conn
+            .query_row(
+                "SELECT created_at FROM tenants WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        Ok(super::Tenant {
+            id: id.to_string(),
+            name,
+            plan,
+            is_active: true,
+            created_at,
+        })
+    }
+
+    fn delete_tenant(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute("DELETE FROM tenants WHERE id = ?1", params![id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_tenant: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!("Tenant {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn get_tenant_quota(&self, id: &str) -> super::TenantQuota {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT max_documents, max_storage_bytes, max_queries_per_day, max_users, max_workspaces FROM tenant_quotas WHERE tenant_id = ?1",
+            params![id],
+            |row| {
+                Ok(super::TenantQuota {
+                    max_documents: row.get::<_, i64>(0)? as u64,
+                    max_storage_bytes: row.get::<_, i64>(1)? as u64,
+                    max_queries_per_day: row.get::<_, i64>(2)? as u64,
+                    max_users: row.get::<_, i64>(3)? as u64,
+                    max_workspaces: row.get::<_, i64>(4)? as u64,
+                })
+            },
+        )
+        .unwrap_or_default()
+    }
+
+    fn set_tenant_quota(&self, id: &str, quota: &super::TenantQuota) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tenant_quotas (tenant_id, max_documents, max_storage_bytes, max_queries_per_day, max_users, max_workspaces) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(tenant_id) DO UPDATE SET max_documents=?2, max_storage_bytes=?3, max_queries_per_day=?4, max_users=?5, max_workspaces=?6",
+            params![
+                id,
+                quota.max_documents as i64,
+                quota.max_storage_bytes as i64,
+                quota.max_queries_per_day as i64,
+                quota.max_users as i64,
+                quota.max_workspaces as i64,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("set_tenant_quota: {e}")))?;
+        Ok(())
+    }
+
+    fn get_tenant_usage(&self, id: &str) -> super::TenantUsage {
+        let conn = self.conn.lock().unwrap();
+
+        // Documents via workspace → dept → org → tenant mapping
+        let current_documents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM documents d JOIN workspaces w ON d.workspace_id = w.id JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let current_storage_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(d.size_bytes), 0) FROM documents d JOIN workspaces w ON d.workspace_id = w.id JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let current_workspaces: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspaces w JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let current_users: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        super::TenantUsage {
+            current_documents: current_documents as u64,
+            current_storage_bytes: current_storage_bytes as u64,
+            queries_today: 0,
+            current_users: current_users as u64,
+            current_workspaces: current_workspaces as u64,
+        }
+    }
+
+    fn assign_org_to_tenant(&self, org_id: OrgId, tenant_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tenant_org_mapping (org_id, tenant_id) VALUES (?1, ?2) ON CONFLICT(org_id) DO UPDATE SET tenant_id=?2",
+            params![org_id.0.to_string(), tenant_id],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("assign_org_to_tenant: {e}")))?;
+        Ok(())
+    }
+
+    fn get_tenant_for_org(&self, org_id: OrgId) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT tenant_id FROM tenant_org_mapping WHERE org_id = ?1",
+            params![org_id.0.to_string()],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    // ── RBAC v2 ─────────────────────────────────────────────────────────
+
+    fn insert_custom_role(&self, role: &super::CustomRole) -> Result<super::CustomRole> {
+        let conn = self.conn.lock().unwrap();
+        let perms = serde_json::to_string(&role.permissions).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO custom_roles (id, name, description, permissions, is_system, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                role.id,
+                role.name,
+                role.description,
+                perms,
+                role.is_system as i64,
+                role.created_at,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_custom_role: {e}")))?;
+        Ok(role.clone())
+    }
+
+    fn get_custom_role(&self, id: &str) -> Result<super::CustomRole> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, permissions, is_system, created_at FROM custom_roles WHERE id = ?1",
+            params![id],
+            |row| {
+                let perms_s: String = row.get(3)?;
+                let permissions = serde_json::from_str(&perms_s).unwrap_or_default();
+                Ok(super::CustomRole {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    permissions,
+                    is_system: row.get::<_, i64>(4)? != 0,
+                    created_at: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Custom role {id} not found")))
+    }
+
+    fn list_custom_roles(&self) -> Vec<super::CustomRole> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, description, permissions, is_system, created_at FROM custom_roles ORDER BY created_at")
+            .unwrap();
+        stmt.query_map([], |row| {
+            let perms_s: String = row.get(3)?;
+            let permissions = serde_json::from_str(&perms_s).unwrap_or_default();
+            Ok(super::CustomRole {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                permissions,
+                is_system: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn update_custom_role(&self, role: &super::CustomRole) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let perms = serde_json::to_string(&role.permissions).unwrap_or_else(|_| "[]".to_string());
+        let n = conn
+            .execute(
+                "UPDATE custom_roles SET name = ?2, description = ?3, permissions = ?4 WHERE id = ?1",
+                params![role.id, role.name, role.description, perms],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_custom_role: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {} not found",
+                role.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_custom_role(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute("DELETE FROM custom_roles WHERE id = ?1", params![id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_custom_role: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    // ── Document Collaboration ──────────────────────────────────────────
+
+    fn insert_comment(&self, comment: &super::DocumentComment) -> Result<super::DocumentComment> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO document_comments (id, doc_id, user_id, user_name, text, parent_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                comment.id,
+                comment.doc_id,
+                comment.user_id,
+                comment.user_name,
+                comment.text,
+                comment.parent_id,
+                comment.created_at,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_comment: {e}")))?;
+        Ok(comment.clone())
+    }
+
+    fn list_comments(&self, doc_id: &str) -> Vec<super::DocumentComment> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, doc_id, user_id, user_name, text, parent_id, created_at FROM document_comments WHERE doc_id = ?1 ORDER BY created_at")
+            .unwrap();
+        stmt.query_map(params![doc_id], |row| {
+            Ok(super::DocumentComment {
+                id: row.get(0)?,
+                doc_id: row.get(1)?,
+                user_id: row.get(2)?,
+                user_name: row.get(3)?,
+                text: row.get(4)?,
+                parent_id: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn delete_comment(&self, comment_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "DELETE FROM document_comments WHERE id = ?1",
+                params![comment_id],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("delete_comment: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Comment {comment_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_annotation(
+        &self,
+        annotation: &super::DocumentAnnotation,
+    ) -> Result<super::DocumentAnnotation> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO document_annotations (id, doc_id, user_id, user_name, chunk_id, text, highlight_start, highlight_end, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                annotation.id,
+                annotation.doc_id,
+                annotation.user_id,
+                annotation.user_name,
+                annotation.chunk_id,
+                annotation.text,
+                annotation.highlight_start.map(|v| v as i64),
+                annotation.highlight_end.map(|v| v as i64),
+                annotation.created_at,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_annotation: {e}")))?;
+        Ok(annotation.clone())
+    }
+
+    fn list_annotations(&self, doc_id: &str) -> Vec<super::DocumentAnnotation> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, doc_id, user_id, user_name, chunk_id, text, highlight_start, highlight_end, created_at FROM document_annotations WHERE doc_id = ?1 ORDER BY created_at")
+            .unwrap();
+        stmt.query_map(params![doc_id], |row| {
+            Ok(super::DocumentAnnotation {
+                id: row.get(0)?,
+                doc_id: row.get(1)?,
+                user_id: row.get(2)?,
+                user_name: row.get(3)?,
+                chunk_id: row.get(4)?,
+                text: row.get(5)?,
+                highlight_start: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                highlight_end: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
+                created_at: row.get(8)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn delete_annotation(&self, annotation_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "DELETE FROM document_annotations WHERE id = ?1",
+                params![annotation_id],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("delete_annotation: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Annotation {annotation_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_review(&self, review: &super::DocumentReview) -> Result<super::DocumentReview> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO document_reviews (id, doc_id, reviewer_id, reviewer_name, status, comments, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                review.id,
+                review.doc_id,
+                review.reviewer_id,
+                review.reviewer_name,
+                review.status,
+                review.comments,
+                review.created_at,
+                review.updated_at,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_review: {e}")))?;
+        Ok(review.clone())
+    }
+
+    fn list_reviews(&self, doc_id: &str) -> Vec<super::DocumentReview> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, doc_id, reviewer_id, reviewer_name, status, comments, created_at, updated_at FROM document_reviews WHERE doc_id = ?1 ORDER BY created_at")
+            .unwrap();
+        stmt.query_map(params![doc_id], |row| {
+            Ok(super::DocumentReview {
+                id: row.get(0)?,
+                doc_id: row.get(1)?,
+                reviewer_id: row.get(2)?,
+                reviewer_name: row.get(3)?,
+                status: row.get(4)?,
+                comments: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn update_review_status(
+        &self,
+        review_id: &str,
+        status: &str,
+        comments: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let n = conn
+            .execute(
+                "UPDATE document_reviews SET status = ?2, comments = COALESCE(?3, comments), updated_at = ?4 WHERE id = ?1",
+                params![review_id, status, comments, now],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_review_status: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Review {review_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    // ── Search Quality Regression ───────────────────────────────────────
+
+    fn insert_regression_run(&self, run: &super::RegressionRun) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO regression_runs (id, timestamp, query_set_id, baseline_score, current_score, degradation, passed, details) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                run.id,
+                run.timestamp,
+                run.query_set_id,
+                run.baseline_score,
+                run.current_score,
+                run.degradation,
+                run.passed as i64,
+                run.details,
+            ],
+        );
+    }
+
+    fn list_regression_runs(&self, limit: usize) -> Vec<super::RegressionRun> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, timestamp, query_set_id, baseline_score, current_score, degradation, passed, details FROM regression_runs ORDER BY timestamp DESC LIMIT ?1")
+            .unwrap();
+        stmt.query_map(params![limit as i64], |row| {
+            Ok(super::RegressionRun {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                query_set_id: row.get(2)?,
+                baseline_score: row.get(3)?,
+                current_score: row.get(4)?,
+                degradation: row.get(5)?,
+                passed: row.get::<_, i64>(6)? != 0,
+                details: row.get(7)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    // ── Prompt Marketplace ──────────────────────────────────────────────
+
+    fn insert_prompt_template(
+        &self,
+        template: &super::PromptTemplate,
+    ) -> Result<super::PromptTemplate> {
+        let conn = self.conn.lock().unwrap();
+        let vars = serde_json::to_string(&template.variables).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO prompt_templates (id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                template.id,
+                template.name,
+                template.description,
+                template.category,
+                template.content,
+                vars,
+                template.author_id,
+                template.author_name,
+                template.version as i64,
+                template.is_public as i64,
+                template.rating_avg,
+                template.rating_count as i64,
+                template.created_at,
+                template.updated_at,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_prompt_template: {e}")))?;
+        Ok(template.clone())
+    }
+
+    fn list_prompt_templates(
+        &self,
+        filter: &super::PromptTemplateFilter,
+    ) -> Vec<super::PromptTemplate> {
+        let conn = self.conn.lock().unwrap();
+        // Build dynamic query
+        let mut conditions: Vec<String> = Vec::new();
+        if filter.category.is_some() {
+            conditions.push("category = ?1".to_string());
+        }
+        if filter.is_public.is_some() {
+            conditions.push(format!("is_public = ?{}", conditions.len() + 1));
+        }
+        if filter.author_id.is_some() {
+            conditions.push(format!("author_id = ?{}", conditions.len() + 1));
+        }
+        if filter.search.is_some() {
+            let n = conditions.len() + 1;
+            conditions.push(format!(
+                "(name LIKE ?{n} OR description LIKE ?{n} OR content LIKE ?{n})"
+            ));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+        let limit = filter.limit.unwrap_or(100);
+        let offset = filter.offset.unwrap_or(0);
+        let sql = format!(
+            "SELECT id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at FROM prompt_templates {where_clause} ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
+        );
+
+        // We use a simple approach — collect params manually
+        let mut param_values: Vec<String> = Vec::new();
+        if let Some(ref cat) = filter.category {
+            param_values.push(cat.clone());
+        }
+        if let Some(pub_flag) = filter.is_public {
+            param_values.push(if pub_flag {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            });
+        }
+        if let Some(ref aid) = filter.author_id {
+            param_values.push(aid.clone());
+        }
+        if let Some(ref s) = filter.search {
+            param_values.push(format!("%{s}%"));
+        }
+
+        let rows: Vec<super::PromptTemplate> = match param_values.len() {
+            0 => {
+                let mut stmt = conn.prepare(&sql).unwrap();
+                stmt.query_map([], row_to_prompt_template)
+                    .unwrap()
+                    .flatten()
+                    .collect()
+            }
+            1 => {
+                let mut stmt = conn.prepare(&sql).unwrap();
+                stmt.query_map(params![param_values[0]], row_to_prompt_template)
+                    .unwrap()
+                    .flatten()
+                    .collect()
+            }
+            2 => {
+                let mut stmt = conn.prepare(&sql).unwrap();
+                stmt.query_map(
+                    params![param_values[0], param_values[1]],
+                    row_to_prompt_template,
+                )
+                .unwrap()
+                .flatten()
+                .collect()
+            }
+            3 => {
+                let mut stmt = conn.prepare(&sql).unwrap();
+                stmt.query_map(
+                    params![param_values[0], param_values[1], param_values[2]],
+                    row_to_prompt_template,
+                )
+                .unwrap()
+                .flatten()
+                .collect()
+            }
+            _ => {
+                let mut stmt = conn.prepare(&sql).unwrap();
+                stmt.query_map(
+                    params![
+                        param_values[0],
+                        param_values[1],
+                        param_values[2],
+                        param_values[3]
+                    ],
+                    row_to_prompt_template,
+                )
+                .unwrap()
+                .flatten()
+                .collect()
+            }
+        };
+        rows
+    }
+
+    fn get_prompt_template(&self, id: &str) -> Result<super::PromptTemplate> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at FROM prompt_templates WHERE id = ?1",
+            params![id],
+            row_to_prompt_template,
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Prompt template {id} not found")))
+    }
+
+    fn update_prompt_template(&self, template: &super::PromptTemplate) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let vars = serde_json::to_string(&template.variables).unwrap_or_else(|_| "[]".to_string());
+        let now = Utc::now().to_rfc3339();
+        let n = conn
+            .execute(
+                "UPDATE prompt_templates SET name=?2, description=?3, category=?4, content=?5, variables=?6, is_public=?7, version=?8, updated_at=?9 WHERE id=?1",
+                params![
+                    template.id,
+                    template.name,
+                    template.description,
+                    template.category,
+                    template.content,
+                    vars,
+                    template.is_public as i64,
+                    template.version as i64,
+                    now,
+                ],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_prompt_template: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {} not found",
+                template.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_prompt_template(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute("DELETE FROM prompt_templates WHERE id = ?1", params![id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_prompt_template: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn rate_prompt_template(&self, rating: &super::PromptRating) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Upsert rating
+        conn.execute(
+            "INSERT INTO prompt_ratings (template_id, user_id, rating) VALUES (?1, ?2, ?3) ON CONFLICT(template_id, user_id) DO UPDATE SET rating=?3",
+            params![rating.template_id, rating.user_id, rating.rating as i64],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("rate_prompt_template: {e}")))?;
+        // Recompute avg
+        let (avg, count): (f64, i64) = conn
+            .query_row(
+                "SELECT AVG(CAST(rating AS REAL)), COUNT(*) FROM prompt_ratings WHERE template_id = ?1",
+                params![rating.template_id],
+                |row| Ok((row.get(0).unwrap_or(0.0), row.get(1).unwrap_or(0))),
+            )
+            .unwrap_or((0.0, 0));
+        conn.execute(
+            "UPDATE prompt_templates SET rating_avg=?2, rating_count=?3 WHERE id=?1",
+            params![rating.template_id, avg, count],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("rate_prompt_template update: {e}")))?;
+        Ok(())
+    }
+
+    fn fork_prompt_template(
+        &self,
+        id: &str,
+        user_id: &str,
+        user_name: &str,
+    ) -> Result<super::PromptTemplate> {
+        let original = self.get_prompt_template(id)?;
+        let now = Utc::now().to_rfc3339();
+        let forked = super::PromptTemplate {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("{} (fork)", original.name),
+            description: original.description.clone(),
+            category: original.category.clone(),
+            content: original.content.clone(),
+            variables: original.variables.clone(),
+            author_id: Some(user_id.to_string()),
+            author_name: Some(user_name.to_string()),
+            version: 1,
+            is_public: false,
+            rating_avg: 0.0,
+            rating_count: 0,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.insert_prompt_template(&forked)
+    }
+
+    // ── Embedding Fine-tuning ───────────────────────────────────────────
+
+    fn insert_training_dataset(
+        &self,
+        name: String,
+        description: String,
+    ) -> Result<super::TrainingDataset> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO training_datasets (id, name, description, pair_count, created_at) VALUES (?1, ?2, ?3, 0, ?4)",
+            params![id, name, description, now],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_training_dataset: {e}")))?;
+        Ok(super::TrainingDataset {
+            id,
+            name,
+            description,
+            pair_count: 0,
+            created_at: now,
+        })
+    }
+
+    fn list_training_datasets(&self) -> Vec<super::TrainingDataset> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, description, pair_count, created_at FROM training_datasets ORDER BY created_at DESC")
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(super::TrainingDataset {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                pair_count: row.get::<_, i64>(3)? as u32,
+                created_at: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn get_training_dataset(&self, id: &str) -> Result<super::TrainingDataset> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, pair_count, created_at FROM training_datasets WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(super::TrainingDataset {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    pair_count: row.get::<_, i64>(3)? as u32,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("TrainingDataset {id} not found")))
+    }
+
+    fn delete_training_dataset(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute("DELETE FROM training_datasets WHERE id = ?1", params![id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_training_dataset: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "TrainingDataset {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_training_pair(&self, pair: &super::TrainingPair) -> Result<super::TrainingPair> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO training_pairs (id, dataset_id, query, positive_doc, negative_doc, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![pair.id, pair.dataset_id, pair.query, pair.positive_doc, pair.negative_doc, pair.created_at],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_training_pair: {e}")))?;
+        conn.execute(
+            "UPDATE training_datasets SET pair_count = pair_count + 1 WHERE id = ?1",
+            params![pair.dataset_id],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update pair_count: {e}")))?;
+        Ok(pair.clone())
+    }
+
+    fn list_training_pairs(&self, dataset_id: &str) -> Vec<super::TrainingPair> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, dataset_id, query, positive_doc, negative_doc, created_at FROM training_pairs WHERE dataset_id = ?1 ORDER BY created_at")
+            .unwrap();
+        stmt.query_map(params![dataset_id], |row| {
+            Ok(super::TrainingPair {
+                id: row.get(0)?,
+                dataset_id: row.get(1)?,
+                query: row.get(2)?,
+                positive_doc: row.get(3)?,
+                negative_doc: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn delete_training_pair(&self, pair_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Get dataset_id before deleting
+        let dataset_id: Option<String> = conn
+            .query_row(
+                "SELECT dataset_id FROM training_pairs WHERE id = ?1",
+                params![pair_id],
+                |row| row.get(0),
+            )
+            .ok();
+        let n = conn
+            .execute("DELETE FROM training_pairs WHERE id = ?1", params![pair_id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_training_pair: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "TrainingPair {pair_id} not found"
+            )));
+        }
+        if let Some(did) = dataset_id {
+            let _ = conn.execute(
+                "UPDATE training_datasets SET pair_count = MAX(0, pair_count - 1) WHERE id = ?1",
+                params![did],
+            );
+        }
+        Ok(())
+    }
+
+    fn insert_finetune_job(&self, job: &super::FinetuneJob) -> Result<super::FinetuneJob> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![job.id, job.dataset_id, job.base_model, job.status, job.metrics, job.output_model_path, job.created_at, job.updated_at],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_finetune_job: {e}")))?;
+        Ok(job.clone())
+    }
+
+    fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(super::FinetuneJob {
+                    id: row.get(0)?,
+                    dataset_id: row.get(1)?,
+                    base_model: row.get(2)?,
+                    status: row.get(3)?,
+                    metrics: row.get(4)?,
+                    output_model_path: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))
+    }
+
+    fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC")
+            .unwrap();
+        stmt.query_map([], |row| {
+            Ok(super::FinetuneJob {
+                id: row.get(0)?,
+                dataset_id: row.get(1)?,
+                base_model: row.get(2)?,
+                status: row.get(3)?,
+                metrics: row.get(4)?,
+                output_model_path: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .unwrap()
+        .flatten()
+        .collect()
+    }
+
+    fn update_finetune_job_status(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let n = conn
+            .execute(
+                "UPDATE finetune_jobs SET status = ?2, metrics = COALESCE(?3, metrics), updated_at = ?4 WHERE id = ?1",
+                params![id, status, metrics, now],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_status: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn row_to_prompt_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<super::PromptTemplate> {
+    let vars_s: String = row.get(5)?;
+    let variables: Vec<String> = serde_json::from_str(&vars_s).unwrap_or_default();
+    Ok(super::PromptTemplate {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        category: row.get(3)?,
+        content: row.get(4)?,
+        variables,
+        author_id: row.get(6)?,
+        author_name: row.get(7)?,
+        version: row.get::<_, i64>(8)? as u32,
+        is_public: row.get::<_, i64>(9)? != 0,
+        rating_avg: row.get(10)?,
+        rating_count: row.get::<_, i64>(11)? as u32,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
 }
 
 #[cfg(test)]

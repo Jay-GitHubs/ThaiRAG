@@ -345,3 +345,189 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
 CREATE INDEX IF NOT EXISTS idx_relations_doc_id ON relations(doc_id);
+
+-- Search Analytics Events
+CREATE TABLE IF NOT EXISTS search_analytics_events (
+    id             TEXT PRIMARY KEY,
+    timestamp      TIMESTAMPTZ NOT NULL,
+    query_text     TEXT NOT NULL,
+    user_id        TEXT,
+    workspace_id   TEXT,
+    result_count   INTEGER NOT NULL DEFAULT 0,
+    latency_ms     BIGINT NOT NULL DEFAULT 0,
+    zero_results   BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_search_events_timestamp ON search_analytics_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_search_events_workspace_id ON search_analytics_events(workspace_id);
+
+-- Document Lineage Records
+CREATE TABLE IF NOT EXISTS lineage_records (
+    id                  TEXT PRIMARY KEY,
+    response_id         TEXT NOT NULL,
+    timestamp           TIMESTAMPTZ NOT NULL,
+    query_text          TEXT NOT NULL,
+    chunk_id            TEXT NOT NULL,
+    doc_id              TEXT NOT NULL,
+    doc_title           TEXT,
+    chunk_text_preview  TEXT NOT NULL DEFAULT '',
+    score               DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    rank                INTEGER NOT NULL DEFAULT 0,
+    contributed         BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_response_id ON lineage_records(response_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_doc_id ON lineage_records(doc_id);
+
+-- Personal Memory (DB-backed per-user memory)
+CREATE TABLE IF NOT EXISTS personal_memories (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL,
+    memory_type       TEXT NOT NULL DEFAULT 'general',
+    summary           TEXT NOT NULL,
+    topics            TEXT NOT NULL DEFAULT '[]',
+    importance        DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    relevance_score   DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    created_at        TIMESTAMPTZ NOT NULL,
+    last_accessed_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_personal_memories_user_id ON personal_memories(user_id);
+
+-- Multi-tenancy
+CREATE TABLE IF NOT EXISTS tenants (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    plan        TEXT NOT NULL DEFAULT 'free',
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tenant_quotas (
+    tenant_id           TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    max_documents       BIGINT NOT NULL DEFAULT 1000,
+    max_storage_bytes   BIGINT NOT NULL DEFAULT 10737418240,
+    max_queries_per_day BIGINT NOT NULL DEFAULT 10000,
+    max_users           BIGINT NOT NULL DEFAULT 50,
+    max_workspaces      BIGINT NOT NULL DEFAULT 20
+);
+
+CREATE TABLE IF NOT EXISTS tenant_org_mapping (
+    org_id      TEXT PRIMARY KEY,
+    tenant_id   TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+-- RBAC v2: Custom Roles
+CREATE TABLE IF NOT EXISTS custom_roles (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    permissions TEXT NOT NULL DEFAULT '[]',
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+
+-- Document Collaboration
+CREATE TABLE IF NOT EXISTS document_comments (
+    id          TEXT PRIMARY KEY,
+    doc_id      TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    user_name   TEXT,
+    text        TEXT NOT NULL,
+    parent_id   TEXT,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_comments_doc_id ON document_comments(doc_id);
+
+CREATE TABLE IF NOT EXISTS document_annotations (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    user_name       TEXT,
+    chunk_id        TEXT,
+    text            TEXT NOT NULL,
+    highlight_start INTEGER,
+    highlight_end   INTEGER,
+    created_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_annotations_doc_id ON document_annotations(doc_id);
+
+CREATE TABLE IF NOT EXISTS document_reviews (
+    id            TEXT PRIMARY KEY,
+    doc_id        TEXT NOT NULL,
+    reviewer_id   TEXT NOT NULL,
+    reviewer_name TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    comments      TEXT,
+    created_at    TIMESTAMPTZ NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_reviews_doc_id ON document_reviews(doc_id);
+
+-- Search Quality Regression
+CREATE TABLE IF NOT EXISTS regression_runs (
+    id              TEXT PRIMARY KEY,
+    timestamp       TIMESTAMPTZ NOT NULL,
+    query_set_id    TEXT NOT NULL,
+    baseline_score  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    current_score   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    degradation     DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    passed          BOOLEAN NOT NULL DEFAULT TRUE,
+    details         TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_regression_runs_timestamp ON regression_runs(timestamp DESC);
+
+-- Prompt Marketplace
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    category        TEXT NOT NULL DEFAULT 'general',
+    content         TEXT NOT NULL,
+    variables       TEXT NOT NULL DEFAULT '[]',
+    author_id       TEXT,
+    author_name     TEXT,
+    version         INTEGER NOT NULL DEFAULT 1,
+    is_public       BOOLEAN NOT NULL DEFAULT TRUE,
+    rating_avg      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    rating_count    INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates(category);
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_author ON prompt_templates(author_id);
+
+CREATE TABLE IF NOT EXISTS prompt_ratings (
+    template_id TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    rating      INTEGER NOT NULL,
+    PRIMARY KEY (template_id, user_id)
+);
+
+-- Embedding Fine-tuning
+CREATE TABLE IF NOT EXISTS training_datasets (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    pair_count  INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS training_pairs (
+    id           TEXT PRIMARY KEY,
+    dataset_id   TEXT NOT NULL REFERENCES training_datasets(id) ON DELETE CASCADE,
+    query        TEXT NOT NULL,
+    positive_doc TEXT NOT NULL,
+    negative_doc TEXT,
+    created_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_training_pairs_dataset ON training_pairs(dataset_id);
+
+CREATE TABLE IF NOT EXISTS finetune_jobs (
+    id                  TEXT PRIMARY KEY,
+    dataset_id          TEXT NOT NULL,
+    base_model          TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    metrics             TEXT,
+    output_model_path   TEXT,
+    created_at          TIMESTAMPTZ NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_finetune_jobs_dataset ON finetune_jobs(dataset_id);

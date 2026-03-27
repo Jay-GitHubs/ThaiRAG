@@ -94,6 +94,7 @@ pub struct ProviderBundle {
     pub document_pipeline: Arc<DocumentPipeline>,
     pub search_engine: Arc<HybridSearchEngine>,
     pub embedding: Arc<dyn EmbeddingModel>,
+    pub reranker: Arc<dyn Reranker>,
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub personal_memory_manager: Option<Arc<PersonalMemoryManager>>,
 }
@@ -186,7 +187,7 @@ impl ProviderBundle {
             Arc::clone(&embedding),
             vector_store,
             text_search,
-            reranker,
+            Arc::clone(&reranker),
             search.clone(),
         ));
 
@@ -702,6 +703,7 @@ impl ProviderBundle {
             document_pipeline,
             search_engine,
             embedding,
+            reranker,
             context_compactor,
             personal_memory_manager,
         }

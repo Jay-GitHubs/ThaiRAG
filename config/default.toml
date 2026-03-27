@@ -108,3 +108,24 @@ max_resource_size_bytes = 52428800
 sync_retry_max_attempts = 3
 sync_retry_base_delay_secs = 2
 sync_retry_max_delay_secs = 60
+
+
+[search_analytics]
+enabled = true
+retention_days = 90
+
+[personal_memory]
+enabled = true
+max_per_user = 100
+relevance_decay = 0.95
+
+[multi_tenancy]
+enabled = false
+default_plan = "free"
+
+[search_quality]
+regression_threshold = 0.05
+
+[embedding_finetune]
+enabled = false
+output_dir = "./data/finetuned_models"

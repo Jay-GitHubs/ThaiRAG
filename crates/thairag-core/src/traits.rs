@@ -104,6 +104,15 @@ pub trait TextSearch: Send + Sync {
 #[async_trait]
 pub trait Reranker: Send + Sync {
     async fn rerank(&self, query: &str, results: Vec<SearchResult>) -> Result<Vec<SearchResult>>;
+
+    /// Rerank with progressive streaming. Default implementation wraps `rerank()`.
+    async fn rerank_stream(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>> {
+        self.rerank(query, results).await
+    }
 }
 
 pub trait DocumentProcessor: Send + Sync {
