@@ -1,3 +1,4 @@
+pub mod api_version;
 pub mod app_state;
 pub mod audit;
 pub mod backup;

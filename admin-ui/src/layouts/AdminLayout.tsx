@@ -24,6 +24,7 @@ import {
   GlobalOutlined,
   MenuOutlined,
   SwapOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
@@ -60,6 +61,7 @@ const baseMenuItems: { key: string; icon: React.ReactNode; labelKey: string; min
   { key: '/eval', icon: <ExperimentOutlined />, labelKey: 'menu.searchEval', minRole: 'super_admin' },
   { key: '/ab-tests', icon: <SplitCellsOutlined />, labelKey: 'menu.abTesting', minRole: 'super_admin' },
   { key: '/backup', icon: <CloudDownloadOutlined />, labelKey: 'menu.backupRestore', minRole: 'super_admin' },
+  { key: '/rate-limits', icon: <StopOutlined />, labelKey: 'menu.rateLimits', minRole: 'super_admin' },
   { key: '/vector-migration', icon: <SwapOutlined />, labelKey: 'menu.vectorMigration', minRole: 'super_admin' },
   { key: '/settings', icon: <SettingOutlined />, labelKey: 'menu.settings', minRole: 'super_admin' },
   { key: '/system', icon: <HeartOutlined />, labelKey: 'menu.health', minRole: 'viewer' },

@@ -64,7 +64,7 @@ async fn main() {
     let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
 
     // Build app state with all providers wired
-    let state = AppState::build(config.clone()).await;
+    let mut state = AppState::build(config.clone()).await;
 
     // Seed super admin from env vars
     seed_super_admin(&*state.km_store);
@@ -240,6 +240,9 @@ async fn main() {
 
     // Start document refresh scheduler (checks every 5 minutes for documents due for refresh)
     thairag_api::routes::documents::spawn_document_refresh_scheduler(state.clone());
+
+    // Store IP rate limiter in AppState so dashboard route can access stats
+    state.ip_rate_limiter = rate_limiter.clone();
 
     // Build router
     let app = build_router(state, rate_limiter);

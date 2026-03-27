@@ -825,6 +825,8 @@ pub struct AppState {
     pub user_request_limiter: UserRequestLimiter,
     /// Per-user token-bucket rate limiter (applied after auth).
     pub user_rate_limiter: crate::rate_limit::UserRateLimiter,
+    /// Per-IP rate limiter reference (for stats dashboard). None if rate limiting disabled.
+    pub ip_rate_limiter: Option<crate::rate_limit::RateLimiter>,
     pub vault: Arc<Vault>,
     pub embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache>,
     pub job_queue: Arc<dyn thairag_core::traits::JobQueue>,
@@ -1007,6 +1009,7 @@ impl AppState {
             prompt_registry: Arc::new(PromptRegistry::new()),
             user_request_limiter: UserRequestLimiter::new(5),
             user_rate_limiter: crate::rate_limit::UserRateLimiter::new(10, 20),
+            ip_rate_limiter: None,
             vault,
             embedding_cache: Arc::new(NoopEmbeddingCache),
             job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
@@ -1268,6 +1271,7 @@ impl AppState {
             prompt_registry,
             user_request_limiter,
             user_rate_limiter,
+            ip_rate_limiter: None,
             vault,
             embedding_cache,
             job_queue,

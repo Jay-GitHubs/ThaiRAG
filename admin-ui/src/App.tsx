@@ -22,6 +22,7 @@ import AbTestPage from './pages/AbTestPage';
 import BackupPage from './pages/BackupPage';
 import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import VectorMigrationPage from './pages/VectorMigrationPage';
+import RateLimitPage from './pages/RateLimitPage';
 import { I18nProvider } from './i18n';
 
 export function App() {
@@ -55,6 +56,7 @@ export function App() {
           <Route path="/knowledge-graph" element={<RoleRoute minRole="editor"><KnowledgeGraphPage /></RoleRoute>} />
           <Route path="/backup" element={<RoleRoute minRole="super_admin"><BackupPage /></RoleRoute>} />
           <Route path="/vector-migration" element={<RoleRoute minRole="super_admin"><VectorMigrationPage /></RoleRoute>} />
+          <Route path="/rate-limits" element={<RoleRoute minRole="super_admin"><RateLimitPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>
