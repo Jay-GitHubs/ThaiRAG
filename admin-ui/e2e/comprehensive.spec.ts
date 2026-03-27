@@ -49,7 +49,7 @@ test.describe('Auth & Session', () => {
 
     // Navigate to Users page
     await page.getByRole('menu').getByText('Users', { exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
 
     // Refresh on the Users page
     await page.reload();
@@ -57,7 +57,7 @@ test.describe('Auth & Session', () => {
 
     // Should still be on Users page
     await expect(page).toHaveURL(/\/users/);
-    await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
   });
 
   test('visiting /login when already authenticated redirects to dashboard', async ({ page }) => {
@@ -114,7 +114,7 @@ test.describe('Navigation', () => {
     const pages = [
       { menu: 'KM Hierarchy', heading: 'KM Hierarchy' },
       { menu: 'Documents', heading: 'Documents' },
-      { menu: 'Users', heading: 'Users' },
+      { menu: 'Users', heading: 'User Management' },
       { menu: 'Permissions', heading: 'Permissions' },
       { menu: 'Health', heading: 'System Health' },
       { menu: 'Dashboard', heading: 'Dashboard' },
@@ -128,7 +128,7 @@ test.describe('Navigation', () => {
 
   test('sidebar highlights active menu item', async ({ page }) => {
     await page.getByRole('menu').getByText('Users', { exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
 
     const menuItem = page.getByRole('menu').locator('.ant-menu-item-selected');
     await expect(menuItem).toContainText('Users');

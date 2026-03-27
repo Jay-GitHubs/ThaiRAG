@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
     external_id     TEXT,
     is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
     role            TEXT NOT NULL DEFAULT 'viewer',
+    disabled        BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL
 );
 
@@ -56,6 +57,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ALTER COLUMN password_hash SET DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
 UPDATE users SET role = 'super_admin' WHERE is_super_admin = TRUE AND role = 'viewer';
 
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready';
