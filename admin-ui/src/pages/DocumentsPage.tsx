@@ -27,7 +27,7 @@ export function DocumentsPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder={t('documents.selectOrg')}
-          style={{ width: 200 }}
+          style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
           value={orgId}
           onChange={(v) => {
             setOrgId(v);
@@ -39,7 +39,7 @@ export function DocumentsPage() {
         />
         <Select
           placeholder={t('documents.selectDept')}
-          style={{ width: 200 }}
+          style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
           value={deptId}
           onChange={(v) => {
             setDeptId(v);
@@ -51,7 +51,7 @@ export function DocumentsPage() {
         />
         <Select
           placeholder={t('documents.selectWorkspace')}
-          style={{ width: 200 }}
+          style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
           value={wsId}
           onChange={setWsId}
           options={workspaces.data?.data.map((w) => ({ label: w.name, value: w.id }))}

@@ -12,9 +12,11 @@ pub mod health;
 pub mod km;
 pub mod knowledge_graph;
 pub mod models;
+pub mod plugins;
 pub mod settings;
 pub mod test_query;
 pub mod vault;
+pub mod vector_migration;
 pub mod webhooks;
 pub mod ws_chat;
 
@@ -406,6 +408,23 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/admin/backup", post(backup::create_backup))
         .route("/admin/restore", post(backup::restore_backup))
         .route("/admin/backup/preview", post(backup::preview_backup))
+        // Vector Database Migration
+        .route(
+            "/admin/vector-migration/start",
+            post(vector_migration::start_migration),
+        )
+        .route(
+            "/admin/vector-migration/status",
+            get(vector_migration::get_migration_status),
+        )
+        .route(
+            "/admin/vector-migration/validate",
+            post(vector_migration::validate_migration),
+        )
+        .route(
+            "/admin/vector-migration/switch",
+            post(vector_migration::switch_provider),
+        )
         // Search Quality Evaluation
         .route(
             "/eval/query-sets",
@@ -429,6 +448,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route("/ab-tests/{id}/run", post(ab_test::run_ab_test))
         .route("/ab-tests/{id}/compare", post(ab_test::compare_ab_test))
+        // Plugins
+        .route("/plugins", get(plugins::list_plugins))
+        .route("/plugins/{name}/enable", post(plugins::enable_plugin))
+        .route("/plugins/{name}/disable", post(plugins::disable_plugin))
         // Knowledge Graph
         .route(
             "/workspaces/{workspace_id}/knowledge-graph",
@@ -483,6 +506,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             delete(api_keys::revoke_api_key),
         )
         .route("/v1/chat/completions", post(chat::chat_completions))
+        .route(
+            "/api/chat/sessions/{session_id}/summary",
+            get(chat::get_session_summary),
+        )
+        .route(
+            "/api/chat/sessions/{session_id}/summarize",
+            post(chat::summarize_session),
+        )
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {

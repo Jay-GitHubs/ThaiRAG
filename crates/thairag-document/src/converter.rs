@@ -100,6 +100,10 @@ pub const SUPPORTED_MIME_TYPES: &[&str] = &[
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    // Image types — handled by the pipeline (LLM vision), converter returns placeholder
+    "image/png",
+    "image/jpeg",
+    "image/webp",
 ];
 
 impl DocumentProcessor for MarkdownConverter {
@@ -116,6 +120,10 @@ impl DocumentProcessor for MarkdownConverter {
             }
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
                 convert_xlsx(raw)
+            }
+            // Image types: return a placeholder — actual description is done by the pipeline
+            "image/png" | "image/jpeg" | "image/webp" => {
+                Ok(format!("[Image: {mime_type}, {} bytes]", raw.len()))
             }
             _ => Err(ThaiRagError::Validation(format!(
                 "Unsupported MIME type: {mime_type}. Supported types: {}",

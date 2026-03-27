@@ -141,6 +141,15 @@ pub struct VectorStoreStats {
     pub vector_count: u64,
 }
 
+/// A single exported vector with its ID, embedding data, and metadata.
+/// Used for vector database migration between providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedVector {
+    pub id: String,
+    pub embedding: Vec<f32>,
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
 // ── Pipeline Progress ────────────────────────────────────────────────
 
 /// Progress event emitted by the chat pipeline at each agent stage.
@@ -282,6 +291,38 @@ pub struct ChatChunkDelta {
     pub content: Option<String>,
 }
 
+// ── Multi-Modal Document Types ───────────────────────────────────────
+
+/// Metadata about an image file (dimensions, format, size).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageMetadata {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub format: String,
+    pub size_bytes: usize,
+}
+
+/// A table extracted from document content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedTable {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// Page number where the table was found (if applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_page: Option<usize>,
+}
+
+/// The type of content in a document chunk.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentContentType {
+    #[default]
+    Text,
+    Image,
+    Table,
+    Mixed,
+}
+
 // ── Document & Search Types ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,6 +368,9 @@ pub struct ChunkMetadata {
     /// Original content before enrichment (for display in search results)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_content: Option<String>,
+    /// Content type of this chunk (text, image, table, mixed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<DocumentContentType>,
 }
 
 // ── AI Document Preprocessing Types ─────────────────────────────────

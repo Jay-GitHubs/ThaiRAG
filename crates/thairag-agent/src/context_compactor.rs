@@ -244,6 +244,45 @@ fn default_importance() -> f32 {
     0.5
 }
 
+// ── Standalone summarization function ────────────────────────────────
+
+const SUMMARIZE_PROMPT: &str = "\
+Summarize this conversation in 2-3 sentences, preserving key facts, decisions, \
+and context needed for continuing the discussion. \
+Be concise but ensure nothing important is lost. \
+Output only the summary text, no JSON wrapping.";
+
+/// Summarize a conversation using the provided LLM.
+/// Returns a concise 2-3 sentence summary preserving key facts, decisions, and context.
+pub async fn summarize_conversation(
+    llm: &dyn LlmProvider,
+    messages: &[ChatMessage],
+) -> Result<String> {
+    if messages.is_empty() {
+        return Ok(String::new());
+    }
+
+    let conversation = messages
+        .iter()
+        .map(|m| format!("{}: {}", m.role, m.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let system = ChatMessage {
+        role: "system".into(),
+        content: SUMMARIZE_PROMPT.to_string(),
+    };
+    let user = ChatMessage {
+        role: "user".into(),
+        content: conversation,
+    };
+
+    let resp = llm.generate(&[system, user], Some(256)).await?;
+    let summary = resp.content.trim().to_string();
+    debug!(summary_len = summary.len(), "Conversation summarized");
+    Ok(summary)
+}
+
 fn parse_memory_type(s: &str) -> PersonalMemoryType {
     match s.to_lowercase().as_str() {
         "preference" => PersonalMemoryType::Preference,
@@ -375,5 +414,49 @@ mod tests {
         // Mixed
         let mixed = estimate_tokens("Hello สวัสดี world");
         assert!(mixed > 0);
+    }
+
+    #[tokio::test]
+    async fn test_summarize_conversation_empty() {
+        let result = summarize_conversation(&MockLlm("mock summary".into()), &[]).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    /// Simple mock LLM for testing summarize_conversation.
+    struct MockLlm(String);
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockLlm {
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            Ok(thairag_core::types::LlmResponse {
+                content: self.0.clone(),
+                usage: Default::default(),
+            })
+        }
+        fn model_name(&self) -> &str {
+            "mock"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_summarize_conversation_produces_summary() {
+        let msgs = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "What is Rust?".into(),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "Rust is a systems programming language.".into(),
+            },
+        ];
+        let result = summarize_conversation(&MockLlm("User asked about Rust.".into()), &msgs).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "User asked about Rust.");
     }
 }

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Layout, Menu, Typography, Button, Dropdown, theme } from 'antd';
+import { useState, useEffect } from 'react';
+import { Layout, Menu, Typography, Button, Dropdown, Drawer, Grid, theme } from 'antd';
 import {
   DashboardOutlined,
   ApartmentOutlined,
@@ -22,6 +22,8 @@ import {
   SunOutlined,
   MoonOutlined,
   GlobalOutlined,
+  MenuOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
@@ -31,6 +33,7 @@ import type { Locale } from '../i18n';
 import type { UserRole } from '../api/types';
 
 const { Sider, Header, Content } = Layout;
+const { useBreakpoint } = Grid;
 
 // Role hierarchy: super_admin > admin > editor > viewer
 const ROLE_LEVEL: Record<UserRole, number> = {
@@ -57,6 +60,7 @@ const baseMenuItems: { key: string; icon: React.ReactNode; labelKey: string; min
   { key: '/eval', icon: <ExperimentOutlined />, labelKey: 'menu.searchEval', minRole: 'super_admin' },
   { key: '/ab-tests', icon: <SplitCellsOutlined />, labelKey: 'menu.abTesting', minRole: 'super_admin' },
   { key: '/backup', icon: <CloudDownloadOutlined />, labelKey: 'menu.backupRestore', minRole: 'super_admin' },
+  { key: '/vector-migration', icon: <SwapOutlined />, labelKey: 'menu.vectorMigration', minRole: 'super_admin' },
   { key: '/settings', icon: <SettingOutlined />, labelKey: 'menu.settings', minRole: 'super_admin' },
   { key: '/system', icon: <HeartOutlined />, labelKey: 'menu.health', minRole: 'viewer' },
 ];
@@ -68,12 +72,21 @@ const languageOptions: { key: Locale; label: string }[] = [
 
 export function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
   const { mode, toggle: toggleTheme } = useThemeMode();
   const { token: themeToken } = theme.useToken();
   const { locale, setLocale, t } = useI18n();
+  const screens = useBreakpoint();
+
+  const isMobile = !screens.lg;
+
+  // Close drawer on route change
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [location.pathname]);
 
   const userRole = user?.role ?? 'viewer';
   const userLevel = ROLE_LEVEL[userRole] ?? 1;
@@ -91,59 +104,124 @@ export function AdminLayout() {
     return location.pathname.startsWith(item.key);
   })?.key || '/';
 
+  const handleMenuClick = ({ key }: { key: string }) => {
+    navigate(key);
+    if (isMobile) {
+      setDrawerOpen(false);
+    }
+  };
+
+  const sidebarContent = (
+    <>
+      <div style={{ padding: 16, textAlign: 'center' }}>
+        <Typography.Text strong style={{ color: '#fff', fontSize: 18 }}>
+          ThaiRAG Admin
+        </Typography.Text>
+      </div>
+      <Menu
+        theme="dark"
+        mode="inline"
+        selectedKeys={[selectedKey]}
+        items={menuItems}
+        onClick={handleMenuClick}
+      />
+    </>
+  );
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
-        <div style={{ padding: 16, textAlign: 'center' }}>
-          <Typography.Text strong style={{ color: '#fff', fontSize: collapsed ? 14 : 18 }}>
-            {collapsed ? 'TR' : 'ThaiRAG Admin'}
-          </Typography.Text>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-        />
-      </Sider>
+      {/* Desktop sidebar */}
+      {!isMobile && (
+        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
+          <div style={{ padding: 16, textAlign: 'center' }}>
+            <Typography.Text strong style={{ color: '#fff', fontSize: collapsed ? 14 : 18 }}>
+              {collapsed ? 'TR' : 'ThaiRAG Admin'}
+            </Typography.Text>
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={menuItems}
+            onClick={handleMenuClick}
+          />
+        </Sider>
+      )}
+
+      {/* Mobile drawer sidebar */}
+      {isMobile && (
+        <Drawer
+          placement="left"
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          width={256}
+          styles={{
+            body: { padding: 0, backgroundColor: '#001529' },
+            header: { display: 'none' },
+          }}
+        >
+          {sidebarContent}
+        </Drawer>
+      )}
+
       <Layout>
         <Header
           style={{
-            padding: '0 24px',
+            padding: '0 16px',
             background: themeToken.colorBgContainer,
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 16,
+            gap: 8,
           }}
         >
-          {user && <Typography.Text>{t('header.loggedInAs', { email: user.email })}</Typography.Text>}
-          <Dropdown
-            menu={{
-              items: languageOptions.map((opt) => ({
-                key: opt.key,
-                label: opt.label,
-              })),
-              selectedKeys: [locale],
-              onClick: ({ key }) => setLocale(key as Locale),
-            }}
-            trigger={['click']}
-          >
-            <Button icon={<GlobalOutlined />}>
-              {locale.toUpperCase()}
+          {/* Left side: hamburger on mobile */}
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {isMobile && (
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                onClick={() => setDrawerOpen(true)}
+                style={{ fontSize: 18, marginRight: 8 }}
+                className="mobile-menu-btn"
+              />
+            )}
+          </div>
+
+          {/* Right side: user info + controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 16 }}>
+            {user && (
+              <Typography.Text className="header-user-text">
+                {t('header.loggedInAs', { email: user.email })}
+              </Typography.Text>
+            )}
+            <Dropdown
+              menu={{
+                items: languageOptions.map((opt) => ({
+                  key: opt.key,
+                  label: opt.label,
+                })),
+                selectedKeys: [locale],
+                onClick: ({ key }) => setLocale(key as Locale),
+              }}
+              trigger={['click']}
+            >
+              <Button icon={<GlobalOutlined />} size={isMobile ? 'small' : 'middle'}>
+                {!isMobile && locale.toUpperCase()}
+              </Button>
+            </Dropdown>
+            <Button
+              icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              title={mode === 'dark' ? t('header.lightMode') : t('header.darkMode')}
+              size={isMobile ? 'small' : 'middle'}
+            />
+            <Button icon={<LogoutOutlined />} onClick={logout} size={isMobile ? 'small' : 'middle'}>
+              <span className="header-btn-text">{t('header.logout')}</span>
             </Button>
-          </Dropdown>
-          <Button
-            icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-            onClick={toggleTheme}
-            title={mode === 'dark' ? t('header.lightMode') : t('header.darkMode')}
-          />
-          <Button icon={<LogoutOutlined />} onClick={logout}>
-            {t('header.logout')}
-          </Button>
+          </div>
         </Header>
-        <Content style={{ margin: 24 }}>
+        <Content style={{ margin: isMobile ? 12 : 24 }}>
           <Outlet />
         </Content>
       </Layout>

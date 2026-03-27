@@ -245,18 +245,30 @@ impl ProviderBundle {
             None
         };
 
-        let document_pipeline = Arc::new(DocumentPipeline::new_with_per_agent_ai_and_prompts(
-            doc.max_chunk_size,
-            doc.chunk_overlap,
-            analyzer_llm,
-            converter_llm,
-            quality_llm,
-            chunker_llm,
-            enricher_llm,
-            orchestrator_llm,
-            &doc.ai_preprocessing,
-            Arc::clone(&prompts),
-        ));
+        let document_pipeline = {
+            let pipeline = DocumentPipeline::new_with_per_agent_ai_and_prompts(
+                doc.max_chunk_size,
+                doc.chunk_overlap,
+                analyzer_llm,
+                converter_llm,
+                quality_llm,
+                chunker_llm,
+                enricher_llm,
+                orchestrator_llm,
+                &doc.ai_preprocessing,
+                Arc::clone(&prompts),
+            )
+            .with_table_extraction(doc.table_extraction_enabled);
+
+            // Enable image description if configured (reuses the primary LLM)
+            let pipeline = if doc.image_description_enabled {
+                pipeline.with_image_description(Arc::clone(&llm), true)
+            } else {
+                pipeline
+            };
+
+            Arc::new(pipeline)
+        };
 
         // ── Chat Pipeline (multi-agent) ──
         let chat_pipeline = if chat.enabled {
@@ -817,14 +829,21 @@ pub struct AppState {
     pub embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache>,
     pub job_queue: Arc<dyn thairag_core::traits::JobQueue>,
     pub webhook_dispatcher: crate::webhook::WebhookDispatcher,
+    pub plugin_registry: Arc<crate::plugin_registry::PluginRegistry>,
     providers: Arc<RwLock<ProviderBundle>>,
     pub scoped_pipeline_cache: ScopedPipelineCache,
+    migration_status: crate::vector_migration::SharedMigrationStatus,
 }
 
 impl AppState {
     /// Get a snapshot of the current dynamic providers.
     pub fn providers(&self) -> ProviderBundle {
         self.providers.read().unwrap().clone()
+    }
+
+    /// Get the shared migration status for vector store migration.
+    pub fn migration_status(&self) -> crate::vector_migration::SharedMigrationStatus {
+        self.migration_status.clone()
     }
 
     /// Hot-swap the dynamic providers with a new bundle.
@@ -973,6 +992,9 @@ impl AppState {
 
         let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
 
+        let plugin_registry = Arc::new(crate::plugin_registry::PluginRegistry::new());
+        crate::builtin_plugins::register_builtin_plugins(&plugin_registry);
+
         Self {
             config,
             jwt,
@@ -989,8 +1011,12 @@ impl AppState {
             embedding_cache: Arc::new(NoopEmbeddingCache),
             job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
             webhook_dispatcher,
+            plugin_registry,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
+            migration_status: Arc::new(tokio::sync::RwLock::new(
+                crate::vector_migration::MigrationStatus::default(),
+            )),
         }
     }
 
@@ -1210,6 +1236,26 @@ impl AppState {
 
         let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
 
+        // ── Plugin registry ──
+        let plugin_registry = Arc::new(crate::plugin_registry::PluginRegistry::new());
+        crate::builtin_plugins::register_builtin_plugins(&plugin_registry);
+
+        // Apply enabled plugins from KV store (if saved) or config defaults
+        if let Some(saved) = km_store.get_setting("plugins.enabled") {
+            let names: Vec<String> = saved.split(',').map(|s| s.trim().to_string()).collect();
+            plugin_registry.set_enabled_plugins(&names);
+            tracing::info!(
+                count = names.len(),
+                "Loaded plugin enabled state from KV store"
+            );
+        } else if !config.plugins.enabled_plugins.is_empty() {
+            plugin_registry.set_enabled_plugins(&config.plugins.enabled_plugins);
+            tracing::info!(
+                count = config.plugins.enabled_plugins.len(),
+                "Loaded plugin enabled state from config"
+            );
+        }
+
         Self {
             config: Arc::new(config),
             jwt,
@@ -1226,8 +1272,12 @@ impl AppState {
             embedding_cache,
             job_queue,
             webhook_dispatcher,
+            plugin_registry,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
+            migration_status: Arc::new(tokio::sync::RwLock::new(
+                crate::vector_migration::MigrationStatus::default(),
+            )),
         }
     }
 }

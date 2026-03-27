@@ -208,6 +208,10 @@ async fn process_document_inner(
             let _ = km.update_document_step(step_doc_id, Some(step.to_string()));
         }));
 
+    // Apply document plugins (e.g., metadata stripping) before processing
+    let bytes =
+        crate::plugin_hooks::apply_document_plugins(&state.plugin_registry, &bytes, &mime_type);
+
     // Save original file bytes + convert to markdown for preview
     {
         let converter = MarkdownConverter::new();
@@ -250,6 +254,10 @@ async fn process_document_inner(
             return (0, Some(msg));
         }
     };
+
+    // Apply chunk plugins (e.g., summary headers) after splitting
+    let mut chunks = chunks;
+    crate::plugin_hooks::apply_chunk_plugins(&state.plugin_registry, &mut chunks);
 
     let chunk_count = chunks.len();
 
@@ -1431,6 +1439,9 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
         "csv" => Some("text/csv"),
         "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
         _ => None,
     }
 }

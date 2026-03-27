@@ -3,8 +3,8 @@ use std::sync::RwLock;
 
 use async_trait::async_trait;
 use thairag_core::error::Result;
-use thairag_core::traits::VectorStore;
-use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
+use thairag_core::traits::{VectorStore, VectorStoreExport};
+use thairag_core::types::{DocId, DocumentChunk, ExportedVector, SearchQuery, SearchResult};
 
 /// In-memory vector store for development and testing.
 /// Stores chunks and performs brute-force cosine similarity search.
@@ -93,6 +93,35 @@ impl VectorStore for InMemoryVectorStore {
             collection_name: "in_memory".to_string(),
             vector_count: store.len() as u64,
         })
+    }
+}
+
+#[async_trait]
+impl VectorStoreExport for InMemoryVectorStore {
+    async fn export_all(&self, _batch_size: usize) -> Result<Vec<ExportedVector>> {
+        let store = self.chunks.read().unwrap();
+        let vectors = store
+            .values()
+            .filter_map(|chunk| {
+                let embedding = chunk.embedding.as_ref()?;
+                let mut metadata = HashMap::new();
+                metadata.insert("doc_id".to_string(), chunk.doc_id.to_string());
+                metadata.insert("workspace_id".to_string(), chunk.workspace_id.to_string());
+                metadata.insert("content".to_string(), chunk.content.clone());
+                metadata.insert("chunk_index".to_string(), chunk.chunk_index.to_string());
+                Some(ExportedVector {
+                    id: chunk.chunk_id.to_string(),
+                    embedding: embedding.clone(),
+                    metadata,
+                })
+            })
+            .collect();
+        Ok(vectors)
+    }
+
+    async fn count(&self) -> Result<usize> {
+        let store = self.chunks.read().unwrap();
+        Ok(store.len())
     }
 }
 

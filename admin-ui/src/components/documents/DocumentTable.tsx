@@ -192,6 +192,7 @@ export function DocumentTable({ workspaceId }: Props) {
         dataSource={data?.data}
         loading={isLoading}
         pagination={{ pageSize: 20 }}
+        scroll={{ x: 'max-content' }}
       />
 
       <UploadModal

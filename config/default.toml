@@ -54,12 +54,19 @@ text_weight = 0.4
 max_chunk_size = 512
 chunk_overlap = 64
 language_aware_chunking = true
+image_description_enabled = false    # requires vision-capable LLM
+table_extraction_enabled = true
 
-# [chat_pipeline]
+[chat_pipeline]
 # live_retrieval_enabled = false
 # live_retrieval_timeout_secs = 15
 # live_retrieval_max_connectors = 3
 # live_retrieval_max_content_chars = 30000
+
+# Conversation auto-summarization: compacts long sessions to manage context window
+auto_summarize = true
+summarize_threshold = 20       # message count before auto-summarize triggers
+summarize_keep_recent = 6      # recent messages kept intact after summarization
 
 [session]
 backend = "memory"          # "memory" or "redis"
@@ -86,6 +93,10 @@ service_name = "thairag"
 [knowledge_graph]
 enabled = false
 extract_on_ingest = false
+
+[plugins]
+# List of plugin names to enable by default. Empty = all built-in plugins enabled.
+# enabled_plugins = ["metadata-strip", "query-expansion", "summary-chunk"]
 
 [mcp]
 enabled = false

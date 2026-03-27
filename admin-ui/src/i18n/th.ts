@@ -15,6 +15,7 @@ const th: Record<string, string> = {
   'menu.searchEval': 'ประเมินการค้นหา',
   'menu.abTesting': 'การทดสอบ A/B',
   'menu.backupRestore': 'สำรองและกู้คืนข้อมูล',
+  'menu.vectorMigration': 'ย้ายฐานข้อมูลเวกเตอร์',
   'menu.settings': 'ตั้งค่า',
   'menu.health': 'สถานะระบบ',
 

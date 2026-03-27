@@ -15,6 +15,7 @@ const en: Record<string, string> = {
   'menu.searchEval': 'Search Eval',
   'menu.abTesting': 'A/B Testing',
   'menu.backupRestore': 'Backup & Restore',
+  'menu.vectorMigration': 'Vector Migration',
   'menu.settings': 'Settings',
   'menu.health': 'Health',
 
