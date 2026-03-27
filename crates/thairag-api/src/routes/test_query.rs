@@ -758,3 +758,179 @@ fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
         state.km_store.set_setting(key, &json);
     }
 }
+
+// ── Streaming Reranking ───────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SearchStreamResult {
+    chunks: Vec<RetrievedChunk>,
+    total: usize,
+    search_ms: u64,
+    rerank_ms: u64,
+}
+
+/// POST /api/km/workspaces/{workspace_id}/search-stream
+///
+/// Performs search then streams results via SSE as reranking progresses.
+/// Events:
+///   - event: reranking   (progress while reranker runs)
+///   - event: result      (SearchStreamResult JSON — all chunks at the end)
+///   - data: [DONE]       (sentinel)
+pub async fn search_stream(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+    AppJson(req): AppJson<TestQueryRequest>,
+) -> Result<
+    (
+        header::HeaderMap,
+        Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>,
+    ),
+    ApiError,
+> {
+    // Validate query
+    if req.query.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "query must not be empty".into(),
+        )));
+    }
+    let max_len = state.config.server.max_message_length;
+    if req.query.len() > max_len {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "query too long: {} chars (max {max_len})",
+            req.query.len()
+        ))));
+    }
+
+    let ws_id = WorkspaceId(workspace_id);
+    state
+        .km_store
+        .get_workspace(ws_id)
+        .map_err(|_| ApiError(ThaiRagError::NotFound("Workspace not found".into())))?;
+
+    if claims.sub != "anonymous"
+        && let Ok(user_id) = claims.sub.parse::<Uuid>()
+    {
+        let user_ws_ids = state
+            .km_store
+            .get_user_workspace_ids(thairag_core::types::UserId(user_id));
+        if !user_ws_ids.contains(&ws_id) {
+            let is_super = state
+                .km_store
+                .get_user(thairag_core::types::UserId(user_id))
+                .map(|u| u.is_super_admin)
+                .unwrap_or(false);
+            if !is_super {
+                return Err(ApiError(ThaiRagError::Authorization(
+                    "No access to this workspace".into(),
+                )));
+            }
+        }
+    }
+
+    let p = state.providers();
+    let retrieval_params = feedback::load_retrieval_params(&state);
+    let query_text = req.query.clone();
+    let state_clone = state.clone();
+
+    let sse_stream = async_stream::stream! {
+        // Step 1: Search
+        let search_start = Instant::now();
+        let search_query = SearchQuery {
+            text: query_text.clone(),
+            top_k: retrieval_params.top_k,
+            workspace_ids: vec![ws_id],
+            unrestricted: false,
+        };
+        let search_result = p.search_engine.search(&search_query).await;
+        let search_ms = search_start.elapsed().as_millis() as u64;
+
+        let mut search_results = match search_result {
+            Ok(r) => r,
+            Err(e) => {
+                let err = serde_json::json!({"error": e.to_string()});
+                yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(err.to_string()));
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
+
+        // Apply document boost/penalty from feedback
+        let boost_map = feedback::get_document_boost_map(&state_clone);
+        if !boost_map.is_empty() {
+            for result in &mut search_results {
+                let doc_id_str = result.chunk.doc_id.to_string();
+                if let Some(&boost) = boost_map.get(&doc_id_str) {
+                    result.score *= boost;
+                }
+            }
+            search_results.sort_by(|a, b| {
+                b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        if retrieval_params.min_score_threshold > 0.0 {
+            search_results.retain(|r| r.score >= retrieval_params.min_score_threshold);
+        }
+
+        // Step 2: Rerank with progress event
+        yield Ok(
+            Event::default().event("reranking").data(
+                serde_json::json!({
+                    "status": "started",
+                    "candidates": search_results.len()
+                }).to_string()
+            )
+        );
+
+        let rerank_start = Instant::now();
+        let reranked = p.reranker
+            .rerank_stream(&query_text, search_results)
+            .await
+            .unwrap_or_else(|_| vec![]);
+        let rerank_ms = rerank_start.elapsed().as_millis() as u64;
+
+        yield Ok(
+            Event::default().event("reranking").data(
+                serde_json::json!({
+                    "status": "done",
+                    "duration_ms": rerank_ms
+                }).to_string()
+            )
+        );
+
+        // Build chunk response
+        let chunks: Vec<RetrievedChunk> = reranked
+            .iter()
+            .map(|r| {
+                let doc_title = state_clone.km_store.get_document(r.chunk.doc_id).ok().map(|d| d.title);
+                let meta = r.chunk.metadata.as_ref();
+                RetrievedChunk {
+                    chunk_id: r.chunk.chunk_id.to_string(),
+                    doc_id: r.chunk.doc_id.to_string(),
+                    content: r.chunk.content.clone(),
+                    score: r.score,
+                    chunk_index: r.chunk.chunk_index,
+                    page_numbers: meta.and_then(|m| m.page_numbers.clone()),
+                    section_title: meta.and_then(|m| m.section_title.clone()),
+                    doc_title,
+                }
+            })
+            .collect();
+
+        let total = chunks.len();
+        let result = SearchStreamResult { chunks, total, search_ms, rerank_ms };
+        let data = serde_json::to_string(&result).unwrap();
+        yield Ok(Event::default().event("result").data(data));
+        yield Ok(Event::default().data("[DONE]"));
+    };
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert("X-Accel-Buffering", "no".parse().unwrap());
+    headers.insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+
+    Ok((
+        headers,
+        Sse::new(sse_stream).keep_alive(KeepAlive::default()),
+    ))
+}

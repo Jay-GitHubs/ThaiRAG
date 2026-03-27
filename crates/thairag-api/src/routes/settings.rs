@@ -5344,3 +5344,29 @@ pub async fn get_inference_analytics(
     let filter = q.to_filter(10000);
     Json(state.km_store.get_inference_stats(&filter))
 }
+
+// ── Audit Log Export & Analytics ─────────────────────────────────────
+
+/// GET /api/km/settings/audit-log/export
+/// Export audit log entries with optional filtering.
+pub async fn export_audit_logs(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(filter): Query<crate::store::AuditLogFilter>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let entries = state.km_store.export_audit_logs(&filter);
+    Ok(Json(entries))
+}
+
+/// GET /api/km/settings/audit-log/analytics
+/// Get aggregated audit log analytics.
+pub async fn get_audit_analytics(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(filter): Query<crate::store::AuditLogFilter>,
+) -> Result<Json<crate::store::AuditAnalytics>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let analytics = state.km_store.get_audit_analytics(&filter);
+    Ok(Json(analytics))
+}

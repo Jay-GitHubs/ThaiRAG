@@ -29,6 +29,16 @@ pub struct AppConfig {
     pub knowledge_graph: KnowledgeGraphConfig,
     #[serde(default)]
     pub plugins: PluginsConfig,
+    #[serde(default)]
+    pub search_analytics: SearchAnalyticsConfig,
+    #[serde(default)]
+    pub personal_memory: PersonalMemoryConfig,
+    #[serde(default)]
+    pub multi_tenancy: MultiTenancyConfig,
+    #[serde(default)]
+    pub search_quality: SearchQualityConfig,
+    #[serde(default)]
+    pub embedding_finetune: EmbeddingFinetuneConfig,
 }
 
 impl AppConfig {
@@ -1247,6 +1257,87 @@ pub struct PluginsConfig {
     pub enabled_plugins: Vec<String>,
 }
 
+// ── Search Analytics Config ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchAnalyticsConfig {
+    pub enabled: bool,
+    pub retention_days: u32,
+}
+
+impl Default for SearchAnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            retention_days: 90,
+        }
+    }
+}
+
+// ── Personal Memory Config ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PersonalMemoryConfig {
+    pub enabled: bool,
+    pub max_per_user: usize,
+    pub relevance_decay: f32,
+}
+
+impl Default for PersonalMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_per_user: 100,
+            relevance_decay: 0.95,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MultiTenancyConfig {
+    pub enabled: bool,
+    pub default_plan: String,
+}
+
+impl Default for MultiTenancyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_plan: "free".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchQualityConfig {
+    pub regression_threshold: f64,
+}
+
+impl Default for SearchQualityConfig {
+    fn default() -> Self {
+        Self {
+            regression_threshold: 0.05,
+        }
+    }
+}
+
+// ── Embedding Fine-tuning ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingFinetuneConfig {
+    pub enabled: bool,
+    pub output_dir: String,
+}
+
+impl Default for EmbeddingFinetuneConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            output_dir: "./data/finetuned_models".into(),
+        }
+    }
+}
+
 fn default_memory_backend() -> String {
     "memory".to_string()
 }
@@ -1355,6 +1446,11 @@ mod tests {
             otel: OtelConfig::default(),
             knowledge_graph: KnowledgeGraphConfig::default(),
             plugins: PluginsConfig::default(),
+            search_analytics: SearchAnalyticsConfig::default(),
+            personal_memory: PersonalMemoryConfig::default(),
+            multi_tenancy: MultiTenancyConfig::default(),
+            search_quality: SearchQualityConfig::default(),
+            embedding_finetune: EmbeddingFinetuneConfig::default(),
         }
     }
 

@@ -1,0 +1,15 @@
+{
+  "name": "@thairag/client",
+  "version": "0.1.0",
+  "description": "TypeScript client for ThaiRAG API",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "AGPL-3.0",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

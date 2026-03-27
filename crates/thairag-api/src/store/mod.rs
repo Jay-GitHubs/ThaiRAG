@@ -350,6 +350,281 @@ pub struct DiffStats {
     pub deletions: usize,
 }
 
+// ── Search Analytics ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchAnalyticsEvent {
+    pub id: String,
+    pub timestamp: String,
+    pub query_text: String,
+    pub user_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub result_count: u32,
+    pub latency_ms: u64,
+    pub zero_results: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SearchAnalyticsFilter {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub workspace_id: Option<String>,
+    pub user_id: Option<String>,
+    pub zero_results_only: bool,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PopularQuery {
+    pub query_text: String,
+    pub count: u64,
+    pub avg_results: f64,
+    pub avg_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchAnalyticsSummary {
+    pub total_searches: u64,
+    pub zero_result_count: u64,
+    pub avg_latency_ms: f64,
+    pub avg_results: f64,
+    pub searches_per_day: Vec<(String, u64)>,
+}
+
+// ── Document Lineage ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LineageRecord {
+    pub id: String,
+    pub response_id: String,
+    pub timestamp: String,
+    pub query_text: String,
+    pub chunk_id: String,
+    pub doc_id: String,
+    pub doc_title: Option<String>,
+    pub chunk_text_preview: String,
+    pub score: f32,
+    pub rank: u32,
+    pub contributed: bool,
+}
+
+// ── Audit Analytics ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AuditLogFilter {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub user_id: Option<String>,
+    pub action: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AuditAnalytics {
+    pub total_events: u64,
+    pub actions_by_type: Vec<(String, u64)>,
+    pub actions_by_user: Vec<(String, u64)>,
+    pub events_per_day: Vec<(String, u64)>,
+}
+
+// ── Personal Memory (DB-backed) ─────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersonalMemoryRow {
+    pub id: String,
+    pub user_id: String,
+    pub memory_type: String,
+    pub summary: String,
+    pub topics: String, // JSON array
+    pub importance: f32,
+    pub relevance_score: f32,
+    pub created_at: String,
+    pub last_accessed_at: String,
+}
+
+// ── Multi-tenancy ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Tenant {
+    pub id: String,
+    pub name: String,
+    pub plan: String,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TenantQuota {
+    pub max_documents: u64,
+    pub max_storage_bytes: u64,
+    pub max_queries_per_day: u64,
+    pub max_users: u64,
+    pub max_workspaces: u64,
+}
+
+impl Default for TenantQuota {
+    fn default() -> Self {
+        Self {
+            max_documents: 1000,
+            max_storage_bytes: 10_737_418_240,
+            max_queries_per_day: 10_000,
+            max_users: 50,
+            max_workspaces: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TenantUsage {
+    pub current_documents: u64,
+    pub current_storage_bytes: u64,
+    pub queries_today: u64,
+    pub current_users: u64,
+    pub current_workspaces: u64,
+}
+
+// ── RBAC v2 ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CustomRole {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<RolePermission>,
+    pub is_system: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RolePermission {
+    pub resource: String,
+    pub actions: Vec<String>,
+}
+
+// ── Document Collaboration ──────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocumentComment {
+    pub id: String,
+    pub doc_id: String,
+    pub user_id: String,
+    pub user_name: Option<String>,
+    pub text: String,
+    pub parent_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocumentAnnotation {
+    pub id: String,
+    pub doc_id: String,
+    pub user_id: String,
+    pub user_name: Option<String>,
+    pub chunk_id: Option<String>,
+    pub text: String,
+    pub highlight_start: Option<u32>,
+    pub highlight_end: Option<u32>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocumentReview {
+    pub id: String,
+    pub doc_id: String,
+    pub reviewer_id: String,
+    pub reviewer_name: Option<String>,
+    pub status: String,
+    pub comments: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ── Embedding Fine-tuning ───────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrainingDataset {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub pair_count: u32,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrainingPair {
+    pub id: String,
+    pub dataset_id: String,
+    pub query: String,
+    pub positive_doc: String,
+    pub negative_doc: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FinetuneJob {
+    pub id: String,
+    pub dataset_id: String,
+    pub base_model: String,
+    pub status: String,          // "pending", "running", "completed", "failed"
+    pub metrics: Option<String>, // JSON
+    pub output_model_path: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ── Search Quality Regression ───────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegressionRun {
+    pub id: String,
+    pub timestamp: String,
+    pub query_set_id: String,
+    pub baseline_score: f64,
+    pub current_score: f64,
+    pub degradation: f64,
+    pub passed: bool,
+    pub details: String, // JSON
+}
+
+// ── Prompt Marketplace ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PromptTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub content: String,
+    pub variables: Vec<String>,
+    pub author_id: Option<String>,
+    pub author_name: Option<String>,
+    pub version: u32,
+    pub is_public: bool,
+    pub rating_avg: f64,
+    pub rating_count: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PromptTemplateFilter {
+    pub category: Option<String>,
+    pub search: Option<String>,
+    pub is_public: Option<bool>,
+    pub author_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PromptRating {
+    pub template_id: String,
+    pub user_id: String,
+    pub rating: u8,
+}
+
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
     // ── Organization ────────────────────────────────────────────────
@@ -701,6 +976,104 @@ pub trait KmStoreTrait: Send + Sync {
     fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()>;
     /// Check a user's permission level for a specific document.
     fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission>;
+
+    // ── Search Analytics ────────────────────────────────────────────────
+    fn insert_search_event(&self, event: &SearchAnalyticsEvent);
+    fn list_search_events(&self, filter: &SearchAnalyticsFilter) -> Vec<SearchAnalyticsEvent>;
+    fn get_popular_queries(&self, limit: usize) -> Vec<PopularQuery>;
+    fn get_search_analytics_summary(
+        &self,
+        filter: &SearchAnalyticsFilter,
+    ) -> SearchAnalyticsSummary;
+
+    // ── Document Lineage ────────────────────────────────────────────────
+    fn insert_lineage_record(&self, record: &LineageRecord);
+    fn get_lineage_for_response(&self, response_id: &str) -> Vec<LineageRecord>;
+    fn get_lineage_for_document(&self, doc_id: &str, limit: usize) -> Vec<LineageRecord>;
+
+    // ── Audit Export & Analytics ────────────────────────────────────────
+    fn export_audit_logs(&self, filter: &AuditLogFilter) -> Vec<serde_json::Value>;
+    fn get_audit_analytics(&self, filter: &AuditLogFilter) -> AuditAnalytics;
+
+    // ── Personal Memory Persistence ────────────────────────────────────
+    fn insert_personal_memory(&self, memory: &PersonalMemoryRow);
+    fn list_personal_memories(&self, user_id: &str, limit: usize) -> Vec<PersonalMemoryRow>;
+    fn delete_personal_memory(&self, memory_id: &str) -> Result<()>;
+    fn delete_all_personal_memories(&self, user_id: &str) -> Result<()>;
+    fn count_personal_memories(&self, user_id: &str) -> usize;
+
+    // ── Multi-tenancy ───────────────────────────────────────────────────
+    fn insert_tenant(&self, name: String, plan: String) -> Result<Tenant>;
+    fn get_tenant(&self, id: &str) -> Result<Tenant>;
+    fn list_tenants(&self) -> Vec<Tenant>;
+    fn update_tenant(&self, id: &str, name: String, plan: String) -> Result<Tenant>;
+    fn delete_tenant(&self, id: &str) -> Result<()>;
+    fn get_tenant_quota(&self, id: &str) -> TenantQuota;
+    fn set_tenant_quota(&self, id: &str, quota: &TenantQuota) -> Result<()>;
+    fn get_tenant_usage(&self, id: &str) -> TenantUsage;
+    fn assign_org_to_tenant(&self, org_id: OrgId, tenant_id: &str) -> Result<()>;
+    fn get_tenant_for_org(&self, org_id: OrgId) -> Option<String>;
+
+    // ── RBAC v2 ─────────────────────────────────────────────────────────
+    fn insert_custom_role(&self, role: &CustomRole) -> Result<CustomRole>;
+    fn get_custom_role(&self, id: &str) -> Result<CustomRole>;
+    fn list_custom_roles(&self) -> Vec<CustomRole>;
+    fn update_custom_role(&self, role: &CustomRole) -> Result<()>;
+    fn delete_custom_role(&self, id: &str) -> Result<()>;
+
+    // ── Search Quality Regression ───────────────────────────────────────
+    fn insert_regression_run(&self, run: &RegressionRun);
+    fn list_regression_runs(&self, limit: usize) -> Vec<RegressionRun>;
+
+    // ── Prompt Marketplace ──────────────────────────────────────────────
+    fn insert_prompt_template(&self, template: &PromptTemplate) -> Result<PromptTemplate>;
+    fn list_prompt_templates(&self, filter: &PromptTemplateFilter) -> Vec<PromptTemplate>;
+    fn get_prompt_template(&self, id: &str) -> Result<PromptTemplate>;
+    fn update_prompt_template(&self, template: &PromptTemplate) -> Result<()>;
+    fn delete_prompt_template(&self, id: &str) -> Result<()>;
+    fn rate_prompt_template(&self, rating: &PromptRating) -> Result<()>;
+    fn fork_prompt_template(
+        &self,
+        id: &str,
+        user_id: &str,
+        user_name: &str,
+    ) -> Result<PromptTemplate>;
+
+    // ── Document Collaboration ──────────────────────────────────────────
+    fn insert_comment(&self, comment: &DocumentComment) -> Result<DocumentComment>;
+    fn list_comments(&self, doc_id: &str) -> Vec<DocumentComment>;
+    fn delete_comment(&self, comment_id: &str) -> Result<()>;
+    fn insert_annotation(&self, annotation: &DocumentAnnotation) -> Result<DocumentAnnotation>;
+    fn list_annotations(&self, doc_id: &str) -> Vec<DocumentAnnotation>;
+    fn delete_annotation(&self, annotation_id: &str) -> Result<()>;
+    fn insert_review(&self, review: &DocumentReview) -> Result<DocumentReview>;
+    fn list_reviews(&self, doc_id: &str) -> Vec<DocumentReview>;
+    fn update_review_status(
+        &self,
+        review_id: &str,
+        status: &str,
+        comments: Option<&str>,
+    ) -> Result<()>;
+
+    // ── Embedding Fine-tuning ───────────────────────────────────────────
+
+    fn insert_training_dataset(&self, name: String, description: String)
+    -> Result<TrainingDataset>;
+    fn list_training_datasets(&self) -> Vec<TrainingDataset>;
+    fn get_training_dataset(&self, id: &str) -> Result<TrainingDataset>;
+    fn delete_training_dataset(&self, id: &str) -> Result<()>;
+    fn insert_training_pair(&self, pair: &TrainingPair) -> Result<TrainingPair>;
+    fn list_training_pairs(&self, dataset_id: &str) -> Vec<TrainingPair>;
+    fn delete_training_pair(&self, pair_id: &str) -> Result<()>;
+    fn insert_finetune_job(&self, job: &FinetuneJob) -> Result<FinetuneJob>;
+    fn get_finetune_job(&self, id: &str) -> Result<FinetuneJob>;
+    fn list_finetune_jobs(&self) -> Vec<FinetuneJob>;
+    fn update_finetune_job_status(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+    ) -> Result<()>;
 }
 
 /// Factory function to create the appropriate KM store.

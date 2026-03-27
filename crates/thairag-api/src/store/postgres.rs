@@ -3414,4 +3414,1494 @@ impl KmStoreTrait for PostgresKmStore {
         .flatten()
         .map(|s| AclPermission::from_str_lossy(&s))
     }
+
+    // ── Search Analytics ────────────────────────────────────────────────
+
+    fn insert_search_event(&self, event: &super::SearchAnalyticsEvent) {
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO search_analytics_events
+                 (id, timestamp, query_text, user_id, workspace_id, result_count, latency_ms, zero_results)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(&event.id)
+            .bind(&event.timestamp)
+            .bind(&event.query_text)
+            .bind(&event.user_id)
+            .bind(&event.workspace_id)
+            .bind(event.result_count as i32)
+            .bind(event.latency_ms as i64)
+            .bind(event.zero_results)
+            .execute(&self.pool),
+        );
+    }
+
+    fn list_search_events(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> Vec<super::SearchAnalyticsEvent> {
+        let mut conditions = Vec::<String>::new();
+        if let Some(from) = &filter.from {
+            conditions.push(format!("timestamp >= '{from}'"));
+        }
+        if let Some(to) = &filter.to {
+            conditions.push(format!("timestamp <= '{to}'"));
+        }
+        if let Some(ws) = &filter.workspace_id {
+            conditions.push(format!("workspace_id = '{ws}'"));
+        }
+        if let Some(uid) = &filter.user_id {
+            conditions.push(format!("user_id = '{uid}'"));
+        }
+        if filter.zero_results_only {
+            conditions.push("zero_results = TRUE".to_string());
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+        let limit = filter.limit.unwrap_or(1000) as i64;
+        let offset = filter.offset.unwrap_or(0) as i64;
+        let sql = format!(
+            "SELECT id, timestamp, query_text, user_id, workspace_id, result_count, latency_ms, zero_results
+             FROM search_analytics_events {where_clause}
+             ORDER BY timestamp DESC
+             LIMIT {limit} OFFSET {offset}"
+        );
+        block_on(async { sqlx::query(&sql).fetch_all(&self.pool).await })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| super::SearchAnalyticsEvent {
+                id: row.get::<String, _>("id"),
+                timestamp: row.get::<String, _>("timestamp"),
+                query_text: row.get::<String, _>("query_text"),
+                user_id: row.get::<Option<String>, _>("user_id"),
+                workspace_id: row.get::<Option<String>, _>("workspace_id"),
+                result_count: row.get::<i32, _>("result_count") as u32,
+                latency_ms: row.get::<i64, _>("latency_ms") as u64,
+                zero_results: row.get::<bool, _>("zero_results"),
+            })
+            .collect()
+    }
+
+    fn get_popular_queries(&self, limit: usize) -> Vec<super::PopularQuery> {
+        let sql = format!(
+            "SELECT query_text, COUNT(*) as cnt,
+             AVG(result_count::FLOAT) as avg_results,
+             AVG(latency_ms::FLOAT) as avg_latency
+             FROM search_analytics_events
+             GROUP BY query_text
+             ORDER BY cnt DESC
+             LIMIT {limit}"
+        );
+        block_on(async { sqlx::query(&sql).fetch_all(&self.pool).await })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| super::PopularQuery {
+                query_text: row.get::<String, _>("query_text"),
+                count: row.get::<i64, _>("cnt") as u64,
+                avg_results: row.get::<f64, _>("avg_results"),
+                avg_latency_ms: row.get::<f64, _>("avg_latency"),
+            })
+            .collect()
+    }
+
+    fn get_search_analytics_summary(
+        &self,
+        filter: &super::SearchAnalyticsFilter,
+    ) -> super::SearchAnalyticsSummary {
+        let mut conditions = Vec::<String>::new();
+        if let Some(from) = &filter.from {
+            conditions.push(format!("timestamp >= '{from}'"));
+        }
+        if let Some(to) = &filter.to {
+            conditions.push(format!("timestamp <= '{to}'"));
+        }
+        if let Some(ws) = &filter.workspace_id {
+            conditions.push(format!("workspace_id = '{ws}'"));
+        }
+        if let Some(uid) = &filter.user_id {
+            conditions.push(format!("user_id = '{uid}'"));
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let row = block_on(async {
+            sqlx::query(&format!(
+                "SELECT COUNT(*) as total,
+                 SUM(CASE WHEN zero_results THEN 1 ELSE 0 END) as zero_cnt,
+                 AVG(latency_ms::FLOAT) as avg_latency,
+                 AVG(result_count::FLOAT) as avg_results
+                 FROM search_analytics_events {where_clause}"
+            ))
+            .fetch_optional(&self.pool)
+            .await
+        });
+
+        let (total_searches, zero_result_count, avg_latency_ms, avg_results) = row
+            .ok()
+            .flatten()
+            .map(|r| {
+                (
+                    r.get::<i64, _>("total") as u64,
+                    r.get::<i64, _>("zero_cnt") as u64,
+                    r.get::<f64, _>("avg_latency"),
+                    r.get::<f64, _>("avg_results"),
+                )
+            })
+            .unwrap_or((0, 0, 0.0, 0.0));
+
+        let per_day_sql = format!(
+            "SELECT DATE(timestamp) as day, COUNT(*) as cnt
+             FROM search_analytics_events {where_clause}
+             GROUP BY day ORDER BY day"
+        );
+        let searches_per_day: Vec<(String, u64)> =
+            block_on(async { sqlx::query(&per_day_sql).fetch_all(&self.pool).await })
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| (row.get::<String, _>("day"), row.get::<i64, _>("cnt") as u64))
+                .collect();
+
+        super::SearchAnalyticsSummary {
+            total_searches,
+            zero_result_count,
+            avg_latency_ms,
+            avg_results,
+            searches_per_day,
+        }
+    }
+
+    // ── Document Lineage ────────────────────────────────────────────────
+
+    fn insert_lineage_record(&self, record: &super::LineageRecord) {
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO lineage_records
+                 (id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+                  chunk_text_preview, score, rank, contributed)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(&record.id)
+            .bind(&record.response_id)
+            .bind(&record.timestamp)
+            .bind(&record.query_text)
+            .bind(&record.chunk_id)
+            .bind(&record.doc_id)
+            .bind(&record.doc_title)
+            .bind(&record.chunk_text_preview)
+            .bind(record.score as f64)
+            .bind(record.rank as i32)
+            .bind(record.contributed)
+            .execute(&self.pool),
+        );
+    }
+
+    fn get_lineage_for_response(&self, response_id: &str) -> Vec<super::LineageRecord> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+                 chunk_text_preview, score, rank, contributed
+                 FROM lineage_records WHERE response_id = $1 ORDER BY rank ASC",
+            )
+            .bind(response_id)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| super::LineageRecord {
+            id: row.get::<String, _>("id"),
+            response_id: row.get::<String, _>("response_id"),
+            timestamp: row.get::<String, _>("timestamp"),
+            query_text: row.get::<String, _>("query_text"),
+            chunk_id: row.get::<String, _>("chunk_id"),
+            doc_id: row.get::<String, _>("doc_id"),
+            doc_title: row.get::<Option<String>, _>("doc_title"),
+            chunk_text_preview: row.get::<String, _>("chunk_text_preview"),
+            score: row.get::<f64, _>("score") as f32,
+            rank: row.get::<i32, _>("rank") as u32,
+            contributed: row.get::<bool, _>("contributed"),
+        })
+        .collect()
+    }
+
+    fn get_lineage_for_document(&self, doc_id: &str, limit: usize) -> Vec<super::LineageRecord> {
+        let sql = format!(
+            "SELECT id, response_id, timestamp, query_text, chunk_id, doc_id, doc_title,
+             chunk_text_preview, score, rank, contributed
+             FROM lineage_records WHERE doc_id = $1 ORDER BY timestamp DESC LIMIT {limit}"
+        );
+        block_on(async { sqlx::query(&sql).bind(doc_id).fetch_all(&self.pool).await })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| super::LineageRecord {
+                id: row.get::<String, _>("id"),
+                response_id: row.get::<String, _>("response_id"),
+                timestamp: row.get::<String, _>("timestamp"),
+                query_text: row.get::<String, _>("query_text"),
+                chunk_id: row.get::<String, _>("chunk_id"),
+                doc_id: row.get::<String, _>("doc_id"),
+                doc_title: row.get::<Option<String>, _>("doc_title"),
+                chunk_text_preview: row.get::<String, _>("chunk_text_preview"),
+                score: row.get::<f64, _>("score") as f32,
+                rank: row.get::<i32, _>("rank") as u32,
+                contributed: row.get::<bool, _>("contributed"),
+            })
+            .collect()
+    }
+
+    // ── Audit Export & Analytics ────────────────────────────────────────
+
+    fn export_audit_logs(&self, filter: &super::AuditLogFilter) -> Vec<serde_json::Value> {
+        // Audit log is stored as JSON in settings key "audit_log"
+        let raw: Vec<serde_json::Value> = self
+            .get_setting("audit_log")
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
+        let limit = filter.limit.unwrap_or(1000);
+        let offset = filter.offset.unwrap_or(0);
+
+        let mut filtered: Vec<serde_json::Value> = raw
+            .into_iter()
+            .filter(|e| {
+                if let Some(from) = &filter.from
+                    && e["timestamp"].as_str().unwrap_or("") < from.as_str()
+                {
+                    return false;
+                }
+                if let Some(to) = &filter.to
+                    && e["timestamp"].as_str().unwrap_or("") > to.as_str()
+                {
+                    return false;
+                }
+                if let Some(uid) = &filter.user_id
+                    && e["actor"].as_str().unwrap_or("") != uid.as_str()
+                {
+                    return false;
+                }
+                if let Some(action) = &filter.action
+                    && e["action"].as_str().unwrap_or("") != action.as_str()
+                {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        filtered.reverse();
+        if offset < filtered.len() {
+            filtered = filtered[offset..].to_vec();
+        } else {
+            filtered.clear();
+        }
+        filtered.truncate(limit);
+        filtered
+    }
+
+    fn get_audit_analytics(&self, filter: &super::AuditLogFilter) -> super::AuditAnalytics {
+        use std::collections::HashMap;
+        let entries = self.export_audit_logs(&super::AuditLogFilter {
+            from: filter.from.clone(),
+            to: filter.to.clone(),
+            user_id: filter.user_id.clone(),
+            action: filter.action.clone(),
+            limit: None,
+            offset: None,
+        });
+
+        let total_events = entries.len() as u64;
+        let mut by_type: HashMap<String, u64> = HashMap::new();
+        let mut by_user: HashMap<String, u64> = HashMap::new();
+        let mut by_day: HashMap<String, u64> = HashMap::new();
+
+        for e in &entries {
+            let action = e["action"].as_str().unwrap_or("unknown").to_string();
+            *by_type.entry(action).or_insert(0) += 1;
+            let actor = e["actor"].as_str().unwrap_or("unknown").to_string();
+            *by_user.entry(actor).or_insert(0) += 1;
+            let ts = e["timestamp"].as_str().unwrap_or("");
+            let day = ts.get(..10).unwrap_or(ts).to_string();
+            *by_day.entry(day).or_insert(0) += 1;
+        }
+
+        let mut actions_by_type: Vec<(String, u64)> = by_type.into_iter().collect();
+        actions_by_type.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut actions_by_user: Vec<(String, u64)> = by_user.into_iter().collect();
+        actions_by_user.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut events_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
+        events_per_day.sort_by(|a, b| a.0.cmp(&b.0));
+
+        super::AuditAnalytics {
+            total_events,
+            actions_by_type,
+            actions_by_user,
+            events_per_day,
+        }
+    }
+
+    // ── Personal Memory Persistence ────────────────────────────────────
+
+    fn insert_personal_memory(&self, memory: &super::PersonalMemoryRow) {
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO personal_memories
+                 (id, user_id, memory_type, summary, topics, importance, relevance_score, created_at, last_accessed_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (id) DO UPDATE SET
+                 summary = EXCLUDED.summary,
+                 topics = EXCLUDED.topics,
+                 importance = EXCLUDED.importance,
+                 relevance_score = EXCLUDED.relevance_score,
+                 last_accessed_at = EXCLUDED.last_accessed_at",
+            )
+            .bind(&memory.id)
+            .bind(&memory.user_id)
+            .bind(&memory.memory_type)
+            .bind(&memory.summary)
+            .bind(&memory.topics)
+            .bind(memory.importance as f64)
+            .bind(memory.relevance_score as f64)
+            .bind(&memory.created_at)
+            .bind(&memory.last_accessed_at)
+            .execute(&self.pool),
+        );
+    }
+
+    fn list_personal_memories(&self, user_id: &str, limit: usize) -> Vec<super::PersonalMemoryRow> {
+        let sql = format!(
+            "SELECT id, user_id, memory_type, summary, topics, importance, relevance_score,
+             created_at, last_accessed_at
+             FROM personal_memories WHERE user_id = $1
+             ORDER BY importance DESC LIMIT {limit}"
+        );
+        block_on(async { sqlx::query(&sql).bind(user_id).fetch_all(&self.pool).await })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| super::PersonalMemoryRow {
+                id: row.get::<String, _>("id"),
+                user_id: row.get::<String, _>("user_id"),
+                memory_type: row.get::<String, _>("memory_type"),
+                summary: row.get::<String, _>("summary"),
+                topics: row.get::<String, _>("topics"),
+                importance: row.get::<f64, _>("importance") as f32,
+                relevance_score: row.get::<f64, _>("relevance_score") as f32,
+                created_at: row.get::<String, _>("created_at"),
+                last_accessed_at: row.get::<String, _>("last_accessed_at"),
+            })
+            .collect()
+    }
+
+    fn delete_personal_memory(&self, memory_id: &str) -> Result<()> {
+        let rows_affected = block_on(
+            sqlx::query("DELETE FROM personal_memories WHERE id = $1")
+                .bind(memory_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(e.to_string()))?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            Err(ThaiRagError::NotFound(format!(
+                "Memory {memory_id} not found"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn delete_all_personal_memories(&self, user_id: &str) -> Result<()> {
+        block_on(
+            sqlx::query("DELETE FROM personal_memories WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    fn count_personal_memories(&self, user_id: &str) -> usize {
+        block_on(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM personal_memories WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&self.pool),
+        )
+        .unwrap_or(0) as usize
+    }
+
+    // ── Multi-tenancy ───────────────────────────────────────────────────
+
+    fn insert_tenant(&self, name: String, plan: String) -> Result<super::Tenant> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        block_on(
+            sqlx::query(
+                "INSERT INTO tenants (id, name, plan, is_active, created_at) VALUES ($1, $2, $3, TRUE, $4)",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&plan)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_tenant: {e}")))?;
+        Ok(super::Tenant {
+            id,
+            name,
+            plan,
+            is_active: true,
+            created_at: now.to_rfc3339(),
+        })
+    }
+
+    fn get_tenant(&self, id: &str) -> Result<super::Tenant> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, bool, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, plan, is_active, created_at FROM tenants WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("get_tenant: {e}")))?
+        .map(|(tid, name, plan, is_active, ca)| super::Tenant {
+            id: tid,
+            name,
+            plan,
+            is_active,
+            created_at: ca.to_rfc3339(),
+        })
+        .ok_or_else(|| ThaiRagError::NotFound(format!("Tenant {id} not found")))
+    }
+
+    fn list_tenants(&self) -> Vec<super::Tenant> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, bool, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, plan, is_active, created_at FROM tenants ORDER BY created_at",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, name, plan, is_active, ca)| super::Tenant {
+            id,
+            name,
+            plan,
+            is_active,
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn update_tenant(&self, id: &str, name: String, plan: String) -> Result<super::Tenant> {
+        let result = block_on(
+            sqlx::query_as::<_, (String,)>(
+                "UPDATE tenants SET name = $2, plan = $3 WHERE id = $1 RETURNING created_at::TEXT",
+            )
+            .bind(id)
+            .bind(&name)
+            .bind(&plan)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_tenant: {e}")))?;
+        match result {
+            None => Err(ThaiRagError::NotFound(format!("Tenant {id} not found"))),
+            Some((created_at,)) => Ok(super::Tenant {
+                id: id.to_string(),
+                name,
+                plan,
+                is_active: true,
+                created_at,
+            }),
+        }
+    }
+
+    fn delete_tenant(&self, id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM tenants WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_tenant: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Tenant {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn get_tenant_quota(&self, id: &str) -> super::TenantQuota {
+        block_on(
+            sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+                "SELECT max_documents, max_storage_bytes, max_queries_per_day, max_users, max_workspaces FROM tenant_quotas WHERE tenant_id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(md, ms, mq, mu, mw)| super::TenantQuota {
+            max_documents: md as u64,
+            max_storage_bytes: ms as u64,
+            max_queries_per_day: mq as u64,
+            max_users: mu as u64,
+            max_workspaces: mw as u64,
+        })
+        .unwrap_or_default()
+    }
+
+    fn set_tenant_quota(&self, id: &str, quota: &super::TenantQuota) -> Result<()> {
+        block_on(
+            sqlx::query(
+                "INSERT INTO tenant_quotas (tenant_id, max_documents, max_storage_bytes, max_queries_per_day, max_users, max_workspaces) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (tenant_id) DO UPDATE SET max_documents=$2, max_storage_bytes=$3, max_queries_per_day=$4, max_users=$5, max_workspaces=$6",
+            )
+            .bind(id)
+            .bind(quota.max_documents as i64)
+            .bind(quota.max_storage_bytes as i64)
+            .bind(quota.max_queries_per_day as i64)
+            .bind(quota.max_users as i64)
+            .bind(quota.max_workspaces as i64)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("set_tenant_quota: {e}")))?;
+        Ok(())
+    }
+
+    fn get_tenant_usage(&self, id: &str) -> super::TenantUsage {
+        let current_documents: i64 = block_on(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM documents d JOIN workspaces w ON d.workspace_id = w.id JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&self.pool),
+        )
+        .unwrap_or(0);
+
+        let current_storage_bytes: i64 = block_on(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COALESCE(SUM(d.size_bytes), 0) FROM documents d JOIN workspaces w ON d.workspace_id = w.id JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&self.pool),
+        )
+        .unwrap_or(0);
+
+        let current_workspaces: i64 = block_on(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM workspaces w JOIN departments dp ON w.dept_id = dp.id JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id WHERE tom.tenant_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&self.pool),
+        )
+        .unwrap_or(0);
+
+        let current_users: i64 = block_on(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users").fetch_one(&self.pool),
+        )
+        .unwrap_or(0);
+
+        super::TenantUsage {
+            current_documents: current_documents as u64,
+            current_storage_bytes: current_storage_bytes as u64,
+            queries_today: 0,
+            current_users: current_users as u64,
+            current_workspaces: current_workspaces as u64,
+        }
+    }
+
+    fn assign_org_to_tenant(&self, org_id: OrgId, tenant_id: &str) -> Result<()> {
+        block_on(
+            sqlx::query(
+                "INSERT INTO tenant_org_mapping (org_id, tenant_id) VALUES ($1, $2) ON CONFLICT (org_id) DO UPDATE SET tenant_id=$2",
+            )
+            .bind(org_id.0.to_string())
+            .bind(tenant_id)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("assign_org_to_tenant: {e}")))?;
+        Ok(())
+    }
+
+    fn get_tenant_for_org(&self, org_id: OrgId) -> Option<String> {
+        block_on(
+            sqlx::query_scalar::<_, String>(
+                "SELECT tenant_id FROM tenant_org_mapping WHERE org_id = $1",
+            )
+            .bind(org_id.0.to_string())
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+    }
+
+    // ── RBAC v2 ─────────────────────────────────────────────────────────
+
+    fn insert_custom_role(&self, role: &super::CustomRole) -> Result<super::CustomRole> {
+        let perms = serde_json::to_string(&role.permissions).unwrap_or_else(|_| "[]".to_string());
+        let now: chrono::DateTime<chrono::Utc> = role
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO custom_roles (id, name, description, permissions, is_system, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(&role.id)
+            .bind(&role.name)
+            .bind(&role.description)
+            .bind(&perms)
+            .bind(role.is_system)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_custom_role: {e}")))?;
+        Ok(role.clone())
+    }
+
+    fn get_custom_role(&self, id: &str) -> Result<super::CustomRole> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, bool, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, permissions, is_system, created_at FROM custom_roles WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("get_custom_role: {e}")))?
+        .map(|(rid, name, description, perms_s, is_system, ca)| super::CustomRole {
+            id: rid,
+            name,
+            description,
+            permissions: serde_json::from_str(&perms_s).unwrap_or_default(),
+            is_system,
+            created_at: ca.to_rfc3339(),
+        })
+        .ok_or_else(|| ThaiRagError::NotFound(format!("Custom role {id} not found")))
+    }
+
+    fn list_custom_roles(&self) -> Vec<super::CustomRole> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, bool, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, permissions, is_system, created_at FROM custom_roles ORDER BY created_at",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, name, description, perms_s, is_system, ca)| super::CustomRole {
+            id,
+            name,
+            description,
+            permissions: serde_json::from_str(&perms_s).unwrap_or_default(),
+            is_system,
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn update_custom_role(&self, role: &super::CustomRole) -> Result<()> {
+        let perms = serde_json::to_string(&role.permissions).unwrap_or_else(|_| "[]".to_string());
+        let result = block_on(
+            sqlx::query(
+                "UPDATE custom_roles SET name=$2, description=$3, permissions=$4 WHERE id=$1",
+            )
+            .bind(&role.id)
+            .bind(&role.name)
+            .bind(&role.description)
+            .bind(&perms)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_custom_role: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {} not found",
+                role.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_custom_role(&self, id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM custom_roles WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_custom_role: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Custom role {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    // ── Document Collaboration ──────────────────────────────────────────
+
+    fn insert_comment(&self, comment: &super::DocumentComment) -> Result<super::DocumentComment> {
+        let now: chrono::DateTime<chrono::Utc> = comment
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_comments (id, doc_id, user_id, user_name, text, parent_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(&comment.id)
+            .bind(&comment.doc_id)
+            .bind(&comment.user_id)
+            .bind(&comment.user_name)
+            .bind(&comment.text)
+            .bind(&comment.parent_id)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_comment: {e}")))?;
+        Ok(comment.clone())
+    }
+
+    fn list_comments(&self, doc_id: &str) -> Vec<super::DocumentComment> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, Option<String>, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, doc_id, user_id, user_name, text, parent_id, created_at FROM document_comments WHERE doc_id = $1 ORDER BY created_at",
+            )
+            .bind(doc_id)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, doc_id, user_id, user_name, text, parent_id, ca)| super::DocumentComment {
+            id,
+            doc_id,
+            user_id,
+            user_name,
+            text,
+            parent_id,
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn delete_comment(&self, comment_id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM document_comments WHERE id = $1")
+                .bind(comment_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_comment: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Comment {comment_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_annotation(
+        &self,
+        annotation: &super::DocumentAnnotation,
+    ) -> Result<super::DocumentAnnotation> {
+        let now: chrono::DateTime<chrono::Utc> = annotation
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_annotations (id, doc_id, user_id, user_name, chunk_id, text, highlight_start, highlight_end, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(&annotation.id)
+            .bind(&annotation.doc_id)
+            .bind(&annotation.user_id)
+            .bind(&annotation.user_name)
+            .bind(&annotation.chunk_id)
+            .bind(&annotation.text)
+            .bind(annotation.highlight_start.map(|v| v as i32))
+            .bind(annotation.highlight_end.map(|v| v as i32))
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_annotation: {e}")))?;
+        Ok(annotation.clone())
+    }
+
+    fn list_annotations(&self, doc_id: &str) -> Vec<super::DocumentAnnotation> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>, String, Option<i32>, Option<i32>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, doc_id, user_id, user_name, chunk_id, text, highlight_start, highlight_end, created_at FROM document_annotations WHERE doc_id = $1 ORDER BY created_at",
+            )
+            .bind(doc_id)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, doc_id, user_id, user_name, chunk_id, text, hs, he, ca)| super::DocumentAnnotation {
+            id,
+            doc_id,
+            user_id,
+            user_name,
+            chunk_id,
+            text,
+            highlight_start: hs.map(|v| v as u32),
+            highlight_end: he.map(|v| v as u32),
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn delete_annotation(&self, annotation_id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM document_annotations WHERE id = $1")
+                .bind(annotation_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_annotation: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Annotation {annotation_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_review(&self, review: &super::DocumentReview) -> Result<super::DocumentReview> {
+        let ca: chrono::DateTime<chrono::Utc> = review
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let ua: chrono::DateTime<chrono::Utc> = review
+            .updated_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_reviews (id, doc_id, reviewer_id, reviewer_name, status, comments, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&review.id)
+            .bind(&review.doc_id)
+            .bind(&review.reviewer_id)
+            .bind(&review.reviewer_name)
+            .bind(&review.status)
+            .bind(&review.comments)
+            .bind(ca)
+            .bind(ua)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_review: {e}")))?;
+        Ok(review.clone())
+    }
+
+    fn list_reviews(&self, doc_id: &str) -> Vec<super::DocumentReview> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, Option<String>, String, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, doc_id, reviewer_id, reviewer_name, status, comments, created_at, updated_at FROM document_reviews WHERE doc_id = $1 ORDER BY created_at",
+            )
+            .bind(doc_id)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, doc_id, reviewer_id, reviewer_name, status, comments, ca, ua)| super::DocumentReview {
+            id,
+            doc_id,
+            reviewer_id,
+            reviewer_name,
+            status,
+            comments,
+            created_at: ca.to_rfc3339(),
+            updated_at: ua.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn update_review_status(
+        &self,
+        review_id: &str,
+        status: &str,
+        comments: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let result = block_on(
+            sqlx::query(
+                "UPDATE document_reviews SET status=$2, comments=COALESCE($3, comments), updated_at=$4 WHERE id=$1",
+            )
+            .bind(review_id)
+            .bind(status)
+            .bind(comments)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_review_status: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Review {review_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    // ── Search Quality Regression ───────────────────────────────────────
+
+    fn insert_regression_run(&self, run: &super::RegressionRun) {
+        let passed_ts: Option<chrono::DateTime<chrono::Utc>> =
+            chrono::DateTime::parse_from_rfc3339(&run.timestamp)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .ok();
+        let ts = passed_ts.unwrap_or_else(chrono::Utc::now);
+        let _ = block_on(
+            sqlx::query(
+                "INSERT INTO regression_runs (id, timestamp, query_set_id, baseline_score, current_score, degradation, passed, details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT(id) DO NOTHING",
+            )
+            .bind(&run.id)
+            .bind(ts)
+            .bind(&run.query_set_id)
+            .bind(run.baseline_score)
+            .bind(run.current_score)
+            .bind(run.degradation)
+            .bind(run.passed)
+            .bind(&run.details)
+            .execute(&self.pool),
+        );
+    }
+
+    fn list_regression_runs(&self, limit: usize) -> Vec<super::RegressionRun> {
+        block_on(
+            sqlx::query_as::<_, (String, chrono::DateTime<chrono::Utc>, String, f64, f64, f64, bool, String)>(
+                "SELECT id, timestamp, query_set_id, baseline_score, current_score, degradation, passed, details FROM regression_runs ORDER BY timestamp DESC LIMIT $1",
+            )
+            .bind(limit as i64)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, ts, query_set_id, baseline_score, current_score, degradation, passed, details)| {
+            super::RegressionRun {
+                id,
+                timestamp: ts.to_rfc3339(),
+                query_set_id,
+                baseline_score,
+                current_score,
+                degradation,
+                passed,
+                details,
+            }
+        })
+        .collect()
+    }
+
+    // ── Prompt Marketplace ──────────────────────────────────────────────
+
+    fn insert_prompt_template(
+        &self,
+        template: &super::PromptTemplate,
+    ) -> Result<super::PromptTemplate> {
+        let vars = serde_json::to_string(&template.variables).unwrap_or_else(|_| "[]".to_string());
+        let now = chrono::Utc::now();
+        block_on(
+            sqlx::query(
+                "INSERT INTO prompt_templates (id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            )
+            .bind(&template.id)
+            .bind(&template.name)
+            .bind(&template.description)
+            .bind(&template.category)
+            .bind(&template.content)
+            .bind(&vars)
+            .bind(&template.author_id)
+            .bind(&template.author_name)
+            .bind(template.version as i32)
+            .bind(template.is_public)
+            .bind(template.rating_avg)
+            .bind(template.rating_count as i32)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_prompt_template: {e}")))?;
+        Ok(template.clone())
+    }
+
+    fn list_prompt_templates(
+        &self,
+        filter: &super::PromptTemplateFilter,
+    ) -> Vec<super::PromptTemplate> {
+        // Build query with optional filters
+        let limit = filter.limit.unwrap_or(100) as i64;
+        let offset = filter.offset.unwrap_or(0) as i64;
+
+        let rows = block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, String, Option<String>, Option<String>, i32, bool, f64, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at FROM prompt_templates ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default();
+
+        rows.into_iter()
+            .filter_map(
+                |(
+                    id,
+                    name,
+                    description,
+                    category,
+                    content,
+                    vars,
+                    author_id,
+                    author_name,
+                    version,
+                    is_public,
+                    rating_avg,
+                    rating_count,
+                    ca,
+                    ua,
+                )| {
+                    if filter
+                        .category
+                        .as_deref()
+                        .is_some_and(|cat| category != cat)
+                    {
+                        return None;
+                    }
+                    if filter
+                        .is_public
+                        .is_some_and(|pub_flag| is_public != pub_flag)
+                    {
+                        return None;
+                    }
+                    if filter
+                        .author_id
+                        .as_deref()
+                        .is_some_and(|aid| author_id.as_deref() != Some(aid))
+                    {
+                        return None;
+                    }
+                    if let Some(ref s) = filter.search {
+                        let sl = s.to_lowercase();
+                        if !name.to_lowercase().contains(&sl)
+                            && !description.to_lowercase().contains(&sl)
+                            && !content.to_lowercase().contains(&sl)
+                        {
+                            return None;
+                        }
+                    }
+                    let variables: Vec<String> = serde_json::from_str(&vars).unwrap_or_default();
+                    Some(super::PromptTemplate {
+                        id,
+                        name,
+                        description,
+                        category,
+                        content,
+                        variables,
+                        author_id,
+                        author_name,
+                        version: version as u32,
+                        is_public,
+                        rating_avg,
+                        rating_count: rating_count as u32,
+                        created_at: ca.to_rfc3339(),
+                        updated_at: ua.to_rfc3339(),
+                    })
+                },
+            )
+            .collect()
+    }
+
+    fn get_prompt_template(&self, id: &str) -> Result<super::PromptTemplate> {
+        let row = block_on(
+            sqlx::query_as::<_, (String, String, String, String, String, String, Option<String>, Option<String>, i32, bool, f64, i32, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, category, content, variables, author_id, author_name, version, is_public, rating_avg, rating_count, created_at, updated_at FROM prompt_templates WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&self.pool),
+        )
+        .map_err(|_| ThaiRagError::NotFound(format!("Prompt template {id} not found")))?;
+
+        let variables: Vec<String> = serde_json::from_str(&row.5).unwrap_or_default();
+        Ok(super::PromptTemplate {
+            id: row.0,
+            name: row.1,
+            description: row.2,
+            category: row.3,
+            content: row.4,
+            variables,
+            author_id: row.6,
+            author_name: row.7,
+            version: row.8 as u32,
+            is_public: row.9,
+            rating_avg: row.10,
+            rating_count: row.11 as u32,
+            created_at: row.12.to_rfc3339(),
+            updated_at: row.13.to_rfc3339(),
+        })
+    }
+
+    fn update_prompt_template(&self, template: &super::PromptTemplate) -> Result<()> {
+        let vars = serde_json::to_string(&template.variables).unwrap_or_else(|_| "[]".to_string());
+        let now = chrono::Utc::now();
+        let result = block_on(
+            sqlx::query(
+                "UPDATE prompt_templates SET name=$2, description=$3, category=$4, content=$5, variables=$6, is_public=$7, version=$8, updated_at=$9 WHERE id=$1",
+            )
+            .bind(&template.id)
+            .bind(&template.name)
+            .bind(&template.description)
+            .bind(&template.category)
+            .bind(&template.content)
+            .bind(&vars)
+            .bind(template.is_public)
+            .bind(template.version as i32)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_prompt_template: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {} not found",
+                template.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_prompt_template(&self, id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM prompt_templates WHERE id=$1")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_prompt_template: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Prompt template {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn rate_prompt_template(&self, rating: &super::PromptRating) -> Result<()> {
+        block_on(
+            sqlx::query(
+                "INSERT INTO prompt_ratings (template_id, user_id, rating) VALUES ($1, $2, $3) ON CONFLICT(template_id, user_id) DO UPDATE SET rating=$3",
+            )
+            .bind(&rating.template_id)
+            .bind(&rating.user_id)
+            .bind(rating.rating as i32)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("rate_prompt_template: {e}")))?;
+        // Recompute avg
+        let (avg, count): (f64, i64) = block_on(
+            sqlx::query_as::<_, (f64, i64)>(
+                "SELECT COALESCE(AVG(rating::float), 0.0), COUNT(*) FROM prompt_ratings WHERE template_id=$1",
+            )
+            .bind(&rating.template_id)
+            .fetch_one(&self.pool),
+        )
+        .unwrap_or((0.0, 0));
+        block_on(
+            sqlx::query("UPDATE prompt_templates SET rating_avg=$2, rating_count=$3 WHERE id=$1")
+                .bind(&rating.template_id)
+                .bind(avg)
+                .bind(count)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("rate_prompt_template update: {e}")))?;
+        Ok(())
+    }
+
+    fn fork_prompt_template(
+        &self,
+        id: &str,
+        user_id: &str,
+        user_name: &str,
+    ) -> Result<super::PromptTemplate> {
+        let original = self.get_prompt_template(id)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let forked = super::PromptTemplate {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("{} (fork)", original.name),
+            description: original.description.clone(),
+            category: original.category.clone(),
+            content: original.content.clone(),
+            variables: original.variables.clone(),
+            author_id: Some(user_id.to_string()),
+            author_name: Some(user_name.to_string()),
+            version: 1,
+            is_public: false,
+            rating_avg: 0.0,
+            rating_count: 0,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.insert_prompt_template(&forked)
+    }
+
+    // ── Embedding Fine-tuning ───────────────────────────────────────────
+
+    fn insert_training_dataset(
+        &self,
+        name: String,
+        description: String,
+    ) -> Result<super::TrainingDataset> {
+        let now = chrono::Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
+        block_on(
+            sqlx::query(
+                "INSERT INTO training_datasets (id, name, description, pair_count, created_at) VALUES ($1, $2, $3, 0, $4)",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&description)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_training_dataset: {e}")))?;
+        Ok(super::TrainingDataset {
+            id,
+            name,
+            description,
+            pair_count: 0,
+            created_at: now.to_rfc3339(),
+        })
+    }
+
+    fn list_training_datasets(&self) -> Vec<super::TrainingDataset> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, i64, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, pair_count, created_at FROM training_datasets ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, name, description, pair_count, ca)| super::TrainingDataset {
+            id,
+            name,
+            description,
+            pair_count: pair_count as u32,
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn get_training_dataset(&self, id: &str) -> Result<super::TrainingDataset> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, i64, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, name, description, pair_count, created_at FROM training_datasets WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("get_training_dataset: {e}")))?
+        .map(|(id, name, description, pair_count, ca)| super::TrainingDataset {
+            id,
+            name,
+            description,
+            pair_count: pair_count as u32,
+            created_at: ca.to_rfc3339(),
+        })
+        .ok_or_else(|| ThaiRagError::NotFound(format!("TrainingDataset {id} not found")))
+    }
+
+    fn delete_training_dataset(&self, id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM training_datasets WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_training_dataset: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "TrainingDataset {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_training_pair(&self, pair: &super::TrainingPair) -> Result<super::TrainingPair> {
+        let ca: chrono::DateTime<chrono::Utc> = pair
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO training_pairs (id, dataset_id, query, positive_doc, negative_doc, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(&pair.id)
+            .bind(&pair.dataset_id)
+            .bind(&pair.query)
+            .bind(&pair.positive_doc)
+            .bind(&pair.negative_doc)
+            .bind(ca)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_training_pair: {e}")))?;
+        block_on(
+            sqlx::query("UPDATE training_datasets SET pair_count = pair_count + 1 WHERE id = $1")
+                .bind(&pair.dataset_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update pair_count: {e}")))?;
+        Ok(pair.clone())
+    }
+
+    fn list_training_pairs(&self, dataset_id: &str) -> Vec<super::TrainingPair> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, Option<String>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, dataset_id, query, positive_doc, negative_doc, created_at FROM training_pairs WHERE dataset_id = $1 ORDER BY created_at",
+            )
+            .bind(dataset_id)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, dataset_id, query, positive_doc, negative_doc, ca)| super::TrainingPair {
+            id,
+            dataset_id,
+            query,
+            positive_doc,
+            negative_doc,
+            created_at: ca.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn delete_training_pair(&self, pair_id: &str) -> Result<()> {
+        // Get dataset_id before deleting
+        let dataset_id: Option<String> = block_on(
+            sqlx::query_as::<_, (String,)>("SELECT dataset_id FROM training_pairs WHERE id = $1")
+                .bind(pair_id)
+                .fetch_optional(&self.pool),
+        )
+        .unwrap_or(None)
+        .map(|(did,)| did);
+
+        let result = block_on(
+            sqlx::query("DELETE FROM training_pairs WHERE id = $1")
+                .bind(pair_id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_training_pair: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "TrainingPair {pair_id} not found"
+            )));
+        }
+        if let Some(did) = dataset_id {
+            let _ = block_on(
+                sqlx::query(
+                    "UPDATE training_datasets SET pair_count = GREATEST(0, pair_count - 1) WHERE id = $1",
+                )
+                .bind(did)
+                .execute(&self.pool),
+            );
+        }
+        Ok(())
+    }
+
+    fn insert_finetune_job(&self, job: &super::FinetuneJob) -> Result<super::FinetuneJob> {
+        let ca: chrono::DateTime<chrono::Utc> = job
+            .created_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        let ua: chrono::DateTime<chrono::Utc> = job
+            .updated_at
+            .parse()
+            .unwrap_or_else(|_| chrono::Utc::now());
+        block_on(
+            sqlx::query(
+                "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&job.id)
+            .bind(&job.dataset_id)
+            .bind(&job.base_model)
+            .bind(&job.status)
+            .bind(&job.metrics)
+            .bind(&job.output_model_path)
+            .bind(ca)
+            .bind(ua)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("insert_finetune_job: {e}")))?;
+        Ok(job.clone())
+    }
+
+    fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("get_finetune_job: {e}")))?
+        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, ca, ua)| super::FinetuneJob {
+            id,
+            dataset_id,
+            base_model,
+            status,
+            metrics,
+            output_model_path,
+            created_at: ca.to_rfc3339(),
+            updated_at: ua.to_rfc3339(),
+        })
+        .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))
+    }
+
+    fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
+        block_on(
+            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, ca, ua)| super::FinetuneJob {
+            id,
+            dataset_id,
+            base_model,
+            status,
+            metrics,
+            output_model_path,
+            created_at: ca.to_rfc3339(),
+            updated_at: ua.to_rfc3339(),
+        })
+        .collect()
+    }
+
+    fn update_finetune_job_status(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let result = block_on(
+            sqlx::query(
+                "UPDATE finetune_jobs SET status=$2, metrics=COALESCE($3, metrics), updated_at=$4 WHERE id=$1",
+            )
+            .bind(id)
+            .bind(status)
+            .bind(metrics)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_status: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
 }

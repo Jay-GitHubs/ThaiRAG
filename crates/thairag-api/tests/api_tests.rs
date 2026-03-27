@@ -128,7 +128,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         Arc::clone(&embedding),
         vector_store,
         text_search,
-        reranker,
+        Arc::clone(&reranker),
         search_config,
     ));
 
@@ -229,6 +229,11 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         otel: Default::default(),
         knowledge_graph: Default::default(),
         plugins: Default::default(),
+        search_analytics: Default::default(),
+        personal_memory: Default::default(),
+        multi_tenancy: Default::default(),
+        search_quality: Default::default(),
+        embedding_finetune: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -239,6 +244,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         document_pipeline,
         search_engine,
         embedding,
+        reranker,
         context_compactor: None,
         personal_memory_manager: None,
     };
@@ -1560,7 +1566,7 @@ fn build_streaming_test_app() -> Router {
         Arc::clone(&embedding),
         vector_store,
         text_search,
-        reranker,
+        Arc::clone(&reranker),
         search_config,
     ));
 
@@ -1655,6 +1661,11 @@ fn build_streaming_test_app() -> Router {
         otel: Default::default(),
         knowledge_graph: Default::default(),
         plugins: Default::default(),
+        search_analytics: Default::default(),
+        personal_memory: Default::default(),
+        multi_tenancy: Default::default(),
+        search_quality: Default::default(),
+        embedding_finetune: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1665,6 +1676,7 @@ fn build_streaming_test_app() -> Router {
         document_pipeline,
         search_engine,
         embedding,
+        reranker,
         context_compactor: None,
         personal_memory_manager: None,
     };
