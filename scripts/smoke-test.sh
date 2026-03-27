@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # smoke-test.sh — End-to-end smoke test for the ThaiRAG API.
 #
-# Tests the full user journey: health → register → login → KM hierarchy →
-# document ingestion → chat → permissions → audit log → cleanup.
+# Tests the full user journey across all features: health → auth → API keys →
+# KM hierarchy → permissions → ACLs → documents → versioning → chat → V2 API →
+# feedback → config snapshots → plugins → knowledge graph → webhooks → jobs →
+# evaluation → A/B testing → backup → vector migration → rate limit stats →
+# inference logs → usage → settings → error handling → rate limiting → cleanup.
 #
 # Usage:
 #   ./scripts/smoke-test.sh [API_URL]
@@ -75,14 +78,40 @@ assert_contains() {
 # ── Cleanup on exit ──────────────────────────────────────────────────
 TOKEN=""
 TOKEN2=""
+API_KEY=""
+API_KEY_ID=""
 ORG_ID=""
 DEPT_ID=""
 WS_ID=""
 DOC_ID=""
+WEBHOOK_ID=""
+SNAPSHOT_ID=""
+EVAL_SET_ID=""
+AB_TEST_ID=""
 
 cleanup() {
     if [ -n "$TOKEN" ]; then
         info "Cleaning up test data..."
+        # Delete webhook
+        [ -n "$WEBHOOK_ID" ] && \
+            curl -sf -X DELETE "${API_URL}/api/km/webhooks/${WEBHOOK_ID}" \
+                -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
+        # Delete API key
+        [ -n "$API_KEY_ID" ] && \
+            curl -sf -X DELETE "${API_URL}/api/auth/api-keys/${API_KEY_ID}" \
+                -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
+        # Delete snapshot
+        [ -n "$SNAPSHOT_ID" ] && \
+            curl -sf -X DELETE "${API_URL}/api/km/settings/snapshots/${SNAPSHOT_ID}" \
+                -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
+        # Delete eval set
+        [ -n "$EVAL_SET_ID" ] && \
+            curl -sf -X DELETE "${API_URL}/api/km/eval/query-sets/${EVAL_SET_ID}" \
+                -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
+        # Delete A/B test
+        [ -n "$AB_TEST_ID" ] && \
+            curl -sf -X DELETE "${API_URL}/api/km/ab-tests/${AB_TEST_ID}" \
+                -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
         # Delete document
         [ -n "$DOC_ID" ] && [ -n "$WS_ID" ] && \
             curl -sf -X DELETE "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}" \
@@ -405,6 +434,15 @@ BODY=$(echo "$RESP" | sed '$d')
 check "List users returns 200" assert_status "200" "$HTTP_CODE"
 check "User list contains test user" assert_contains "$BODY" "$TEST_EMAIL"
 
+# Update user role
+RESP=$(curl -sf -w "\n%{http_code}" -X PUT "${API_URL}/api/km/users/${USER_ID2}/role" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"role":"editor"}' \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Update user role returns 200" assert_status "200" "$HTTP_CODE"
+
 # Delete second user
 RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/users/${USER_ID2}" \
     -H "Authorization: Bearer $TOKEN" \
@@ -412,8 +450,52 @@ RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/users/${USER_ID
 HTTP_CODE=$(echo "$RESP" | tail -1)
 check "Delete user returns 204" assert_status "204" "$HTTP_CODE"
 
-# ── 9. Settings (super admin) ────────────────────────────────────────
-section "9. Settings & Audit Log"
+# ── 9. API Key Management ────────────────────────────────────────────
+section "9. API Key Authentication"
+
+# Create API key
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/auth/api-keys" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"smoke-key-${RUN_ID}\"}" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "Create API key returns 201" assert_status "201" "$HTTP_CODE"
+check "API key has trag_ prefix" assert_contains "$BODY" "trag_"
+API_KEY=$(echo "$BODY" | jq -r '.key // .api_key // empty')
+API_KEY_ID=$(echo "$BODY" | jq -r '.id // .key_id // empty')
+
+# List API keys
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/auth/api-keys" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "List API keys returns 200" assert_status "200" "$HTTP_CODE"
+check "API key list contains created key" assert_contains "$BODY" "smoke-key-${RUN_ID}"
+
+# Authenticate with API key (if key was returned)
+if [ -n "$API_KEY" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/v1/models" \
+        -H "X-API-Key: $API_KEY" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "X-API-Key auth returns 200" assert_status "200" "$HTTP_CODE"
+fi
+
+# Revoke API key
+if [ -n "$API_KEY_ID" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/auth/api-keys/${API_KEY_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Revoke API key returns 204" assert_status "204" "$HTTP_CODE"
+    API_KEY_ID=""  # prevent double-delete
+fi
+
+# ── 10. Settings (super admin) ───────────────────────────────────────
+section "10. Settings & Audit Log"
 
 # Audit log
 RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/audit-log?limit=50" \
@@ -461,8 +543,446 @@ RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/identity-provide
 HTTP_CODE=$(echo "$RESP" | tail -1)
 check "GET identity providers returns 200" assert_status "200" "$HTTP_CODE"
 
-# ── 10. Error Handling ───────────────────────────────────────────────
-section "10. Error Handling & Edge Cases"
+# Presets
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/presets" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET presets returns 200" assert_status "200" "$HTTP_CODE"
+
+# Scope info
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/scope-info" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET scope info returns 200" assert_status "200" "$HTTP_CODE"
+
+# Vector DB info
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/vectordb/info" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET vectordb info returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 11. Config Snapshots ─────────────────────────────────────────────
+section "11. Config Snapshots"
+
+# Create snapshot
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/settings/snapshots" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"smoke-snapshot-${RUN_ID}\",\"description\":\"Smoke test snapshot\"}" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "Create snapshot returns 201" assert_status "201" "$HTTP_CODE"
+SNAPSHOT_ID=$(echo "$BODY" | jq -r '.id // empty')
+
+# List snapshots
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/snapshots" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "List snapshots returns 200" assert_status "200" "$HTTP_CODE"
+check "Snapshot list contains created snapshot" assert_contains "$BODY" "smoke-snapshot-${RUN_ID}"
+
+# Delete snapshot
+if [ -n "$SNAPSHOT_ID" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/settings/snapshots/${SNAPSHOT_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Delete snapshot returns 200 or 204" [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]
+    SNAPSHOT_ID=""  # prevent double-delete
+fi
+
+# ── 12. Feedback ─────────────────────────────────────────────────────
+section "12. Feedback System"
+
+# Submit feedback
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/v1/chat/feedback" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"response_id\": \"smoke-${RUN_ID}\",
+        \"thumbs_up\": true,
+        \"query\": \"test query\",
+        \"answer\": \"test answer\",
+        \"workspace_id\": \"${WS_ID}\"
+    }" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Submit feedback returns 200" assert_status "200" "$HTTP_CODE"
+
+# Feedback stats
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/feedback/stats" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET feedback stats returns 200" assert_status "200" "$HTTP_CODE"
+
+# Feedback entries
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/feedback/entries?page=1&per_page=10" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET feedback entries returns 200" assert_status "200" "$HTTP_CODE"
+
+# Document boosts
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/feedback/document-boosts" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET document boosts returns 200" assert_status "200" "$HTTP_CODE"
+
+# Golden examples
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/feedback/golden-examples" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET golden examples returns 200" assert_status "200" "$HTTP_CODE"
+
+# Retrieval params
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/feedback/retrieval-params" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET retrieval params returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 13. V2 API ───────────────────────────────────────────────────────
+section "13. API v2 Endpoints"
+
+# V2 Models
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/v2/models" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "GET /v2/models returns 200" assert_status "200" "$HTTP_CODE"
+check "V2 models contains ThaiRAG-1.0" assert_contains "$BODY" "ThaiRAG-1.0"
+
+# API version info
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/version" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET /api/version returns 200" assert_status "200" "$HTTP_CODE"
+
+# V2 Chat (non-streaming)
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/v2/chat/completions" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "ThaiRAG-1.0",
+        "messages": [{"role": "user", "content": "Hello from V2"}],
+        "stream": false
+    }' \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "V2 non-streaming chat returns 200" assert_status "200" "$HTTP_CODE"
+check "V2 chat has choices" assert_json_field "$BODY" '.choices[0].message.content'
+
+# ── 14. Plugins ──────────────────────────────────────────────────────
+section "14. Plugin System"
+
+# List plugins
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/plugins" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "GET plugins returns 200" assert_status "200" "$HTTP_CODE"
+
+# Enable plugin
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/plugins/metadata-strip/enable" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Enable plugin returns 200" assert_status "200" "$HTTP_CODE"
+
+# Disable plugin
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/plugins/metadata-strip/disable" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Disable plugin returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 15. Webhooks ─────────────────────────────────────────────────────
+section "15. Webhooks"
+
+# Create webhook
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/webhooks" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"name\": \"smoke-webhook-${RUN_ID}\",
+        \"url\": \"https://httpbin.org/post\",
+        \"events\": [\"document.created\"],
+        \"secret\": \"smoke-secret\"
+    }" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "Create webhook returns 201" assert_status "201" "$HTTP_CODE"
+WEBHOOK_ID=$(echo "$BODY" | jq -r '.id // empty')
+
+# List webhooks
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/webhooks" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "List webhooks returns 200" assert_status "200" "$HTTP_CODE"
+check "Webhook list contains created webhook" assert_contains "$BODY" "smoke-webhook-${RUN_ID}"
+
+# Delete webhook
+if [ -n "$WEBHOOK_ID" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/webhooks/${WEBHOOK_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Delete webhook returns 204" assert_status "204" "$HTTP_CODE"
+    WEBHOOK_ID=""  # prevent double-delete
+fi
+
+# ── 16. Document Versioning & Reprocessing ────────────────────────────
+section "16. Document Versioning & Chunks"
+
+# Get document chunks
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}/chunks" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET document chunks returns 200" assert_status "200" "$HTTP_CODE"
+
+# Get document content
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}/content" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET document content returns 200" assert_status "200" "$HTTP_CODE"
+
+# List document versions
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}/versions" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "List document versions returns 200" assert_status "200" "$HTTP_CODE"
+
+# Reprocess document
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}/reprocess" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Reprocess document returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 17. ACLs ─────────────────────────────────────────────────────────
+section "17. Access Control Lists"
+
+# Grant workspace ACL (re-register second user since we deleted them)
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"acl-${RUN_ID}@test.com\",\"name\":\"ACL User\",\"password\":\"${TEST_PASSWORD}\"}" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+ACL_USER_ID=$(echo "$BODY" | jq -r '.id // empty')
+
+if [ -n "$ACL_USER_ID" ]; then
+    # Grant workspace ACL
+    RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/workspaces/${WS_ID}/acl" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"user_id\":\"${ACL_USER_ID}\",\"permission\":\"read\"}" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Grant workspace ACL returns 200 or 201" [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]
+
+    # List workspace ACLs
+    RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/acl" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "List workspace ACLs returns 200" assert_status "200" "$HTTP_CODE"
+
+    # Revoke workspace ACL
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/workspaces/${WS_ID}/acl/${ACL_USER_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Revoke workspace ACL returns 200 or 204" [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]
+
+    # Cleanup ACL user
+    curl -sf -X DELETE "${API_URL}/api/km/users/${ACL_USER_ID}" \
+        -H "Authorization: Bearer $TOKEN" > /dev/null 2>&1 || true
+fi
+
+# ── 18. Knowledge Graph ──────────────────────────────────────────────
+section "18. Knowledge Graph"
+
+# Get knowledge graph
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/knowledge-graph" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET knowledge graph returns 200" assert_status "200" "$HTTP_CODE"
+
+# List entities
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/entities" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "List entities returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 19. Background Jobs ──────────────────────────────────────────────
+section "19. Background Jobs"
+
+# List jobs
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/workspaces/${WS_ID}/jobs" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "List jobs returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 20. Evaluation & A/B Testing ─────────────────────────────────────
+section "20. Evaluation & A/B Testing"
+
+# Create evaluation query set
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/eval/query-sets" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"name\": \"smoke-eval-${RUN_ID}\",
+        \"queries\": [{\"query\": \"test question\", \"expected_answer\": \"test answer\"}]
+    }" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "Create eval query set returns 201" assert_status "201" "$HTTP_CODE"
+EVAL_SET_ID=$(echo "$BODY" | jq -r '.id // empty')
+
+# List evaluation query sets
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/eval/query-sets" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "List eval query sets returns 200" assert_status "200" "$HTTP_CODE"
+
+# Delete eval set
+if [ -n "$EVAL_SET_ID" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/eval/query-sets/${EVAL_SET_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Delete eval query set returns 200 or 204" [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]
+    EVAL_SET_ID=""  # prevent double-delete
+fi
+
+# Create A/B test
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/ab-tests" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"name\": \"smoke-ab-${RUN_ID}\",
+        \"config_a\": {\"top_k\": 5},
+        \"config_b\": {\"top_k\": 10}
+    }" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "Create A/B test returns 201" assert_status "201" "$HTTP_CODE"
+AB_TEST_ID=$(echo "$BODY" | jq -r '.id // empty')
+
+# List A/B tests
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/ab-tests" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "List A/B tests returns 200" assert_status "200" "$HTTP_CODE"
+
+# Delete A/B test
+if [ -n "$AB_TEST_ID" ]; then
+    RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/ab-tests/${AB_TEST_ID}" \
+        -H "Authorization: Bearer $TOKEN" \
+        2>/dev/null || echo -e "\n000")
+    HTTP_CODE=$(echo "$RESP" | tail -1)
+    check "Delete A/B test returns 200 or 204" [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]
+    AB_TEST_ID=""  # prevent double-delete
+fi
+
+# ── 21. Backup & Restore ─────────────────────────────────────────────
+section "21. Backup & Restore"
+
+# Preview backup
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/admin/backup/preview" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Backup preview returns 200" assert_status "200" "$HTTP_CODE"
+
+# Create backup
+RESP=$(curl -sf -w "\n%{http_code}" -X POST "${API_URL}/api/km/admin/backup" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Create backup returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 22. Vector Migration Status ──────────────────────────────────────
+section "22. Vector Migration"
+
+# Get migration status
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/admin/vector-migration/status" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+BODY=$(echo "$RESP" | sed '$d')
+check "GET migration status returns 200" assert_status "200" "$HTTP_CODE"
+check "Migration status has state field" assert_json_field "$BODY" '.state'
+
+# ── 23. Rate Limit Stats ─────────────────────────────────────────────
+section "23. Rate Limit Dashboard"
+
+# Get rate limit stats
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/admin/rate-limits/stats" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET rate limit stats returns 200" assert_status "200" "$HTTP_CODE"
+
+# Get blocked events
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/admin/rate-limits/blocked" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET blocked events returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 24. Inference Logs & Usage ────────────────────────────────────────
+section "24. Inference Logs & Usage"
+
+# Inference logs
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/inference-logs" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET inference logs returns 200" assert_status "200" "$HTTP_CODE"
+
+# Inference analytics
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/inference-analytics" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET inference analytics returns 200" assert_status "200" "$HTTP_CODE"
+
+# Usage stats
+RESP=$(curl -sf -w "\n%{http_code}" "${API_URL}/api/km/settings/usage" \
+    -H "Authorization: Bearer $TOKEN" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "GET usage stats returns 200" assert_status "200" "$HTTP_CODE"
+
+# ── 25. Error Handling ───────────────────────────────────────────────
+section "25. Error Handling & Edge Cases"
 
 # 404 — nonexistent org
 RESP=$(curl -s -w "\n%{http_code}" "${API_URL}/api/km/orgs/00000000-0000-0000-0000-000000000000" \
@@ -488,8 +1008,14 @@ RESP=$(curl -s -w "\n%{http_code}" -X POST "${API_URL}/api/auth/register" \
 HTTP_CODE=$(echo "$RESP" | tail -1)
 check "Empty fields returns 400" assert_status "400" "$HTTP_CODE"
 
-# ── 11. Rate Limiting ────────────────────────────────────────────────
-section "11. Rate Limiting"
+# Unauthorized access
+RESP=$(curl -s -w "\n%{http_code}" "${API_URL}/api/km/settings/providers" \
+    2>/dev/null || echo -e "\n000")
+HTTP_CODE=$(echo "$RESP" | tail -1)
+check "Settings without auth returns 401" assert_status "401" "$HTTP_CODE"
+
+# ── 26. Rate Limiting ────────────────────────────────────────────────
+section "26. Rate Limiting"
 
 RATE_LIMIT_HIT=false
 for i in $(seq 1 50); do
@@ -503,8 +1029,8 @@ done
 # Rate limiting may or may not trigger depending on config; just check the endpoint works
 check "Health endpoint survives rapid requests" [ "$HTTP_CODE" = "200" ] || [ "$RATE_LIMIT_HIT" = "true" ]
 
-# ── 12. Document Cleanup ────────────────────────────────────────────
-section "12. Cleanup Verification"
+# ── 27. Cleanup ──────────────────────────────────────────────────────
+section "27. Cleanup Verification"
 
 # Delete document
 RESP=$(curl -sf -w "\n%{http_code}" -X DELETE "${API_URL}/api/km/workspaces/${WS_ID}/documents/${DOC_ID}" \
