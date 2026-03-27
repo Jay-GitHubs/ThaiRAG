@@ -51,6 +51,7 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 csv = { workspace = true }
+regex = { workspace = true }
 zip = "8.4"
 
 [dev-dependencies]

@@ -11,8 +11,9 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport,
-    OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+    AclPermission, ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, DocumentAcl, IdpId,
+    McpConnectorConfig, McpTransport, OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus,
+    SyncState, UserId, WorkspaceAcl, WorkspaceId,
 };
 use uuid::Uuid;
 
@@ -2901,5 +2902,516 @@ impl KmStoreTrait for PostgresKmStore {
                 .execute(&self.pool)
                 .await
         });
+    }
+
+    // ── Knowledge Graph ──────────────────────────────────────────────
+
+    fn upsert_entity(
+        &self,
+        name: &str,
+        entity_type: &str,
+        workspace_id: WorkspaceId,
+        metadata: serde_json::Value,
+    ) -> Result<thairag_core::types::Entity> {
+        block_on(async {
+            let meta_str = metadata.to_string();
+            // Try to find existing
+            let existing: Option<(Uuid,String)> = sqlx::query_as(
+                "SELECT id, created_at::text FROM entities WHERE name = $1 AND entity_type = $2 AND workspace_id = $3",
+            )
+            .bind(name)
+            .bind(entity_type)
+            .bind(workspace_id.0)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::Database(format!("Entity lookup failed: {e}")))?;
+
+            if let Some((id, created_at)) = existing {
+                // Update metadata
+                sqlx::query("UPDATE entities SET metadata = $1 WHERE id = $2")
+                    .bind(&meta_str)
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await
+                    .ok();
+                let doc_rows: Vec<(Uuid,)> =
+                    sqlx::query_as("SELECT doc_id FROM entity_doc_links WHERE entity_id = $1")
+                        .bind(id)
+                        .fetch_all(&self.pool)
+                        .await
+                        .unwrap_or_default();
+                let doc_ids: Vec<DocId> = doc_rows.iter().map(|(d,)| DocId(*d)).collect();
+                return Ok(thairag_core::types::Entity {
+                    id: thairag_core::types::EntityId(id),
+                    name: name.to_string(),
+                    entity_type: entity_type.to_string(),
+                    workspace_id,
+                    doc_ids,
+                    metadata,
+                    created_at,
+                });
+            }
+
+            let id = Uuid::new_v4();
+            let now = chrono::Utc::now();
+            sqlx::query(
+                "INSERT INTO entities (id, name, entity_type, workspace_id, metadata, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(entity_type)
+            .bind(workspace_id.0)
+            .bind(&meta_str)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::Database(format!("Insert entity failed: {e}")))?;
+
+            Ok(thairag_core::types::Entity {
+                id: thairag_core::types::EntityId(id),
+                name: name.to_string(),
+                entity_type: entity_type.to_string(),
+                workspace_id,
+                doc_ids: vec![],
+                metadata,
+                created_at: now.to_rfc3339(),
+            })
+        })
+    }
+
+    fn add_entity_doc_link(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+        doc_id: DocId,
+    ) -> Result<()> {
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO entity_doc_links (entity_id, doc_id) VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(entity_id.0)
+            .bind(doc_id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::Database(format!("Add entity doc link failed: {e}")))?;
+            Ok(())
+        })
+    }
+
+    fn insert_relation(
+        &self,
+        from_id: thairag_core::types::EntityId,
+        to_id: thairag_core::types::EntityId,
+        relation_type: &str,
+        confidence: f32,
+        doc_id: DocId,
+    ) -> Result<thairag_core::types::Relation> {
+        block_on(async {
+            let id = Uuid::new_v4();
+            let now = chrono::Utc::now();
+            sqlx::query(
+                "INSERT INTO relations (id, from_entity_id, to_entity_id, relation_type, confidence, doc_id, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(id)
+            .bind(from_id.0)
+            .bind(to_id.0)
+            .bind(relation_type)
+            .bind(confidence)
+            .bind(doc_id.0)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::Database(format!("Insert relation failed: {e}")))?;
+
+            Ok(thairag_core::types::Relation {
+                id: thairag_core::types::RelationId(id),
+                from_entity_id: from_id,
+                to_entity_id: to_id,
+                relation_type: relation_type.to_string(),
+                confidence,
+                doc_id,
+                created_at: now.to_rfc3339(),
+            })
+        })
+    }
+
+    fn list_entities(&self, workspace_id: WorkspaceId) -> Vec<thairag_core::types::Entity> {
+        block_on(async {
+            let rows: Vec<(Uuid, String, String, String, String)> = sqlx::query_as(
+                "SELECT id, name, entity_type, metadata, created_at::text
+                 FROM entities WHERE workspace_id = $1 ORDER BY name",
+            )
+            .bind(workspace_id.0)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
+            let mut entities = Vec::with_capacity(rows.len());
+            for (id, name, entity_type, meta_str, created_at) in rows {
+                let doc_rows: Vec<(Uuid,)> =
+                    sqlx::query_as("SELECT doc_id FROM entity_doc_links WHERE entity_id = $1")
+                        .bind(id)
+                        .fetch_all(&self.pool)
+                        .await
+                        .unwrap_or_default();
+                let doc_ids: Vec<DocId> = doc_rows.iter().map(|(d,)| DocId(*d)).collect();
+                entities.push(thairag_core::types::Entity {
+                    id: thairag_core::types::EntityId(id),
+                    name,
+                    entity_type,
+                    workspace_id,
+                    doc_ids,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                    created_at,
+                });
+            }
+            entities
+        })
+    }
+
+    fn get_entity_relations(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Vec<thairag_core::types::Relation> {
+        block_on(async {
+            let rows: Vec<(Uuid, Uuid, Uuid, String, f32, Uuid, String)> = sqlx::query_as(
+                "SELECT id, from_entity_id, to_entity_id, relation_type, confidence, doc_id, created_at::text
+                 FROM relations WHERE from_entity_id = $1 OR to_entity_id = $1",
+            )
+            .bind(entity_id.0)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
+            rows.into_iter()
+                .map(|(id, from_id, to_id, rel_type, conf, doc_id, created_at)| {
+                    thairag_core::types::Relation {
+                        id: thairag_core::types::RelationId(id),
+                        from_entity_id: thairag_core::types::EntityId(from_id),
+                        to_entity_id: thairag_core::types::EntityId(to_id),
+                        relation_type: rel_type,
+                        confidence: conf,
+                        doc_id: DocId(doc_id),
+                        created_at,
+                    }
+                })
+                .collect()
+        })
+    }
+
+    fn search_entities(
+        &self,
+        workspace_id: WorkspaceId,
+        query: &str,
+    ) -> Vec<thairag_core::types::Entity> {
+        block_on(async {
+            let pattern = format!("%{query}%");
+            let rows: Vec<(Uuid, String, String, String, String)> = sqlx::query_as(
+                "SELECT id, name, entity_type, metadata, created_at::text
+                 FROM entities WHERE workspace_id = $1 AND name ILIKE $2
+                 ORDER BY name LIMIT 100",
+            )
+            .bind(workspace_id.0)
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
+            let mut entities = Vec::with_capacity(rows.len());
+            for (id, name, entity_type, meta_str, created_at) in rows {
+                let doc_rows: Vec<(Uuid,)> =
+                    sqlx::query_as("SELECT doc_id FROM entity_doc_links WHERE entity_id = $1")
+                        .bind(id)
+                        .fetch_all(&self.pool)
+                        .await
+                        .unwrap_or_default();
+                let doc_ids: Vec<DocId> = doc_rows.iter().map(|(d,)| DocId(*d)).collect();
+                entities.push(thairag_core::types::Entity {
+                    id: thairag_core::types::EntityId(id),
+                    name,
+                    entity_type,
+                    workspace_id,
+                    doc_ids,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                    created_at,
+                });
+            }
+            entities
+        })
+    }
+
+    fn get_knowledge_graph(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> thairag_core::types::KnowledgeGraph {
+        let entities = self.list_entities(workspace_id);
+        let relations = block_on(async {
+            let rows: Vec<(Uuid, Uuid, Uuid, String, f32, Uuid, String)> = sqlx::query_as(
+                "SELECT r.id, r.from_entity_id, r.to_entity_id, r.relation_type, r.confidence, r.doc_id, r.created_at::text
+                 FROM relations r
+                 JOIN entities e ON r.from_entity_id = e.id
+                 WHERE e.workspace_id = $1",
+            )
+            .bind(workspace_id.0)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
+            rows.into_iter()
+                .map(|(id, from_id, to_id, rel_type, conf, doc_id, created_at)| {
+                    thairag_core::types::Relation {
+                        id: thairag_core::types::RelationId(id),
+                        from_entity_id: thairag_core::types::EntityId(from_id),
+                        to_entity_id: thairag_core::types::EntityId(to_id),
+                        relation_type: rel_type,
+                        confidence: conf,
+                        doc_id: DocId(doc_id),
+                        created_at,
+                    }
+                })
+                .collect()
+        });
+
+        thairag_core::types::KnowledgeGraph {
+            entities,
+            relations,
+        }
+    }
+
+    fn delete_entity(&self, entity_id: thairag_core::types::EntityId) -> Result<()> {
+        block_on(async {
+            let result = sqlx::query("DELETE FROM entities WHERE id = $1")
+                .bind(entity_id.0)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| ThaiRagError::Database(format!("Delete entity failed: {e}")))?;
+            if result.rows_affected() == 0 {
+                return Err(ThaiRagError::NotFound(format!(
+                    "Entity {entity_id} not found"
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    fn get_entity(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Result<thairag_core::types::Entity> {
+        block_on(async {
+            let row: (String, String, Uuid, String, String) = sqlx::query_as(
+                "SELECT name, entity_type, workspace_id, metadata, created_at::text
+                 FROM entities WHERE id = $1",
+            )
+            .bind(entity_id.0)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| ThaiRagError::Database(format!("Get entity failed: {e}")))?
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Entity {entity_id} not found")))?;
+
+            let (name, entity_type, ws_id, meta_str, created_at) = row;
+            let doc_rows: Vec<(Uuid,)> =
+                sqlx::query_as("SELECT doc_id FROM entity_doc_links WHERE entity_id = $1")
+                    .bind(entity_id.0)
+                    .fetch_all(&self.pool)
+                    .await
+                    .unwrap_or_default();
+            let doc_ids: Vec<DocId> = doc_rows.iter().map(|(d,)| DocId(*d)).collect();
+
+            Ok(thairag_core::types::Entity {
+                id: entity_id,
+                name,
+                entity_type,
+                workspace_id: WorkspaceId(ws_id),
+                doc_ids,
+                metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                created_at,
+            })
+        })
+    }
+
+    // ── Workspace ACLs ──────────────────────────────────────────────
+
+    fn grant_workspace_access(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        permission: AclPermission,
+        granted_by: Option<UserId>,
+    ) -> Result<WorkspaceAcl> {
+        let now = Utc::now();
+        let gb = granted_by.map(|u| u.0);
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO workspace_acls (user_id, workspace_id, permission, granted_at, granted_by)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT(user_id, workspace_id) DO UPDATE SET
+                    permission = EXCLUDED.permission,
+                    granted_at = EXCLUDED.granted_at,
+                    granted_by = EXCLUDED.granted_by",
+            )
+            .bind(user_id.0)
+            .bind(workspace_id.0)
+            .bind(permission.as_str())
+            .bind(now)
+            .bind(gb)
+            .execute(&self.pool)
+            .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to grant workspace access: {e}")))?;
+        Ok(WorkspaceAcl {
+            user_id,
+            workspace_id,
+            permission,
+            granted_at: now.to_rfc3339(),
+            granted_by,
+        })
+    }
+
+    fn revoke_workspace_access(&self, user_id: UserId, workspace_id: WorkspaceId) -> Result<()> {
+        let result = block_on(async {
+            sqlx::query("DELETE FROM workspace_acls WHERE user_id = $1 AND workspace_id = $2")
+                .bind(user_id.0)
+                .bind(workspace_id.0)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to revoke workspace access: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(
+                "Workspace ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn list_workspace_acls(&self, workspace_id: WorkspaceId) -> Vec<WorkspaceAcl> {
+        block_on(async {
+            sqlx::query(
+                "SELECT user_id, workspace_id, permission, granted_at, granted_by
+                 FROM workspace_acls WHERE workspace_id = $1 ORDER BY granted_at",
+            )
+            .bind(workspace_id.0)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let uid: Uuid = row.get("user_id");
+            let wid: Uuid = row.get("workspace_id");
+            let perm: String = row.get("permission");
+            let granted_at: DateTime<Utc> = row.get("granted_at");
+            let gb: Option<Uuid> = row.get("granted_by");
+            WorkspaceAcl {
+                user_id: UserId(uid),
+                workspace_id: WorkspaceId(wid),
+                permission: AclPermission::from_str_lossy(&perm),
+                granted_at: granted_at.to_rfc3339(),
+                granted_by: gb.map(UserId),
+            }
+        })
+        .collect()
+    }
+
+    fn get_user_workspace_acl(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+    ) -> Option<AclPermission> {
+        block_on(async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT permission FROM workspace_acls WHERE user_id = $1 AND workspace_id = $2",
+            )
+            .bind(user_id.0)
+            .bind(workspace_id.0)
+            .fetch_optional(&self.pool)
+            .await
+        })
+        .ok()
+        .flatten()
+        .map(|s| AclPermission::from_str_lossy(&s))
+    }
+
+    fn list_accessible_workspaces(&self, user_id: UserId) -> Vec<WorkspaceId> {
+        block_on(async {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT workspace_id FROM workspace_acls WHERE user_id = $1",
+            )
+            .bind(user_id.0)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(WorkspaceId)
+        .collect()
+    }
+
+    // ── Document ACLs ───────────────────────────────────────────────
+
+    fn grant_document_access(
+        &self,
+        user_id: UserId,
+        doc_id: DocId,
+        permission: AclPermission,
+    ) -> Result<DocumentAcl> {
+        let now = Utc::now();
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO document_acls (user_id, doc_id, permission, granted_at)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT(user_id, doc_id) DO UPDATE SET
+                    permission = EXCLUDED.permission,
+                    granted_at = EXCLUDED.granted_at",
+            )
+            .bind(user_id.0)
+            .bind(doc_id.0)
+            .bind(permission.as_str())
+            .bind(now)
+            .execute(&self.pool)
+            .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to grant document access: {e}")))?;
+        Ok(DocumentAcl {
+            user_id,
+            doc_id,
+            permission,
+            granted_at: now.to_rfc3339(),
+        })
+    }
+
+    fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()> {
+        let result = block_on(async {
+            sqlx::query("DELETE FROM document_acls WHERE user_id = $1 AND doc_id = $2")
+                .bind(user_id.0)
+                .bind(doc_id.0)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to revoke document access: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(
+                "Document ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission> {
+        block_on(async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT permission FROM document_acls WHERE user_id = $1 AND doc_id = $2",
+            )
+            .bind(user_id.0)
+            .bind(doc_id.0)
+            .fetch_optional(&self.pool)
+            .await
+        })
+        .ok()
+        .flatten()
+        .map(|s| AclPermission::from_str_lossy(&s))
     }
 }

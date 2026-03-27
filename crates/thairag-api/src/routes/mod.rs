@@ -1,5 +1,8 @@
+pub mod ab_test;
+pub mod acl;
 pub mod api_keys;
 pub mod auth;
+pub mod backup;
 pub mod chat;
 pub mod connectors;
 pub mod documents;
@@ -7,6 +10,7 @@ pub mod eval;
 pub mod feedback;
 pub mod health;
 pub mod km;
+pub mod knowledge_graph;
 pub mod models;
 pub mod settings;
 pub mod test_query;
@@ -321,6 +325,24 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/workspaces/{workspace_id}/documents/{doc_id}/schedule",
             patch(documents::update_document_schedule),
         )
+        // Workspace ACLs
+        .route(
+            "/workspaces/{ws_id}/acl",
+            get(acl::list_workspace_acls).post(acl::grant_workspace_acl),
+        )
+        .route(
+            "/workspaces/{ws_id}/acl/{user_id}",
+            delete(acl::revoke_workspace_acl),
+        )
+        // Document ACLs
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/acl",
+            post(acl::grant_document_acl),
+        )
+        .route(
+            "/workspaces/{ws_id}/documents/{doc_id}/acl/{user_id}",
+            delete(acl::revoke_document_acl),
+        )
         // Jobs
         .route("/workspaces/{workspace_id}/jobs", get(documents::list_jobs))
         .route(
@@ -379,6 +401,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route("/webhooks/{webhook_id}", delete(webhooks::delete_webhook))
         .route("/webhooks/{webhook_id}/test", post(webhooks::test_webhook))
+        // Backup & Restore
+        .route("/admin/backup", post(backup::create_backup))
+        .route("/admin/restore", post(backup::restore_backup))
+        .route("/admin/backup/preview", post(backup::preview_backup))
         // Search Quality Evaluation
         .route(
             "/eval/query-sets",
@@ -390,7 +416,35 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(eval::get_query_set).delete(eval::delete_query_set),
         )
         .route("/eval/query-sets/{id}/run", post(eval::run_evaluation))
-        .route("/eval/query-sets/{id}/results", get(eval::list_results));
+        .route("/eval/query-sets/{id}/results", get(eval::list_results))
+        // A/B Testing
+        .route(
+            "/ab-tests",
+            get(ab_test::list_ab_tests).post(ab_test::create_ab_test),
+        )
+        .route(
+            "/ab-tests/{id}",
+            get(ab_test::get_ab_test).delete(ab_test::delete_ab_test),
+        )
+        .route("/ab-tests/{id}/run", post(ab_test::run_ab_test))
+        .route("/ab-tests/{id}/compare", post(ab_test::compare_ab_test))
+        // Knowledge Graph
+        .route(
+            "/workspaces/{workspace_id}/knowledge-graph",
+            get(knowledge_graph::get_knowledge_graph),
+        )
+        .route(
+            "/workspaces/{workspace_id}/entities",
+            get(knowledge_graph::list_entities),
+        )
+        .route(
+            "/workspaces/{workspace_id}/entities/{entity_id}",
+            get(knowledge_graph::get_entity).delete(knowledge_graph::delete_entity),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/extract",
+            post(knowledge_graph::extract_from_document),
+        );
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let server_timeout = std::time::Duration::from_secs(state.config.server.request_timeout_secs);

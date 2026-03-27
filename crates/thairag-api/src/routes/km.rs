@@ -139,12 +139,22 @@ fn user_id_from_claims(claims: &AuthClaims) -> Option<UserId> {
     claims.sub.parse::<Uuid>().ok().map(UserId)
 }
 
+/// Public wrapper for `user_id_from_claims` — used by ACL module.
+pub fn user_id_from_claims_pub(claims: &AuthClaims) -> Option<UserId> {
+    user_id_from_claims(claims)
+}
+
 fn is_super_admin(state: &AppState, user_id: UserId) -> bool {
     state
         .km_store
         .get_user(user_id)
         .map(|u| u.is_super_admin || u.role == "super_admin")
         .unwrap_or(false)
+}
+
+/// Public wrapper for `is_super_admin` — used by ACL module.
+pub fn is_super_admin_pub(state: &AppState, user_id: UserId) -> bool {
+    is_super_admin(state, user_id)
 }
 
 /// Check permission at org level (considers all scopes within the org).

@@ -18,6 +18,9 @@ import { ConnectorsPage } from './pages/ConnectorsPage';
 import InferenceLogsPage from './pages/InferenceLogsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EvalPage from './pages/EvalPage';
+import AbTestPage from './pages/AbTestPage';
+import BackupPage from './pages/BackupPage';
+import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 
 export function App() {
   return (
@@ -45,6 +48,9 @@ export function App() {
           <Route path="/analytics" element={<RoleRoute minRole="admin"><AnalyticsPage /></RoleRoute>} />
           <Route path="/inference-logs" element={<RoleRoute minRole="super_admin"><InferenceLogsPage /></RoleRoute>} />
           <Route path="/eval" element={<RoleRoute minRole="super_admin"><EvalPage /></RoleRoute>} />
+          <Route path="/ab-tests" element={<RoleRoute minRole="super_admin"><AbTestPage /></RoleRoute>} />
+          <Route path="/knowledge-graph" element={<RoleRoute minRole="editor"><KnowledgeGraphPage /></RoleRoute>} />
+          <Route path="/backup" element={<RoleRoute minRole="super_admin"><BackupPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>

@@ -5814,6 +5814,7 @@ dependencies = [
  "opentelemetry_sdk",
  "password-hash",
  "prometheus",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

@@ -9,8 +9,9 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport,
-    OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+    AclPermission, ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, DocumentAcl, IdpId,
+    McpConnectorConfig, McpTransport, OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus,
+    SyncState, UserId, WorkspaceAcl, WorkspaceId,
 };
 use uuid::Uuid;
 
@@ -2850,6 +2851,527 @@ impl KmStoreTrait for SqliteKmStore {
             params![now, key_id.0.to_string()],
         );
     }
+
+    // ── Knowledge Graph ──────────────────────────────────────────────
+
+    fn upsert_entity(
+        &self,
+        name: &str,
+        entity_type: &str,
+        workspace_id: WorkspaceId,
+        metadata: serde_json::Value,
+    ) -> Result<thairag_core::types::Entity> {
+        let conn = self.conn.lock().unwrap();
+        let ws_str = workspace_id.0.to_string();
+        // Try to find existing entity by name+type+workspace
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM entities WHERE name = ?1 AND entity_type = ?2 AND workspace_id = ?3",
+                params![name, entity_type, ws_str],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(id_str) = existing {
+            // Update metadata
+            let meta_str = metadata.to_string();
+            conn.execute(
+                "UPDATE entities SET metadata = ?1 WHERE id = ?2",
+                params![meta_str, id_str],
+            )
+            .ok();
+            let id = thairag_core::types::EntityId(parse_uuid(&id_str));
+            // Fetch doc_ids
+            let mut stmt = conn
+                .prepare("SELECT doc_id FROM entity_doc_links WHERE entity_id = ?1")
+                .unwrap();
+            let doc_ids: Vec<DocId> = stmt
+                .query_map(params![id_str], |row| {
+                    Ok(DocId(parse_uuid(&row.get::<_, String>(0)?)))
+                })
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            let created_at: String = conn
+                .query_row(
+                    "SELECT created_at FROM entities WHERE id = ?1",
+                    params![id_str],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+            return Ok(thairag_core::types::Entity {
+                id,
+                name: name.to_string(),
+                entity_type: entity_type.to_string(),
+                workspace_id,
+                doc_ids,
+                metadata,
+                created_at,
+            });
+        }
+
+        let id = thairag_core::types::EntityId::new();
+        let now = ts(&chrono::Utc::now());
+        let meta_str = metadata.to_string();
+        conn.execute(
+            "INSERT INTO entities (id, name, entity_type, workspace_id, metadata, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id.0.to_string(), name, entity_type, ws_str, meta_str, now],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to insert entity: {e}")))?;
+
+        Ok(thairag_core::types::Entity {
+            id,
+            name: name.to_string(),
+            entity_type: entity_type.to_string(),
+            workspace_id,
+            doc_ids: vec![],
+            metadata,
+            created_at: now,
+        })
+    }
+
+    fn add_entity_doc_link(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+        doc_id: DocId,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO entity_doc_links (entity_id, doc_id) VALUES (?1, ?2)",
+            params![entity_id.0.to_string(), doc_id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to add entity doc link: {e}")))?;
+        Ok(())
+    }
+
+    fn insert_relation(
+        &self,
+        from_id: thairag_core::types::EntityId,
+        to_id: thairag_core::types::EntityId,
+        relation_type: &str,
+        confidence: f32,
+        doc_id: DocId,
+    ) -> Result<thairag_core::types::Relation> {
+        let conn = self.conn.lock().unwrap();
+        let id = thairag_core::types::RelationId::new();
+        let now = ts(&chrono::Utc::now());
+        conn.execute(
+            "INSERT INTO relations (id, from_entity_id, to_entity_id, relation_type, confidence, doc_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id.0.to_string(),
+                from_id.0.to_string(),
+                to_id.0.to_string(),
+                relation_type,
+                confidence,
+                doc_id.0.to_string(),
+                now,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to insert relation: {e}")))?;
+
+        Ok(thairag_core::types::Relation {
+            id,
+            from_entity_id: from_id,
+            to_entity_id: to_id,
+            relation_type: relation_type.to_string(),
+            confidence,
+            doc_id,
+            created_at: now,
+        })
+    }
+
+    fn list_entities(&self, workspace_id: WorkspaceId) -> Vec<thairag_core::types::Entity> {
+        let conn = self.conn.lock().unwrap();
+        let ws_str = workspace_id.0.to_string();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, entity_type, metadata, created_at FROM entities WHERE workspace_id = ?1 ORDER BY name",
+            )
+            .unwrap();
+        let entities: Vec<_> = stmt
+            .query_map(params![ws_str], |row| {
+                let id_str: String = row.get(0)?;
+                let meta_str: String = row.get(3)?;
+                Ok((
+                    id_str,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    meta_str,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        entities
+            .into_iter()
+            .map(|(id_str, name, entity_type, meta_str, created_at)| {
+                let id = thairag_core::types::EntityId(parse_uuid(&id_str));
+                let mut doc_stmt = conn
+                    .prepare("SELECT doc_id FROM entity_doc_links WHERE entity_id = ?1")
+                    .unwrap();
+                let doc_ids: Vec<DocId> = doc_stmt
+                    .query_map(params![id_str], |row| {
+                        Ok(DocId(parse_uuid(&row.get::<_, String>(0)?)))
+                    })
+                    .unwrap()
+                    .filter_map(|r| r.ok())
+                    .collect();
+                thairag_core::types::Entity {
+                    id,
+                    name,
+                    entity_type,
+                    workspace_id,
+                    doc_ids,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                    created_at,
+                }
+            })
+            .collect()
+    }
+
+    fn get_entity_relations(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Vec<thairag_core::types::Relation> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = entity_id.0.to_string();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, from_entity_id, to_entity_id, relation_type, confidence, doc_id, created_at
+                 FROM relations WHERE from_entity_id = ?1 OR to_entity_id = ?1",
+            )
+            .unwrap();
+        stmt.query_map(params![id_str], |row| {
+            Ok(thairag_core::types::Relation {
+                id: thairag_core::types::RelationId(parse_uuid(&row.get::<_, String>(0)?)),
+                from_entity_id: thairag_core::types::EntityId(parse_uuid(
+                    &row.get::<_, String>(1)?,
+                )),
+                to_entity_id: thairag_core::types::EntityId(parse_uuid(&row.get::<_, String>(2)?)),
+                relation_type: row.get(3)?,
+                confidence: row.get(4)?,
+                doc_id: DocId(parse_uuid(&row.get::<_, String>(5)?)),
+                created_at: row.get(6)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn search_entities(
+        &self,
+        workspace_id: WorkspaceId,
+        query: &str,
+    ) -> Vec<thairag_core::types::Entity> {
+        let conn = self.conn.lock().unwrap();
+        let ws_str = workspace_id.0.to_string();
+        let pattern = format!("%{query}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, entity_type, metadata, created_at FROM entities
+                 WHERE workspace_id = ?1 AND name LIKE ?2 ORDER BY name LIMIT 100",
+            )
+            .unwrap();
+        let entities: Vec<_> = stmt
+            .query_map(params![ws_str, pattern], |row| {
+                let id_str: String = row.get(0)?;
+                let meta_str: String = row.get(3)?;
+                Ok((
+                    id_str,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    meta_str,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        entities
+            .into_iter()
+            .map(|(id_str, name, entity_type, meta_str, created_at)| {
+                let id = thairag_core::types::EntityId(parse_uuid(&id_str));
+                let mut doc_stmt = conn
+                    .prepare("SELECT doc_id FROM entity_doc_links WHERE entity_id = ?1")
+                    .unwrap();
+                let doc_ids: Vec<DocId> = doc_stmt
+                    .query_map(params![id_str], |row| {
+                        Ok(DocId(parse_uuid(&row.get::<_, String>(0)?)))
+                    })
+                    .unwrap()
+                    .filter_map(|r| r.ok())
+                    .collect();
+                thairag_core::types::Entity {
+                    id,
+                    name,
+                    entity_type,
+                    workspace_id,
+                    doc_ids,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                    created_at,
+                }
+            })
+            .collect()
+    }
+
+    fn get_knowledge_graph(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> thairag_core::types::KnowledgeGraph {
+        let entities = self.list_entities(workspace_id);
+        let conn = self.conn.lock().unwrap();
+        let ws_str = workspace_id.0.to_string();
+        let mut stmt = conn
+            .prepare(
+                "SELECT r.id, r.from_entity_id, r.to_entity_id, r.relation_type, r.confidence, r.doc_id, r.created_at
+                 FROM relations r
+                 JOIN entities e ON r.from_entity_id = e.id
+                 WHERE e.workspace_id = ?1",
+            )
+            .unwrap();
+        let relations: Vec<thairag_core::types::Relation> = stmt
+            .query_map(params![ws_str], |row| {
+                Ok(thairag_core::types::Relation {
+                    id: thairag_core::types::RelationId(parse_uuid(&row.get::<_, String>(0)?)),
+                    from_entity_id: thairag_core::types::EntityId(parse_uuid(
+                        &row.get::<_, String>(1)?,
+                    )),
+                    to_entity_id: thairag_core::types::EntityId(parse_uuid(
+                        &row.get::<_, String>(2)?,
+                    )),
+                    relation_type: row.get(3)?,
+                    confidence: row.get(4)?,
+                    doc_id: DocId(parse_uuid(&row.get::<_, String>(5)?)),
+                    created_at: row.get(6)?,
+                })
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        thairag_core::types::KnowledgeGraph {
+            entities,
+            relations,
+        }
+    }
+
+    fn delete_entity(&self, entity_id: thairag_core::types::EntityId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = entity_id.0.to_string();
+        // Relations and doc links are cascade-deleted by foreign keys
+        let affected = conn
+            .execute("DELETE FROM entities WHERE id = ?1", params![id_str])
+            .map_err(|e| ThaiRagError::Database(format!("Failed to delete entity: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "Entity {entity_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn get_entity(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Result<thairag_core::types::Entity> {
+        let conn = self.conn.lock().unwrap();
+        let id_str = entity_id.0.to_string();
+        let (name, entity_type, ws_str, meta_str, created_at): (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT name, entity_type, workspace_id, metadata, created_at FROM entities WHERE id = ?1",
+                params![id_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .map_err(|_| ThaiRagError::NotFound(format!("Entity {entity_id} not found")))?;
+
+        let mut doc_stmt = conn
+            .prepare("SELECT doc_id FROM entity_doc_links WHERE entity_id = ?1")
+            .unwrap();
+        let doc_ids: Vec<DocId> = doc_stmt
+            .query_map(params![id_str], |row| {
+                Ok(DocId(parse_uuid(&row.get::<_, String>(0)?)))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(thairag_core::types::Entity {
+            id: entity_id,
+            name,
+            entity_type,
+            workspace_id: WorkspaceId(parse_uuid(&ws_str)),
+            doc_ids,
+            metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+            created_at,
+        })
+    }
+
+    // ── Workspace ACLs ──────────────────────────────────────────────
+
+    fn grant_workspace_access(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        permission: AclPermission,
+        granted_by: Option<UserId>,
+    ) -> Result<WorkspaceAcl> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&Utc::now());
+        let uid = user_id.0.to_string();
+        let wid = workspace_id.0.to_string();
+        let perm_str = permission.as_str();
+        let gb = granted_by.map(|u| u.0.to_string());
+        conn.execute(
+            "INSERT INTO workspace_acls (user_id, workspace_id, permission, granted_at, granted_by)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(user_id, workspace_id) DO UPDATE SET
+                permission = excluded.permission,
+                granted_at = excluded.granted_at,
+                granted_by = excluded.granted_by",
+            params![uid, wid, perm_str, now, gb],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to grant workspace access: {e}")))?;
+        Ok(WorkspaceAcl {
+            user_id,
+            workspace_id,
+            permission,
+            granted_at: now,
+            granted_by,
+        })
+    }
+
+    fn revoke_workspace_access(&self, user_id: UserId, workspace_id: WorkspaceId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "DELETE FROM workspace_acls WHERE user_id = ?1 AND workspace_id = ?2",
+                params![user_id.0.to_string(), workspace_id.0.to_string()],
+            )
+            .map_err(|e| {
+                ThaiRagError::Database(format!("Failed to revoke workspace access: {e}"))
+            })?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(
+                "Workspace ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn list_workspace_acls(&self, workspace_id: WorkspaceId) -> Vec<WorkspaceAcl> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT user_id, workspace_id, permission, granted_at, granted_by
+                 FROM workspace_acls WHERE workspace_id = ?1 ORDER BY granted_at",
+            )
+            .unwrap();
+        stmt.query_map(params![workspace_id.0.to_string()], |row| {
+            Ok(WorkspaceAcl {
+                user_id: UserId(parse_uuid(&row.get::<_, String>(0)?)),
+                workspace_id: WorkspaceId(parse_uuid(&row.get::<_, String>(1)?)),
+                permission: AclPermission::from_str_lossy(&row.get::<_, String>(2)?),
+                granted_at: row.get(3)?,
+                granted_by: row
+                    .get::<_, Option<String>>(4)?
+                    .map(|s| UserId(parse_uuid(&s))),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_user_workspace_acl(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+    ) -> Option<AclPermission> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT permission FROM workspace_acls WHERE user_id = ?1 AND workspace_id = ?2",
+            params![user_id.0.to_string(), workspace_id.0.to_string()],
+            |row| Ok(AclPermission::from_str_lossy(&row.get::<_, String>(0)?)),
+        )
+        .ok()
+    }
+
+    fn list_accessible_workspaces(&self, user_id: UserId) -> Vec<WorkspaceId> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT workspace_id FROM workspace_acls WHERE user_id = ?1")
+            .unwrap();
+        stmt.query_map(params![user_id.0.to_string()], |row| {
+            Ok(WorkspaceId(parse_uuid(&row.get::<_, String>(0)?)))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    // ── Document ACLs ───────────────────────────────────────────────
+
+    fn grant_document_access(
+        &self,
+        user_id: UserId,
+        doc_id: DocId,
+        permission: AclPermission,
+    ) -> Result<DocumentAcl> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&Utc::now());
+        let uid = user_id.0.to_string();
+        let did = doc_id.0.to_string();
+        let perm_str = permission.as_str();
+        conn.execute(
+            "INSERT INTO document_acls (user_id, doc_id, permission, granted_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, doc_id) DO UPDATE SET
+                permission = excluded.permission,
+                granted_at = excluded.granted_at",
+            params![uid, did, perm_str, now],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to grant document access: {e}")))?;
+        Ok(DocumentAcl {
+            user_id,
+            doc_id,
+            permission,
+            granted_at: now,
+        })
+    }
+
+    fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "DELETE FROM document_acls WHERE user_id = ?1 AND doc_id = ?2",
+                params![user_id.0.to_string(), doc_id.0.to_string()],
+            )
+            .map_err(|e| {
+                ThaiRagError::Database(format!("Failed to revoke document access: {e}"))
+            })?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(
+                "Document ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT permission FROM document_acls WHERE user_id = ?1 AND doc_id = ?2",
+            params![user_id.0.to_string(), doc_id.0.to_string()],
+            |row| Ok(AclPermission::from_str_lossy(&row.get::<_, String>(0)?)),
+        )
+        .ok()
+    }
 }
 
 #[cfg(test)]
@@ -3157,5 +3679,129 @@ mod tests {
         });
 
         assert_eq!(store.count_org_owners(org.id), 1);
+    }
+
+    #[test]
+    fn workspace_acl_grant_list_revoke() {
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+        let granter = store
+            .insert_user("admin@t.com".into(), "Admin".into(), "h".into())
+            .unwrap();
+
+        // Grant read
+        let acl = store
+            .grant_workspace_access(user.id, ws.id, AclPermission::Read, Some(granter.id))
+            .unwrap();
+        assert_eq!(acl.permission, AclPermission::Read);
+        assert_eq!(acl.granted_by, Some(granter.id));
+
+        // List
+        let acls = store.list_workspace_acls(ws.id);
+        assert_eq!(acls.len(), 1);
+        assert_eq!(acls[0].user_id, user.id);
+
+        // Get permission
+        assert_eq!(
+            store.get_user_workspace_acl(user.id, ws.id),
+            Some(AclPermission::Read)
+        );
+
+        // Upgrade to write (upsert)
+        store
+            .grant_workspace_access(user.id, ws.id, AclPermission::Write, Some(granter.id))
+            .unwrap();
+        assert_eq!(
+            store.get_user_workspace_acl(user.id, ws.id),
+            Some(AclPermission::Write)
+        );
+        // Should still be 1 entry (upsert, not duplicate)
+        assert_eq!(store.list_workspace_acls(ws.id).len(), 1);
+
+        // List accessible workspaces
+        let ws_ids = store.list_accessible_workspaces(user.id);
+        assert!(ws_ids.contains(&ws.id));
+
+        // Revoke
+        store.revoke_workspace_access(user.id, ws.id).unwrap();
+        assert_eq!(store.get_user_workspace_acl(user.id, ws.id), None);
+        assert_eq!(store.list_workspace_acls(ws.id).len(), 0);
+
+        // Revoke again should fail
+        assert!(store.revoke_workspace_access(user.id, ws.id).is_err());
+    }
+
+    #[test]
+    fn document_acl_grant_check_revoke() {
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let user = store
+            .insert_user("u@t.com".into(), "U".into(), "h".into())
+            .unwrap();
+        let now = Utc::now();
+        let doc = Document {
+            id: DocId::new(),
+            workspace_id: ws.id,
+            title: "secret".into(),
+            mime_type: "text/plain".into(),
+            size_bytes: 10,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let doc = store.insert_document(doc).unwrap();
+
+        // No access initially
+        assert_eq!(store.check_document_access(user.id, doc.id), None);
+
+        // Grant read
+        let acl = store
+            .grant_document_access(user.id, doc.id, AclPermission::Read)
+            .unwrap();
+        assert_eq!(acl.permission, AclPermission::Read);
+
+        // Check
+        assert_eq!(
+            store.check_document_access(user.id, doc.id),
+            Some(AclPermission::Read)
+        );
+
+        // Upgrade to write (upsert)
+        store
+            .grant_document_access(user.id, doc.id, AclPermission::Write)
+            .unwrap();
+        assert_eq!(
+            store.check_document_access(user.id, doc.id),
+            Some(AclPermission::Write)
+        );
+
+        // Revoke
+        store.revoke_document_access(user.id, doc.id).unwrap();
+        assert_eq!(store.check_document_access(user.id, doc.id), None);
+
+        // Revoke again should fail
+        assert!(store.revoke_document_access(user.id, doc.id).is_err());
+    }
+
+    #[test]
+    fn acl_permission_ordering() {
+        assert!(AclPermission::Read < AclPermission::Write);
+        assert!(AclPermission::Write < AclPermission::Admin);
+        assert!(AclPermission::Read < AclPermission::Admin);
     }
 }

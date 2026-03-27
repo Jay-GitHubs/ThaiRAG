@@ -11,7 +11,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ApiKeyId, ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId,
+    AclPermission, ApiKeyId, ConnectorId, DeptId, DocId, DocumentAcl, IdpId, OrgId, UserId,
+    WorkspaceAcl, WorkspaceId,
 };
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
@@ -610,6 +611,54 @@ pub trait KmStoreTrait: Send + Sync {
     fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()>;
     fn touch_api_key(&self, key_id: ApiKeyId);
 
+    // ── Knowledge Graph ──────────────────────────────────────────────
+    /// Upsert an entity by name+type+workspace (returns existing if found).
+    fn upsert_entity(
+        &self,
+        name: &str,
+        entity_type: &str,
+        workspace_id: WorkspaceId,
+        metadata: serde_json::Value,
+    ) -> Result<thairag_core::types::Entity>;
+    /// Link an entity to a document.
+    fn add_entity_doc_link(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+        doc_id: DocId,
+    ) -> Result<()>;
+    /// Insert a relation between two entities.
+    fn insert_relation(
+        &self,
+        from_id: thairag_core::types::EntityId,
+        to_id: thairag_core::types::EntityId,
+        relation_type: &str,
+        confidence: f32,
+        doc_id: DocId,
+    ) -> Result<thairag_core::types::Relation>;
+    /// List all entities in a workspace.
+    fn list_entities(&self, workspace_id: WorkspaceId) -> Vec<thairag_core::types::Entity>;
+    /// Get relations for a specific entity (both directions).
+    fn get_entity_relations(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Vec<thairag_core::types::Relation>;
+    /// Search entities by name (LIKE search).
+    fn search_entities(
+        &self,
+        workspace_id: WorkspaceId,
+        query: &str,
+    ) -> Vec<thairag_core::types::Entity>;
+    /// Get the full knowledge graph for a workspace.
+    fn get_knowledge_graph(&self, workspace_id: WorkspaceId)
+    -> thairag_core::types::KnowledgeGraph;
+    /// Delete an entity and its relations.
+    fn delete_entity(&self, entity_id: thairag_core::types::EntityId) -> Result<()>;
+    /// Get a single entity by ID.
+    fn get_entity(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Result<thairag_core::types::Entity>;
+
     // ── Inference Logs ────────────────────────────────────────────────
     fn insert_inference_log(&self, entry: &InferenceLogEntry);
     fn list_inference_logs(&self, filter: &InferenceLogFilter) -> Vec<InferenceLogEntry>;
@@ -617,6 +666,41 @@ pub trait KmStoreTrait: Send + Sync {
     fn update_inference_log_feedback(&self, response_id: &str, score: i8);
     fn delete_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
     fn count_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
+
+    // ── Workspace ACLs ──────────────────────────────────────────────
+    /// Grant (or update) a user's workspace-level access.
+    fn grant_workspace_access(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        permission: AclPermission,
+        granted_by: Option<UserId>,
+    ) -> Result<WorkspaceAcl>;
+    /// Revoke a user's workspace-level access.
+    fn revoke_workspace_access(&self, user_id: UserId, workspace_id: WorkspaceId) -> Result<()>;
+    /// List all ACL entries for a workspace.
+    fn list_workspace_acls(&self, workspace_id: WorkspaceId) -> Vec<WorkspaceAcl>;
+    /// Get a specific user's permission level for a workspace.
+    fn get_user_workspace_acl(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+    ) -> Option<AclPermission>;
+    /// List all workspace IDs a user has been granted access to via ACLs.
+    fn list_accessible_workspaces(&self, user_id: UserId) -> Vec<WorkspaceId>;
+
+    // ── Document ACLs ───────────────────────────────────────────────
+    /// Grant (or update) a user's document-level access.
+    fn grant_document_access(
+        &self,
+        user_id: UserId,
+        doc_id: DocId,
+        permission: AclPermission,
+    ) -> Result<DocumentAcl>;
+    /// Revoke a user's document-level access.
+    fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()>;
+    /// Check a user's permission level for a specific document.
+    fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission>;
 }
 
 /// Factory function to create the appropriate KM store.

@@ -225,6 +225,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         job_queue: Default::default(),
         redis: Default::default(),
         otel: Default::default(),
+        knowledge_graph: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1647,6 +1648,7 @@ fn build_streaming_test_app() -> Router {
         job_queue: Default::default(),
         redis: Default::default(),
         otel: Default::default(),
+        knowledge_graph: Default::default(),
     };
 
     let bundle = ProviderBundle {

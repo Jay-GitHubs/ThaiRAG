@@ -83,6 +83,10 @@ enabled = false
 endpoint = "http://localhost:4317"
 service_name = "thairag"
 
+[knowledge_graph]
+enabled = false
+extract_on_ingest = false
+
 [mcp]
 enabled = false
 max_concurrent_syncs = 3

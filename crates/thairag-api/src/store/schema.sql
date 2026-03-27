@@ -248,3 +248,60 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+
+-- Workspace ACLs (fine-grained workspace-level access control)
+CREATE TABLE IF NOT EXISTS workspace_acls (
+    user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    permission    TEXT NOT NULL DEFAULT 'read',
+    granted_at    TEXT NOT NULL,
+    granted_by    TEXT,
+    UNIQUE(user_id, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_acls_workspace_id ON workspace_acls(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_acls_user_id ON workspace_acls(user_id);
+
+-- Document ACLs (fine-grained document-level access control)
+CREATE TABLE IF NOT EXISTS document_acls (
+    user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    doc_id        TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    permission    TEXT NOT NULL DEFAULT 'read',
+    granted_at    TEXT NOT NULL,
+    UNIQUE(user_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_acls_doc_id ON document_acls(doc_id);
+CREATE INDEX IF NOT EXISTS idx_document_acls_user_id ON document_acls(user_id);
+
+-- Knowledge Graph: Entities
+CREATE TABLE IF NOT EXISTS entities (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    entity_type   TEXT NOT NULL,
+    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    metadata      TEXT NOT NULL DEFAULT '{}',
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entities_workspace_id ON entities(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+
+-- Knowledge Graph: Entity-Document links (many-to-many)
+CREATE TABLE IF NOT EXISTS entity_doc_links (
+    entity_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    doc_id        TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    PRIMARY KEY (entity_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_doc_links_doc_id ON entity_doc_links(doc_id);
+
+-- Knowledge Graph: Relations between entities
+CREATE TABLE IF NOT EXISTS relations (
+    id              TEXT PRIMARY KEY,
+    from_entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    to_entity_id    TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    relation_type   TEXT NOT NULL,
+    confidence      REAL NOT NULL DEFAULT 1.0,
+    doc_id          TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_doc_id ON relations(doc_id);

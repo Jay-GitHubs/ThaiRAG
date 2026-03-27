@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     #[serde(default)]
     pub otel: OtelConfig,
+    #[serde(default)]
+    pub knowledge_graph: KnowledgeGraphConfig,
 }
 
 impl AppConfig {
@@ -1194,6 +1196,18 @@ fn default_otel_service_name() -> String {
     "thairag".to_string()
 }
 
+// ── Knowledge Graph Config ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct KnowledgeGraphConfig {
+    /// Master switch to enable knowledge graph extraction.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Whether to automatically extract entities on document ingestion.
+    #[serde(default)]
+    pub extract_on_ingest: bool,
+}
+
 fn default_memory_backend() -> String {
     "memory".to_string()
 }
@@ -1298,6 +1312,7 @@ mod tests {
             job_queue: JobQueueConfig::default(),
             redis: RedisConfig::default(),
             otel: OtelConfig::default(),
+            knowledge_graph: KnowledgeGraphConfig::default(),
         }
     }
 
