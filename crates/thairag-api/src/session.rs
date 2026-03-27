@@ -13,6 +13,10 @@ struct Session {
     #[allow(dead_code)]
     created_at: Instant,
     updated_at: Instant,
+    /// Conversation summary (populated by auto-summarization or manual trigger).
+    summary: Option<String>,
+    /// Number of messages in the session when the summary was last generated.
+    summary_message_count: usize,
 }
 
 #[derive(Clone)]
@@ -53,6 +57,8 @@ impl SessionStoreTrait for InMemorySessionStore {
             user_id,
             created_at: now,
             updated_at: now,
+            summary: None,
+            summary_message_count: 0,
         });
         let session = entry.value_mut();
         session.messages.push(user_msg);
@@ -92,6 +98,22 @@ impl SessionStoreTrait for InMemorySessionStore {
         let cutoff = Instant::now() - max_age;
         self.sessions
             .retain(|_id, session| session.updated_at > cutoff);
+    }
+
+    async fn get_summary(&self, id: &SessionId) -> Option<(String, usize)> {
+        self.sessions.get(id).and_then(|s| {
+            s.summary
+                .as_ref()
+                .map(|sum| (sum.clone(), s.summary_message_count))
+        })
+    }
+
+    async fn set_summary(&self, id: &SessionId, summary: String, message_count: usize) {
+        if let Some(mut entry) = self.sessions.get_mut(id) {
+            entry.summary = Some(summary);
+            entry.summary_message_count = message_count;
+            entry.updated_at = Instant::now();
+        }
     }
 }
 
@@ -220,5 +242,37 @@ mod tests {
 
         store.cleanup_stale(Duration::from_secs(3600)).await;
         assert!(store.get_history(&sid).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_set_summary() {
+        let store = InMemorySessionStore::new();
+        let sid = SessionId(Uuid::new_v4());
+
+        // No summary before session exists
+        assert!(store.get_summary(&sid).await.is_none());
+
+        // Create session
+        store
+            .append(sid, msg("user", "hi"), msg("assistant", "hey"), None)
+            .await;
+
+        // No summary yet
+        assert!(store.get_summary(&sid).await.is_none());
+
+        // Set summary
+        store
+            .set_summary(&sid, "User greeted the assistant.".into(), 2)
+            .await;
+
+        let (summary, count) = store.get_summary(&sid).await.unwrap();
+        assert_eq!(summary, "User greeted the assistant.");
+        assert_eq!(count, 2);
+
+        // Update summary
+        store.set_summary(&sid, "Updated summary.".into(), 10).await;
+        let (summary, count) = store.get_summary(&sid).await.unwrap();
+        assert_eq!(summary, "Updated summary.");
+        assert_eq!(count, 10);
     }
 }

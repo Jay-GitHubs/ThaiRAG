@@ -14,9 +14,18 @@ The ThaiRAG Admin UI is a React + Ant Design application for managing the entire
 8. [Usage & Costs](#usage--costs)
 9. [Feedback & Tuning](#feedback--tuning)
 10. [Settings](#settings)
-11. [Health](#health)
-12. [Config Snapshots](#config-snapshots)
-13. [Collapsible Settings](#collapsible-settings)
+11. [Connectors](#connectors)
+12. [Analytics](#analytics)
+13. [Inference Logs](#inference-logs)
+14. [Evaluation](#evaluation)
+15. [A/B Tests](#ab-tests)
+16. [Knowledge Graph](#knowledge-graph)
+17. [Backup & Restore](#backup--restore)
+18. [Vector Migration](#vector-migration)
+19. [Rate Limits](#rate-limits)
+20. [Health](#health)
+21. [Config Snapshots](#config-snapshots)
+22. [Collapsible Settings](#collapsible-settings)
 
 ## Access Control
 
@@ -25,9 +34,9 @@ Pages are role-gated:
 | Role | Accessible Pages |
 |------|-----------------|
 | `viewer` | Dashboard, Health |
-| `editor` | + KM Hierarchy, Documents, Test Chat |
-| `admin` | + Users, Permissions, Usage & Costs, Feedback & Tuning |
-| `super_admin` | + Settings |
+| `editor` | + KM Hierarchy, Documents, Test Chat, Connectors |
+| `admin` | + Users, Permissions, Usage & Costs, Feedback & Tuning, Analytics, Inference Logs |
+| `super_admin` | + Settings, Evaluation, A/B Tests, Knowledge Graph, Backup & Restore, Vector Migration, Rate Limits |
 
 The sidebar menu automatically shows only pages the logged-in user can access.
 
@@ -98,6 +107,7 @@ Manage documents within workspaces.
 ### Upload
 - Click "Upload Document" to open the upload modal
 - **Supported formats:** PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text
+- **Batch upload:** Select multiple files at once; each is processed independently in the background
 - Documents are automatically converted, chunked, embedded, and indexed
 - Upload size limit is configurable (default varies by tier)
 
@@ -107,6 +117,21 @@ Manage documents within workspaces.
 - **Download** — Download the original file
 - **Reprocess** — Re-chunk and re-embed the document (useful after changing chunk settings)
 - **Delete** — Remove document and all its chunks from vector DB and search index
+
+### Document Versioning
+- Documents support version history — uploading a new file for an existing document creates a new version rather than overwriting
+- **Version History** — View all versions of a document with timestamps and file sizes
+- **Diff** — Compare the extracted text between any two versions side-by-side
+- **Restore** — Roll back to any previous version (re-processes the older file)
+
+### Refresh Scheduling
+- Set a recurring refresh schedule (cron expression) on any document that was ingested via a URL or connector source
+- The system re-fetches and re-processes the source on schedule, creating a new version automatically
+
+### ACL Management
+- Per-document access control lists (ACLs) allow fine-grained permissions on top of workspace-level permissions
+- Grant or revoke read access for specific users on individual documents
+- Useful for sensitive documents within shared workspaces
 
 ---
 
@@ -374,20 +399,137 @@ For Ollama LLM provider:
 - List downloaded models
 - Pull new models
 
-### MCP Connectors (API only)
+### Vault & Credential Management
 
-MCP connector management is currently available via the API only. The Admin UI integration is planned for a future release. Super admins can manage connectors through the API endpoints:
+The Settings page includes routes for managing secrets and LLM profiles stored in the Vault:
 
-- Create connectors from 9 built-in templates (GitHub, Confluence, Notion, Slack, Google Drive, PostgreSQL, SQLite, filesystem, web fetch)
-- Trigger manual or scheduled (cron) syncs
-- Monitor sync history and status
-- Configure webhook notifications
-
-See [API Reference](API_REFERENCE.md#mcp-connectors-super-admin) for endpoint details.
+- **Credentials** — Store and rotate API keys and secrets used by providers. Credentials are referenced by name so the actual secret values are never exposed in config or UI responses.
+- **LLM Profiles** — Named LLM configurations (provider + model + credentials) that can be assigned to individual pipeline agents. Profiles allow switching models across agents without editing each agent individually.
+- **Scoped Settings** — Manage settings at different scopes (global, organization, workspace). Scoped settings override the global configuration for a specific tenant context.
 
 ### Local Auth Tab
 - Shows whether local authentication is enabled
 - Configuration note: "Configure via `THAIRAG__AUTH__ENABLED` env var"
+
+---
+
+## Connectors
+
+**Path:** `/connectors` | **Min role:** `editor`
+
+Manage MCP connectors for external data sources.
+
+- Create connectors from 10 built-in templates: GitHub, Confluence, Notion, Slack, Google Drive, OneDrive, PostgreSQL, SQLite, filesystem, web fetch
+- Trigger manual or scheduled (cron) syncs
+- Monitor sync history and status per connector
+- Pause and resume connectors without deleting configuration
+- Test connectivity before committing to a full sync
+- Configure webhook notifications for sync completion or errors
+
+---
+
+## Analytics
+
+**Path:** `/analytics` | **Min role:** `admin`
+
+Advanced analytics dashboard with usage trends, query patterns, and performance metrics. Visualizes request volume over time, top queries, workspace activity, and provider-level throughput. Supports date range filtering and CSV export.
+
+---
+
+## Inference Logs
+
+**Path:** `/inference-logs` | **Min role:** `admin`
+
+View, export, and manage LLM inference logs. Each log entry captures the full prompt, completion, model, token counts, latency, and workspace context.
+
+- **Search and filter** — Filter by date range, workspace, model, or status
+- **Token and latency analytics** — Trend charts for token usage and p50/p95 latency
+- **Export** — Download filtered log entries as CSV or JSONL
+- **Purge** — Delete logs older than a configurable retention period
+
+---
+
+## Evaluation
+
+**Path:** `/evaluation` | **Min role:** `super_admin`
+
+Search quality evaluation using custom query sets and RAGAS metrics.
+
+- **Create evaluation sets** — Define a list of queries with expected answers and relevant document references
+- **Import** — Upload evaluation sets from CSV or JSON
+- **Run evaluations** — Execute a set against the current pipeline and record results
+- **RAGAS metrics** — Faithfulness, answer relevancy, context precision, context recall
+- **Result history** — Compare evaluation runs over time to track quality regressions or improvements
+- **Export** — Download results as CSV for offline analysis
+
+---
+
+## A/B Tests
+
+**Path:** `/ab-tests` | **Min role:** `super_admin`
+
+Create and run A/B tests comparing different pipeline configurations.
+
+- Define two or more pipeline variants (different models, retrieval parameters, or prompt templates)
+- Run the same query set against all variants simultaneously
+- Compare results side-by-side with metric breakdowns (quality scores, latency, token cost)
+- Promote a winning variant to the active configuration
+
+---
+
+## Knowledge Graph
+
+**Path:** `/knowledge-graph` | **Min role:** `super_admin`
+
+Visualize and manage the knowledge graph built from ingested documents.
+
+- **Graph visualization** — Interactive node/edge graph of entities and their relationships
+- **Entity extraction** — Trigger entity extraction on selected documents or an entire workspace
+- **Entity browser** — Search, view, and edit individual entities and their attributes
+- **Relationship management** — Add, edit, or delete relationships between entities
+- **Export** — Download the graph as JSON or RDF for use in external tools
+
+---
+
+## Backup & Restore
+
+**Path:** `/backup` | **Min role:** `super_admin`
+
+Create full system backups, preview backup contents, and restore from backups with validation.
+
+- **Create backup** — Snapshot the current database, vector store, and configuration into a single archive
+- **Preview** — Inspect backup metadata (creation date, included components, size) before restoring
+- **Restore** — Upload or select a backup archive and restore with pre-flight validation
+- **Integrity check** — Validate checksums before restore to detect corrupted archives
+- **Download** — Export backup archives for off-site storage
+
+---
+
+## Vector Migration
+
+**Path:** `/vector-migration` | **Min role:** `super_admin`
+
+Migrate between vector database providers with minimal disruption.
+
+- **Start migration** — Select the source and target vector DB providers and begin the migration job
+- **Progress tracking** — Monitor migration status with per-collection progress bars
+- **Validate integrity** — Run a post-migration validation comparing vector counts and spot-checking nearest-neighbor results
+- **Switch providers** — Atomically switch the active vector DB to the new provider after a successful validation
+- **Zero-downtime mode** — Read traffic stays on the source provider until the cutover is confirmed
+
+---
+
+## Rate Limits
+
+**Path:** `/rate-limits` | **Min role:** `super_admin`
+
+Monitor and manage rate limiting across the platform.
+
+- **Per-IP analytics** — Request rates, burst patterns, and throttle events broken down by client IP
+- **Blocked events** — Log of all blocked requests with timestamp, IP, endpoint, and reason
+- **Configuration** — Adjust global and per-endpoint rate limit windows and thresholds
+- **Allow/block lists** — Manually add IPs to allow or block lists
+- **Auto-refresh** — Dashboard polls for new blocked events automatically (configurable interval)
 
 ---
 
@@ -550,12 +692,16 @@ Sections remember their expanded/collapsed state within the current page session
 
 ---
 
-## Theme
+## Theme & Localization
 
-The Admin UI supports light and dark modes. Toggle via the sun/moon button in the top-right header. The preference persists in local storage.
+- Light and dark modes. Toggle via the sun/moon button in the header.
+- Internationalization: English and Thai language support. Switch language via the header.
+- Preferences persist in local storage.
 
 ## Navigation
 
 - **Sidebar** — Collapsible sidebar with icons and labels for all pages
-- **Header** — Shows logged-in user email, theme toggle, and logout button
+- **Header** — Shows logged-in user email, theme toggle, language switcher, and logout button
 - **Title** — Shows "ThaiRAG Admin" (or "TR" when collapsed)
+- **Mobile responsive** — Sidebar converts to a drawer on mobile viewports; tap the hamburger icon to open
+- **Grid layouts** — Page layouts adapt to screen size using Ant Design breakpoints (xs/sm/md/lg/xl)

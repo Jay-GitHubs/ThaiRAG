@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub otel: OtelConfig,
     #[serde(default)]
     pub knowledge_graph: KnowledgeGraphConfig,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 impl AppConfig {
@@ -357,6 +359,12 @@ pub struct DocumentConfig {
     pub language_aware_chunking: bool,
     #[serde(default)]
     pub ai_preprocessing: AiPreprocessingConfig,
+    /// Enable LLM-based image description for uploaded images (requires vision-capable LLM).
+    #[serde(default)]
+    pub image_description_enabled: bool,
+    /// Enable heuristic table extraction from PDF/text content.
+    #[serde(default = "default_true")]
+    pub table_extraction_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -709,6 +717,17 @@ pub struct ChatPipelineConfig {
     #[serde(default = "default_compaction_keep_recent")]
     pub compaction_keep_recent: usize,
 
+    // ── Feature: Conversation Summarization ──
+    /// Enable automatic conversation summarization when message count exceeds threshold.
+    #[serde(default = "default_true_val")]
+    pub auto_summarize: bool,
+    /// Number of messages before auto-summarization is triggered.
+    #[serde(default = "default_summarize_threshold")]
+    pub summarize_threshold: usize,
+    /// Number of recent messages to keep intact after summarization.
+    #[serde(default = "default_summarize_keep_recent")]
+    pub summarize_keep_recent: usize,
+
     // ── Feature: Personal Memory (Per-User RAG) ──
     /// Enable vector-based personal memory per user.
     #[serde(default)]
@@ -846,6 +865,12 @@ fn default_compaction_threshold() -> f32 {
 fn default_compaction_keep_recent() -> usize {
     6
 }
+fn default_summarize_threshold() -> usize {
+    20
+}
+fn default_summarize_keep_recent() -> usize {
+    6
+}
 fn default_personal_memory_top_k() -> usize {
     5
 }
@@ -959,6 +984,10 @@ impl Default for ChatPipelineConfig {
             model_context_window: default_model_context_window(),
             compaction_threshold: default_compaction_threshold(),
             compaction_keep_recent: default_compaction_keep_recent(),
+            // Conversation Summarization
+            auto_summarize: true,
+            summarize_threshold: default_summarize_threshold(),
+            summarize_keep_recent: default_summarize_keep_recent(),
             // Personal Memory
             personal_memory_enabled: false,
             personal_memory_top_k: default_personal_memory_top_k(),
@@ -1208,6 +1237,16 @@ pub struct KnowledgeGraphConfig {
     pub extract_on_ingest: bool,
 }
 
+// ── Plugins Config ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PluginsConfig {
+    /// List of plugin names to enable by default at startup.
+    /// If empty, all registered built-in plugins are enabled.
+    #[serde(default)]
+    pub enabled_plugins: Vec<String>,
+}
+
 fn default_memory_backend() -> String {
     "memory".to_string()
 }
@@ -1304,6 +1343,8 @@ mod tests {
                 max_upload_size_mb: 50,
                 language_aware_chunking: true,
                 ai_preprocessing: AiPreprocessingConfig::default(),
+                image_description_enabled: false,
+                table_extraction_enabled: true,
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
@@ -1313,6 +1354,7 @@ mod tests {
             redis: RedisConfig::default(),
             otel: OtelConfig::default(),
             knowledge_graph: KnowledgeGraphConfig::default(),
+            plugins: PluginsConfig::default(),
         }
     }
 

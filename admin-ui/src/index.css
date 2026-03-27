@@ -1,0 +1,52 @@
+/* ── Mobile Responsive Utilities ─────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* Table horizontal scroll */
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+
+  /* Card grid adjustments */
+  .ant-card {
+    margin-bottom: 8px;
+  }
+
+  /* Reduce content padding */
+  .ant-layout-content {
+    padding: 12px !important;
+    margin: 12px !important;
+  }
+
+  /* Mobile hamburger button */
+  .mobile-menu-btn {
+    display: flex !important;
+  }
+
+  /* Hide user email text on mobile */
+  .header-user-text {
+    display: none !important;
+  }
+
+  /* Hide button text labels on mobile, keep icons */
+  .header-btn-text {
+    display: none !important;
+  }
+
+  /* Make modals responsive on mobile */
+  .ant-modal {
+    max-width: calc(100vw - 32px) !important;
+    margin: 16px auto !important;
+  }
+
+  /* Compact form layout on mobile */
+  .ant-form-item {
+    margin-bottom: 12px;
+  }
+}
+
+@media (min-width: 769px) {
+  /* Hide hamburger on desktop */
+  .mobile-menu-btn {
+    display: none !important;
+  }
+}

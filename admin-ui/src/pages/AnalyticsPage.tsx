@@ -368,7 +368,7 @@ export default function AnalyticsPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <Space align="baseline">
           <Typography.Title level={4} style={{ margin: 0 }}>
             Analytics
@@ -585,6 +585,7 @@ export default function AnalyticsPage() {
             rowKey="query"
             pagination={false}
             size="small"
+            scroll={{ x: 'max-content' }}
             columns={[
               {
                 title: '#',
@@ -633,6 +634,7 @@ export default function AnalyticsPage() {
             rowKey="model"
             pagination={false}
             size="small"
+            scroll={{ x: 'max-content' }}
             columns={[
               { title: 'Model', dataIndex: 'model', render: (v: string) => <Tag color="blue">{v}</Tag> },
               { title: 'Requests', dataIndex: 'count', sorter: (a, b) => a.count - b.count, defaultSortOrder: 'descend' as const },

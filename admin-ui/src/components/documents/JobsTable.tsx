@@ -139,6 +139,7 @@ export function JobsTable({ workspaceId }: Props) {
         loading={isLoading}
         pagination={false}
         size="small"
+        scroll={{ x: 'max-content' }}
       />
     </div>
   );

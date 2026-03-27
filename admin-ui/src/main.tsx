@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConfigProvider } from 'antd';
+import './index.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './auth/AuthContext';
 import { ThemeProvider, useThemeMode } from './theme/ThemeContext';

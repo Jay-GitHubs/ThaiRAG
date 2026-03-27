@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct,
-    QueryPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, point_id::PointIdOptions,
+    QueryPointsBuilder, ScrollPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+    point_id::PointIdOptions,
 };
 use qdrant_client::{Payload, Qdrant};
 use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
-use thairag_core::traits::VectorStore;
-use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
+use thairag_core::traits::{VectorStore, VectorStoreExport};
+use thairag_core::types::{DocId, DocumentChunk, ExportedVector, SearchQuery, SearchResult};
 use tracing::{info, instrument};
 
 pub struct QdrantVectorStore {
@@ -234,5 +235,94 @@ impl VectorStore for QdrantVectorStore {
             collection_name: self.collection.clone(),
             vector_count: count,
         })
+    }
+}
+
+#[async_trait]
+impl VectorStoreExport for QdrantVectorStore {
+    async fn export_all(&self, batch_size: usize) -> Result<Vec<ExportedVector>> {
+        let exists = self
+            .client
+            .collection_exists(&self.collection)
+            .await
+            .map_err(|e| ThaiRagError::VectorStore(format!("Failed to check collection: {e}")))?;
+
+        if !exists {
+            return Ok(vec![]);
+        }
+
+        let mut all_vectors = Vec::new();
+        let mut offset: Option<qdrant_client::qdrant::PointId> = None;
+
+        loop {
+            let mut scroll = ScrollPointsBuilder::new(&self.collection)
+                .limit(batch_size as u32)
+                .with_payload(true)
+                .with_vectors(true);
+
+            if let Some(ref off) = offset {
+                scroll = scroll.offset(off.clone());
+            }
+
+            let response = self
+                .client
+                .scroll(scroll)
+                .await
+                .map_err(|e| ThaiRagError::VectorStore(format!("Qdrant scroll failed: {e}")))?;
+
+            let points = &response.result;
+            if points.is_empty() {
+                break;
+            }
+
+            for point in points {
+                let id = match point
+                    .id
+                    .as_ref()
+                    .and_then(|pid| pid.point_id_options.as_ref())
+                {
+                    Some(PointIdOptions::Uuid(uuid)) => uuid.clone(),
+                    Some(PointIdOptions::Num(n)) => n.to_string(),
+                    None => continue,
+                };
+
+                // Extract embedding from vectors
+                #[allow(deprecated)]
+                let embedding = match &point.vectors {
+                    Some(vectors) => {
+                        use qdrant_client::qdrant::vectors_output::VectorsOptions;
+                        match &vectors.vectors_options {
+                            Some(VectorsOptions::Vector(v)) => v.data.clone(),
+                            _ => continue,
+                        }
+                    }
+                    None => continue,
+                };
+
+                let mut metadata = std::collections::HashMap::new();
+                for (key, value) in &point.payload {
+                    metadata.insert(key.clone(), value.to_string().trim_matches('"').to_string());
+                }
+
+                all_vectors.push(ExportedVector {
+                    id,
+                    embedding,
+                    metadata,
+                });
+            }
+
+            // Check if there's a next page offset
+            match response.next_page_offset {
+                Some(next_offset) => offset = Some(next_offset),
+                None => break,
+            }
+        }
+
+        Ok(all_vectors)
+    }
+
+    async fn count(&self) -> Result<usize> {
+        let stats = self.collection_stats().await?;
+        Ok(stats.vector_count as usize)
     }
 }

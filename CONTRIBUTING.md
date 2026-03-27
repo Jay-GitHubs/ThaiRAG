@@ -29,7 +29,7 @@ Before your contribution can be accepted, you must agree to our [Contributor Lic
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Make your changes
-4. Run tests:
+4. Run tests (the project has 326+ backend tests):
    ```bash
    cargo fmt --check
    cargo clippy -- -D warnings

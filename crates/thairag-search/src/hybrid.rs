@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use thairag_config::schema::SearchConfig;
 use thairag_core::error::Result;
-use thairag_core::traits::{EmbeddingModel, Reranker, TextSearch, VectorStore};
+use thairag_core::traits::{EmbeddingModel, Reranker, SearchPlugin, TextSearch, VectorStore};
 use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
 
 /// Hybrid search engine combining vector similarity and BM25 text search.
@@ -14,6 +14,8 @@ pub struct HybridSearchEngine {
     text_search: Arc<dyn TextSearch>,
     reranker: Arc<dyn Reranker>,
     config: SearchConfig,
+    /// Optional search plugins applied pre/post search.
+    search_plugins: Vec<Arc<dyn SearchPlugin>>,
 }
 
 impl HybridSearchEngine {
@@ -30,7 +32,32 @@ impl HybridSearchEngine {
             text_search,
             reranker,
             config,
+            search_plugins: Vec::new(),
         }
+    }
+
+    /// Create a new engine with search plugins for pre/post-processing.
+    pub fn new_with_plugins(
+        embedding: Arc<dyn EmbeddingModel>,
+        vector_store: Arc<dyn VectorStore>,
+        text_search: Arc<dyn TextSearch>,
+        reranker: Arc<dyn Reranker>,
+        config: SearchConfig,
+        search_plugins: Vec<Arc<dyn SearchPlugin>>,
+    ) -> Self {
+        Self {
+            embedding,
+            vector_store,
+            text_search,
+            reranker,
+            config,
+            search_plugins,
+        }
+    }
+
+    /// Set search plugins to be applied during search.
+    pub fn set_search_plugins(&mut self, plugins: Vec<Arc<dyn SearchPlugin>>) {
+        self.search_plugins = plugins;
     }
 
     /// Number of documents in the text search index.
@@ -120,17 +147,31 @@ impl HybridSearchEngine {
     }
 
     /// Hybrid search: parallel vector + BM25, RRF merge, rerank.
+    ///
+    /// If search plugins are registered, `pre_search` is applied to the query
+    /// text before searching, and `post_search` is applied to the final results.
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        // Apply search plugin pre-processing (query expansion, etc.)
+        let effective_query_text = if self.search_plugins.is_empty() {
+            query.text.clone()
+        } else {
+            let mut q = query.text.clone();
+            for plugin in &self.search_plugins {
+                q = plugin.pre_search(&q);
+            }
+            q
+        };
+
         // Embed the query
         let query_embeddings = self
             .embedding
-            .embed(std::slice::from_ref(&query.text))
+            .embed(std::slice::from_ref(&effective_query_text))
             .await?;
         let query_embedding = &query_embeddings[0];
 
         // Parallel search
         let vector_query = SearchQuery {
-            text: query.text.clone(),
+            text: effective_query_text.clone(),
             top_k: self.config.top_k,
             workspace_ids: query.workspace_ids.clone(),
             unrestricted: query.unrestricted,
@@ -149,7 +190,16 @@ impl HybridSearchEngine {
 
         // Rerank
         let top = merged.into_iter().take(self.config.rerank_top_k).collect();
-        self.reranker.rerank(&query.text, top).await
+        let mut results = self.reranker.rerank(&query.text, top).await?;
+
+        // Apply search plugin post-processing (filtering, re-ranking, etc.)
+        if !self.search_plugins.is_empty() {
+            for plugin in &self.search_plugins {
+                results = plugin.post_search(results);
+            }
+        }
+
+        Ok(results)
     }
 
     /// Delete a document from both vector store and text search.

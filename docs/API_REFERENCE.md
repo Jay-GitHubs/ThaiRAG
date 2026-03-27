@@ -977,6 +977,506 @@ Get usage statistics.
 
 ---
 
+## API v2
+
+### `GET /v2/models`
+
+V2 models list with additional metadata (capabilities, context window, tier availability).
+
+### `POST /v2/chat/completions`
+
+V2 chat completions with enriched response including sources, intent classification, and processing time. **Auth required.**
+
+Supports streaming (SSE). When streaming, an `event: metadata` frame is emitted before `data: [DONE]` containing sources and processing time.
+
+### `POST /v2/search`
+
+Direct search endpoint. Runs hybrid retrieval and reranking but bypasses LLM generation. Returns ranked chunks with scores.
+
+**Request:**
+```json
+{
+  "query": "What is ThaiRAG?",
+  "workspace_id": "optional-uuid",
+  "top_k": 5
+}
+```
+
+### `GET /api/version`
+
+Returns API version information (no auth required).
+
+**Response:**
+```json
+{
+  "version": "1.0.0",
+  "api_versions": ["v1", "v2"]
+}
+```
+
+---
+
+## WebSocket Chat
+
+### `WS /ws/chat`
+
+WebSocket chat endpoint. Bi-directional JSON protocol.
+
+**Authentication:** Pass token as query parameter — `?token=<jwt>` or `?api_key=<key>`.
+
+**Client message:**
+```json
+{
+  "type": "chat",
+  "session_id": "optional-uuid",
+  "message": "What is ThaiRAG?",
+  "workspace_id": "optional-uuid"
+}
+```
+
+**Server messages:**
+```json
+{ "type": "delta", "content": "Thai" }
+{ "type": "delta", "content": "RAG is..." }
+{ "type": "done", "usage": { "prompt_tokens": 150, "completion_tokens": 200, "total_tokens": 350 } }
+```
+
+---
+
+## API Key Management
+
+API keys use `X-API-Key: <key>` header for authentication (alternative to JWT Bearer tokens).
+
+### `GET /api/auth/api-keys`
+List all API keys for the authenticated user. Key values are not returned — only metadata.
+
+### `POST /api/auth/api-keys`
+Create a new API key. The full key value (prefixed with `trag_`) is returned only once in this response.
+
+**Request:**
+```json
+{ "name": "My Integration Key" }
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "uuid",
+  "name": "My Integration Key",
+  "key": "trag_xxxxxxxxxxxxxxxxxxxx",
+  "created_at": "2026-03-27T10:00:00Z"
+}
+```
+
+### `DELETE /api/auth/api-keys/{key_id}`
+Revoke an API key immediately.
+
+---
+
+## Users (extended)
+
+The following endpoints extend the [Users](#users) section above.
+
+### `PUT /api/km/users/{user_id}/role`
+Update a user's role. **Super admin only.**
+
+**Request:**
+```json
+{ "role": "admin" }
+```
+
+### `PUT /api/km/users/{user_id}/status`
+Enable or disable a user account. **Super admin only.**
+
+**Request:**
+```json
+{ "active": false }
+```
+
+---
+
+## Document Versioning
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/versions`
+List all versions of a document.
+
+**Response:**
+```json
+[
+  { "version": 3, "created_at": "2026-03-27T10:00:00Z", "created_by": "user-uuid", "size_bytes": 4096 },
+  { "version": 2, "created_at": "2026-03-20T08:00:00Z", "created_by": "user-uuid", "size_bytes": 3800 }
+]
+```
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/versions/{version}`
+Get the content of a specific document version.
+
+### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/diff`
+Get a diff between two versions of a document.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `from` | u32 | Source version number |
+| `to` | u32 | Target version number |
+
+---
+
+## Batch Document Upload
+
+### `POST /api/km/workspaces/{workspace_id}/documents/batch`
+Upload multiple documents in a single request. **Multipart form data.**
+
+Each document part follows the same schema as the single upload endpoint. Returns a list of created document IDs and any per-file errors.
+
+**Response:** `207 Multi-Status`
+```json
+{
+  "created": ["doc-uuid-1", "doc-uuid-2"],
+  "errors": [
+    { "filename": "corrupt.pdf", "error": "Failed to extract text" }
+  ]
+}
+```
+
+---
+
+## Document Refresh Schedule
+
+### `PATCH /api/km/workspaces/{workspace_id}/documents/{doc_id}/schedule`
+Update the automatic refresh schedule for a document (e.g., for URL-sourced documents).
+
+**Request:**
+```json
+{
+  "schedule_cron": "0 0 * * *",
+  "enabled": true
+}
+```
+
+---
+
+## ACLs
+
+Fine-grained access control lists at workspace and document level.
+
+### Workspace ACLs
+
+#### `GET /api/km/workspaces/{ws_id}/acl`
+List ACL entries for a workspace.
+
+#### `POST /api/km/workspaces/{ws_id}/acl`
+Grant a user access to a workspace.
+```json
+{ "user_id": "uuid", "permission": "read" }
+```
+
+#### `DELETE /api/km/workspaces/{ws_id}/acl/{user_id}`
+Revoke a user's workspace ACL entry.
+
+### Document ACLs
+
+#### `POST /api/km/workspaces/{ws_id}/documents/{doc_id}/acl`
+Grant a user access to a specific document.
+```json
+{ "user_id": "uuid", "permission": "read" }
+```
+
+#### `DELETE /api/km/workspaces/{ws_id}/documents/{doc_id}/acl/{user_id}`
+Revoke a user's document ACL entry.
+
+---
+
+## Background Jobs
+
+Track long-running operations (document processing, batch uploads, reprocessing).
+
+### `GET /api/km/workspaces/{workspace_id}/jobs`
+List jobs for a workspace. Supports pagination (`?page=1&per_page=20`).
+
+### `GET /api/km/workspaces/{workspace_id}/jobs/stream`
+SSE stream of job status updates for a workspace. Emits `event: job` frames as job state changes.
+
+### `GET /api/km/workspaces/{workspace_id}/jobs/{job_id}`
+Get status and progress of a specific job.
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "type": "document_processing",
+  "status": "running",
+  "progress": 0.65,
+  "created_at": "2026-03-27T10:00:00Z",
+  "completed_at": null,
+  "error": null
+}
+```
+
+### `DELETE /api/km/workspaces/{workspace_id}/jobs/{job_id}`
+Cancel a running job.
+
+---
+
+## Webhooks
+
+Register webhook endpoints to receive event notifications (document processed, sync completed, etc.).
+
+### `GET /api/km/webhooks`
+List all registered webhooks.
+
+### `POST /api/km/webhooks`
+Register a new webhook.
+```json
+{
+  "url": "https://example.com/hook",
+  "events": ["document.processed", "sync.completed"],
+  "secret": "my-signing-secret"
+}
+```
+
+### `DELETE /api/km/webhooks/{webhook_id}`
+Delete a webhook registration.
+
+### `POST /api/km/webhooks/{webhook_id}/test`
+Send a test ping to a webhook URL. Returns the HTTP status received.
+
+---
+
+## Enterprise Admin
+
+All enterprise admin routes are under `/api/km/admin` and require super admin access.
+
+### Backup & Restore
+
+#### `POST /api/km/admin/backup`
+Create a full backup of configuration and data.
+
+**Response:** Backup archive (binary) or a signed download URL.
+
+#### `POST /api/km/admin/backup/preview`
+Preview what a backup would include (file list and size estimates) without creating the backup.
+
+#### `POST /api/km/admin/restore`
+Restore from a backup archive. **Multipart form data.**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | Backup archive |
+| `dry_run` | bool | Validate without applying |
+
+### Vector DB Migration
+
+Migrate vector data between providers without downtime.
+
+#### `POST /api/km/admin/vector-migration/start`
+Start a vector DB migration job.
+```json
+{ "target_provider": "qdrant", "target_config": { "url": "http://qdrant:6333" } }
+```
+
+#### `GET /api/km/admin/vector-migration/status`
+Get current migration status and progress.
+
+#### `POST /api/km/admin/vector-migration/validate`
+Validate migration integrity by comparing vector counts and spot-checking embeddings.
+
+#### `POST /api/km/admin/vector-migration/switch`
+Atomically switch the active vector DB to the migration target (after validation).
+
+### Rate Limit Stats
+
+#### `GET /api/km/admin/rate-limits/stats`
+Get rate limiting statistics (requests, rejections, top clients).
+
+#### `GET /api/km/admin/rate-limits/blocked`
+List currently blocked IP addresses and their lockout expiry times.
+
+---
+
+## Search Quality
+
+### Evaluation Query Sets
+
+#### `GET /api/km/eval/query-sets`
+List all evaluation query sets.
+
+#### `POST /api/km/eval/query-sets`
+Create a new evaluation query set.
+```json
+{
+  "name": "Finance Q&A",
+  "workspace_id": "uuid",
+  "queries": [
+    { "query": "What is the refund policy?", "expected_doc_ids": ["doc-uuid-1"] }
+  ]
+}
+```
+
+#### `POST /api/km/eval/query-sets/import`
+Import a query set from a CSV or JSON file. **Multipart form data.**
+
+#### `GET /api/km/eval/query-sets/{id}`
+Get a query set with all queries.
+
+#### `DELETE /api/km/eval/query-sets/{id}`
+Delete a query set.
+
+#### `POST /api/km/eval/query-sets/{id}/run`
+Run evaluation against the current retrieval configuration. Returns recall@k, MRR, and NDCG metrics.
+
+#### `GET /api/km/eval/query-sets/{id}/results`
+Get historical evaluation results for a query set.
+
+### A/B Testing
+
+#### `GET /api/km/ab-tests`
+List all A/B tests.
+
+#### `POST /api/km/ab-tests`
+Create a new A/B test comparing two retrieval configurations.
+```json
+{
+  "name": "RRF k=60 vs k=20",
+  "query_set_id": "uuid",
+  "config_a": { "rrf_k": 60 },
+  "config_b": { "rrf_k": 20 }
+}
+```
+
+#### `GET /api/km/ab-tests/{id}`
+Get A/B test details.
+
+#### `DELETE /api/km/ab-tests/{id}`
+Delete an A/B test.
+
+#### `POST /api/km/ab-tests/{id}/run`
+Run both configurations against the query set and record results.
+
+#### `POST /api/km/ab-tests/{id}/compare`
+Generate a statistical comparison report between the two configurations.
+
+---
+
+## Plugins
+
+Extend ThaiRAG with optional feature plugins.
+
+### `GET /api/km/plugins`
+List all available plugins and their enabled status.
+
+### `POST /api/km/plugins/{name}/enable`
+Enable a plugin by name.
+
+### `POST /api/km/plugins/{name}/disable`
+Disable a plugin by name.
+
+---
+
+## Knowledge Graph
+
+Extract and query entity relationships from workspace documents.
+
+### `GET /api/km/workspaces/{workspace_id}/knowledge-graph`
+Get the knowledge graph for a workspace (entities and relationships).
+
+### `GET /api/km/workspaces/{workspace_id}/entities`
+List extracted entities in a workspace. Supports pagination and filtering by entity type.
+
+### `GET /api/km/workspaces/{workspace_id}/entities/{entity_id}`
+Get a single entity with its relationships.
+
+### `DELETE /api/km/workspaces/{workspace_id}/entities/{entity_id}`
+Delete an entity from the knowledge graph.
+
+### `POST /api/km/workspaces/{workspace_id}/documents/{doc_id}/extract`
+Trigger entity extraction on a document (adds results to the workspace knowledge graph).
+
+---
+
+## Chat Sessions
+
+### `GET /api/chat/sessions/{session_id}/summary`
+Get the current summary of a chat session (generated during context compaction).
+
+### `POST /api/chat/sessions/{session_id}/summarize`
+Manually trigger summarization of a chat session.
+
+---
+
+## Settings (extended)
+
+The following endpoints extend the [Settings](#settings-super-admin) section above.
+
+### Inference Logs
+
+#### `GET /api/km/settings/inference-logs`
+Get recent LLM inference logs (prompts, completions, token counts, latency).
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `page` | u32 | Page number |
+| `per_page` | u32 | Items per page |
+| `workspace_id` | string | Filter by workspace |
+
+#### `DELETE /api/km/settings/inference-logs`
+Clear all inference logs.
+
+#### `GET /api/km/settings/inference-logs/export`
+Export inference logs as JSONL or CSV.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `format` | string | `jsonl` (default) or `csv` |
+
+#### `GET /api/km/settings/inference-analytics`
+Get aggregated inference analytics (token usage over time, cost estimates, latency percentiles).
+
+### Vector DB Management
+
+#### `GET /api/km/settings/vectordb/info`
+Get vector DB status: provider, collection stats, index size, and document count.
+
+#### `POST /api/km/settings/vectordb/clear`
+Clear all vectors from the vector DB. **Irreversible.** Requires confirmation:
+```json
+{ "confirm": true }
+```
+
+### Scoped Settings
+
+#### `GET /api/km/settings/scope-info`
+Get information about the current settings scope (org, dept, workspace overrides in effect).
+
+#### `DELETE /api/km/settings/scoped`
+Delete all scoped (non-global) settings overrides, reverting to global defaults.
+
+**Query Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `scope` | string | `org`, `dept`, or `workspace` |
+| `scope_id` | uuid | ID of the scope to clear |
+
+### Document Configuration (extended)
+
+#### `POST /api/km/settings/document/ai-preprocessing`
+Configure AI-assisted preprocessing for documents (e.g., table extraction, image captioning, layout analysis).
+
+**Request:**
+```json
+{
+  "enabled": true,
+  "extract_tables": true,
+  "caption_images": false,
+  "layout_analysis": true,
+  "llm_override": { "kind": "ollama", "model": "llava:7b" }
+}
+```
+
+---
+
 ## Error Responses
 
 All errors follow a consistent format:
