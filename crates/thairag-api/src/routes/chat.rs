@@ -224,7 +224,7 @@ pub async fn chat_completions(
 }
 
 /// Inject personal memory context as a system message at the beginning of the conversation.
-fn inject_personal_memory_context(
+pub(crate) fn inject_personal_memory_context(
     mut messages: Vec<ChatMessage>,
     personal_memories: &[PersonalMemory],
 ) -> Vec<ChatMessage> {
@@ -235,7 +235,7 @@ fn inject_personal_memory_context(
 }
 
 /// Persist cumulative token usage to KV store so it survives restarts.
-fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
+pub(crate) fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
     let key = "usage:tokens";
     let (prev_prompt, prev_completion) = state
         .km_store
@@ -250,7 +250,7 @@ fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
 }
 
 /// Load conversation memory entries for a user from the KV store.
-fn load_memories(state: &AppState, user_id: Option<UserId>) -> Vec<MemoryEntry> {
+pub(crate) fn load_memories(state: &AppState, user_id: Option<UserId>) -> Vec<MemoryEntry> {
     let Some(uid) = user_id else { return vec![] };
     let key = format!("memory:{}", uid.0);
     state
@@ -274,7 +274,7 @@ fn save_memories(state: &AppState, user_id: UserId, memories: &[MemoryEntry], ma
 }
 
 /// Check if context compaction is needed and perform it if so.
-async fn maybe_compact_context(
+pub(crate) async fn maybe_compact_context(
     state: &AppState,
     messages: Vec<ChatMessage>,
     session_id: Option<SessionId>,
@@ -355,7 +355,7 @@ async fn maybe_compact_context(
 }
 
 /// Retrieve relevant personal memories for the current query.
-async fn retrieve_personal_memories(
+pub(crate) async fn retrieve_personal_memories(
     state: &AppState,
     user_id: Option<UserId>,
     messages: &[ChatMessage],

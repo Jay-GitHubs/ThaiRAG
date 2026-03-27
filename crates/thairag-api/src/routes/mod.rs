@@ -16,6 +16,7 @@ pub mod settings;
 pub mod test_query;
 pub mod vault;
 pub mod webhooks;
+pub mod ws_chat;
 
 use std::sync::Arc;
 
@@ -454,6 +455,23 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         Some(Arc::new(StoreApiKeyValidator {
             km_store: state.km_store.clone(),
         }));
+
+    // ── WebSocket route (auth but no CSRF, no timeout) ─────────────
+    let ws_jwt = jwt.clone();
+    let ws_api_keys = api_keys.clone();
+    let ws_dynamic_validator = dynamic_validator.clone();
+    let ws_routes = Router::new()
+        .route("/ws/chat", get(ws_chat::ws_chat_handler))
+        .layer(middleware::from_fn(move |req, next| {
+            auth_layer(
+                ws_jwt.clone(),
+                ws_api_keys.clone(),
+                ws_dynamic_validator.clone(),
+                req,
+                next,
+            )
+        }));
+
     let protected = Router::new()
         .nest("/api/km", km_routes)
         .route(
@@ -486,9 +504,12 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
 
     // Merge public + protected, optionally with rate limiting
     let rate_limited = if let Some(limiter) = rate_limiter {
-        public.merge(protected).layer(RateLimitLayer::new(limiter))
+        public
+            .merge(protected)
+            .merge(ws_routes)
+            .layer(RateLimitLayer::new(limiter))
     } else {
-        public.merge(protected)
+        public.merge(protected).merge(ws_routes)
     };
 
     // ── CORS ─────────────────────────────────────────────────────

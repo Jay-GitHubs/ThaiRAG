@@ -302,10 +302,9 @@ async fn process_document_inner(
         if let Ok(Some(content)) = state.km_store.get_document_content(doc_id)
             && !content.is_empty()
         {
-            let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> =
-                std::sync::Arc::from(thairag_provider_llm::create_llm_provider(
-                    &p.providers_config.llm,
-                ));
+            let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> = std::sync::Arc::from(
+                thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
+            );
 
             let extracted_entities =
                 crate::knowledge_graph::extract_entities_from_text(&llm, &content).await;

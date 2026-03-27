@@ -21,9 +21,11 @@ import EvalPage from './pages/EvalPage';
 import AbTestPage from './pages/AbTestPage';
 import BackupPage from './pages/BackupPage';
 import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
+import { I18nProvider } from './i18n';
 
 export function App() {
   return (
+    <I18nProvider>
     <BrowserRouter>
       <Routes>
         <Route element={<AuthLayout />}>
@@ -56,5 +58,6 @@ export function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </I18nProvider>
   );
 }
