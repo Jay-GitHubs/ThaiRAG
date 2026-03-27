@@ -866,3 +866,61 @@ pub struct WebhookPayload {
     pub timestamp: String,
     pub data: serde_json::Value,
 }
+
+// ── Search Quality Evaluation Types ─────────────────────────────────
+
+define_id!(EvalSetId);
+
+/// A set of evaluation queries with ground-truth relevance judgments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalQuerySet {
+    pub id: EvalSetId,
+    pub name: String,
+    pub queries: Vec<EvalQuery>,
+    pub created_at: String,
+}
+
+/// A single evaluation query with known relevant documents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalQuery {
+    pub query: String,
+    pub relevant_doc_ids: Vec<DocId>,
+    /// Graded relevance scores (same order as relevant_doc_ids).
+    /// If None, binary relevance (1.0 for all relevant docs) is assumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance_scores: Option<Vec<f32>>,
+}
+
+/// Result of running an evaluation query set against the search pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalResult {
+    pub query_set_id: EvalSetId,
+    pub run_at: String,
+    pub metrics: EvalMetrics,
+    pub per_query: Vec<QueryEvalResult>,
+}
+
+/// Aggregate metrics across all queries in an evaluation run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMetrics {
+    pub ndcg_at_5: f64,
+    pub ndcg_at_10: f64,
+    pub mrr: f64,
+    pub precision_at_5: f64,
+    pub precision_at_10: f64,
+    pub recall_at_10: f64,
+    pub mean_latency_ms: f64,
+}
+
+/// Per-query evaluation metrics from a single evaluation run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryEvalResult {
+    pub query: String,
+    pub ndcg_at_5: f64,
+    pub ndcg_at_10: f64,
+    pub mrr: f64,
+    pub precision: f64,
+    pub recall: f64,
+    pub latency_ms: u64,
+    pub retrieved_doc_ids: Vec<DocId>,
+}

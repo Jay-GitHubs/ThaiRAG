@@ -4,6 +4,7 @@ pub mod cached_embedding;
 pub mod csrf;
 pub mod embedding_cache;
 pub mod error;
+pub mod eval;
 pub mod job_queue;
 pub mod login_tracker;
 pub mod metrics;

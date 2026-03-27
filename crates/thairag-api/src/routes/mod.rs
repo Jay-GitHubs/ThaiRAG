@@ -3,6 +3,7 @@ pub mod auth;
 pub mod chat;
 pub mod connectors;
 pub mod documents;
+pub mod eval;
 pub mod feedback;
 pub mod health;
 pub mod km;
@@ -377,7 +378,19 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(webhooks::list_webhooks).post(webhooks::create_webhook),
         )
         .route("/webhooks/{webhook_id}", delete(webhooks::delete_webhook))
-        .route("/webhooks/{webhook_id}/test", post(webhooks::test_webhook));
+        .route("/webhooks/{webhook_id}/test", post(webhooks::test_webhook))
+        // Search Quality Evaluation
+        .route(
+            "/eval/query-sets",
+            get(eval::list_query_sets).post(eval::create_query_set),
+        )
+        .route("/eval/query-sets/import", post(eval::import_query_set))
+        .route(
+            "/eval/query-sets/{id}",
+            get(eval::get_query_set).delete(eval::delete_query_set),
+        )
+        .route("/eval/query-sets/{id}/run", post(eval::run_evaluation))
+        .route("/eval/query-sets/{id}/results", get(eval::list_results));
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let server_timeout = std::time::Duration::from_secs(state.config.server.request_timeout_secs);

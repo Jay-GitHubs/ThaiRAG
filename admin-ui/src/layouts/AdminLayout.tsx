@@ -14,6 +14,7 @@ import {
   HeartOutlined,
   FundOutlined,
   FileSearchOutlined,
+  ExperimentOutlined,
   LogoutOutlined,
   SunOutlined,
   MoonOutlined,
@@ -45,6 +46,7 @@ const baseMenuItems = [
   { key: '/analytics', icon: <LineChartOutlined />, label: 'Analytics', minRole: 'admin' as UserRole },
   { key: '/connectors', icon: <ApiOutlined />, label: 'Connectors', minRole: 'super_admin' as UserRole },
   { key: '/inference-logs', icon: <FileSearchOutlined />, label: 'Inference Logs', minRole: 'super_admin' as UserRole },
+  { key: '/eval', icon: <ExperimentOutlined />, label: 'Search Eval', minRole: 'super_admin' as UserRole },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings', minRole: 'super_admin' as UserRole },
   { key: '/system', icon: <HeartOutlined />, label: 'Health', minRole: 'viewer' as UserRole },
 ];
