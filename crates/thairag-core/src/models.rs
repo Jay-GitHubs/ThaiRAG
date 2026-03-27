@@ -74,8 +74,27 @@ pub struct Document {
     /// Current AI preprocessing step (analyzing, converting, checking_quality, chunking, indexing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing_step: Option<String>,
+    /// Current version number (1-indexed, increments on each update).
+    #[serde(default = "default_version")]
+    pub version: i32,
+    /// SHA-256 hash of the document content for change detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// URL the document was fetched from (for scheduled re-ingestion).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    /// Refresh interval (e.g., "1h", "6h", "1d", "7d", "30d").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_schedule: Option<String>,
+    /// Timestamp of last successful refresh from source_url.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_refreshed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_version() -> i32 {
+    1
 }
 
 fn default_doc_status() -> DocStatus {
@@ -103,6 +122,8 @@ pub struct User {
     pub is_super_admin: bool,
     #[serde(default = "default_viewer")]
     pub role: String,
+    #[serde(default)]
+    pub disabled: bool,
     pub created_at: DateTime<Utc>,
 }
 

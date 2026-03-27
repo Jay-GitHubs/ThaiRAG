@@ -104,7 +104,11 @@ pub async fn chat_completions(
 
     // Prepend history to messages if session exists
     let full_messages = if let Some(sid) = session_id {
-        let mut msgs = state.session_store.get_history(&sid).unwrap_or_default();
+        let mut msgs = state
+            .session_store
+            .get_history(&sid)
+            .await
+            .unwrap_or_default();
         msgs.extend(req.messages.clone());
         msgs
     } else {
@@ -220,7 +224,7 @@ pub async fn chat_completions(
 }
 
 /// Inject personal memory context as a system message at the beginning of the conversation.
-fn inject_personal_memory_context(
+pub(crate) fn inject_personal_memory_context(
     mut messages: Vec<ChatMessage>,
     personal_memories: &[PersonalMemory],
 ) -> Vec<ChatMessage> {
@@ -231,7 +235,7 @@ fn inject_personal_memory_context(
 }
 
 /// Persist cumulative token usage to KV store so it survives restarts.
-fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
+pub(crate) fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
     let key = "usage:tokens";
     let (prev_prompt, prev_completion) = state
         .km_store
@@ -246,7 +250,7 @@ fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
 }
 
 /// Load conversation memory entries for a user from the KV store.
-fn load_memories(state: &AppState, user_id: Option<UserId>) -> Vec<MemoryEntry> {
+pub(crate) fn load_memories(state: &AppState, user_id: Option<UserId>) -> Vec<MemoryEntry> {
     let Some(uid) = user_id else { return vec![] };
     let key = format!("memory:{}", uid.0);
     state
@@ -270,7 +274,7 @@ fn save_memories(state: &AppState, user_id: UserId, memories: &[MemoryEntry], ma
 }
 
 /// Check if context compaction is needed and perform it if so.
-async fn maybe_compact_context(
+pub(crate) async fn maybe_compact_context(
     state: &AppState,
     messages: Vec<ChatMessage>,
     session_id: Option<SessionId>,
@@ -331,7 +335,8 @@ async fn maybe_compact_context(
             // Update session with compacted history
             state
                 .session_store
-                .replace_messages(&sid, compacted.clone());
+                .replace_messages(&sid, compacted.clone())
+                .await;
 
             tracing::info!(
                 compacted = result.messages_compacted,
@@ -350,7 +355,7 @@ async fn maybe_compact_context(
 }
 
 /// Retrieve relevant personal memories for the current query.
-async fn retrieve_personal_memories(
+pub(crate) async fn retrieve_personal_memories(
     state: &AppState,
     user_id: Option<UserId>,
     messages: &[ChatMessage],
@@ -504,12 +509,10 @@ async fn handle_non_stream(
             role: "assistant".to_string(),
             content: llm_resp.content.clone(),
         };
-        state.session_store.append_with_user(
-            sid,
-            last_user_msg.clone(),
-            assistant_msg.clone(),
-            user_id,
-        );
+        state
+            .session_store
+            .append(sid, last_user_msg.clone(), assistant_msg.clone(), user_id)
+            .await;
 
         // Feature 1: Async memory summarization
         if let Some(uid) = user_id {
@@ -618,29 +621,22 @@ fn maybe_summarize_memory(
     existing_memories: Vec<MemoryEntry>,
 ) {
     let Some(pipeline) = pipeline else { return };
-    let Some(memory_agent) = pipeline.conversation_memory() else {
-        return;
-    };
-
-    // Only summarize every 5 turns (10 messages)
-    let history = state.session_store.get_history(&session_id);
-    let msg_count = history.as_ref().map(|h| h.len()).unwrap_or(0);
-    if msg_count < 10 || !msg_count.is_multiple_of(10) {
+    if pipeline.conversation_memory().is_none() {
         return;
     }
 
-    let messages = history.unwrap_or_default();
-    let max_summaries = pipeline
-        .conversation_memory()
-        .map(|_| 10usize) // default
-        .unwrap_or(10);
-
-    // Clone what we need for the async task
-    let state_clone = state.clone();
-    let _ = memory_agent; // we'll re-access via pipeline in the task
+    let max_summaries = 10usize;
 
     tokio::spawn(async move {
-        let p = state_clone.providers();
+        // Only summarize every 5 turns (10 messages)
+        let history = state.session_store.get_history(&session_id).await;
+        let msg_count = history.as_ref().map(|h| h.len()).unwrap_or(0);
+        if msg_count < 10 || !msg_count.is_multiple_of(10) {
+            return;
+        }
+
+        let messages = history.unwrap_or_default();
+        let p = state.providers();
         if let Some(ref pipeline) = p.chat_pipeline
             && let Some(mem) = pipeline.conversation_memory()
         {
@@ -648,7 +644,7 @@ fn maybe_summarize_memory(
                 Ok(entry) => {
                     let mut all = existing_memories;
                     all.push(entry);
-                    save_memories(&state_clone, user_id, &all, max_summaries);
+                    save_memories(&state, user_id, &all, max_summaries);
                     tracing::debug!(user_id = %user_id.0, "Conversation memory saved");
                 }
                 Err(e) => {
@@ -872,7 +868,7 @@ async fn handle_stream(
                 role: "assistant".to_string(),
                 content: accumulated_content.clone(),
             };
-            state.session_store.append_with_user(sid, user_msg.clone(), assistant_msg, user_id);
+            state.session_store.append(sid, user_msg.clone(), assistant_msg, user_id).await;
 
             // Feature 1: Async memory summarization
             if let Some(uid) = user_id {

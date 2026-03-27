@@ -53,12 +53,39 @@ text_weight = 0.4
 [document]
 max_chunk_size = 512
 chunk_overlap = 64
+language_aware_chunking = true
 
 # [chat_pipeline]
 # live_retrieval_enabled = false
 # live_retrieval_timeout_secs = 15
 # live_retrieval_max_connectors = 3
 # live_retrieval_max_content_chars = 30000
+
+[session]
+backend = "memory"          # "memory" or "redis"
+max_history = 50
+stale_timeout_secs = 3600
+
+[embedding_cache]
+backend = "memory"          # "memory", "redis", or "none"
+max_entries = 10000
+ttl_secs = 3600
+
+[job_queue]
+backend = "memory"
+retention_secs = 86400          # 24 hours
+
+[redis]
+url = "redis://127.0.0.1:6379"
+
+[otel]
+enabled = false
+endpoint = "http://localhost:4317"
+service_name = "thairag"
+
+[knowledge_graph]
+enabled = false
+extract_on_ingest = false
 
 [mcp]
 enabled = false

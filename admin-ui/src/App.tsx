@@ -16,9 +16,16 @@ import { UsagePage } from './pages/UsagePage';
 import { FeedbackPage } from './pages/FeedbackPage';
 import { ConnectorsPage } from './pages/ConnectorsPage';
 import InferenceLogsPage from './pages/InferenceLogsPage';
+import AnalyticsPage from './pages/AnalyticsPage';
+import EvalPage from './pages/EvalPage';
+import AbTestPage from './pages/AbTestPage';
+import BackupPage from './pages/BackupPage';
+import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
+import { I18nProvider } from './i18n';
 
 export function App() {
   return (
+    <I18nProvider>
     <BrowserRouter>
       <Routes>
         <Route element={<AuthLayout />}>
@@ -40,11 +47,17 @@ export function App() {
           <Route path="/usage" element={<RoleRoute minRole="admin"><UsagePage /></RoleRoute>} />
           <Route path="/feedback" element={<RoleRoute minRole="admin"><FeedbackPage /></RoleRoute>} />
           <Route path="/connectors" element={<RoleRoute minRole="super_admin"><ConnectorsPage /></RoleRoute>} />
+          <Route path="/analytics" element={<RoleRoute minRole="admin"><AnalyticsPage /></RoleRoute>} />
           <Route path="/inference-logs" element={<RoleRoute minRole="super_admin"><InferenceLogsPage /></RoleRoute>} />
+          <Route path="/eval" element={<RoleRoute minRole="super_admin"><EvalPage /></RoleRoute>} />
+          <Route path="/ab-tests" element={<RoleRoute minRole="super_admin"><AbTestPage /></RoleRoute>} />
+          <Route path="/knowledge-graph" element={<RoleRoute minRole="editor"><KnowledgeGraphPage /></RoleRoute>} />
+          <Route path="/backup" element={<RoleRoute minRole="super_admin"><BackupPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
+    </I18nProvider>
   );
 }

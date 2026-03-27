@@ -4,11 +4,14 @@ import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { DocumentTable } from '../components/documents/DocumentTable';
+import { JobsTable } from '../components/documents/JobsTable';
+import { useI18n } from '../i18n';
 
 export function DocumentsPage() {
   const [orgId, setOrgId] = useState<string>();
   const [deptId, setDeptId] = useState<string>();
   const [wsId, setWsId] = useState<string>();
+  const { t } = useI18n();
 
   const orgs = useOrgs();
   const depts = useDepts(orgId);
@@ -20,10 +23,10 @@ export function DocumentsPage() {
 
   return (
     <>
-      <Typography.Title level={4}>Documents</Typography.Title>
+      <Typography.Title level={4}>{t('documents.title')}</Typography.Title>
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
-          placeholder="Select Organization"
+          placeholder={t('documents.selectOrg')}
           style={{ width: 200 }}
           value={orgId}
           onChange={(v) => {
@@ -35,7 +38,7 @@ export function DocumentsPage() {
           allowClear
         />
         <Select
-          placeholder="Select Department"
+          placeholder={t('documents.selectDept')}
           style={{ width: 200 }}
           value={deptId}
           onChange={(v) => {
@@ -47,7 +50,7 @@ export function DocumentsPage() {
           allowClear
         />
         <Select
-          placeholder="Select Workspace"
+          placeholder={t('documents.selectWorkspace')}
           style={{ width: 200 }}
           value={wsId}
           onChange={setWsId}
@@ -69,10 +72,13 @@ export function DocumentsPage() {
       )}
 
       {wsId ? (
-        <DocumentTable workspaceId={wsId} />
+        <>
+          <JobsTable workspaceId={wsId} />
+          <DocumentTable workspaceId={wsId} />
+        </>
       ) : (
         <Typography.Text type="secondary">
-          Select an organization, department, and workspace to view documents.
+          {t('documents.selectPrompt')}
         </Typography.Text>
       )}
     </>

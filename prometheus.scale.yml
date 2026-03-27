@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "thairag"
+    metrics_path: /metrics
+    # Use Docker DNS to discover all thairag replicas.
+    # Docker Compose DNS returns all container IPs for the service name.
+    dns_sd_configs:
+      - names:
+          - "tasks.thairag"
+        type: A
+        port: 8080
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: "nginx"
+    metrics_path: /stub_status
+    static_configs:
+      - targets: ["nginx:80"]
+        labels:
+          instance: "nginx-lb"

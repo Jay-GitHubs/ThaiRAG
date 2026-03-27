@@ -4,3 +4,4 @@ pub mod middleware;
 
 pub use claims::AuthClaims;
 pub use jwt::JwtService;
+pub use middleware::{DynamicApiKeyInfo, DynamicApiKeyValidator};

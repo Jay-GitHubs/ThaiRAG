@@ -26,3 +26,16 @@ kind = "tantivy"
 kind = "cohere"
 model = "rerank-v3.5"
 api_key = ""
+
+# Premium tier: Redis-backed scaling
+[session]
+backend = "redis"
+
+[embedding_cache]
+backend = "redis"
+
+[job_queue]
+backend = "memory"
+
+[redis]
+url = "redis://redis:6379"

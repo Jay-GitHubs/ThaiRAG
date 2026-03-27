@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 thairag-core = { workspace = true }
 thairag-config = { workspace = true }
+thairag-thai = { workspace = true }
 uuid = { workspace = true }
 csv = { workspace = true }
 docx-rs = { workspace = true }

@@ -48,6 +48,10 @@ define_id!(IdpId);
 define_id!(MemoryId);
 define_id!(ConnectorId);
 define_id!(SyncRunId);
+define_id!(JobId);
+define_id!(ApiKeyId);
+define_id!(WebhookId);
+define_id!(EntityId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -508,6 +512,61 @@ pub struct SearchResult {
     pub score: f32,
 }
 
+// ── ACL Types ────────────────────────────────────────────────────────
+
+/// Fine-grained permission level for workspace and document ACLs.
+/// Ordering: Read < Write < Admin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AclPermission {
+    Read,
+    Write,
+    Admin,
+}
+
+impl AclPermission {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "write" => Self::Write,
+            "admin" => Self::Admin,
+            _ => Self::Read,
+        }
+    }
+}
+
+impl std::fmt::Display for AclPermission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// An ACL entry granting a user a permission level on a workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAcl {
+    pub user_id: UserId,
+    pub workspace_id: WorkspaceId,
+    pub permission: AclPermission,
+    pub granted_at: String,
+    pub granted_by: Option<UserId>,
+}
+
+/// An ACL entry granting a user a permission level on a specific document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentAcl {
+    pub user_id: UserId,
+    pub doc_id: DocId,
+    pub permission: AclPermission,
+    pub granted_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryIntent {
     Retrieval,
@@ -724,6 +783,85 @@ pub struct CompactionResult {
     pub messages_kept: usize,
 }
 
+// ── Job Queue Types ──────────────────────────────────────────────────
+
+/// The kind of background job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// Process a newly uploaded document (convert → chunk → embed → index).
+    DocumentIngestion,
+    /// Reprocess an existing document (re-chunk + re-embed).
+    DocumentReprocess,
+    /// Reprocess all documents in a workspace.
+    BatchReprocess,
+    /// Batch upload of multiple documents (CSV or ZIP).
+    BatchUpload,
+    /// Refresh a document from its source URL on schedule.
+    DocumentRefresh,
+}
+
+impl std::fmt::Display for JobKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DocumentIngestion => write!(f, "document_ingestion"),
+            Self::DocumentReprocess => write!(f, "document_reprocess"),
+            Self::BatchReprocess => write!(f, "batch_reprocess"),
+            Self::BatchUpload => write!(f, "batch_upload"),
+            Self::DocumentRefresh => write!(f, "document_refresh"),
+        }
+    }
+}
+
+/// Status of a background job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+/// A background job tracked by the job queue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    pub id: JobId,
+    pub kind: JobKind,
+    pub status: JobStatus,
+    pub workspace_id: WorkspaceId,
+    /// Related document ID (if applicable).
+    pub doc_id: Option<DocId>,
+    /// Human-readable description.
+    pub description: String,
+    /// Unix timestamp (seconds) when the job was created.
+    pub created_at: i64,
+    /// Unix timestamp when the job started running.
+    pub started_at: Option<i64>,
+    /// Unix timestamp when the job completed/failed.
+    pub completed_at: Option<i64>,
+    /// Error message if the job failed.
+    pub error: Option<String>,
+    /// Number of items processed (e.g., chunks indexed).
+    pub items_processed: usize,
+    /// Total number of items to process (for progress tracking in batch jobs).
+    #[serde(default)]
+    pub items_total: Option<usize>,
+}
+
 /// Estimate tokens for a string using heuristic: Thai ~2 chars/token, EN ~4 chars/token.
 pub fn estimate_tokens(text: &str) -> usize {
     let mut thai_chars = 0usize;
@@ -736,4 +874,282 @@ pub fn estimate_tokens(text: &str) -> usize {
         }
     }
     (thai_chars / 2) + (other_chars / 4) + 1
+}
+
+// ── Webhook Notification Types ──────────────────────────────────────
+
+/// Events that can trigger webhook notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookEvent {
+    JobCompleted,
+    JobFailed,
+    DocumentIngested,
+    SyncCompleted,
+    SyncFailed,
+}
+
+impl std::fmt::Display for WebhookEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JobCompleted => write!(f, "job_completed"),
+            Self::JobFailed => write!(f, "job_failed"),
+            Self::DocumentIngested => write!(f, "document_ingested"),
+            Self::SyncCompleted => write!(f, "sync_completed"),
+            Self::SyncFailed => write!(f, "sync_failed"),
+        }
+    }
+}
+
+/// A registered webhook endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Webhook {
+    pub id: WebhookId,
+    pub url: String,
+    /// HMAC-SHA256 secret for signing payloads.
+    #[serde(default, skip_serializing)]
+    pub secret: String,
+    /// Which events this webhook subscribes to.
+    pub events: Vec<WebhookEvent>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+/// Payload sent to webhook endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookPayload {
+    pub event: WebhookEvent,
+    pub timestamp: String,
+    pub data: serde_json::Value,
+}
+
+// ── A/B Testing Types ───────────────────────────────────────────────
+
+define_id!(AbTestId);
+
+/// Status of an A/B test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AbTestStatus {
+    Draft,
+    Running,
+    Completed,
+}
+
+/// Search parameter overrides for an A/B test variant.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SearchOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_top_k: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_weight: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_weight: Option<f32>,
+}
+
+/// A single variant in an A/B test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbVariant {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_config: Option<SearchOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_template: Option<String>,
+}
+
+/// Metrics collected for one variant after running an A/B test.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AbMetrics {
+    pub avg_latency_ms: f64,
+    pub avg_relevance_score: f64,
+    pub total_queries: usize,
+    pub avg_token_count: f64,
+}
+
+/// Results of a completed A/B test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbTestResults {
+    pub variant_a_metrics: AbMetrics,
+    pub variant_b_metrics: AbMetrics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winner: Option<String>,
+    pub per_query: Vec<AbQueryResult>,
+}
+
+/// Per-query comparison for a single A/B test query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbQueryResult {
+    pub query: String,
+    pub variant_a: AbQueryVariantResult,
+    pub variant_b: AbQueryVariantResult,
+}
+
+/// Result of running a single query through one A/B test variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbQueryVariantResult {
+    pub answer: String,
+    pub latency_ms: u64,
+    pub token_count: u32,
+    pub relevance_score: f64,
+    pub chunks_retrieved: usize,
+}
+
+/// An A/B test definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbTest {
+    pub id: AbTestId,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub variant_a: AbVariant,
+    pub variant_b: AbVariant,
+    pub status: AbTestStatus,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<AbTestResults>,
+}
+
+// ── Search Quality Evaluation Types ─────────────────────────────────
+
+define_id!(EvalSetId);
+define_id!(RelationId);
+
+// ── Knowledge Graph Types ────────────────────────────────────────────
+
+/// An entity extracted from documents (person, organization, concept, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entity {
+    pub id: EntityId,
+    pub name: String,
+    pub entity_type: String,
+    pub workspace_id: WorkspaceId,
+    pub doc_ids: Vec<DocId>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    pub created_at: String,
+}
+
+/// A relationship between two entities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Relation {
+    pub id: RelationId,
+    pub from_entity_id: EntityId,
+    pub to_entity_id: EntityId,
+    pub relation_type: String,
+    pub confidence: f32,
+    pub doc_id: DocId,
+    pub created_at: String,
+}
+
+/// A knowledge graph consisting of entities and their relationships.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeGraph {
+    pub entities: Vec<Entity>,
+    pub relations: Vec<Relation>,
+}
+
+/// Well-known entity types for knowledge graph extraction.
+pub const ENTITY_TYPES: &[&str] = &[
+    "Person",
+    "Organization",
+    "Location",
+    "Concept",
+    "Event",
+    "Technology",
+    "Product",
+];
+
+/// A set of evaluation queries with ground-truth relevance judgments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalQuerySet {
+    pub id: EvalSetId,
+    pub name: String,
+    pub queries: Vec<EvalQuery>,
+    pub created_at: String,
+}
+
+/// A single evaluation query with known relevant documents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalQuery {
+    pub query: String,
+    pub relevant_doc_ids: Vec<DocId>,
+    /// Graded relevance scores (same order as relevant_doc_ids).
+    /// If None, binary relevance (1.0 for all relevant docs) is assumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance_scores: Option<Vec<f32>>,
+}
+
+/// Result of running an evaluation query set against the search pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalResult {
+    pub query_set_id: EvalSetId,
+    pub run_at: String,
+    pub metrics: EvalMetrics,
+    pub per_query: Vec<QueryEvalResult>,
+}
+
+/// Aggregate metrics across all queries in an evaluation run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMetrics {
+    pub ndcg_at_5: f64,
+    pub ndcg_at_10: f64,
+    pub mrr: f64,
+    pub precision_at_5: f64,
+    pub precision_at_10: f64,
+    pub recall_at_10: f64,
+    pub mean_latency_ms: f64,
+}
+
+/// Per-query evaluation metrics from a single evaluation run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryEvalResult {
+    pub query: String,
+    pub ndcg_at_5: f64,
+    pub ndcg_at_10: f64,
+    pub mrr: f64,
+    pub precision: f64,
+    pub recall: f64,
+    pub latency_ms: u64,
+    pub retrieved_doc_ids: Vec<DocId>,
+}
+
+// ── Backup & Restore Types ──────────────────────────────────────────
+
+/// Manifest stored inside a backup ZIP archive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupManifest {
+    /// Backup format version (e.g. "1.0").
+    pub version: String,
+    /// ISO-8601 timestamp when the backup was created.
+    pub created_at: String,
+    /// What is included in this backup.
+    pub includes: BackupIncludes,
+    /// Summary counts of backed-up entities.
+    pub stats: BackupStats,
+}
+
+/// Flags indicating which data sections are present in a backup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupIncludes {
+    pub settings: bool,
+    pub users: bool,
+    pub documents: bool,
+    pub org_structure: bool,
+}
+
+/// Summary counts of entities in a backup archive.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BackupStats {
+    pub users_count: usize,
+    pub orgs_count: usize,
+    pub depts_count: usize,
+    pub workspaces_count: usize,
+    pub documents_count: usize,
+    pub settings_count: usize,
 }

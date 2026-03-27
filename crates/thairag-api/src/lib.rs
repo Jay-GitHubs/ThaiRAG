@@ -1,7 +1,13 @@
 pub mod app_state;
 pub mod audit;
+pub mod backup;
+pub mod cached_embedding;
 pub mod csrf;
+pub mod embedding_cache;
 pub mod error;
+pub mod eval;
+pub mod job_queue;
+pub mod knowledge_graph;
 pub mod login_tracker;
 pub mod metrics;
 pub mod oidc;
@@ -10,3 +16,4 @@ pub mod routes;
 pub mod session;
 pub mod store;
 pub mod vault;
+pub mod webhook;

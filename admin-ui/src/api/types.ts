@@ -109,6 +109,7 @@ export interface User {
   external_id?: string;
   is_super_admin: boolean;
   role: UserRole;
+  disabled: boolean;
   created_at: string;
 }
 
@@ -964,6 +965,29 @@ export interface ConnectorTemplate {
   env_keys: string[];
   url: string | null;
   resource_filters: string[];
+}
+
+// ── Jobs ────────────────────────────────────────────────────────────
+export type JobId = string;
+export type JobKind = 'document_ingestion' | 'document_reprocess' | 'batch_reprocess';
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface Job {
+  id: JobId;
+  kind: JobKind;
+  status: JobStatus;
+  workspace_id: WorkspaceId;
+  doc_id?: DocId;
+  description: string;
+  created_at: number;
+  started_at?: number;
+  completed_at?: number;
+  error?: string;
+  items_processed: number;
+}
+
+export interface JobListResponse {
+  jobs: Job[];
 }
 
 // ── Health ──────────────────────────────────────────────────────────

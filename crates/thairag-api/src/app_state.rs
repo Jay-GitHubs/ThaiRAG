@@ -40,10 +40,11 @@ use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
 use thairag_provider_vectordb::{create_personal_memory_store, create_vector_store};
 
+use crate::embedding_cache::{InMemoryEmbeddingCache, NoopEmbeddingCache};
 use crate::login_tracker::LoginTracker;
 use crate::metrics::MetricsState;
 use crate::oidc::OidcStateCache;
-use crate::session::SessionStore;
+use crate::session::InMemorySessionStore;
 use crate::store::{KmStoreTrait, create_km_store};
 use crate::vault::Vault;
 
@@ -132,6 +133,20 @@ impl ProviderBundle {
         km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
         vault: Option<&Vault>,
     ) -> Self {
+        Self::build_full_with_cache(providers, search, doc, chat, prompts, km_store, vault, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_full_with_cache(
+        providers: &ProvidersConfig,
+        search: &SearchConfig,
+        doc: &DocumentConfig,
+        chat: &ChatPipelineConfig,
+        prompts: Arc<thairag_core::PromptRegistry>,
+        km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
+        vault: Option<&Vault>,
+        embedding_cache: Option<Arc<dyn thairag_core::traits::EmbeddingCache>>,
+    ) -> Self {
         let ollama_ka = &chat.ollama_keep_alive;
         let ka_opt = if ollama_ka.is_empty() {
             None
@@ -150,10 +165,17 @@ impl ProviderBundle {
             120,
             ka_opt,
         ));
-        let embedding: Arc<dyn EmbeddingModel> = Arc::from(create_embedding_provider_with_options(
-            &providers.embedding,
-            ka_opt,
-        ));
+        let raw_embedding: Arc<dyn EmbeddingModel> = Arc::from(
+            create_embedding_provider_with_options(&providers.embedding, ka_opt),
+        );
+        let embedding: Arc<dyn EmbeddingModel> = if let Some(cache) = embedding_cache {
+            Arc::new(crate::cached_embedding::CachedEmbeddingModel::new(
+                raw_embedding,
+                cache,
+            ))
+        } else {
+            raw_embedding
+        };
         let vector_store: Arc<dyn VectorStore> =
             Arc::from(create_vector_store(&providers.vector_store));
         let text_search: Arc<dyn TextSearch> =
@@ -783,7 +805,7 @@ pub struct AppState {
     pub jwt: Option<Arc<JwtService>>,
     pub api_keys: Arc<std::collections::HashSet<String>>,
     pub km_store: Arc<dyn KmStoreTrait>,
-    pub session_store: Arc<SessionStore>,
+    pub session_store: Arc<dyn thairag_core::traits::SessionStoreTrait>,
     pub metrics: Arc<MetricsState>,
     pub oidc_state_cache: OidcStateCache,
     pub login_tracker: LoginTracker,
@@ -792,6 +814,9 @@ pub struct AppState {
     /// Per-user token-bucket rate limiter (applied after auth).
     pub user_rate_limiter: crate::rate_limit::UserRateLimiter,
     pub vault: Arc<Vault>,
+    pub embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache>,
+    pub job_queue: Arc<dyn thairag_core::traits::JobQueue>,
+    pub webhook_dispatcher: crate::webhook::WebhookDispatcher,
     providers: Arc<RwLock<ProviderBundle>>,
     pub scoped_pipeline_cache: ScopedPipelineCache,
 }
@@ -883,7 +908,7 @@ impl AppState {
         }
 
         // Build a new pipeline with the scoped config but shared infrastructure
-        let scoped_bundle = ProviderBundle::build_full(
+        let scoped_bundle = ProviderBundle::build_full_with_cache(
             &global_bundle.providers_config,
             &self.config.search,
             &self.config.document,
@@ -891,6 +916,7 @@ impl AppState {
             Arc::clone(&self.prompt_registry),
             Some(Arc::clone(&self.km_store)),
             Some(&*self.vault),
+            Some(Arc::clone(&self.embedding_cache)),
         );
 
         if let Some(ref pipeline) = scoped_bundle.chat_pipeline {
@@ -914,7 +940,7 @@ impl AppState {
         doc: &DocumentConfig,
         chat: &ChatPipelineConfig,
     ) -> ProviderBundle {
-        ProviderBundle::build_full(
+        ProviderBundle::build_full_with_cache(
             providers,
             search,
             doc,
@@ -922,6 +948,7 @@ impl AppState {
             Arc::clone(&self.prompt_registry),
             Some(Arc::clone(&self.km_store)),
             Some(&*self.vault),
+            Some(Arc::clone(&self.embedding_cache)),
         )
     }
 
@@ -944,12 +971,14 @@ impl AppState {
             test_vault_dir.to_str().unwrap_or("/tmp/thairag-test-vault"),
         ));
 
+        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
+
         Self {
             config,
             jwt,
             api_keys: Arc::new(std::collections::HashSet::new()),
             km_store,
-            session_store: Arc::new(SessionStore::new()),
+            session_store: Arc::new(InMemorySessionStore::new()),
             metrics: Arc::new(MetricsState::new()),
             oidc_state_cache: OidcStateCache::new(),
             login_tracker,
@@ -957,12 +986,15 @@ impl AppState {
             user_request_limiter: UserRequestLimiter::new(5),
             user_rate_limiter: crate::rate_limit::UserRateLimiter::new(10, 20),
             vault,
+            embedding_cache: Arc::new(NoopEmbeddingCache),
+            job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
+            webhook_dispatcher,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }
     }
 
-    pub fn build(config: AppConfig) -> Self {
+    pub async fn build(config: AppConfig) -> Self {
         // Load prompt registry early so it's available during provider build
         let prompt_registry = Arc::new(PromptRegistry::new());
         let prompts_dir = std::path::Path::new("prompts");
@@ -991,7 +1023,34 @@ impl AppState {
         };
 
         let km_store = create_km_store(&config.database.url, config.database.max_connections);
-        let session_store = Arc::new(SessionStore::new());
+
+        // ── Session store backend selection ──
+        let session_store: Arc<dyn thairag_core::traits::SessionStoreTrait> = match config
+            .session
+            .backend
+            .as_str()
+        {
+            "redis" => {
+                match thairag_provider_redis::RedisConnection::new(&config.redis.url).await {
+                    Ok(conn) => {
+                        tracing::info!("Session store: Redis");
+                        Arc::new(thairag_provider_redis::RedisSessionStore::new(
+                            conn,
+                            config.session.max_history,
+                            config.session.stale_timeout_secs,
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to connect to Redis for sessions, falling back to memory");
+                        Arc::new(InMemorySessionStore::new())
+                    }
+                }
+            }
+            _ => {
+                tracing::info!("Session store: in-memory");
+                Arc::new(InMemorySessionStore::new())
+            }
+        };
         let metrics = Arc::new(MetricsState::new());
         let oidc_state_cache = OidcStateCache::new();
         let login_tracker = LoginTracker::new(
@@ -1045,6 +1104,74 @@ impl AppState {
 
         let vault = Arc::new(Vault::init("/data"));
 
+        // ── Embedding cache backend selection ──
+        let embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache> = match config
+            .embedding_cache
+            .backend
+            .as_str()
+        {
+            "redis" => {
+                match thairag_provider_redis::RedisConnection::new(&config.redis.url).await {
+                    Ok(conn) => {
+                        tracing::info!("Embedding cache: Redis");
+                        Arc::new(thairag_provider_redis::RedisEmbeddingCache::new(
+                            conn,
+                            config.embedding_cache.ttl_secs,
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to connect to Redis for embedding cache, falling back to memory");
+                        Arc::new(InMemoryEmbeddingCache::new(
+                            config.embedding_cache.max_entries,
+                            config.embedding_cache.ttl_secs,
+                        ))
+                    }
+                }
+            }
+            "none" => {
+                tracing::info!("Embedding cache: disabled");
+                Arc::new(NoopEmbeddingCache)
+            }
+            _ => {
+                tracing::info!(
+                    "Embedding cache: in-memory (max_entries={}, ttl={}s)",
+                    config.embedding_cache.max_entries,
+                    config.embedding_cache.ttl_secs
+                );
+                Arc::new(InMemoryEmbeddingCache::new(
+                    config.embedding_cache.max_entries,
+                    config.embedding_cache.ttl_secs,
+                ))
+            }
+        };
+
+        // ── Job queue backend selection ──
+        let job_queue: Arc<dyn thairag_core::traits::JobQueue> = match config
+            .job_queue
+            .backend
+            .as_str()
+        {
+            "redis" => {
+                match thairag_provider_redis::RedisConnection::new(&config.redis.url).await {
+                    Ok(conn) => {
+                        tracing::info!("Job queue: Redis");
+                        Arc::new(thairag_provider_redis::RedisJobQueue::new(
+                            conn,
+                            config.job_queue.retention_secs,
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to connect to Redis for job queue, falling back to memory");
+                        Arc::new(crate::job_queue::InMemoryJobQueue::new())
+                    }
+                }
+            }
+            _ => {
+                tracing::info!("Job queue: in-memory");
+                Arc::new(crate::job_queue::InMemoryJobQueue::new())
+            }
+        };
+
         // Re-build the provider bundle now that km_store is available, so DB-stored
         // per-agent LLM configs (from presets) are picked up on restart.
         let bundle = {
@@ -1059,7 +1186,7 @@ impl AppState {
             } else {
                 config.providers.clone()
             };
-            ProviderBundle::build_full(
+            ProviderBundle::build_full_with_cache(
                 &pc,
                 &config.search,
                 &config.document,
@@ -1067,6 +1194,7 @@ impl AppState {
                 Arc::clone(&prompt_registry),
                 Some(Arc::clone(&km_store)),
                 Some(&*vault),
+                Some(Arc::clone(&embedding_cache)),
             )
         };
 
@@ -1079,6 +1207,8 @@ impl AppState {
             bundle.providers_config.embedding.dimension,
         );
         km_store.set_setting("_embedding_fingerprint", &emb_fp);
+
+        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
 
         Self {
             config: Arc::new(config),
@@ -1093,6 +1223,9 @@ impl AppState {
             user_request_limiter,
             user_rate_limiter,
             vault,
+            embedding_cache,
+            job_queue,
+            webhook_dispatcher,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }
