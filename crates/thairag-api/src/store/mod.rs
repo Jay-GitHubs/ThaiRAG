@@ -10,9 +10,39 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{
+    AclPermission, ApiKeyId, ConnectorId, DeptId, DocId, DocumentAcl, IdpId, OrgId, UserId,
+    WorkspaceAcl, WorkspaceId,
+};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
+
+// ── Schedule Parsing ────────────────────────────────────────────────
+
+/// Parse a simple interval string like "1h", "6h", "1d", "7d", "30d"
+/// into a `std::time::Duration`. Returns `None` for invalid formats.
+pub fn parse_refresh_interval(s: &str) -> Option<std::time::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_part, unit) = s.split_at(s.len() - 1);
+    let num: u64 = num_part.parse().ok()?;
+    if num == 0 {
+        return None;
+    }
+    match unit {
+        "h" => Some(std::time::Duration::from_secs(num * 3600)),
+        "d" => Some(std::time::Duration::from_secs(num * 86400)),
+        "m" => Some(std::time::Duration::from_secs(num * 60)),
+        _ => None,
+    }
+}
+
+/// Validate a refresh schedule string. Returns true if valid.
+pub fn is_valid_refresh_schedule(s: &str) -> bool {
+    parse_refresh_interval(s).is_some()
+}
 
 // ── Scoped Settings ──────────────────────────────────────────────────
 
@@ -174,6 +204,23 @@ pub struct LlmProfileRow {
     pub updated_at: String,
 }
 
+// ── API Key (M2M Auth) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApiKeyRow {
+    pub id: ApiKeyId,
+    pub name: String,
+    /// SHA-256 hex hash of the raw key.
+    pub key_hash: String,
+    /// Prefix of raw key for display (e.g. "trag_abc1...").
+    pub key_prefix: String,
+    pub user_id: UserId,
+    pub role: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub is_active: bool,
+}
+
 // ── Inference Log Types ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -277,6 +324,32 @@ pub struct WorkspaceStats {
     pub total_tokens: u64,
 }
 
+// ── Document Versioning ──────────────────────────────────────────────
+
+/// A historical version of a document, saved before each update.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocumentVersion {
+    pub id: String,
+    pub doc_id: DocId,
+    pub version_number: i32,
+    pub title: String,
+    pub content: Option<String>,
+    pub content_hash: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+    pub created_by: Option<UserId>,
+}
+
+/// Line-level diff statistics between two document versions.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DiffStats {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
     // ── Organization ────────────────────────────────────────────────
@@ -327,6 +400,45 @@ pub trait KmStoreTrait: Send + Sync {
     /// Get image and table counts for a document.
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)>;
 
+    /// Update document version number and content hash.
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()>;
+
+    // ── Document Versioning ─────────────────────────────────────────
+    /// Save a snapshot of the current document state as a version before overwriting.
+    #[allow(clippy::too_many_arguments)]
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<DocumentVersion>;
+    /// List all versions of a document, ordered by version_number descending.
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<DocumentVersion>;
+    /// Get a specific version of a document.
+    fn get_document_version(&self, doc_id: DocId, version_number: i32) -> Option<DocumentVersion>;
+
+    // ── Document Refresh Schedule ──────────────────────────────────
+    /// Update a document's source URL, refresh schedule, and last_refreshed_at.
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()>;
+    /// Update last_refreshed_at timestamp to now.
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()>;
+    /// List all documents that have a refresh_schedule set and are due for refresh.
+    fn list_documents_due_for_refresh(&self) -> Vec<Document>;
+
     // ── Document Chunks (for Tantivy rebuild) ──────────────────────
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()>;
     fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk>;
@@ -346,6 +458,7 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord>;
     fn get_user(&self, id: UserId) -> Result<User>;
     fn list_users(&self) -> Vec<User>;
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User>;
 
     // ── Identity Providers ──────────────────────────────────────────
     fn list_identity_providers(&self) -> Vec<IdentityProvider>;
@@ -484,6 +597,68 @@ pub trait KmStoreTrait: Send + Sync {
     fn upsert_llm_profile(&self, row: &LlmProfileRow);
     fn delete_llm_profile(&self, id: &str);
 
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<ApiKeyRow>;
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<ApiKeyRow>;
+    fn list_api_keys(&self, user_id: UserId) -> Vec<ApiKeyRow>;
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()>;
+    fn touch_api_key(&self, key_id: ApiKeyId);
+
+    // ── Knowledge Graph ──────────────────────────────────────────────
+    /// Upsert an entity by name+type+workspace (returns existing if found).
+    fn upsert_entity(
+        &self,
+        name: &str,
+        entity_type: &str,
+        workspace_id: WorkspaceId,
+        metadata: serde_json::Value,
+    ) -> Result<thairag_core::types::Entity>;
+    /// Link an entity to a document.
+    fn add_entity_doc_link(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+        doc_id: DocId,
+    ) -> Result<()>;
+    /// Insert a relation between two entities.
+    fn insert_relation(
+        &self,
+        from_id: thairag_core::types::EntityId,
+        to_id: thairag_core::types::EntityId,
+        relation_type: &str,
+        confidence: f32,
+        doc_id: DocId,
+    ) -> Result<thairag_core::types::Relation>;
+    /// List all entities in a workspace.
+    fn list_entities(&self, workspace_id: WorkspaceId) -> Vec<thairag_core::types::Entity>;
+    /// Get relations for a specific entity (both directions).
+    fn get_entity_relations(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Vec<thairag_core::types::Relation>;
+    /// Search entities by name (LIKE search).
+    fn search_entities(
+        &self,
+        workspace_id: WorkspaceId,
+        query: &str,
+    ) -> Vec<thairag_core::types::Entity>;
+    /// Get the full knowledge graph for a workspace.
+    fn get_knowledge_graph(&self, workspace_id: WorkspaceId)
+    -> thairag_core::types::KnowledgeGraph;
+    /// Delete an entity and its relations.
+    fn delete_entity(&self, entity_id: thairag_core::types::EntityId) -> Result<()>;
+    /// Get a single entity by ID.
+    fn get_entity(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Result<thairag_core::types::Entity>;
+
     // ── Inference Logs ────────────────────────────────────────────────
     fn insert_inference_log(&self, entry: &InferenceLogEntry);
     fn list_inference_logs(&self, filter: &InferenceLogFilter) -> Vec<InferenceLogEntry>;
@@ -491,6 +666,41 @@ pub trait KmStoreTrait: Send + Sync {
     fn update_inference_log_feedback(&self, response_id: &str, score: i8);
     fn delete_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
     fn count_inference_logs(&self, filter: &InferenceLogFilter) -> u64;
+
+    // ── Workspace ACLs ──────────────────────────────────────────────
+    /// Grant (or update) a user's workspace-level access.
+    fn grant_workspace_access(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        permission: AclPermission,
+        granted_by: Option<UserId>,
+    ) -> Result<WorkspaceAcl>;
+    /// Revoke a user's workspace-level access.
+    fn revoke_workspace_access(&self, user_id: UserId, workspace_id: WorkspaceId) -> Result<()>;
+    /// List all ACL entries for a workspace.
+    fn list_workspace_acls(&self, workspace_id: WorkspaceId) -> Vec<WorkspaceAcl>;
+    /// Get a specific user's permission level for a workspace.
+    fn get_user_workspace_acl(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+    ) -> Option<AclPermission>;
+    /// List all workspace IDs a user has been granted access to via ACLs.
+    fn list_accessible_workspaces(&self, user_id: UserId) -> Vec<WorkspaceId>;
+
+    // ── Document ACLs ───────────────────────────────────────────────
+    /// Grant (or update) a user's document-level access.
+    fn grant_document_access(
+        &self,
+        user_id: UserId,
+        doc_id: DocId,
+        permission: AclPermission,
+    ) -> Result<DocumentAcl>;
+    /// Revoke a user's document-level access.
+    fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()>;
+    /// Check a user's permission level for a specific document.
+    fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission>;
 }
 
 /// Factory function to create the appropriate KM store.

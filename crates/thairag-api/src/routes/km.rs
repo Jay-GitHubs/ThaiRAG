@@ -139,12 +139,22 @@ fn user_id_from_claims(claims: &AuthClaims) -> Option<UserId> {
     claims.sub.parse::<Uuid>().ok().map(UserId)
 }
 
+/// Public wrapper for `user_id_from_claims` — used by ACL module.
+pub fn user_id_from_claims_pub(claims: &AuthClaims) -> Option<UserId> {
+    user_id_from_claims(claims)
+}
+
 fn is_super_admin(state: &AppState, user_id: UserId) -> bool {
     state
         .km_store
         .get_user(user_id)
         .map(|u| u.is_super_admin || u.role == "super_admin")
         .unwrap_or(false)
+}
+
+/// Public wrapper for `is_super_admin` — used by ACL module.
+pub fn is_super_admin_pub(state: &AppState, user_id: UserId) -> bool {
+    is_super_admin(state, user_id)
 }
 
 /// Check permission at org level (considers all scopes within the org).
@@ -682,7 +692,7 @@ fn grant_permission_inner(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn revoke_permission_inner(
+async fn revoke_permission_inner(
     state: &AppState,
     perm: &PermCheck,
     org_id: OrgId,
@@ -717,7 +727,10 @@ fn revoke_permission_inner(
     // stale context from leaking revoked document content (session history,
     // context compaction summaries, and conversation memories may contain
     // information from workspaces the user no longer has access to).
-    let cleared = state.session_store.clear_user_sessions(target.user.id);
+    let cleared = state
+        .session_store
+        .clear_user_sessions(target.user.id)
+        .await;
     let memory_key = format!("memory:{}", target.user.id.0);
     state.km_store.delete_setting(&memory_key);
     if cleared > 0 {
@@ -783,7 +796,7 @@ pub async fn revoke_dept_permission(
     let dept_id = DeptId(dept_id);
     let perm = resolve_perm_dept(&claims, &state, org_id, dept_id);
     let scope = PermissionScope::Dept { org_id, dept_id };
-    revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
+    revoke_permission_inner(&state, &perm, org_id, scope, &body.email).await
 }
 
 // ── Workspace-scoped permission handlers ────────────────────────────
@@ -840,7 +853,7 @@ pub async fn revoke_workspace_permission(
         dept_id,
         workspace_id: WorkspaceId(ws_id),
     };
-    revoke_permission_inner(&state, &perm, org_id, scope, &body.email)
+    revoke_permission_inner(&state, &perm, org_id, scope, &body.email).await
 }
 
 // ── Users handler ───────────────────────────────────────────────────
@@ -911,6 +924,57 @@ pub async fn update_user_role(
         None,
     );
     tracing::info!(%user_id, role = %body.role, "User role updated");
+    Ok(Json(updated))
+}
+
+// ── Update user status (enable/disable) ──────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpdateUserStatusRequest {
+    pub disabled: bool,
+}
+
+pub async fn update_user_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(user_id): Path<Uuid>,
+    AppJson(body): AppJson<UpdateUserStatusRequest>,
+) -> Result<Json<User>, ApiError> {
+    // Only super_admin can enable/disable users
+    let caller_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| ApiError(ThaiRagError::Validation("Invalid user ID".into())))?;
+    let caller = state.km_store.get_user(UserId(caller_id))?;
+    if !caller.is_super_admin && caller.role != "super_admin" {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Only super admins can enable/disable users".into(),
+        )));
+    }
+
+    let target = state.km_store.get_user(UserId(user_id))?;
+
+    // Cannot disable a super admin
+    if target.is_super_admin && body.disabled {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Cannot disable a super admin user".into(),
+        )));
+    }
+
+    let updated = state
+        .km_store
+        .set_user_disabled(UserId(user_id), body.disabled)?;
+
+    let action_str = if body.disabled { "disabled" } else { "enabled" };
+    audit_log(
+        &state.km_store,
+        &claims.sub,
+        AuditAction::SettingsChanged,
+        &format!("User {} {}", target.email, action_str),
+        true,
+        None,
+    );
+    tracing::info!(%user_id, disabled = %body.disabled, "User status updated");
     Ok(Json(updated))
 }
 

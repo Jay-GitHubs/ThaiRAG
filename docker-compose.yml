@@ -16,6 +16,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis (session store, embedding cache) ──────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ── ThaiRAG API ──────────────────────────────────────────────────────
   thairag:
     build: .
@@ -28,6 +41,8 @@ services:
       THAIRAG__SERVER__HOST: "0.0.0.0"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   # ── Admin UI ────────────────────────────────────────────────────────
@@ -46,6 +61,33 @@ services:
       - "6334:6334"
     volumes:
       - qdrant-data:/qdrant/storage
+
+  # ── Prometheus (metrics collection) ────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - thairag
+
+  # ── Grafana (dashboards) ──────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
   # ── Ollama (local LLM for free tier) ───────────────────────────────
   #ollama:
@@ -91,6 +133,9 @@ services:
 volumes:
   postgres-data:
   thairag-data:
+  redis-data:
   qdrant-data:
+  prometheus-data:
+  grafana-data:
   ollama-models:
   open-webui-data:

@@ -282,6 +282,21 @@ pub async fn login(
         ApiError(ThaiRagError::Auth("Invalid email or password".into()))
     })?;
 
+    // Check if user is disabled
+    if record.user.disabled {
+        audit_log(
+            &state.km_store,
+            &record.user.id.0.to_string(),
+            AuditAction::LoginFailed,
+            &body.email,
+            false,
+            Some("account disabled"),
+        );
+        return Err(ApiError(ThaiRagError::Auth(
+            "This account has been disabled. Contact your administrator.".into(),
+        )));
+    }
+
     let parsed_hash = PasswordHash::new(&record.password_hash).map_err(|e| {
         ApiError(ThaiRagError::Internal(format!(
             "Password hash parse error: {e}"

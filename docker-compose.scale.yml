@@ -1,0 +1,73 @@
+# Horizontal scaling override.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale thairag=5
+
+services:
+  # ── ThaiRAG API (scaled) ──────────────────────────────────────────────
+  # Override: remove host port binding (nginx handles external traffic)
+  # and add deploy.replicas for default scale.
+  thairag:
+    ports: !override
+      - "8080"                  # expose container port only (no host mapping)
+    environment:
+      THAIRAG__SERVER__HOST: "0.0.0.0"
+      # Force Redis backends for shared state across instances
+      THAIRAG__SESSION__BACKEND: "redis"
+      THAIRAG__EMBEDDING_CACHE__BACKEND: "redis"
+      THAIRAG__JOB_QUEUE__BACKEND: "redis"
+      THAIRAG__REDIS__URL: "redis://redis:6379"
+      # Use Qdrant for vector store (not in_memory)
+      THAIRAG__PROVIDERS__VECTOR_STORE__KIND: "qdrant"
+      THAIRAG__PROVIDERS__VECTOR_STORE__URL: "http://qdrant:6334"
+      THAIRAG__PROVIDERS__VECTOR_STORE__COLLECTION: "thairag_chunks"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Nginx load balancer ───────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+      # Uncomment for TLS:
+      # - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Uncomment for TLS certificates:
+      # - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      thairag:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Admin UI: point to nginx instead of direct thairag ────────────────
+  admin-ui:
+    environment:
+      # The admin UI should route API calls through the load balancer
+      API_BASE_URL: "http://nginx:80"
+
+  # ── Prometheus: scrape all instances via Docker DNS ───────────────────
+  prometheus:
+    volumes:
+      - ./prometheus.scale.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus

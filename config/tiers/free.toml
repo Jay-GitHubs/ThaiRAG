@@ -17,3 +17,13 @@ kind = "tantivy"
 
 [providers.reranker]
 kind = "passthrough"
+
+# Free tier: all in-memory backends (no Redis dependency)
+[session]
+backend = "memory"
+
+[embedding_cache]
+backend = "memory"
+
+[job_queue]
+backend = "memory"

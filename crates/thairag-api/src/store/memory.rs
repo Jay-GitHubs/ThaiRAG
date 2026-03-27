@@ -9,8 +9,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, OrgId, SyncRun,
-    SyncState, UserId, WorkspaceId,
+    AclPermission, ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, DocumentAcl, IdpId,
+    McpConnectorConfig, OrgId, SyncRun, SyncState, UserId, WorkspaceAcl, WorkspaceId,
 };
 
 use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
@@ -41,7 +41,14 @@ pub struct MemoryKmStore {
     chunks: RwLock<Vec<thairag_core::types::DocumentChunk>>,
     vault_keys: RwLock<HashMap<String, super::VaultKeyRow>>,
     llm_profiles: RwLock<HashMap<String, super::LlmProfileRow>>,
+    document_versions: RwLock<Vec<super::DocumentVersion>>,
     inference_logs: RwLock<Vec<super::InferenceLogEntry>>,
+    api_keys_m2m: RwLock<HashMap<ApiKeyId, super::ApiKeyRow>>,
+    entities: RwLock<HashMap<thairag_core::types::EntityId, thairag_core::types::Entity>>,
+    entity_doc_links: RwLock<Vec<(thairag_core::types::EntityId, DocId)>>,
+    relations: RwLock<Vec<thairag_core::types::Relation>>,
+    workspace_acls: RwLock<Vec<WorkspaceAcl>>,
+    document_acls: RwLock<Vec<DocumentAcl>>,
 }
 
 impl Default for MemoryKmStore {
@@ -69,7 +76,14 @@ impl MemoryKmStore {
             chunks: RwLock::new(Vec::new()),
             vault_keys: RwLock::new(HashMap::new()),
             llm_profiles: RwLock::new(HashMap::new()),
+            document_versions: RwLock::new(Vec::new()),
             inference_logs: RwLock::new(Vec::new()),
+            api_keys_m2m: RwLock::new(HashMap::new()),
+            entities: RwLock::new(HashMap::new()),
+            entity_doc_links: RwLock::new(Vec::new()),
+            relations: RwLock::new(Vec::new()),
+            workspace_acls: RwLock::new(Vec::new()),
+            document_acls: RwLock::new(Vec::new()),
         }
     }
 }
@@ -305,6 +319,136 @@ impl KmStoreTrait for MemoryKmStore {
             .unwrap_or((0, 0)))
     }
 
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.version = version;
+        doc.content_hash = content_hash;
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    // ── Document Versioning ─────────────────────────────────────────
+
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<super::DocumentVersion> {
+        let mut versions = self.document_versions.write().unwrap();
+        let next_version = versions
+            .iter()
+            .filter(|v| v.doc_id == doc_id)
+            .map(|v| v.version_number)
+            .max()
+            .unwrap_or(0)
+            + 1;
+
+        let ver = super::DocumentVersion {
+            id: uuid::Uuid::new_v4().to_string(),
+            doc_id,
+            version_number: next_version,
+            title: title.to_string(),
+            content: content.map(|s| s.to_string()),
+            content_hash: content_hash.to_string(),
+            mime_type: mime_type.to_string(),
+            size_bytes,
+            created_at: Utc::now().to_rfc3339(),
+            created_by,
+        };
+        versions.push(ver.clone());
+        Ok(ver)
+    }
+
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<super::DocumentVersion> {
+        let versions = self.document_versions.read().unwrap();
+        let mut result: Vec<_> = versions
+            .iter()
+            .filter(|v| v.doc_id == doc_id)
+            .cloned()
+            .collect();
+        result.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+        result
+    }
+
+    fn get_document_version(
+        &self,
+        doc_id: DocId,
+        version_number: i32,
+    ) -> Option<super::DocumentVersion> {
+        let versions = self.document_versions.read().unwrap();
+        versions
+            .iter()
+            .find(|v| v.doc_id == doc_id && v.version_number == version_number)
+            .cloned()
+    }
+
+    // ── Document Refresh Schedule ────────────────────────────────
+
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.source_url = source_url;
+        doc.refresh_schedule = refresh_schedule;
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.last_refreshed_at = Some(Utc::now());
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn list_documents_due_for_refresh(&self) -> Vec<Document> {
+        let docs = self.documents.read().unwrap();
+        let now = Utc::now();
+        docs.values()
+            .filter(|doc| {
+                if doc.status != DocStatus::Ready {
+                    return false;
+                }
+                let schedule = match &doc.refresh_schedule {
+                    Some(s) => s,
+                    None => return false,
+                };
+                if doc.source_url.is_none() {
+                    return false;
+                }
+                let interval = match super::parse_refresh_interval(schedule) {
+                    Some(d) => chrono::Duration::from_std(d).unwrap_or(chrono::Duration::days(1)),
+                    None => return false,
+                };
+                let last = doc.last_refreshed_at.unwrap_or(doc.created_at);
+                now - last >= interval
+            })
+            .cloned()
+            .collect()
+    }
+
     // ── Document Chunks ────────────────────────────────────────────
 
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
@@ -348,6 +492,7 @@ impl KmStoreTrait for MemoryKmStore {
             external_id: None,
             is_super_admin: false,
             role: "viewer".into(),
+            disabled: false,
             created_at: Utc::now(),
         };
         self.users.write().unwrap().insert(
@@ -399,6 +544,7 @@ impl KmStoreTrait for MemoryKmStore {
             external_id: None,
             is_super_admin,
             role,
+            disabled: false,
             created_at: Utc::now(),
         };
         self.users.write().unwrap().insert(
@@ -462,6 +608,15 @@ impl KmStoreTrait for MemoryKmStore {
             .values()
             .map(|r| r.user.clone())
             .collect()
+    }
+
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User> {
+        let mut users = self.users.write().unwrap();
+        let record = users
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))?;
+        record.user.disabled = disabled;
+        Ok(record.user.clone())
     }
 
     // ── Identity Providers ──────────────────────────────────────────
@@ -1434,6 +1589,368 @@ impl KmStoreTrait for MemoryKmStore {
             })
             .count() as u64
     }
+
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<super::ApiKeyRow> {
+        let row = super::ApiKeyRow {
+            id: ApiKeyId::new(),
+            name,
+            key_hash,
+            key_prefix,
+            user_id,
+            role,
+            created_at: Utc::now().to_rfc3339(),
+            last_used_at: None,
+            is_active: true,
+        };
+        self.api_keys_m2m
+            .write()
+            .unwrap()
+            .insert(row.id, row.clone());
+        Ok(row)
+    }
+
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<super::ApiKeyRow> {
+        self.api_keys_m2m
+            .read()
+            .unwrap()
+            .values()
+            .find(|k| k.key_hash == key_hash)
+            .cloned()
+    }
+
+    fn list_api_keys(&self, user_id: UserId) -> Vec<super::ApiKeyRow> {
+        self.api_keys_m2m
+            .read()
+            .unwrap()
+            .values()
+            .filter(|k| k.user_id == user_id)
+            .cloned()
+            .collect()
+    }
+
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()> {
+        let mut keys = self.api_keys_m2m.write().unwrap();
+        if let Some(key) = keys.get_mut(&key_id) {
+            key.is_active = false;
+            Ok(())
+        } else {
+            Err(ThaiRagError::NotFound(format!(
+                "API key {key_id} not found"
+            )))
+        }
+    }
+
+    fn touch_api_key(&self, key_id: ApiKeyId) {
+        let mut keys = self.api_keys_m2m.write().unwrap();
+        if let Some(key) = keys.get_mut(&key_id) {
+            key.last_used_at = Some(Utc::now().to_rfc3339());
+        }
+    }
+
+    // ── Knowledge Graph ──────────────────────────────────────────────
+
+    fn upsert_entity(
+        &self,
+        name: &str,
+        entity_type: &str,
+        workspace_id: WorkspaceId,
+        metadata: serde_json::Value,
+    ) -> Result<thairag_core::types::Entity> {
+        let mut map = self.entities.write().unwrap();
+        // Find existing by name+type+workspace
+        if let Some(existing) = map.values_mut().find(|e| {
+            e.name == name && e.entity_type == entity_type && e.workspace_id == workspace_id
+        }) {
+            existing.metadata = metadata.clone();
+            // Rebuild doc_ids from links
+            let links = self.entity_doc_links.read().unwrap();
+            existing.doc_ids = links
+                .iter()
+                .filter(|(eid, _)| *eid == existing.id)
+                .map(|(_, did)| *did)
+                .collect();
+            return Ok(existing.clone());
+        }
+        let entity = thairag_core::types::Entity {
+            id: thairag_core::types::EntityId::new(),
+            name: name.to_string(),
+            entity_type: entity_type.to_string(),
+            workspace_id,
+            doc_ids: vec![],
+            metadata,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        map.insert(entity.id, entity.clone());
+        Ok(entity)
+    }
+
+    fn add_entity_doc_link(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+        doc_id: DocId,
+    ) -> Result<()> {
+        let mut links = self.entity_doc_links.write().unwrap();
+        if !links.iter().any(|(e, d)| *e == entity_id && *d == doc_id) {
+            links.push((entity_id, doc_id));
+        }
+        // Also update the entity's doc_ids cache
+        let mut map = self.entities.write().unwrap();
+        if let Some(entity) = map.get_mut(&entity_id)
+            && !entity.doc_ids.contains(&doc_id)
+        {
+            entity.doc_ids.push(doc_id);
+        }
+        Ok(())
+    }
+
+    fn insert_relation(
+        &self,
+        from_id: thairag_core::types::EntityId,
+        to_id: thairag_core::types::EntityId,
+        relation_type: &str,
+        confidence: f32,
+        doc_id: DocId,
+    ) -> Result<thairag_core::types::Relation> {
+        let relation = thairag_core::types::Relation {
+            id: thairag_core::types::RelationId::new(),
+            from_entity_id: from_id,
+            to_entity_id: to_id,
+            relation_type: relation_type.to_string(),
+            confidence,
+            doc_id,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        self.relations.write().unwrap().push(relation.clone());
+        Ok(relation)
+    }
+
+    fn list_entities(&self, workspace_id: WorkspaceId) -> Vec<thairag_core::types::Entity> {
+        let map = self.entities.read().unwrap();
+        let mut entities: Vec<_> = map
+            .values()
+            .filter(|e| e.workspace_id == workspace_id)
+            .cloned()
+            .collect();
+        entities.sort_by(|a, b| a.name.cmp(&b.name));
+        entities
+    }
+
+    fn get_entity_relations(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Vec<thairag_core::types::Relation> {
+        self.relations
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| r.from_entity_id == entity_id || r.to_entity_id == entity_id)
+            .cloned()
+            .collect()
+    }
+
+    fn search_entities(
+        &self,
+        workspace_id: WorkspaceId,
+        query: &str,
+    ) -> Vec<thairag_core::types::Entity> {
+        let map = self.entities.read().unwrap();
+        let lower = query.to_lowercase();
+        let mut results: Vec<_> = map
+            .values()
+            .filter(|e| e.workspace_id == workspace_id && e.name.to_lowercase().contains(&lower))
+            .cloned()
+            .collect();
+        results.sort_by(|a, b| a.name.cmp(&b.name));
+        results.truncate(100);
+        results
+    }
+
+    fn get_knowledge_graph(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> thairag_core::types::KnowledgeGraph {
+        let entities = self.list_entities(workspace_id);
+        let entity_ids: std::collections::HashSet<_> = entities.iter().map(|e| e.id).collect();
+        let relations: Vec<_> = self
+            .relations
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|r| entity_ids.contains(&r.from_entity_id))
+            .cloned()
+            .collect();
+        thairag_core::types::KnowledgeGraph {
+            entities,
+            relations,
+        }
+    }
+
+    fn delete_entity(&self, entity_id: thairag_core::types::EntityId) -> Result<()> {
+        let mut map = self.entities.write().unwrap();
+        if map.remove(&entity_id).is_none() {
+            return Err(ThaiRagError::NotFound(format!(
+                "Entity {entity_id} not found"
+            )));
+        }
+        // Remove doc links
+        self.entity_doc_links
+            .write()
+            .unwrap()
+            .retain(|(e, _)| *e != entity_id);
+        // Remove relations
+        self.relations
+            .write()
+            .unwrap()
+            .retain(|r| r.from_entity_id != entity_id && r.to_entity_id != entity_id);
+        Ok(())
+    }
+
+    fn get_entity(
+        &self,
+        entity_id: thairag_core::types::EntityId,
+    ) -> Result<thairag_core::types::Entity> {
+        self.entities
+            .read()
+            .unwrap()
+            .get(&entity_id)
+            .cloned()
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Entity {entity_id} not found")))
+    }
+
+    // ── Workspace ACLs ──────────────────────────────────────────────
+
+    fn grant_workspace_access(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+        permission: AclPermission,
+        granted_by: Option<UserId>,
+    ) -> Result<WorkspaceAcl> {
+        let mut acls = self.workspace_acls.write().unwrap();
+        let now = Utc::now().to_rfc3339();
+        // Upsert: update if exists, insert otherwise
+        if let Some(existing) = acls
+            .iter_mut()
+            .find(|a| a.user_id == user_id && a.workspace_id == workspace_id)
+        {
+            existing.permission = permission;
+            existing.granted_at = now;
+            existing.granted_by = granted_by;
+            return Ok(existing.clone());
+        }
+        let acl = WorkspaceAcl {
+            user_id,
+            workspace_id,
+            permission,
+            granted_at: now,
+            granted_by,
+        };
+        acls.push(acl.clone());
+        Ok(acl)
+    }
+
+    fn revoke_workspace_access(&self, user_id: UserId, workspace_id: WorkspaceId) -> Result<()> {
+        let mut acls = self.workspace_acls.write().unwrap();
+        let before = acls.len();
+        acls.retain(|a| !(a.user_id == user_id && a.workspace_id == workspace_id));
+        if acls.len() == before {
+            return Err(ThaiRagError::NotFound(
+                "Workspace ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn list_workspace_acls(&self, workspace_id: WorkspaceId) -> Vec<WorkspaceAcl> {
+        self.workspace_acls
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|a| a.workspace_id == workspace_id)
+            .cloned()
+            .collect()
+    }
+
+    fn get_user_workspace_acl(
+        &self,
+        user_id: UserId,
+        workspace_id: WorkspaceId,
+    ) -> Option<AclPermission> {
+        self.workspace_acls
+            .read()
+            .unwrap()
+            .iter()
+            .find(|a| a.user_id == user_id && a.workspace_id == workspace_id)
+            .map(|a| a.permission)
+    }
+
+    fn list_accessible_workspaces(&self, user_id: UserId) -> Vec<WorkspaceId> {
+        self.workspace_acls
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|a| a.user_id == user_id)
+            .map(|a| a.workspace_id)
+            .collect()
+    }
+
+    // ── Document ACLs ───────────────────────────────────────────────
+
+    fn grant_document_access(
+        &self,
+        user_id: UserId,
+        doc_id: DocId,
+        permission: AclPermission,
+    ) -> Result<DocumentAcl> {
+        let mut acls = self.document_acls.write().unwrap();
+        let now = Utc::now().to_rfc3339();
+        if let Some(existing) = acls
+            .iter_mut()
+            .find(|a| a.user_id == user_id && a.doc_id == doc_id)
+        {
+            existing.permission = permission;
+            existing.granted_at = now;
+            return Ok(existing.clone());
+        }
+        let acl = DocumentAcl {
+            user_id,
+            doc_id,
+            permission,
+            granted_at: now,
+        };
+        acls.push(acl.clone());
+        Ok(acl)
+    }
+
+    fn revoke_document_access(&self, user_id: UserId, doc_id: DocId) -> Result<()> {
+        let mut acls = self.document_acls.write().unwrap();
+        let before = acls.len();
+        acls.retain(|a| !(a.user_id == user_id && a.doc_id == doc_id));
+        if acls.len() == before {
+            return Err(ThaiRagError::NotFound(
+                "Document ACL entry not found".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_document_access(&self, user_id: UserId, doc_id: DocId) -> Option<AclPermission> {
+        self.document_acls
+            .read()
+            .unwrap()
+            .iter()
+            .find(|a| a.user_id == user_id && a.doc_id == doc_id)
+            .map(|a| a.permission)
+    }
 }
 
 #[cfg(test)]
@@ -1590,6 +2107,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1613,6 +2135,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1653,6 +2180,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1684,6 +2216,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1820,6 +2357,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };

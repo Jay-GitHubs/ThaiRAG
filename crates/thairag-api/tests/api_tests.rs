@@ -23,9 +23,7 @@ use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
 use thairag_api::app_state::{AppState, ProviderBundle};
-use thairag_api::metrics::MetricsState;
 use thairag_api::routes::build_router;
-use thairag_api::session::SessionStore;
 use thairag_api::store::KmStoreTrait;
 use thairag_api::store::memory::MemoryKmStore;
 
@@ -217,10 +215,17 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             max_chunk_size: 512,
             chunk_overlap: 50,
             max_upload_size_mb: 50,
+            language_aware_chunking: false,
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
         mcp: Default::default(),
+        session: Default::default(),
+        embedding_cache: Default::default(),
+        job_queue: Default::default(),
+        redis: Default::default(),
+        otel: Default::default(),
+        knowledge_graph: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1633,10 +1638,17 @@ fn build_streaming_test_app() -> Router {
             max_chunk_size: 512,
             chunk_overlap: 50,
             max_upload_size_mb: 50,
+            language_aware_chunking: false,
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
         mcp: Default::default(),
+        session: Default::default(),
+        embedding_cache: Default::default(),
+        job_queue: Default::default(),
+        redis: Default::default(),
+        otel: Default::default(),
+        knowledge_graph: Default::default(),
     };
 
     let bundle = ProviderBundle {

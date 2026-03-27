@@ -14,6 +14,7 @@ members = [
     "crates/thairag-search",
     "crates/thairag-agent",
     "crates/thairag-mcp",
+    "crates/thairag-provider-redis",
     "crates/thairag-api",
 ]
 
@@ -28,7 +29,7 @@ authors = ["Anuwat Yodngoen <jdevspecialist@gmail.com>"]
 tokio = { version = "1.43", features = ["full"] }
 
 # Web framework
-axum = { version = "0.8", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["cors", "trace", "request-id", "propagate-header", "util", "set-header", "timeout"] }
@@ -83,7 +84,13 @@ prometheus = "0.13"
 
 # Logging/tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+
+# OpenTelemetry
+opentelemetry = "0.28"
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.29"
 
 # Streaming
 tokio-stream = "0.1"
@@ -103,6 +110,9 @@ aes-gcm = "0.10"
 base64 = "0.22"
 hex = "0.4"
 
+# Regex
+regex = "1"
+
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -113,6 +123,7 @@ async-trait = "0.1"
 # MCP
 rmcp = { version = "1.2", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 sha2 = "0.10"
+hmac = "0.12"
 cron = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
 
@@ -130,3 +141,7 @@ thairag-document = { path = "crates/thairag-document" }
 thairag-search = { path = "crates/thairag-search" }
 thairag-agent = { path = "crates/thairag-agent" }
 thairag-mcp = { path = "crates/thairag-mcp" }
+thairag-provider-redis = { path = "crates/thairag-provider-redis" }
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }

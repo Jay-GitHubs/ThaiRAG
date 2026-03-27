@@ -4,9 +4,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::types::{
-    ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, LlmResponse,
-    LlmStreamResponse, McpResource, McpResourceContent, McpToolInfo, MemoryId, PersonalMemory,
-    QualityReport, SearchQuery, SearchResult, UserId, VisionMessage,
+    ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, Job, JobId,
+    JobStatus, LlmResponse, LlmStreamResponse, McpResource, McpResourceContent, McpToolInfo,
+    MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, SessionId, UserId,
+    VisionMessage, WorkspaceId,
 };
 
 #[async_trait]
@@ -190,4 +191,100 @@ pub trait SmartChunker: Send + Sync {
         converted: &ConvertedDocument,
         max_chunk_size: usize,
     ) -> Result<Vec<EnrichedChunk>>;
+}
+
+// ── Session Store Trait ─────────────────────────────────────────────
+
+#[async_trait]
+pub trait SessionStoreTrait: Send + Sync {
+    /// Get conversation history for a session.
+    async fn get_history(&self, session_id: &SessionId) -> Option<Vec<ChatMessage>>;
+
+    /// Append a user+assistant message pair to a session.
+    async fn append(
+        &self,
+        session_id: SessionId,
+        user_msg: ChatMessage,
+        assistant_msg: ChatMessage,
+        user_id: Option<UserId>,
+    );
+
+    /// Replace the session's message history (used by context compaction).
+    async fn replace_messages(&self, session_id: &SessionId, new_messages: Vec<ChatMessage>);
+
+    /// Get current message count for a session.
+    async fn message_count(&self, session_id: &SessionId) -> usize;
+
+    /// Number of active sessions.
+    async fn count(&self) -> usize;
+
+    /// Remove all sessions belonging to a specific user.
+    async fn clear_user_sessions(&self, user_id: UserId) -> usize;
+
+    /// Remove sessions idle longer than `max_age`.
+    async fn cleanup_stale(&self, max_age: std::time::Duration);
+}
+
+// ── Embedding Cache Trait ───────────────────────────────────────────
+
+#[async_trait]
+pub trait EmbeddingCache: Send + Sync {
+    /// Get a cached embedding for a text.
+    async fn get(&self, text: &str) -> Option<Vec<f32>>;
+
+    /// Get cached embeddings for multiple texts. Returns None for cache misses.
+    async fn get_many(&self, texts: &[String]) -> Vec<Option<Vec<f32>>>;
+
+    /// Store an embedding for a text.
+    async fn put(&self, text: &str, embedding: Vec<f32>);
+
+    /// Store multiple embeddings.
+    async fn put_many(&self, pairs: Vec<(String, Vec<f32>)>);
+
+    /// Number of cached entries.
+    async fn len(&self) -> usize;
+
+    /// Whether the cache is empty.
+    async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+}
+
+// ── Job Queue ────────────────────────────────────────────────────────
+
+/// Trait for managing background job tracking.
+#[async_trait]
+pub trait JobQueue: Send + Sync {
+    /// Submit a new job and return its ID.
+    async fn enqueue(&self, job: Job) -> JobId;
+
+    /// Get a job by ID.
+    async fn get(&self, job_id: &JobId) -> Option<Job>;
+
+    /// List jobs for a workspace, most recent first.
+    async fn list_by_workspace(&self, workspace_id: &WorkspaceId) -> Vec<Job>;
+
+    /// Update a job's status and optional error message.
+    async fn update_status(&self, job_id: &JobId, status: JobStatus, error: Option<String>);
+
+    /// Mark a job as running (sets started_at).
+    async fn mark_running(&self, job_id: &JobId);
+
+    /// Mark a job as completed (sets completed_at + items_processed).
+    async fn mark_completed(&self, job_id: &JobId, items_processed: usize);
+
+    /// Mark a job as failed (sets completed_at + error).
+    async fn mark_failed(&self, job_id: &JobId, error: String);
+
+    /// Increment the items_processed counter by 1.
+    async fn increment_progress(&self, job_id: &JobId);
+
+    /// Cancel a queued or running job.
+    async fn cancel(&self, job_id: &JobId) -> bool;
+
+    /// Remove completed/failed/cancelled jobs older than max_age.
+    async fn cleanup(&self, max_age: std::time::Duration);
+
+    /// Total number of tracked jobs.
+    async fn count(&self) -> usize;
 }

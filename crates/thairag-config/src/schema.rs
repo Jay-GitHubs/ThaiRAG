@@ -15,6 +15,18 @@ pub struct AppConfig {
     pub chat_pipeline: ChatPipelineConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub session: SessionConfig,
+    #[serde(default)]
+    pub embedding_cache: EmbeddingCacheConfig,
+    #[serde(default)]
+    pub job_queue: JobQueueConfig,
+    #[serde(default)]
+    pub redis: RedisConfig,
+    #[serde(default)]
+    pub otel: OtelConfig,
+    #[serde(default)]
+    pub knowledge_graph: KnowledgeGraphConfig,
 }
 
 impl AppConfig {
@@ -341,8 +353,14 @@ pub struct DocumentConfig {
     pub chunk_overlap: usize,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: usize,
+    #[serde(default = "default_true")]
+    pub language_aware_chunking: bool,
     #[serde(default)]
     pub ai_preprocessing: AiPreprocessingConfig,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_max_upload_size_mb() -> usize {
@@ -1037,6 +1055,163 @@ fn default_sync_retry_max_delay_secs() -> u64 {
     60
 }
 
+// ── Session Config ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionConfig {
+    /// Backend: "memory" or "redis".
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    /// Max messages per session.
+    #[serde(default = "default_session_max_history")]
+    pub max_history: usize,
+    /// Session TTL in seconds (for cleanup/Redis expiry).
+    #[serde(default = "default_session_ttl")]
+    pub stale_timeout_secs: u64,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_memory_backend(),
+            max_history: default_session_max_history(),
+            stale_timeout_secs: default_session_ttl(),
+        }
+    }
+}
+
+fn default_session_max_history() -> usize {
+    50
+}
+fn default_session_ttl() -> u64 {
+    3600
+}
+
+// ── Embedding Cache Config ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingCacheConfig {
+    /// Backend: "memory", "redis", or "none".
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    /// Max entries for in-memory cache.
+    #[serde(default = "default_cache_max_entries")]
+    pub max_entries: usize,
+    /// TTL for cached embeddings in seconds.
+    #[serde(default = "default_cache_ttl")]
+    pub ttl_secs: u64,
+}
+
+impl Default for EmbeddingCacheConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_memory_backend(),
+            max_entries: default_cache_max_entries(),
+            ttl_secs: default_cache_ttl(),
+        }
+    }
+}
+
+fn default_cache_max_entries() -> usize {
+    10_000
+}
+fn default_cache_ttl() -> u64 {
+    3600
+}
+
+// ── Job Queue Config ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct JobQueueConfig {
+    /// Backend: "memory" (default) or "redis".
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    /// How long to keep completed/failed jobs (seconds).
+    #[serde(default = "default_job_retention")]
+    pub retention_secs: u64,
+}
+
+impl Default for JobQueueConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_memory_backend(),
+            retention_secs: default_job_retention(),
+        }
+    }
+}
+
+fn default_job_retention() -> u64 {
+    86400 // 24 hours
+}
+
+// ── Redis Config ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RedisConfig {
+    /// Redis connection URL.
+    #[serde(default = "default_redis_url")]
+    pub url: String,
+}
+
+impl Default for RedisConfig {
+    fn default() -> Self {
+        Self {
+            url: default_redis_url(),
+        }
+    }
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtelConfig {
+    /// Whether OpenTelemetry tracing export is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// OTLP exporter endpoint (gRPC).
+    #[serde(default = "default_otel_endpoint")]
+    pub endpoint: String,
+    /// Service name reported in traces.
+    #[serde(default = "default_otel_service_name")]
+    pub service_name: String,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_otel_endpoint(),
+            service_name: default_otel_service_name(),
+        }
+    }
+}
+
+fn default_otel_endpoint() -> String {
+    "http://localhost:4317".to_string()
+}
+
+fn default_otel_service_name() -> String {
+    "thairag".to_string()
+}
+
+// ── Knowledge Graph Config ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct KnowledgeGraphConfig {
+    /// Master switch to enable knowledge graph extraction.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Whether to automatically extract entities on document ingestion.
+    #[serde(default)]
+    pub extract_on_ingest: bool,
+}
+
+fn default_memory_backend() -> String {
+    "memory".to_string()
+}
+
 fn default_quality_threshold() -> f32 {
     0.7
 }
@@ -1127,10 +1302,17 @@ mod tests {
                 max_chunk_size: 512,
                 chunk_overlap: 64,
                 max_upload_size_mb: 50,
+                language_aware_chunking: true,
                 ai_preprocessing: AiPreprocessingConfig::default(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
+            session: SessionConfig::default(),
+            embedding_cache: EmbeddingCacheConfig::default(),
+            job_queue: JobQueueConfig::default(),
+            redis: RedisConfig::default(),
+            otel: OtelConfig::default(),
+            knowledge_graph: KnowledgeGraphConfig::default(),
         }
     }
 

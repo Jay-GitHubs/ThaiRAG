@@ -109,6 +109,31 @@ BEGIN
     END IF;
 END $$;
 
+-- Document version history
+CREATE TABLE IF NOT EXISTS document_versions (
+    id              UUID PRIMARY KEY,
+    doc_id          UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_number  INTEGER NOT NULL,
+    title           TEXT NOT NULL,
+    content         TEXT,
+    content_hash    TEXT NOT NULL,
+    mime_type       TEXT NOT NULL,
+    size_bytes      BIGINT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL,
+    created_by      UUID,
+    UNIQUE(doc_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_doc_id ON document_versions(doc_id);
+
+-- Add version and content_hash columns to documents
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT;
+
+-- Add scheduled refresh columns to documents
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS refresh_schedule TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_refreshed_at TIMESTAMPTZ;
+
 -- Document content storage (original file + converted markdown)
 CREATE TABLE IF NOT EXISTS document_blobs (
     doc_id           UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
@@ -246,3 +271,75 @@ CREATE TABLE IF NOT EXISTS inference_logs (
 CREATE INDEX IF NOT EXISTS idx_inference_logs_timestamp ON inference_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_inference_logs_workspace_id ON inference_logs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_inference_logs_response_id ON inference_logs(response_id);
+
+-- API Keys (M2M authentication)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id            UUID PRIMARY KEY,
+    name          TEXT NOT NULL,
+    key_hash      TEXT NOT NULL UNIQUE,
+    key_prefix    TEXT NOT NULL DEFAULT '',
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    created_at    TIMESTAMPTZ NOT NULL,
+    last_used_at  TIMESTAMPTZ,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+
+-- Workspace ACLs (fine-grained workspace-level access control)
+CREATE TABLE IF NOT EXISTS workspace_acls (
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    permission    TEXT NOT NULL DEFAULT 'read',
+    granted_at    TIMESTAMPTZ NOT NULL,
+    granted_by    UUID,
+    UNIQUE(user_id, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_acls_workspace_id ON workspace_acls(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_acls_user_id ON workspace_acls(user_id);
+
+-- Document ACLs (fine-grained document-level access control)
+CREATE TABLE IF NOT EXISTS document_acls (
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    doc_id        UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    permission    TEXT NOT NULL DEFAULT 'read',
+    granted_at    TIMESTAMPTZ NOT NULL,
+    UNIQUE(user_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_acls_doc_id ON document_acls(doc_id);
+CREATE INDEX IF NOT EXISTS idx_document_acls_user_id ON document_acls(user_id);
+
+-- Knowledge Graph: Entities
+CREATE TABLE IF NOT EXISTS entities (
+    id            UUID PRIMARY KEY,
+    name          TEXT NOT NULL,
+    entity_type   TEXT NOT NULL,
+    workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    metadata      TEXT NOT NULL DEFAULT '{}',
+    created_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entities_workspace_id ON entities(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+
+-- Knowledge Graph: Entity-Document links (many-to-many)
+CREATE TABLE IF NOT EXISTS entity_doc_links (
+    entity_id     UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    doc_id        UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    PRIMARY KEY (entity_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_entity_doc_links_doc_id ON entity_doc_links(doc_id);
+
+-- Knowledge Graph: Relations between entities
+CREATE TABLE IF NOT EXISTS relations (
+    id              UUID PRIMARY KEY,
+    from_entity_id  UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    to_entity_id    UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    relation_type   TEXT NOT NULL,
+    confidence      REAL NOT NULL DEFAULT 1.0,
+    doc_id          UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    created_at      TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_doc_id ON relations(doc_id);
