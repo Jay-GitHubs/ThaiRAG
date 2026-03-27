@@ -41,6 +41,7 @@ pub struct MemoryKmStore {
     chunks: RwLock<Vec<thairag_core::types::DocumentChunk>>,
     vault_keys: RwLock<HashMap<String, super::VaultKeyRow>>,
     llm_profiles: RwLock<HashMap<String, super::LlmProfileRow>>,
+    document_versions: RwLock<Vec<super::DocumentVersion>>,
     inference_logs: RwLock<Vec<super::InferenceLogEntry>>,
     api_keys_m2m: RwLock<HashMap<ApiKeyId, super::ApiKeyRow>>,
 }
@@ -70,6 +71,7 @@ impl MemoryKmStore {
             chunks: RwLock::new(Vec::new()),
             vault_keys: RwLock::new(HashMap::new()),
             llm_profiles: RwLock::new(HashMap::new()),
+            document_versions: RwLock::new(Vec::new()),
             inference_logs: RwLock::new(Vec::new()),
             api_keys_m2m: RwLock::new(HashMap::new()),
         }
@@ -305,6 +307,136 @@ impl KmStoreTrait for MemoryKmStore {
             .get(&doc_id)
             .map(|b| (b.image_count, b.table_count))
             .unwrap_or((0, 0)))
+    }
+
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.version = version;
+        doc.content_hash = content_hash;
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    // ── Document Versioning ─────────────────────────────────────────
+
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<super::DocumentVersion> {
+        let mut versions = self.document_versions.write().unwrap();
+        let next_version = versions
+            .iter()
+            .filter(|v| v.doc_id == doc_id)
+            .map(|v| v.version_number)
+            .max()
+            .unwrap_or(0)
+            + 1;
+
+        let ver = super::DocumentVersion {
+            id: uuid::Uuid::new_v4().to_string(),
+            doc_id,
+            version_number: next_version,
+            title: title.to_string(),
+            content: content.map(|s| s.to_string()),
+            content_hash: content_hash.to_string(),
+            mime_type: mime_type.to_string(),
+            size_bytes,
+            created_at: Utc::now().to_rfc3339(),
+            created_by,
+        };
+        versions.push(ver.clone());
+        Ok(ver)
+    }
+
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<super::DocumentVersion> {
+        let versions = self.document_versions.read().unwrap();
+        let mut result: Vec<_> = versions
+            .iter()
+            .filter(|v| v.doc_id == doc_id)
+            .cloned()
+            .collect();
+        result.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+        result
+    }
+
+    fn get_document_version(
+        &self,
+        doc_id: DocId,
+        version_number: i32,
+    ) -> Option<super::DocumentVersion> {
+        let versions = self.document_versions.read().unwrap();
+        versions
+            .iter()
+            .find(|v| v.doc_id == doc_id && v.version_number == version_number)
+            .cloned()
+    }
+
+    // ── Document Refresh Schedule ────────────────────────────────
+
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.source_url = source_url;
+        doc.refresh_schedule = refresh_schedule;
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.last_refreshed_at = Some(Utc::now());
+        doc.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn list_documents_due_for_refresh(&self) -> Vec<Document> {
+        let docs = self.documents.read().unwrap();
+        let now = Utc::now();
+        docs.values()
+            .filter(|doc| {
+                if doc.status != DocStatus::Ready {
+                    return false;
+                }
+                let schedule = match &doc.refresh_schedule {
+                    Some(s) => s,
+                    None => return false,
+                };
+                if doc.source_url.is_none() {
+                    return false;
+                }
+                let interval = match super::parse_refresh_interval(schedule) {
+                    Some(d) => chrono::Duration::from_std(d).unwrap_or(chrono::Duration::days(1)),
+                    None => return false,
+                };
+                let last = doc.last_refreshed_at.unwrap_or(doc.created_at);
+                now - last >= interval
+            })
+            .cloned()
+            .collect()
     }
 
     // ── Document Chunks ────────────────────────────────────────────
@@ -1669,6 +1801,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1692,6 +1829,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1732,6 +1874,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1763,6 +1910,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -1899,6 +2051,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };

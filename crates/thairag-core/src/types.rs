@@ -739,6 +739,10 @@ pub enum JobKind {
     DocumentReprocess,
     /// Reprocess all documents in a workspace.
     BatchReprocess,
+    /// Batch upload of multiple documents (CSV or ZIP).
+    BatchUpload,
+    /// Refresh a document from its source URL on schedule.
+    DocumentRefresh,
 }
 
 impl std::fmt::Display for JobKind {
@@ -747,6 +751,8 @@ impl std::fmt::Display for JobKind {
             Self::DocumentIngestion => write!(f, "document_ingestion"),
             Self::DocumentReprocess => write!(f, "document_reprocess"),
             Self::BatchReprocess => write!(f, "batch_reprocess"),
+            Self::BatchUpload => write!(f, "batch_upload"),
+            Self::DocumentRefresh => write!(f, "document_refresh"),
         }
     }
 }
@@ -795,6 +801,9 @@ pub struct Job {
     pub error: Option<String>,
     /// Number of items processed (e.g., chunks indexed).
     pub items_processed: usize,
+    /// Total number of items to process (for progress tracking in batch jobs).
+    #[serde(default)]
+    pub items_total: Option<usize>,
 }
 
 /// Estimate tokens for a string using heuristic: Thai ~2 chars/token, EN ~4 chars/token.

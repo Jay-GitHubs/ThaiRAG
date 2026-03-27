@@ -261,6 +261,7 @@ fn make_job(workspace_id: WorkspaceId, kind: JobKind) -> Job {
         completed_at: None,
         error: None,
         items_processed: 0,
+        items_total: None,
     }
 }
 

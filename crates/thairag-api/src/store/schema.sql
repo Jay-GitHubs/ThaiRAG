@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_count   INTEGER NOT NULL DEFAULT 0,
     error_message    TEXT,
     processing_step  TEXT,
+    version          INTEGER NOT NULL DEFAULT 1,
+    content_hash     TEXT,
+    source_url       TEXT,
+    refresh_schedule TEXT,
+    last_refreshed_at TEXT,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -66,6 +71,22 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at  TEXT NOT NULL,
     PRIMARY KEY (key, scope_type, scope_id)
 );
+
+-- Document version history
+CREATE TABLE IF NOT EXISTS document_versions (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_number  INTEGER NOT NULL,
+    title           TEXT NOT NULL,
+    content         TEXT,
+    content_hash    TEXT NOT NULL,
+    mime_type       TEXT NOT NULL,
+    size_bytes      INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    created_by      TEXT,
+    UNIQUE(doc_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_doc_id ON document_versions(doc_id);
 
 -- Document content storage (original file + converted markdown)
 CREATE TABLE IF NOT EXISTS document_blobs (

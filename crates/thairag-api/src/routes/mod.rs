@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderValue, Request};
 use axum::middleware;
-use axum::{Router, routing::delete, routing::get, routing::post, routing::put};
+use axum::{Router, routing::delete, routing::get, routing::patch, routing::post, routing::put};
 use sha2::{Digest, Sha256};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -277,6 +277,12 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             )),
         )
         .route(
+            "/workspaces/{workspace_id}/documents/batch",
+            post(documents::batch_upload_documents).layer(DefaultBodyLimit::max(
+                state.config.document.max_upload_size_mb * 1024 * 1024,
+            )),
+        )
+        .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/content",
             get(documents::get_document_content),
         )
@@ -295,6 +301,24 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/documents/reprocess-all",
             post(documents::reprocess_all_documents),
+        )
+        // Document Versioning
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/versions",
+            get(documents::list_document_versions),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/versions/{version}",
+            get(documents::get_document_version),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/diff",
+            get(documents::diff_document_versions),
+        )
+        // Document Refresh Schedule
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/schedule",
+            patch(documents::update_document_schedule),
         )
         // Jobs
         .route("/workspaces/{workspace_id}/jobs", get(documents::list_jobs))
@@ -417,6 +441,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 axum::http::Method::GET,
                 axum::http::Method::POST,
                 axum::http::Method::PUT,
+                axum::http::Method::PATCH,
                 axum::http::Method::DELETE,
                 axum::http::Method::OPTIONS,
             ])

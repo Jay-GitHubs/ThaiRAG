@@ -9,6 +9,7 @@ use thairag_core::types::{ChunkId, DocId, DocumentChunk, WorkspaceId};
 use crate::ai::pipeline::AiDocumentPipeline;
 use crate::chunker::MarkdownChunker;
 use crate::converter::MarkdownConverter;
+use crate::thai_chunker::ThaiAwareChunker;
 
 /// Callback invoked when the pipeline enters a new processing step.
 /// Steps: "analyzing", "converting", "checking_quality", "chunking", "indexing".
@@ -18,7 +19,7 @@ pub type StepCallback = Arc<dyn Fn(&str) + Send + Sync>;
 /// When AI preprocessing is enabled, delegates to the AI agent team.
 pub struct DocumentPipeline {
     converter: MarkdownConverter,
-    chunker: MarkdownChunker,
+    chunker: Box<dyn Chunker>,
     max_chunk_size: usize,
     chunk_overlap: usize,
     ai_pipeline: Option<AiDocumentPipeline>,
@@ -27,9 +28,23 @@ pub struct DocumentPipeline {
 impl DocumentPipeline {
     /// Create a mechanical-only pipeline (no AI).
     pub fn new(max_chunk_size: usize, chunk_overlap: usize) -> Self {
+        Self::new_with_language_aware(max_chunk_size, chunk_overlap, true)
+    }
+
+    /// Create a mechanical-only pipeline with configurable language awareness.
+    pub fn new_with_language_aware(
+        max_chunk_size: usize,
+        chunk_overlap: usize,
+        language_aware_chunking: bool,
+    ) -> Self {
+        let chunker: Box<dyn Chunker> = if language_aware_chunking {
+            Box::new(ThaiAwareChunker::new())
+        } else {
+            Box::new(MarkdownChunker::new())
+        };
         Self {
             converter: MarkdownConverter::new(),
-            chunker: MarkdownChunker::new(),
+            chunker,
             max_chunk_size,
             chunk_overlap,
             ai_pipeline: None,
@@ -124,9 +139,10 @@ impl DocumentPipeline {
             None
         };
 
+        let chunker: Box<dyn Chunker> = Box::new(ThaiAwareChunker::new());
         Self {
             converter: MarkdownConverter::new(),
-            chunker: MarkdownChunker::new(),
+            chunker,
             max_chunk_size,
             chunk_overlap,
             ai_pipeline,

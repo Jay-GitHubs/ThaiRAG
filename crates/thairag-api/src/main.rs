@@ -238,6 +238,9 @@ async fn main() {
         None
     };
 
+    // Start document refresh scheduler (checks every 5 minutes for documents due for refresh)
+    thairag_api::routes::documents::spawn_document_refresh_scheduler(state.clone());
+
     // Build router
     let app = build_router(state, rate_limiter);
 

@@ -53,6 +53,7 @@ text_weight = 0.4
 [document]
 max_chunk_size = 512
 chunk_overlap = 64
+language_aware_chunking = true
 
 # [chat_pipeline]
 # live_retrieval_enabled = false

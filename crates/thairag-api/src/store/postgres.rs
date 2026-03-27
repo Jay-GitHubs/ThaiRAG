@@ -500,7 +500,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn insert_document(&self, doc: Document) -> Result<Document> {
         self.get_workspace(doc.workspace_id)?;
         block_on(sqlx::query(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(doc.id.0)
         .bind(doc.workspace_id.0)
@@ -511,6 +511,11 @@ impl KmStoreTrait for PostgresKmStore {
         .bind(doc.chunk_count)
         .bind(&doc.error_message)
         .bind(&doc.processing_step)
+        .bind(doc.version)
+        .bind(&doc.content_hash)
+        .bind(&doc.source_url)
+        .bind(&doc.refresh_schedule)
+        .bind(doc.last_refreshed_at)
         .bind(doc.created_at)
         .bind(doc.updated_at)
         .execute(&self.pool))
@@ -520,13 +525,13 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn get_document(&self, id: DocId) -> Result<Document> {
         block_on(
-            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE id = $1",
+            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE id = $1",
             )
             .bind(id.0)
             .fetch_one(&self.pool),
         )
-        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, ca, ua)| Document {
+        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
             id: DocId(id),
             workspace_id: WorkspaceId(ws_id),
             title,
@@ -536,6 +541,11 @@ impl KmStoreTrait for PostgresKmStore {
             chunk_count: chunks as i64,
             error_message: err_msg,
             processing_step,
+            version,
+            content_hash,
+            source_url,
+            refresh_schedule,
+            last_refreshed_at,
             created_at: ca,
             updated_at: ua,
         })
@@ -544,15 +554,15 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         block_on(
-            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>)>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE workspace_id = $1",
+            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE workspace_id = $1",
             )
             .bind(workspace_id.0)
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, ca, ua)| Document {
+        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
             id: DocId(id),
             workspace_id: WorkspaceId(ws_id),
             title,
@@ -562,6 +572,11 @@ impl KmStoreTrait for PostgresKmStore {
             chunk_count: chunks as i64,
             error_message: err_msg,
             processing_step,
+            version,
+            content_hash,
+            source_url,
+            refresh_schedule,
+            last_refreshed_at,
             created_at: ca,
             updated_at: ua,
         })
@@ -682,6 +697,227 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres get blob stats: {e}")))?;
         Ok(row.unwrap_or((0, 0)))
+    }
+
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()> {
+        let result = block_on(
+            sqlx::query("UPDATE documents SET version = $1, content_hash = $2, updated_at = $3 WHERE id = $4")
+                .bind(version)
+                .bind(&content_hash)
+                .bind(Utc::now())
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update document version info: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    // ── Document Versioning ─────────────────────────────────────────
+
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<super::DocumentVersion> {
+        let next_version: i32 = block_on(
+            sqlx::query_as::<_, (i32,)>(
+                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM document_versions WHERE doc_id = $1",
+            )
+            .bind(doc_id.0)
+            .fetch_one(&self.pool),
+        )
+        .map(|(v,)| v)
+        .unwrap_or(1);
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_versions (id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            )
+            .bind(id)
+            .bind(doc_id.0)
+            .bind(next_version)
+            .bind(title)
+            .bind(content)
+            .bind(content_hash)
+            .bind(mime_type)
+            .bind(size_bytes)
+            .bind(now)
+            .bind(created_by.map(|u| u.0))
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres save document version: {e}")))?;
+
+        Ok(super::DocumentVersion {
+            id: id.to_string(),
+            doc_id,
+            version_number: next_version,
+            title: title.to_string(),
+            content: content.map(|s| s.to_string()),
+            content_hash: content_hash.to_string(),
+            mime_type: mime_type.to_string(),
+            size_bytes,
+            created_at: now.to_rfc3339(),
+            created_by,
+        })
+    }
+
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<super::DocumentVersion> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, Uuid, i32, String, Option<String>, String, String, i64, DateTime<Utc>, Option<Uuid>)>(
+                "SELECT id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by
+                 FROM document_versions WHERE doc_id = $1 ORDER BY version_number DESC",
+            )
+            .bind(doc_id.0)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, did, vn, title, content, hash, mime, size, ca, cb)| super::DocumentVersion {
+            id: id.to_string(),
+            doc_id: DocId(did),
+            version_number: vn,
+            title,
+            content,
+            content_hash: hash,
+            mime_type: mime,
+            size_bytes: size,
+            created_at: ca.to_rfc3339(),
+            created_by: cb.map(UserId),
+        })
+        .collect()
+    }
+
+    fn get_document_version(
+        &self,
+        doc_id: DocId,
+        version_number: i32,
+    ) -> Option<super::DocumentVersion> {
+        block_on(
+            sqlx::query_as::<_, (Uuid, Uuid, i32, String, Option<String>, String, String, i64, DateTime<Utc>, Option<Uuid>)>(
+                "SELECT id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by
+                 FROM document_versions WHERE doc_id = $1 AND version_number = $2",
+            )
+            .bind(doc_id.0)
+            .bind(version_number)
+            .fetch_optional(&self.pool),
+        )
+        .ok()
+        .flatten()
+        .map(|(id, did, vn, title, content, hash, mime, size, ca, cb)| super::DocumentVersion {
+            id: id.to_string(),
+            doc_id: DocId(did),
+            version_number: vn,
+            title,
+            content,
+            content_hash: hash,
+            mime_type: mime,
+            size_bytes: size,
+            created_at: ca.to_rfc3339(),
+            created_by: cb.map(UserId),
+        })
+    }
+
+    // ── Document Refresh Schedule ────────────────────────────────
+
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()> {
+        let result = block_on(
+            sqlx::query("UPDATE documents SET source_url = $1, refresh_schedule = $2, updated_at = $3 WHERE id = $4")
+                .bind(&source_url)
+                .bind(&refresh_schedule)
+                .bind(Utc::now())
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update document schedule: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()> {
+        let now = Utc::now();
+        let result = block_on(
+            sqlx::query(
+                "UPDATE documents SET last_refreshed_at = $1, updated_at = $2 WHERE id = $3",
+            )
+            .bind(now)
+            .bind(now)
+            .bind(id.0)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres touch document refreshed: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn list_documents_due_for_refresh(&self) -> Vec<Document> {
+        let all: Vec<Document> = block_on(
+            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at
+                 FROM documents WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
+            )
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
+            id: DocId(id),
+            workspace_id: WorkspaceId(ws_id),
+            title,
+            mime_type: mime,
+            size_bytes: size,
+            status: DocStatus::from_str_lossy(&status),
+            chunk_count: chunks as i64,
+            error_message: err_msg,
+            processing_step,
+            version,
+            content_hash,
+            source_url,
+            refresh_schedule,
+            last_refreshed_at,
+            created_at: ca,
+            updated_at: ua,
+        })
+        .collect();
+        let now = Utc::now();
+        all.into_iter()
+            .filter(|doc| {
+                let schedule = match &doc.refresh_schedule {
+                    Some(s) => s,
+                    None => return false,
+                };
+                let interval = match super::parse_refresh_interval(schedule) {
+                    Some(d) => chrono::Duration::from_std(d).unwrap_or(chrono::Duration::days(1)),
+                    None => return false,
+                };
+                let last = doc.last_refreshed_at.unwrap_or(doc.created_at);
+                now - last >= interval
+            })
+            .collect()
     }
 
     // ── Document Chunks ────────────────────────────────────────────

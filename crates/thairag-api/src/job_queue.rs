@@ -84,6 +84,12 @@ impl JobQueue for InMemoryJobQueue {
         }
     }
 
+    async fn increment_progress(&self, job_id: &JobId) {
+        if let Some(mut job) = self.jobs.get_mut(job_id) {
+            job.items_processed += 1;
+        }
+    }
+
     async fn cancel(&self, job_id: &JobId) -> bool {
         if let Some(mut job) = self.jobs.get_mut(job_id)
             && (job.status == JobStatus::Queued || job.status == JobStatus::Running)
@@ -130,6 +136,7 @@ mod tests {
             completed_at: None,
             error: None,
             items_processed: 0,
+            items_total: None,
         }
     }
 

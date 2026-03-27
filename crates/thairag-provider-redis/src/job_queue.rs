@@ -186,6 +186,13 @@ impl JobQueue for RedisJobQueue {
         }
     }
 
+    async fn increment_progress(&self, job_id: &JobId) {
+        if let Some(mut job) = self.get(job_id).await {
+            job.items_processed += 1;
+            self.save_job(&job).await;
+        }
+    }
+
     async fn cancel(&self, job_id: &JobId) -> bool {
         if let Some(mut job) = self.get(job_id).await
             && (job.status == JobStatus::Queued || job.status == JobStatus::Running)

@@ -351,8 +351,14 @@ pub struct DocumentConfig {
     pub chunk_overlap: usize,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: usize,
+    #[serde(default = "default_true")]
+    pub language_aware_chunking: bool,
     #[serde(default)]
     pub ai_preprocessing: AiPreprocessingConfig,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_max_upload_size_mb() -> usize {
@@ -1282,6 +1288,7 @@ mod tests {
                 max_chunk_size: 512,
                 chunk_overlap: 64,
                 max_upload_size_mb: 50,
+                language_aware_chunking: true,
                 ai_preprocessing: AiPreprocessingConfig::default(),
             },
             chat_pipeline: ChatPipelineConfig::default(),

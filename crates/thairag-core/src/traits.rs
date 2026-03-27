@@ -276,6 +276,9 @@ pub trait JobQueue: Send + Sync {
     /// Mark a job as failed (sets completed_at + error).
     async fn mark_failed(&self, job_id: &JobId, error: String);
 
+    /// Increment the items_processed counter by 1.
+    async fn increment_progress(&self, job_id: &JobId);
+
     /// Cancel a queued or running job.
     async fn cancel(&self, job_id: &JobId) -> bool;
 

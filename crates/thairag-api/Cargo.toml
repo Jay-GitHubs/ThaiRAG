@@ -50,6 +50,8 @@ aes-gcm = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
+csv = { workspace = true }
+zip = "8.4"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

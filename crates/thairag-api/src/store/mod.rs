@@ -16,6 +16,33 @@ use thairag_core::types::{
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
+// ── Schedule Parsing ────────────────────────────────────────────────
+
+/// Parse a simple interval string like "1h", "6h", "1d", "7d", "30d"
+/// into a `std::time::Duration`. Returns `None` for invalid formats.
+pub fn parse_refresh_interval(s: &str) -> Option<std::time::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_part, unit) = s.split_at(s.len() - 1);
+    let num: u64 = num_part.parse().ok()?;
+    if num == 0 {
+        return None;
+    }
+    match unit {
+        "h" => Some(std::time::Duration::from_secs(num * 3600)),
+        "d" => Some(std::time::Duration::from_secs(num * 86400)),
+        "m" => Some(std::time::Duration::from_secs(num * 60)),
+        _ => None,
+    }
+}
+
+/// Validate a refresh schedule string. Returns true if valid.
+pub fn is_valid_refresh_schedule(s: &str) -> bool {
+    parse_refresh_interval(s).is_some()
+}
+
 // ── Scoped Settings ──────────────────────────────────────────────────
 
 /// Hierarchical scope for settings with inheritance:
@@ -296,6 +323,32 @@ pub struct WorkspaceStats {
     pub total_tokens: u64,
 }
 
+// ── Document Versioning ──────────────────────────────────────────────
+
+/// A historical version of a document, saved before each update.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocumentVersion {
+    pub id: String,
+    pub doc_id: DocId,
+    pub version_number: i32,
+    pub title: String,
+    pub content: Option<String>,
+    pub content_hash: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+    pub created_by: Option<UserId>,
+}
+
+/// Line-level diff statistics between two document versions.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DiffStats {
+    pub from_version: i32,
+    pub to_version: i32,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
     // ── Organization ────────────────────────────────────────────────
@@ -345,6 +398,45 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_document_file(&self, doc_id: DocId) -> Result<Option<Vec<u8>>>;
     /// Get image and table counts for a document.
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)>;
+
+    /// Update document version number and content hash.
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()>;
+
+    // ── Document Versioning ─────────────────────────────────────────
+    /// Save a snapshot of the current document state as a version before overwriting.
+    #[allow(clippy::too_many_arguments)]
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<DocumentVersion>;
+    /// List all versions of a document, ordered by version_number descending.
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<DocumentVersion>;
+    /// Get a specific version of a document.
+    fn get_document_version(&self, doc_id: DocId, version_number: i32) -> Option<DocumentVersion>;
+
+    // ── Document Refresh Schedule ──────────────────────────────────
+    /// Update a document's source URL, refresh schedule, and last_refreshed_at.
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()>;
+    /// Update last_refreshed_at timestamp to now.
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()>;
+    /// List all documents that have a refresh_schedule set and are due for refresh.
+    fn list_documents_due_for_refresh(&self) -> Vec<Document>;
 
     // ── Document Chunks (for Tantivy rebuild) ──────────────────────
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()>;

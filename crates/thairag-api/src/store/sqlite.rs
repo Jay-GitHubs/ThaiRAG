@@ -41,6 +41,11 @@ impl SqliteKmStore {
             "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
             "ALTER TABLE documents ADD COLUMN processing_step TEXT",
+            "ALTER TABLE documents ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE documents ADD COLUMN content_hash TEXT",
+            "ALTER TABLE documents ADD COLUMN source_url TEXT",
+            "ALTER TABLE documents ADD COLUMN refresh_schedule TEXT",
+            "ALTER TABLE documents ADD COLUMN last_refreshed_at TEXT",
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
@@ -111,8 +116,13 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
     let chunk_count: i64 = row.get(6)?;
     let error_message: Option<String> = row.get(7)?;
     let processing_step: Option<String> = row.get(8)?;
-    let ca: String = row.get(9)?;
-    let ua: String = row.get(10)?;
+    let version: i32 = row.get(9)?;
+    let content_hash: Option<String> = row.get(10)?;
+    let source_url: Option<String> = row.get(11)?;
+    let refresh_schedule: Option<String> = row.get(12)?;
+    let last_refreshed_at_s: Option<String> = row.get(13)?;
+    let ca: String = row.get(14)?;
+    let ua: String = row.get(15)?;
     Ok(Document {
         id: DocId(parse_uuid(&id_s)),
         workspace_id: WorkspaceId(parse_uuid(&ws_s)),
@@ -123,6 +133,11 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
         chunk_count,
         error_message,
         processing_step,
+        version,
+        content_hash,
+        source_url,
+        refresh_schedule,
+        last_refreshed_at: last_refreshed_at_s.map(|s| parse_ts(&s)),
         created_at: parse_ts(&ca),
         updated_at: parse_ts(&ua),
     })
@@ -583,7 +598,7 @@ impl KmStoreTrait for SqliteKmStore {
         self.get_workspace(doc.workspace_id)?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 doc.id.0.to_string(),
                 doc.workspace_id.0.to_string(),
@@ -594,6 +609,11 @@ impl KmStoreTrait for SqliteKmStore {
                 doc.chunk_count,
                 doc.error_message,
                 doc.processing_step,
+                doc.version,
+                doc.content_hash,
+                doc.source_url,
+                doc.refresh_schedule,
+                doc.last_refreshed_at.map(|dt| ts(&dt)),
                 ts(&doc.created_at),
                 ts(&doc.updated_at),
             ],
@@ -605,7 +625,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_document(&self, id: DocId) -> Result<Document> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE id = ?1",
+            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE id = ?1",
             params![id.0.to_string()],
             doc_from_row,
         )
@@ -615,7 +635,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, created_at, updated_at FROM documents WHERE workspace_id = ?1")
+            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE workspace_id = ?1")
             .unwrap();
         stmt.query_map(params![workspace_id.0.to_string()], doc_from_row)
             .unwrap()
@@ -732,6 +752,204 @@ impl KmStoreTrait for SqliteKmStore {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
+    }
+
+    fn update_document_version_info(
+        &self,
+        id: DocId,
+        version: i32,
+        content_hash: Option<String>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE documents SET version = ?1, content_hash = ?2, updated_at = ?3 WHERE id = ?4",
+                params![version, content_hash, ts(&Utc::now()), id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update document version info: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    // ── Document Versioning ─────────────────────────────────────────
+
+    fn save_document_version(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        content: Option<&str>,
+        content_hash: &str,
+        mime_type: &str,
+        size_bytes: i64,
+        created_by: Option<UserId>,
+    ) -> Result<super::DocumentVersion> {
+        let conn = self.conn.lock().unwrap();
+        let next_version: i32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM document_versions WHERE doc_id = ?1",
+                params![doc_id.0.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
+
+        let id = Uuid::new_v4().to_string();
+        let now = ts(&Utc::now());
+        conn.execute(
+            "INSERT INTO document_versions (id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id,
+                doc_id.0.to_string(),
+                next_version,
+                title,
+                content,
+                content_hash,
+                mime_type,
+                size_bytes,
+                now,
+                created_by.map(|u| u.0.to_string()),
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite save document version: {e}")))?;
+
+        Ok(super::DocumentVersion {
+            id,
+            doc_id,
+            version_number: next_version,
+            title: title.to_string(),
+            content: content.map(|s| s.to_string()),
+            content_hash: content_hash.to_string(),
+            mime_type: mime_type.to_string(),
+            size_bytes,
+            created_at: now,
+            created_by,
+        })
+    }
+
+    fn list_document_versions(&self, doc_id: DocId) -> Vec<super::DocumentVersion> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by
+                 FROM document_versions WHERE doc_id = ?1 ORDER BY version_number DESC",
+            )
+            .unwrap();
+        stmt.query_map(params![doc_id.0.to_string()], |row| {
+            let created_by_str: Option<String> = row.get(9)?;
+            Ok(super::DocumentVersion {
+                id: row.get(0)?,
+                doc_id: DocId(parse_uuid(&row.get::<_, String>(1)?)),
+                version_number: row.get(2)?,
+                title: row.get(3)?,
+                content: row.get(4)?,
+                content_hash: row.get(5)?,
+                mime_type: row.get(6)?,
+                size_bytes: row.get(7)?,
+                created_at: row.get(8)?,
+                created_by: created_by_str.map(|s| UserId(parse_uuid(&s))),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_document_version(
+        &self,
+        doc_id: DocId,
+        version_number: i32,
+    ) -> Option<super::DocumentVersion> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, doc_id, version_number, title, content, content_hash, mime_type, size_bytes, created_at, created_by
+             FROM document_versions WHERE doc_id = ?1 AND version_number = ?2",
+            params![doc_id.0.to_string(), version_number],
+            |row| {
+                let created_by_str: Option<String> = row.get(9)?;
+                Ok(super::DocumentVersion {
+                    id: row.get(0)?,
+                    doc_id: DocId(parse_uuid(&row.get::<_, String>(1)?)),
+                    version_number: row.get(2)?,
+                    title: row.get(3)?,
+                    content: row.get(4)?,
+                    content_hash: row.get(5)?,
+                    mime_type: row.get(6)?,
+                    size_bytes: row.get(7)?,
+                    created_at: row.get(8)?,
+                    created_by: created_by_str.map(|s| UserId(parse_uuid(&s))),
+                })
+            },
+        )
+        .ok()
+    }
+
+    // ── Document Refresh Schedule ────────────────────────────────
+
+    fn update_document_schedule(
+        &self,
+        id: DocId,
+        source_url: Option<String>,
+        refresh_schedule: Option<String>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE documents SET source_url = ?1, refresh_schedule = ?2, updated_at = ?3 WHERE id = ?4",
+                params![source_url, refresh_schedule, ts(&Utc::now()), id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite update document schedule: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn touch_document_refreshed(&self, id: DocId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&Utc::now());
+        let affected = conn
+            .execute(
+                "UPDATE documents SET last_refreshed_at = ?1, updated_at = ?2 WHERE id = ?3",
+                params![now, now, id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite touch document refreshed: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn list_documents_due_for_refresh(&self) -> Vec<Document> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at
+                 FROM documents
+                 WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
+            )
+            .unwrap();
+        let all: Vec<Document> = stmt
+            .query_map([], doc_from_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        let now = Utc::now();
+        all.into_iter()
+            .filter(|doc| {
+                let schedule = match &doc.refresh_schedule {
+                    Some(s) => s,
+                    None => return false,
+                };
+                let interval = match super::parse_refresh_interval(schedule) {
+                    Some(d) => chrono::Duration::from_std(d).unwrap_or(chrono::Duration::days(1)),
+                    None => return false,
+                };
+                let last = doc.last_refreshed_at.unwrap_or(doc.created_at);
+                now - last >= interval
+            })
+            .collect()
     }
 
     // ── Document Chunks ────────────────────────────────────────────
@@ -2701,6 +2919,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -2900,6 +3123,11 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
             created_at: now,
             updated_at: now,
         };

@@ -109,6 +109,31 @@ BEGIN
     END IF;
 END $$;
 
+-- Document version history
+CREATE TABLE IF NOT EXISTS document_versions (
+    id              UUID PRIMARY KEY,
+    doc_id          UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_number  INTEGER NOT NULL,
+    title           TEXT NOT NULL,
+    content         TEXT,
+    content_hash    TEXT NOT NULL,
+    mime_type       TEXT NOT NULL,
+    size_bytes      BIGINT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL,
+    created_by      UUID,
+    UNIQUE(doc_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_document_versions_doc_id ON document_versions(doc_id);
+
+-- Add version and content_hash columns to documents
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT;
+
+-- Add scheduled refresh columns to documents
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS refresh_schedule TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_refreshed_at TIMESTAMPTZ;
+
 -- Document content storage (original file + converted markdown)
 CREATE TABLE IF NOT EXISTS document_blobs (
     doc_id           UUID PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
