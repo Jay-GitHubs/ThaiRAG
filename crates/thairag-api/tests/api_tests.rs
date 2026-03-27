@@ -216,6 +216,8 @@ fn build_test_state(auth_enabled: bool) -> AppState {
             chunk_overlap: 50,
             max_upload_size_mb: 50,
             language_aware_chunking: false,
+            image_description_enabled: false,
+            table_extraction_enabled: false,
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
@@ -226,6 +228,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         redis: Default::default(),
         otel: Default::default(),
         knowledge_graph: Default::default(),
+        plugins: Default::default(),
     };
 
     let bundle = ProviderBundle {
@@ -1639,6 +1642,8 @@ fn build_streaming_test_app() -> Router {
             chunk_overlap: 50,
             max_upload_size_mb: 50,
             language_aware_chunking: false,
+            image_description_enabled: false,
+            table_extraction_enabled: false,
             ai_preprocessing: Default::default(),
         },
         chat_pipeline: Default::default(),
@@ -1649,6 +1654,7 @@ fn build_streaming_test_app() -> Router {
         redis: Default::default(),
         otel: Default::default(),
         knowledge_graph: Default::default(),
+        plugins: Default::default(),
     };
 
     let bundle = ProviderBundle {

@@ -241,6 +241,29 @@ GET    /api/km/settings/feedback/stats      # Feedback statistics (super admin)
 
 ---
 
+## Additional Endpoints
+
+For complete endpoint documentation including the following, see [API_REFERENCE.md](API_REFERENCE.md):
+
+- **API v2** — `/v2/chat/completions`, `/v2/search`, `/v2/models` with metadata and sources
+- **WebSocket** — `/ws/chat` for real-time bidirectional chat
+- **API Keys** — `/api/auth/api-keys` for key management
+- **Webhooks** — `/api/km/webhooks` for event notifications
+- **Background Jobs** — `/api/km/workspaces/{id}/jobs` with SSE streaming
+- **Backup & Restore** — `/api/km/admin/backup`, `/api/km/admin/restore`
+- **Vector Migration** — `/api/km/admin/vector-migration/*`
+- **Rate Limit Stats** — `/api/km/admin/rate-limits/*`
+- **Evaluation** — `/api/km/eval/query-sets/*`
+- **A/B Testing** — `/api/km/ab-tests/*`
+- **Plugins** — `/api/km/plugins/*`
+- **Knowledge Graph** — `/api/km/workspaces/{id}/knowledge-graph`, `/api/km/workspaces/{id}/entities`
+- **ACLs** — Workspace and document-level access control lists
+- **Document Versioning** — Version history and diff endpoints
+- **Inference Logs** — `/api/km/settings/inference-logs/*`
+- **Chat Sessions** — `/api/chat/sessions/{id}/summary`
+
+---
+
 ## Configuration
 
 See `config/default.toml` for all available settings. Override with:

@@ -2627,6 +2627,16 @@ where
         compaction_keep_recent: s("chat_pipeline.compaction_keep_recent")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.compaction_keep_recent),
+        // Conversation Summarization
+        auto_summarize: s("chat_pipeline.auto_summarize")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.auto_summarize),
+        summarize_threshold: s("chat_pipeline.summarize_threshold")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.summarize_threshold),
+        summarize_keep_recent: s("chat_pipeline.summarize_keep_recent")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.summarize_keep_recent),
         // Personal Memory
         personal_memory_enabled: s("chat_pipeline.personal_memory_enabled")
             .and_then(|v| v.parse().ok())

@@ -4,11 +4,16 @@ use thairag_config::schema::AiPreprocessingConfig;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, DocumentProcessor, LlmProvider};
-use thairag_core::types::{ChunkId, DocId, DocumentChunk, WorkspaceId};
+use thairag_core::types::{
+    ChunkId, ChunkMetadata, DocId, DocumentChunk, DocumentContentType, WorkspaceId,
+};
+use tracing::info;
 
 use crate::ai::pipeline::AiDocumentPipeline;
 use crate::chunker::MarkdownChunker;
 use crate::converter::MarkdownConverter;
+use crate::image;
+use crate::table_extractor;
 use crate::thai_chunker::ThaiAwareChunker;
 
 /// Callback invoked when the pipeline enters a new processing step.
@@ -17,12 +22,19 @@ pub type StepCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Orchestrates: convert raw bytes → chunk text → produce DocumentChunks.
 /// When AI preprocessing is enabled, delegates to the AI agent team.
+/// Supports multi-modal content: images (via LLM vision) and table extraction.
 pub struct DocumentPipeline {
     converter: MarkdownConverter,
     chunker: Box<dyn Chunker>,
     max_chunk_size: usize,
     chunk_overlap: usize,
     ai_pipeline: Option<AiDocumentPipeline>,
+    /// LLM provider for image description (only used when image_description_enabled).
+    vision_llm: Option<Arc<dyn LlmProvider>>,
+    /// Whether to generate LLM descriptions for uploaded images.
+    image_description_enabled: bool,
+    /// Whether to extract tables from text content and add as separate chunks.
+    table_extraction_enabled: bool,
 }
 
 impl DocumentPipeline {
@@ -48,6 +60,9 @@ impl DocumentPipeline {
             max_chunk_size,
             chunk_overlap,
             ai_pipeline: None,
+            vision_llm: None,
+            image_description_enabled: false,
+            table_extraction_enabled: true,
         }
     }
 
@@ -146,13 +161,35 @@ impl DocumentPipeline {
             max_chunk_size,
             chunk_overlap,
             ai_pipeline,
+            vision_llm: None,
+            image_description_enabled: false,
+            table_extraction_enabled: true,
         }
+    }
+
+    /// Set the vision LLM and enable image description.
+    pub fn with_image_description(mut self, llm: Arc<dyn LlmProvider>, enabled: bool) -> Self {
+        if enabled {
+            self.vision_llm = Some(llm);
+            self.image_description_enabled = true;
+        }
+        self
+    }
+
+    /// Set whether table extraction is enabled.
+    pub fn with_table_extraction(mut self, enabled: bool) -> Self {
+        self.table_extraction_enabled = enabled;
+        self
     }
 
     /// Process document bytes into chunks.
     /// If AI preprocessing is enabled, uses the AI agent team.
     /// Otherwise, uses the mechanical pipeline.
     /// The optional `on_step` callback is invoked at each processing stage.
+    ///
+    /// Supports multi-modal content:
+    /// - Image files are described via LLM vision (if enabled) and stored as text chunks.
+    /// - Tables in text/PDF content are extracted and appended as structured markdown chunks.
     pub async fn process(
         &self,
         raw: &[u8],
@@ -161,12 +198,36 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
     ) -> Result<Vec<DocumentChunk>> {
-        if let Some(ai) = &self.ai_pipeline {
-            ai.process(raw, mime_type, doc_id, workspace_id, on_step)
-                .await
-        } else {
-            self.process_mechanical(raw, mime_type, doc_id, workspace_id)
+        // Route image files to the image description pipeline
+        if image::is_image_mime(mime_type) {
+            return self
+                .process_image(raw, mime_type, doc_id, workspace_id)
+                .await;
         }
+
+        let mut chunks = if let Some(ai) = &self.ai_pipeline {
+            ai.process(raw, mime_type, doc_id, workspace_id, on_step)
+                .await?
+        } else {
+            self.process_mechanical(raw, mime_type, doc_id, workspace_id)?
+        };
+
+        // Run table extraction on text-based content and append table chunks
+        if self.table_extraction_enabled {
+            let text_content: String = chunks.iter().map(|c| c.content.as_str()).collect();
+            let table_chunks =
+                self.extract_table_chunks(&text_content, doc_id, workspace_id, chunks.len());
+            if !table_chunks.is_empty() {
+                info!(
+                    %doc_id,
+                    table_count = table_chunks.len(),
+                    "Extracted tables as separate chunks"
+                );
+                chunks.extend(table_chunks);
+            }
+        }
+
+        Ok(chunks)
     }
 
     /// Mechanical pipeline: convert → chunk → produce DocumentChunks.
@@ -195,6 +256,89 @@ impl DocumentPipeline {
                 metadata: None,
             })
             .collect())
+    }
+
+    /// Process an image file: generate a text description and return as a single chunk.
+    async fn process_image(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Result<Vec<DocumentChunk>> {
+        let description = if self.image_description_enabled {
+            if let Some(llm) = &self.vision_llm {
+                image::describe_image(llm.as_ref(), raw, mime_type).await?
+            } else {
+                // No LLM configured — use metadata placeholder
+                let meta = image::extract_image_metadata(raw, mime_type);
+                format!(
+                    "[Image: {} format, {} bytes, no vision LLM configured]",
+                    meta.format, meta.size_bytes
+                )
+            }
+        } else {
+            // Image description disabled — use metadata placeholder
+            let meta = image::extract_image_metadata(raw, mime_type);
+            format!("[Image: {} format, {} bytes]", meta.format, meta.size_bytes)
+        };
+
+        let metadata = image::extract_image_metadata(raw, mime_type);
+        info!(
+            %doc_id,
+            format = %metadata.format,
+            size = metadata.size_bytes,
+            description_len = description.len(),
+            "Processed image document"
+        );
+
+        Ok(vec![DocumentChunk {
+            chunk_id: ChunkId::new(),
+            doc_id,
+            workspace_id,
+            content: description,
+            chunk_index: 0,
+            embedding: None,
+            metadata: Some(ChunkMetadata {
+                content_type: Some(DocumentContentType::Image),
+                chunk_type: Some("image_description".to_string()),
+                ..Default::default()
+            }),
+        }])
+    }
+
+    /// Extract tables from text content and produce separate markdown table chunks.
+    fn extract_table_chunks(
+        &self,
+        text: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        start_index: usize,
+    ) -> Vec<DocumentChunk> {
+        let tables = table_extractor::extract_tables(text);
+        tables
+            .iter()
+            .enumerate()
+            .filter_map(|(i, table)| {
+                let md = table_extractor::table_to_markdown(table);
+                if md.is_empty() {
+                    return None;
+                }
+                Some(DocumentChunk {
+                    chunk_id: ChunkId::new(),
+                    doc_id,
+                    workspace_id,
+                    content: md,
+                    chunk_index: start_index + i,
+                    embedding: None,
+                    metadata: Some(ChunkMetadata {
+                        content_type: Some(DocumentContentType::Table),
+                        chunk_type: Some("extracted_table".to_string()),
+                        ..Default::default()
+                    }),
+                })
+            })
+            .collect()
     }
 }
 

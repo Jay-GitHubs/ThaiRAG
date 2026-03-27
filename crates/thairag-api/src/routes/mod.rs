@@ -12,9 +12,13 @@ pub mod health;
 pub mod km;
 pub mod knowledge_graph;
 pub mod models;
+pub mod plugins;
+pub mod rate_limit_stats;
 pub mod settings;
 pub mod test_query;
+pub mod v2;
 pub mod vault;
+pub mod vector_migration;
 pub mod webhooks;
 pub mod ws_chat;
 
@@ -89,6 +93,8 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
     // ── Public routes (rate-limited) ────────────────────────────────
     let public = Router::new()
         .route("/v1/models", get(models::list_models))
+        .route("/v2/models", get(v2::v2_models::list_models_v2))
+        .route("/api/version", get(v2::version_info::api_version_info))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/providers", get(settings::list_enabled_providers))
@@ -406,6 +412,32 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/admin/backup", post(backup::create_backup))
         .route("/admin/restore", post(backup::restore_backup))
         .route("/admin/backup/preview", post(backup::preview_backup))
+        // Rate Limit Dashboard
+        .route(
+            "/admin/rate-limits/stats",
+            get(rate_limit_stats::get_rate_limit_stats),
+        )
+        .route(
+            "/admin/rate-limits/blocked",
+            get(rate_limit_stats::get_blocked_events),
+        )
+        // Vector Database Migration
+        .route(
+            "/admin/vector-migration/start",
+            post(vector_migration::start_migration),
+        )
+        .route(
+            "/admin/vector-migration/status",
+            get(vector_migration::get_migration_status),
+        )
+        .route(
+            "/admin/vector-migration/validate",
+            post(vector_migration::validate_migration),
+        )
+        .route(
+            "/admin/vector-migration/switch",
+            post(vector_migration::switch_provider),
+        )
         // Search Quality Evaluation
         .route(
             "/eval/query-sets",
@@ -429,6 +461,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route("/ab-tests/{id}/run", post(ab_test::run_ab_test))
         .route("/ab-tests/{id}/compare", post(ab_test::compare_ab_test))
+        // Plugins
+        .route("/plugins", get(plugins::list_plugins))
+        .route("/plugins/{name}/enable", post(plugins::enable_plugin))
+        .route("/plugins/{name}/disable", post(plugins::disable_plugin))
         // Knowledge Graph
         .route(
             "/workspaces/{workspace_id}/knowledge-graph",
@@ -483,6 +519,19 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             delete(api_keys::revoke_api_key),
         )
         .route("/v1/chat/completions", post(chat::chat_completions))
+        .route(
+            "/v2/chat/completions",
+            post(v2::v2_chat::v2_chat_completions),
+        )
+        .route("/v2/search", post(v2::v2_search::v2_search))
+        .route(
+            "/api/chat/sessions/{session_id}/summary",
+            get(chat::get_session_summary),
+        )
+        .route(
+            "/api/chat/sessions/{session_id}/summarize",
+            post(chat::summarize_session),
+        )
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {
@@ -540,6 +589,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 axum::http::header::ORIGIN,
                 axum::http::header::HeaderName::from_static("x-request-id"),
                 axum::http::header::HeaderName::from_static("x-api-key"),
+                axum::http::header::HeaderName::from_static("x-api-version"),
             ])
             .allow_credentials(true)
     };

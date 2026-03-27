@@ -4,10 +4,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::types::{
-    ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, Job, JobId,
-    JobStatus, LlmResponse, LlmStreamResponse, McpResource, McpResourceContent, McpToolInfo,
-    MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, SessionId, UserId,
-    VisionMessage, WorkspaceId,
+    ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, ExportedVector,
+    Job, JobId, JobStatus, LlmResponse, LlmStreamResponse, McpResource, McpResourceContent,
+    McpToolInfo, MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, SessionId,
+    UserId, VisionMessage, WorkspaceId,
 };
 
 #[async_trait]
@@ -76,6 +76,18 @@ pub trait VectorStore: Send + Sync {
     async fn collection_stats(&self) -> Result<crate::types::VectorStoreStats> {
         Ok(crate::types::VectorStoreStats::default())
     }
+}
+
+/// Extended trait for exporting vectors from a store (used by migration tool).
+/// Implemented separately to avoid breaking existing VectorStore consumers.
+#[async_trait]
+pub trait VectorStoreExport: VectorStore {
+    /// Export all stored vectors in batches. Returns all vectors with their IDs,
+    /// embeddings, and metadata for migration to another provider.
+    async fn export_all(&self, batch_size: usize) -> Result<Vec<ExportedVector>>;
+
+    /// Return the total number of vectors in the store.
+    async fn count(&self) -> Result<usize>;
 }
 
 #[async_trait]
@@ -223,6 +235,18 @@ pub trait SessionStoreTrait: Send + Sync {
 
     /// Remove sessions idle longer than `max_age`.
     async fn cleanup_stale(&self, max_age: std::time::Duration);
+
+    /// Get the current conversation summary for a session.
+    /// Returns (summary_text, message_count_at_summarization).
+    async fn get_summary(&self, session_id: &SessionId) -> Option<(String, usize)> {
+        let _ = session_id;
+        None
+    }
+
+    /// Set the conversation summary and the message count at which it was generated.
+    async fn set_summary(&self, session_id: &SessionId, summary: String, message_count: usize) {
+        let _ = (session_id, summary, message_count);
+    }
 }
 
 // ── Embedding Cache Trait ───────────────────────────────────────────
@@ -248,6 +272,44 @@ pub trait EmbeddingCache: Send + Sync {
     async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
+}
+
+// ── Plugin Traits ────────────────────────────────────────────────────
+
+/// Plugin for custom document processing (e.g., stripping metadata, format conversion).
+/// Matched by MIME type — if a plugin supports a MIME type, it is invoked before
+/// the default converter.
+pub trait DocumentPlugin: Send + Sync + 'static {
+    /// Unique name for this plugin (e.g., "metadata-strip").
+    fn name(&self) -> &str;
+    /// Human-readable description.
+    fn description(&self) -> &str;
+    /// MIME types this plugin can process (e.g., ["text/html", "application/xml"]).
+    fn supported_mime_types(&self) -> Vec<String>;
+    /// Process raw text content, returning transformed text.
+    fn process(&self, content: &str, mime_type: &str) -> Result<String>;
+}
+
+/// Plugin for transforming search queries and post-processing search results.
+pub trait SearchPlugin: Send + Sync + 'static {
+    /// Unique name for this plugin.
+    fn name(&self) -> &str;
+    /// Human-readable description.
+    fn description(&self) -> &str;
+    /// Transform the query before search (e.g., synonym expansion).
+    fn pre_search(&self, query: &str) -> String;
+    /// Post-process search results (e.g., re-ranking, filtering).
+    fn post_search(&self, results: Vec<SearchResult>) -> Vec<SearchResult>;
+}
+
+/// Plugin for post-processing individual chunks after splitting.
+pub trait ChunkPlugin: Send + Sync + 'static {
+    /// Unique name for this plugin.
+    fn name(&self) -> &str;
+    /// Human-readable description.
+    fn description(&self) -> &str;
+    /// Transform a chunk's text after splitting (e.g., prepend summary header).
+    fn transform_chunk(&self, chunk: &str) -> String;
 }
 
 // ── Job Queue ────────────────────────────────────────────────────────

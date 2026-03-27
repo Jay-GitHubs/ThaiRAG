@@ -206,7 +206,7 @@ export function UsersPage() {
           prefix={<SearchOutlined />}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 320 }}
+          style={{ width: '100%', maxWidth: 320 }}
           allowClear
         />
         <Typography.Text type="secondary">
@@ -220,6 +220,7 @@ export function UsersPage() {
         loading={isLoading}
         pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
         size="middle"
+        scroll={{ x: 'max-content' }}
       />
     </>
   );

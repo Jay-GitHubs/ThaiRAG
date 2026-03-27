@@ -9,7 +9,7 @@ use chrono::Utc;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use thairag_agent::context_compactor::ContextCompactor;
+use thairag_agent::context_compactor::{self, ContextCompactor};
 use thairag_agent::conversation_memory::MemoryEntry;
 use thairag_agent::personal_memory::PersonalMemoryManager;
 use thairag_agent::tool_router::SearchableScope;
@@ -186,6 +186,9 @@ pub async fn chat_completions(
     // ── Context Compaction (Claude Code style) ──────────────────────
     let full_messages = maybe_compact_context(&state, full_messages, session_id, user_id).await;
 
+    // ── Message-count Auto-Summarization ─────────────────────────────
+    let full_messages = maybe_auto_summarize(&state, full_messages, session_id, user_id).await;
+
     // ── Personal Memory Retrieval (Per-User RAG) ────────────────────
     let personal_memories = retrieve_personal_memories(&state, user_id, &full_messages).await;
 
@@ -349,6 +352,100 @@ pub(crate) async fn maybe_compact_context(
         }
         Err(e) => {
             tracing::warn!(error = %e, "Context compaction failed, using original messages");
+            messages
+        }
+    }
+}
+
+/// Check if message-count-based auto-summarization should run and perform it.
+/// This summarizes older messages and replaces them with a summary system message,
+/// keeping recent messages intact for immediate context.
+pub(crate) async fn maybe_auto_summarize(
+    state: &AppState,
+    messages: Vec<ChatMessage>,
+    session_id: Option<SessionId>,
+    _user_id: Option<UserId>,
+) -> Vec<ChatMessage> {
+    let p = state.providers();
+    let chat_config = &p.chat_pipeline_config;
+
+    // Check if auto-summarization is enabled
+    if !chat_config.auto_summarize {
+        return messages;
+    }
+
+    let Some(sid) = session_id else {
+        return messages;
+    };
+
+    let threshold = chat_config.summarize_threshold;
+    let keep_recent = chat_config.summarize_keep_recent;
+
+    // Only trigger when message count exceeds threshold
+    if messages.len() < threshold {
+        return messages;
+    }
+
+    // Check if we already summarized at this message count (avoid re-summarizing)
+    if let Some((_summary, prev_count)) = state.session_store.get_summary(&sid).await
+        && messages.len() <= prev_count + 4
+    {
+        // Already summarized recently, skip
+        return messages;
+    }
+
+    // Build the LLM provider for summarization: prefer memory_llm > shared llm > global
+    let llm: Arc<dyn thairag_core::traits::LlmProvider> =
+        if let Some(ref cfg) = chat_config.memory_llm {
+            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+        } else if let Some(ref cfg) = chat_config.llm {
+            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+        } else {
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &p.providers_config.llm,
+            ))
+        };
+
+    tracing::info!(
+        session_id = %sid,
+        msg_count = messages.len(),
+        threshold,
+        "Auto-summarization triggered"
+    );
+
+    // Summarize older messages
+    let compact_end = messages.len().saturating_sub(keep_recent);
+    if compact_end <= 1 {
+        return messages;
+    }
+
+    let to_summarize = &messages[..compact_end];
+    match context_compactor::summarize_conversation(llm.as_ref(), to_summarize).await {
+        Ok(summary) if !summary.is_empty() => {
+            let recent = &messages[compact_end..];
+            let compacted = ContextCompactor::build_compacted_messages(&summary, recent);
+
+            // Update session store
+            state
+                .session_store
+                .replace_messages(&sid, compacted.clone())
+                .await;
+            state
+                .session_store
+                .set_summary(&sid, summary, messages.len())
+                .await;
+
+            tracing::info!(
+                session_id = %sid,
+                summarized = compact_end,
+                kept = recent.len(),
+                "Auto-summarization complete"
+            );
+            compacted
+        }
+        Ok(_) => messages,
+        Err(e) => {
+            tracing::warn!(error = %e, "Auto-summarization failed, using original messages");
             messages
         }
     }
@@ -1007,4 +1104,130 @@ fn resolve_llm_info(p: &crate::app_state::ProviderBundle) -> (String, String) {
             p.providers_config.llm.model.clone(),
         )
     }
+}
+
+// ── Session Summary Endpoints ────────────────────────────────────────
+
+/// GET /api/chat/sessions/:session_id/summary
+/// Returns the current conversation summary for a session.
+pub async fn get_session_summary(
+    State(state): State<AppState>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Response, ApiError> {
+    let uuid = session_id.parse::<Uuid>().map_err(|_| {
+        ApiError(ThaiRagError::Validation(format!(
+            "invalid session_id: {session_id}"
+        )))
+    })?;
+    let sid = SessionId(uuid);
+
+    let msg_count = state.session_store.message_count(&sid).await;
+    if msg_count == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "session not found".into(),
+        )));
+    }
+
+    let (summary, summary_message_count) = state
+        .session_store
+        .get_summary(&sid)
+        .await
+        .unwrap_or_else(|| (String::new(), 0));
+
+    Ok(Json(serde_json::json!({
+        "session_id": session_id,
+        "summary": summary,
+        "summary_message_count": summary_message_count,
+        "current_message_count": msg_count,
+    }))
+    .into_response())
+}
+
+/// POST /api/chat/sessions/:session_id/summarize
+/// Manually trigger summarization of a session's conversation history.
+pub async fn summarize_session(
+    State(state): State<AppState>,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Response, ApiError> {
+    let uuid = session_id.parse::<Uuid>().map_err(|_| {
+        ApiError(ThaiRagError::Validation(format!(
+            "invalid session_id: {session_id}"
+        )))
+    })?;
+    let sid = SessionId(uuid);
+
+    let messages = state
+        .session_store
+        .get_history(&sid)
+        .await
+        .ok_or_else(|| ApiError(ThaiRagError::Validation("session not found".into())))?;
+
+    if messages.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "session has no messages".into(),
+        )));
+    }
+
+    // Build LLM provider for summarization
+    let p = state.providers();
+    let chat_config = &p.chat_pipeline_config;
+    let llm: Arc<dyn thairag_core::traits::LlmProvider> =
+        if let Some(ref cfg) = chat_config.memory_llm {
+            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+        } else if let Some(ref cfg) = chat_config.llm {
+            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+        } else {
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &p.providers_config.llm,
+            ))
+        };
+
+    let keep_recent = chat_config.summarize_keep_recent;
+    let compact_end = messages.len().saturating_sub(keep_recent);
+
+    // If there are very few messages, summarize all of them without compacting
+    let (summary, did_compact) = if compact_end <= 1 {
+        let summary = context_compactor::summarize_conversation(llm.as_ref(), &messages)
+            .await
+            .map_err(|e| ApiError(ThaiRagError::LlmProvider(e.to_string())))?;
+        (summary, false)
+    } else {
+        let to_summarize = &messages[..compact_end];
+        let summary = context_compactor::summarize_conversation(llm.as_ref(), to_summarize)
+            .await
+            .map_err(|e| ApiError(ThaiRagError::LlmProvider(e.to_string())))?;
+
+        if !summary.is_empty() {
+            // Compact the session: replace old messages with summary + keep recent
+            let recent = &messages[compact_end..];
+            let compacted = ContextCompactor::build_compacted_messages(&summary, recent);
+            state.session_store.replace_messages(&sid, compacted).await;
+        }
+        (summary, true)
+    };
+
+    // Store the summary
+    state
+        .session_store
+        .set_summary(&sid, summary.clone(), messages.len())
+        .await;
+
+    let new_msg_count = state.session_store.message_count(&sid).await;
+
+    tracing::info!(
+        session_id = %sid,
+        original_messages = messages.len(),
+        new_messages = new_msg_count,
+        compacted = did_compact,
+        "Manual session summarization complete"
+    );
+
+    Ok(Json(serde_json::json!({
+        "session_id": session_id,
+        "summary": summary,
+        "messages_before": messages.len(),
+        "messages_after": new_msg_count,
+        "compacted": did_compact,
+    }))
+    .into_response())
 }
