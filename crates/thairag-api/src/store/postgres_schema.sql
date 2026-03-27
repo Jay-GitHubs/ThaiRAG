@@ -246,3 +246,18 @@ CREATE TABLE IF NOT EXISTS inference_logs (
 CREATE INDEX IF NOT EXISTS idx_inference_logs_timestamp ON inference_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_inference_logs_workspace_id ON inference_logs(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_inference_logs_response_id ON inference_logs(response_id);
+
+-- API Keys (M2M authentication)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id            UUID PRIMARY KEY,
+    name          TEXT NOT NULL,
+    key_hash      TEXT NOT NULL UNIQUE,
+    key_prefix    TEXT NOT NULL DEFAULT '',
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    created_at    TIMESTAMPTZ NOT NULL,
+    last_used_at  TIMESTAMPTZ,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);

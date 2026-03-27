@@ -917,6 +917,57 @@ pub async fn update_user_role(
     Ok(Json(updated))
 }
 
+// ── Update user status (enable/disable) ──────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpdateUserStatusRequest {
+    pub disabled: bool,
+}
+
+pub async fn update_user_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(user_id): Path<Uuid>,
+    AppJson(body): AppJson<UpdateUserStatusRequest>,
+) -> Result<Json<User>, ApiError> {
+    // Only super_admin can enable/disable users
+    let caller_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| ApiError(ThaiRagError::Validation("Invalid user ID".into())))?;
+    let caller = state.km_store.get_user(UserId(caller_id))?;
+    if !caller.is_super_admin && caller.role != "super_admin" {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Only super admins can enable/disable users".into(),
+        )));
+    }
+
+    let target = state.km_store.get_user(UserId(user_id))?;
+
+    // Cannot disable a super admin
+    if target.is_super_admin && body.disabled {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Cannot disable a super admin user".into(),
+        )));
+    }
+
+    let updated = state
+        .km_store
+        .set_user_disabled(UserId(user_id), body.disabled)?;
+
+    let action_str = if body.disabled { "disabled" } else { "enabled" };
+    audit_log(
+        &state.km_store,
+        &claims.sub,
+        AuditAction::SettingsChanged,
+        &format!("User {} {}", target.email, action_str),
+        true,
+        None,
+    );
+    tracing::info!(%user_id, disabled = %body.disabled, "User status updated");
+    Ok(Json(updated))
+}
+
 pub async fn delete_user(
     State(state): State<AppState>,
     Extension(_claims): Extension<AuthClaims>,

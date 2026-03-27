@@ -49,6 +49,8 @@ define_id!(MemoryId);
 define_id!(ConnectorId);
 define_id!(SyncRunId);
 define_id!(JobId);
+define_id!(ApiKeyId);
+define_id!(WebhookId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -807,4 +809,51 @@ pub fn estimate_tokens(text: &str) -> usize {
         }
     }
     (thai_chars / 2) + (other_chars / 4) + 1
+}
+
+// ── Webhook Notification Types ──────────────────────────────────────
+
+/// Events that can trigger webhook notifications.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookEvent {
+    JobCompleted,
+    JobFailed,
+    DocumentIngested,
+    SyncCompleted,
+    SyncFailed,
+}
+
+impl std::fmt::Display for WebhookEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JobCompleted => write!(f, "job_completed"),
+            Self::JobFailed => write!(f, "job_failed"),
+            Self::DocumentIngested => write!(f, "document_ingested"),
+            Self::SyncCompleted => write!(f, "sync_completed"),
+            Self::SyncFailed => write!(f, "sync_failed"),
+        }
+    }
+}
+
+/// A registered webhook endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Webhook {
+    pub id: WebhookId,
+    pub url: String,
+    /// HMAC-SHA256 secret for signing payloads.
+    #[serde(default, skip_serializing)]
+    pub secret: String,
+    /// Which events this webhook subscribes to.
+    pub events: Vec<WebhookEvent>,
+    pub is_active: bool,
+    pub created_at: String,
+}
+
+/// Payload sent to webhook endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookPayload {
+    pub event: WebhookEvent,
+    pub timestamp: String,
+    pub data: serde_json::Value,
 }

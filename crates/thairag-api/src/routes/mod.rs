@@ -1,3 +1,4 @@
+pub mod api_keys;
 pub mod auth;
 pub mod chat;
 pub mod connectors;
@@ -9,11 +10,15 @@ pub mod models;
 pub mod settings;
 pub mod test_query;
 pub mod vault;
+pub mod webhooks;
+
+use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderValue, Request};
 use axum::middleware;
 use axum::{Router, routing::delete, routing::get, routing::post, routing::put};
+use sha2::{Digest, Sha256};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -23,11 +28,43 @@ use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use thairag_auth::middleware::auth_layer;
+use thairag_auth::{DynamicApiKeyInfo, DynamicApiKeyValidator};
 
 use crate::app_state::AppState;
 use crate::csrf::csrf_guard;
 use crate::metrics::MetricsLayer;
 use crate::rate_limit::{RateLimitLayer, RateLimiter};
+use crate::store::KmStoreTrait;
+
+/// Implements `DynamicApiKeyValidator` using the KM store.
+struct StoreApiKeyValidator {
+    km_store: Arc<dyn KmStoreTrait>,
+}
+
+impl DynamicApiKeyValidator for StoreApiKeyValidator {
+    fn validate(&self, raw_key: &str) -> Option<DynamicApiKeyInfo> {
+        // Hash the raw key with SHA-256
+        let mut hasher = Sha256::new();
+        hasher.update(raw_key.as_bytes());
+        let key_hash = hex::encode(hasher.finalize());
+
+        let api_key = self.km_store.get_api_key_by_hash(&key_hash)?;
+        if !api_key.is_active {
+            return None;
+        }
+
+        // Update last_used_at timestamp (fire and forget)
+        self.km_store.touch_api_key(api_key.id);
+
+        // Look up the owning user for email
+        let user = self.km_store.get_user(api_key.user_id).ok()?;
+
+        Some(DynamicApiKeyInfo {
+            user_id: api_key.user_id.0.to_string(),
+            email: user.email,
+        })
+    }
+}
 
 async fn metrics_handler(State(state): State<AppState>) -> String {
     state
@@ -104,6 +141,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/users", get(km::list_users))
         .route("/users/{user_id}", delete(km::delete_user))
         .route("/users/{user_id}/role", put(km::update_user_role))
+        .route("/users/{user_id}/status", put(km::update_user_status))
         // Settings — identity providers
         .route(
             "/settings/identity-providers",
@@ -308,19 +346,44 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         )
         .route("/connectors/{id}/test", post(connectors::test_connection))
         // API Key Vault + LLM Profiles
-        .nest("/settings/vault", vault::routes());
+        .nest("/settings/vault", vault::routes())
+        // Webhooks
+        .route(
+            "/webhooks",
+            get(webhooks::list_webhooks).post(webhooks::create_webhook),
+        )
+        .route("/webhooks/{webhook_id}", delete(webhooks::delete_webhook))
+        .route("/webhooks/{webhook_id}/test", post(webhooks::test_webhook));
 
     // Apply auth middleware + CSRF guard to KM routes + chat + feedback
     let server_timeout = std::time::Duration::from_secs(state.config.server.request_timeout_secs);
     let jwt = state.jwt.clone();
     let api_keys = state.api_keys.clone();
+    let dynamic_validator: Option<Arc<dyn DynamicApiKeyValidator>> =
+        Some(Arc::new(StoreApiKeyValidator {
+            km_store: state.km_store.clone(),
+        }));
     let protected = Router::new()
         .nest("/api/km", km_routes)
+        .route(
+            "/api/auth/api-keys",
+            get(api_keys::list_api_keys).post(api_keys::create_api_key),
+        )
+        .route(
+            "/api/auth/api-keys/{key_id}",
+            delete(api_keys::revoke_api_key),
+        )
         .route("/v1/chat/completions", post(chat::chat_completions))
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {
-            auth_layer(jwt.clone(), api_keys.clone(), req, next)
+            auth_layer(
+                jwt.clone(),
+                api_keys.clone(),
+                dynamic_validator.clone(),
+                req,
+                next,
+            )
         }))
         // Server-side request timeout: returns 408 before reverse proxy 504.
         // For SSE (streaming chat), headers are sent immediately so this
@@ -363,6 +426,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 axum::http::header::ACCEPT,
                 axum::http::header::ORIGIN,
                 axum::http::header::HeaderName::from_static("x-request-id"),
+                axum::http::header::HeaderName::from_static("x-api-key"),
             ])
             .allow_credentials(true)
     };

@@ -103,6 +103,8 @@ pub struct User {
     pub is_super_admin: bool,
     #[serde(default = "default_viewer")]
     pub role: String,
+    #[serde(default)]
+    pub disabled: bool,
     pub created_at: DateTime<Utc>,
 }
 

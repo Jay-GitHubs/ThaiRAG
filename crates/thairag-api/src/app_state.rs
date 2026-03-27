@@ -816,6 +816,7 @@ pub struct AppState {
     pub vault: Arc<Vault>,
     pub embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache>,
     pub job_queue: Arc<dyn thairag_core::traits::JobQueue>,
+    pub webhook_dispatcher: crate::webhook::WebhookDispatcher,
     providers: Arc<RwLock<ProviderBundle>>,
     pub scoped_pipeline_cache: ScopedPipelineCache,
 }
@@ -970,6 +971,8 @@ impl AppState {
             test_vault_dir.to_str().unwrap_or("/tmp/thairag-test-vault"),
         ));
 
+        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
+
         Self {
             config,
             jwt,
@@ -985,6 +988,7 @@ impl AppState {
             vault,
             embedding_cache: Arc::new(NoopEmbeddingCache),
             job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
+            webhook_dispatcher,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }
@@ -1204,6 +1208,8 @@ impl AppState {
         );
         km_store.set_setting("_embedding_fingerprint", &emb_fp);
 
+        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
+
         Self {
             config: Arc::new(config),
             jwt,
@@ -1219,6 +1225,7 @@ impl AppState {
             vault,
             embedding_cache,
             job_queue,
+            webhook_dispatcher,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
         }

@@ -9,8 +9,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport, OrgId,
-    SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+    ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport,
+    OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
 };
 use uuid::Uuid;
 
@@ -41,6 +41,7 @@ impl SqliteKmStore {
             "ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
             "ALTER TABLE documents ADD COLUMN processing_step TEXT",
+            "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -821,10 +822,11 @@ impl KmStoreTrait for SqliteKmStore {
             external_id: None,
             is_super_admin: false,
             role: "viewer".into(),
+            disabled: false,
             created_at: Utc::now(),
         };
         conn.execute(
-            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, disabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 user.id.0.to_string(),
                 user.email,
@@ -834,6 +836,7 @@ impl KmStoreTrait for SqliteKmStore {
                 user.external_id,
                 user.is_super_admin as i32,
                 user.role,
+                user.disabled as i32,
                 ts(&user.created_at),
             ],
         )
@@ -878,10 +881,11 @@ impl KmStoreTrait for SqliteKmStore {
             external_id: None,
             is_super_admin,
             role,
+            disabled: false,
             created_at: Utc::now(),
         };
         conn.execute(
-            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, disabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 user.id.0.to_string(),
                 user.email,
@@ -891,6 +895,7 @@ impl KmStoreTrait for SqliteKmStore {
                 user.external_id,
                 user.is_super_admin as i32,
                 user.role,
+                user.disabled as i32,
                 ts(&user.created_at),
             ],
         )
@@ -913,7 +918,7 @@ impl KmStoreTrait for SqliteKmStore {
         let email_lower = email.to_lowercase();
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE email = ?1",
+            "SELECT id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, disabled, created_at FROM users WHERE email = ?1",
             params![email_lower],
             |row| {
                 let id_s: String = row.get(0)?;
@@ -924,7 +929,8 @@ impl KmStoreTrait for SqliteKmStore {
                 let external_id: Option<String> = row.get(5)?;
                 let is_super_admin: i32 = row.get(6)?;
                 let role: String = row.get(7)?;
-                let ca: String = row.get(8)?;
+                let disabled: i32 = row.get(8)?;
+                let ca: String = row.get(9)?;
                 Ok(UserRecord {
                     user: User {
                         id: UserId(parse_uuid(&id_s)),
@@ -934,6 +940,7 @@ impl KmStoreTrait for SqliteKmStore {
                         external_id,
                         is_super_admin: is_super_admin != 0,
                         role,
+                        disabled: disabled != 0,
                         created_at: parse_ts(&ca),
                     },
                     password_hash: pw,
@@ -946,7 +953,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_user(&self, id: UserId) -> Result<User> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE id = ?1",
+            "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, disabled, created_at FROM users WHERE id = ?1",
             params![id.0.to_string()],
             |row| {
                 let id_s: String = row.get(0)?;
@@ -956,7 +963,8 @@ impl KmStoreTrait for SqliteKmStore {
                 let external_id: Option<String> = row.get(4)?;
                 let is_super_admin: i32 = row.get(5)?;
                 let role: String = row.get(6)?;
-                let ca: String = row.get(7)?;
+                let disabled: i32 = row.get(7)?;
+                let ca: String = row.get(8)?;
                 Ok(User {
                     id: UserId(parse_uuid(&id_s)),
                     email,
@@ -965,6 +973,7 @@ impl KmStoreTrait for SqliteKmStore {
                     external_id,
                     is_super_admin: is_super_admin != 0,
                     role,
+                    disabled: disabled != 0,
                     created_at: parse_ts(&ca),
                 })
             },
@@ -975,7 +984,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_users(&self) -> Vec<User> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users")
+            .prepare("SELECT id, email, name, auth_provider, external_id, is_super_admin, role, disabled, created_at FROM users")
             .unwrap();
         stmt.query_map([], |row| {
             let id_s: String = row.get(0)?;
@@ -985,7 +994,8 @@ impl KmStoreTrait for SqliteKmStore {
             let external_id: Option<String> = row.get(4)?;
             let is_super_admin: i32 = row.get(5)?;
             let role: String = row.get(6)?;
-            let ca: String = row.get(7)?;
+            let disabled: i32 = row.get(7)?;
+            let ca: String = row.get(8)?;
             Ok(User {
                 id: UserId(parse_uuid(&id_s)),
                 email,
@@ -994,12 +1004,28 @@ impl KmStoreTrait for SqliteKmStore {
                 external_id,
                 is_super_admin: is_super_admin != 0,
                 role,
+                disabled: disabled != 0,
                 created_at: parse_ts(&ca),
             })
         })
         .unwrap()
         .filter_map(|r| r.ok())
         .collect()
+    }
+
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE users SET disabled = ?1 WHERE id = ?2",
+                params![disabled as i32, id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite set_user_disabled: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("User {id} not found")));
+        }
+        drop(conn);
+        self.get_user(id)
     }
 
     // ── Identity Providers ──────────────────────────────────────────
@@ -2490,6 +2516,121 @@ impl KmStoreTrait for SqliteKmStore {
 
         conn.query_row(&sql, params_refs.as_slice(), |row| row.get::<_, i64>(0))
             .unwrap_or(0) as u64
+    }
+
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<super::ApiKeyRow> {
+        let conn = self.conn.lock().unwrap();
+        let id = ApiKeyId::new();
+        let now = ts(&chrono::Utc::now());
+        conn.execute(
+            "INSERT INTO api_keys (id, name, key_hash, key_prefix, user_id, role, created_at, is_active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+            params![
+                id.0.to_string(),
+                name,
+                key_hash,
+                key_prefix,
+                user_id.0.to_string(),
+                role,
+                now,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to create API key: {e}")))?;
+
+        Ok(super::ApiKeyRow {
+            id,
+            name,
+            key_hash,
+            key_prefix,
+            user_id,
+            role,
+            created_at: now,
+            last_used_at: None,
+            is_active: true,
+        })
+    }
+
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<super::ApiKeyRow> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, key_hash, key_prefix, user_id, role, created_at, last_used_at, is_active
+             FROM api_keys WHERE key_hash = ?1",
+            params![key_hash],
+            |row| {
+                Ok(super::ApiKeyRow {
+                    id: ApiKeyId(parse_uuid(&row.get::<_, String>(0)?)),
+                    name: row.get(1)?,
+                    key_hash: row.get(2)?,
+                    key_prefix: row.get(3)?,
+                    user_id: UserId(parse_uuid(&row.get::<_, String>(4)?)),
+                    role: row.get(5)?,
+                    created_at: row.get(6)?,
+                    last_used_at: row.get(7)?,
+                    is_active: row.get::<_, i32>(8)? != 0,
+                })
+            },
+        )
+        .ok()
+    }
+
+    fn list_api_keys(&self, user_id: UserId) -> Vec<super::ApiKeyRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, key_hash, key_prefix, user_id, role, created_at, last_used_at, is_active
+                 FROM api_keys WHERE user_id = ?1 ORDER BY created_at DESC",
+            )
+            .unwrap();
+        stmt.query_map(params![user_id.0.to_string()], |row| {
+            Ok(super::ApiKeyRow {
+                id: ApiKeyId(parse_uuid(&row.get::<_, String>(0)?)),
+                name: row.get(1)?,
+                key_hash: row.get(2)?,
+                key_prefix: row.get(3)?,
+                user_id: UserId(parse_uuid(&row.get::<_, String>(4)?)),
+                role: row.get(5)?,
+                created_at: row.get(6)?,
+                last_used_at: row.get(7)?,
+                is_active: row.get::<_, i32>(8)? != 0,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE api_keys SET is_active = 0 WHERE id = ?1",
+                params![key_id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Failed to revoke API key: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "API key {key_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn touch_api_key(&self, key_id: ApiKeyId) {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&chrono::Utc::now());
+        let _ = conn.execute(
+            "UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2",
+            params![now, key_id.0.to_string()],
+        );
     }
 }
 

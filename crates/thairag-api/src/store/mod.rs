@@ -10,7 +10,9 @@ use thairag_core::models::{
     UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
-use thairag_core::types::{ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId};
+use thairag_core::types::{
+    ApiKeyId, ConnectorId, DeptId, DocId, IdpId, OrgId, UserId, WorkspaceId,
+};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
@@ -172,6 +174,23 @@ pub struct LlmProfileRow {
     pub max_tokens: Option<u32>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+// ── API Key (M2M Auth) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApiKeyRow {
+    pub id: ApiKeyId,
+    pub name: String,
+    /// SHA-256 hex hash of the raw key.
+    pub key_hash: String,
+    /// Prefix of raw key for display (e.g. "trag_abc1...").
+    pub key_prefix: String,
+    pub user_id: UserId,
+    pub role: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub is_active: bool,
 }
 
 // ── Inference Log Types ──────────────────────────────────────────────
@@ -346,6 +365,7 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord>;
     fn get_user(&self, id: UserId) -> Result<User>;
     fn list_users(&self) -> Vec<User>;
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User>;
 
     // ── Identity Providers ──────────────────────────────────────────
     fn list_identity_providers(&self) -> Vec<IdentityProvider>;
@@ -483,6 +503,20 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_llm_profile(&self, id: &str) -> Option<LlmProfileRow>;
     fn upsert_llm_profile(&self, row: &LlmProfileRow);
     fn delete_llm_profile(&self, id: &str);
+
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<ApiKeyRow>;
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<ApiKeyRow>;
+    fn list_api_keys(&self, user_id: UserId) -> Vec<ApiKeyRow>;
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()>;
+    fn touch_api_key(&self, key_id: ApiKeyId);
 
     // ── Inference Logs ────────────────────────────────────────────────
     fn insert_inference_log(&self, entry: &InferenceLogEntry);

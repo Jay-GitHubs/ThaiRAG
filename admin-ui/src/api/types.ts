@@ -109,6 +109,7 @@ export interface User {
   external_id?: string;
   is_super_admin: boolean;
   role: UserRole;
+  disabled: boolean;
   created_at: string;
 }
 

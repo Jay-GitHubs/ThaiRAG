@@ -683,7 +683,7 @@ pub async fn trigger_sync(
         run.items_failed as u64,
     );
 
-    // Fire webhook notification if configured
+    // Fire per-connector webhook notification if configured
     if let Some(ref webhook_url) = config.webhook_url {
         let event = match run.status {
             thairag_core::types::SyncRunStatus::Completed => "sync.completed",
@@ -707,6 +707,28 @@ pub async fn trigger_sync(
             thairag_mcp::webhook::send_webhook(&webhook_url, webhook_secret.as_deref(), &payload)
                 .await;
         });
+    }
+
+    // Fire global webhook notifications
+    {
+        use thairag_core::types::WebhookEvent;
+        let webhook_event = match run.status {
+            thairag_core::types::SyncRunStatus::Completed => WebhookEvent::SyncCompleted,
+            thairag_core::types::SyncRunStatus::Failed => WebhookEvent::SyncFailed,
+            _ => WebhookEvent::SyncCompleted,
+        };
+        state.webhook_dispatcher.dispatch(
+            webhook_event,
+            serde_json::json!({
+                "connector_id": config.id.0,
+                "connector_name": connector_name,
+                "items_created": run.items_created,
+                "items_updated": run.items_updated,
+                "items_skipped": run.items_skipped,
+                "items_failed": run.items_failed,
+                "error_message": run.error_message,
+            }),
+        );
     }
 
     Ok(Json(run.into()))

@@ -39,6 +39,8 @@ pub enum AuditAction {
     PromptUpdated,
     PromptDeleted,
     VectorDbCleared,
+    ApiKeyCreated,
+    ApiKeyRevoked,
 }
 
 impl std::fmt::Display for AuditAction {

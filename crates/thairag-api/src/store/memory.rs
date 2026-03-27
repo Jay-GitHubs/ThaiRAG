@@ -9,8 +9,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, OrgId, SyncRun,
-    SyncState, UserId, WorkspaceId,
+    ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, OrgId,
+    SyncRun, SyncState, UserId, WorkspaceId,
 };
 
 use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
@@ -42,6 +42,7 @@ pub struct MemoryKmStore {
     vault_keys: RwLock<HashMap<String, super::VaultKeyRow>>,
     llm_profiles: RwLock<HashMap<String, super::LlmProfileRow>>,
     inference_logs: RwLock<Vec<super::InferenceLogEntry>>,
+    api_keys_m2m: RwLock<HashMap<ApiKeyId, super::ApiKeyRow>>,
 }
 
 impl Default for MemoryKmStore {
@@ -70,6 +71,7 @@ impl MemoryKmStore {
             vault_keys: RwLock::new(HashMap::new()),
             llm_profiles: RwLock::new(HashMap::new()),
             inference_logs: RwLock::new(Vec::new()),
+            api_keys_m2m: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -348,6 +350,7 @@ impl KmStoreTrait for MemoryKmStore {
             external_id: None,
             is_super_admin: false,
             role: "viewer".into(),
+            disabled: false,
             created_at: Utc::now(),
         };
         self.users.write().unwrap().insert(
@@ -399,6 +402,7 @@ impl KmStoreTrait for MemoryKmStore {
             external_id: None,
             is_super_admin,
             role,
+            disabled: false,
             created_at: Utc::now(),
         };
         self.users.write().unwrap().insert(
@@ -462,6 +466,15 @@ impl KmStoreTrait for MemoryKmStore {
             .values()
             .map(|r| r.user.clone())
             .collect()
+    }
+
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User> {
+        let mut users = self.users.write().unwrap();
+        let record = users
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("User {id} not found")))?;
+        record.user.disabled = disabled;
+        Ok(record.user.clone())
     }
 
     // ── Identity Providers ──────────────────────────────────────────
@@ -1433,6 +1446,72 @@ impl KmStoreTrait for MemoryKmStore {
                 true
             })
             .count() as u64
+    }
+
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<super::ApiKeyRow> {
+        let row = super::ApiKeyRow {
+            id: ApiKeyId::new(),
+            name,
+            key_hash,
+            key_prefix,
+            user_id,
+            role,
+            created_at: Utc::now().to_rfc3339(),
+            last_used_at: None,
+            is_active: true,
+        };
+        self.api_keys_m2m
+            .write()
+            .unwrap()
+            .insert(row.id, row.clone());
+        Ok(row)
+    }
+
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<super::ApiKeyRow> {
+        self.api_keys_m2m
+            .read()
+            .unwrap()
+            .values()
+            .find(|k| k.key_hash == key_hash)
+            .cloned()
+    }
+
+    fn list_api_keys(&self, user_id: UserId) -> Vec<super::ApiKeyRow> {
+        self.api_keys_m2m
+            .read()
+            .unwrap()
+            .values()
+            .filter(|k| k.user_id == user_id)
+            .cloned()
+            .collect()
+    }
+
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()> {
+        let mut keys = self.api_keys_m2m.write().unwrap();
+        if let Some(key) = keys.get_mut(&key_id) {
+            key.is_active = false;
+            Ok(())
+        } else {
+            Err(ThaiRagError::NotFound(format!(
+                "API key {key_id} not found"
+            )))
+        }
+    }
+
+    fn touch_api_key(&self, key_id: ApiKeyId) {
+        let mut keys = self.api_keys_m2m.write().unwrap();
+        if let Some(key) = keys.get_mut(&key_id) {
+            key.last_used_at = Some(Utc::now().to_rfc3339());
+        }
     }
 }
 

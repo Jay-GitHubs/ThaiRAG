@@ -8,7 +8,7 @@ use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::models::{DocStatus, Document};
 use thairag_core::permission::Role;
-use thairag_core::types::{DocId, Job, JobId, JobKind, JobStatus, WorkspaceId};
+use thairag_core::types::{DocId, Job, JobId, JobKind, JobStatus, WebhookEvent, WorkspaceId};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -108,20 +108,55 @@ async fn process_document(
         tokio::spawn(async move {
             jq.mark_running(&job_id).await;
             let (chunks, error) =
-                process_document_inner(state, doc_id, workspace_id, bytes, mime_type).await;
-            if let Some(err) = error {
-                jq.mark_failed(&job_id, err).await;
+                process_document_inner(state.clone(), doc_id, workspace_id, bytes, mime_type).await;
+            if let Some(ref err) = error {
+                jq.mark_failed(&job_id, err.clone()).await;
+                state.webhook_dispatcher.dispatch(
+                    WebhookEvent::JobFailed,
+                    serde_json::json!({
+                        "job_id": job_id.0,
+                        "doc_id": doc_id.0,
+                        "workspace_id": workspace_id.0,
+                        "error": err,
+                    }),
+                );
             } else {
                 jq.mark_completed(&job_id, chunks).await;
+                state.webhook_dispatcher.dispatch(
+                    WebhookEvent::JobCompleted,
+                    serde_json::json!({
+                        "job_id": job_id.0,
+                        "doc_id": doc_id.0,
+                        "workspace_id": workspace_id.0,
+                        "chunks_indexed": chunks,
+                    }),
+                );
+                state.webhook_dispatcher.dispatch(
+                    WebhookEvent::DocumentIngested,
+                    serde_json::json!({
+                        "doc_id": doc_id.0,
+                        "workspace_id": workspace_id.0,
+                        "chunks_indexed": chunks,
+                    }),
+                );
             }
         });
         0 // chunk count unknown yet
     } else {
         // Small file: process inline
         let (chunk_count, error) =
-            process_document_inner(state, doc_id, workspace_id, bytes, mime_type).await;
-        if let Some(err) = error {
+            process_document_inner(state.clone(), doc_id, workspace_id, bytes, mime_type).await;
+        if let Some(ref err) = error {
             tracing::error!(%doc_id, %err, "Small file processing failed");
+        } else {
+            state.webhook_dispatcher.dispatch(
+                WebhookEvent::DocumentIngested,
+                serde_json::json!({
+                    "doc_id": doc_id.0,
+                    "workspace_id": workspace_id.0,
+                    "chunks_indexed": chunk_count,
+                }),
+            );
         }
         chunk_count
     }
@@ -703,11 +738,30 @@ pub async fn reprocess_document(
     tokio::spawn(async move {
         jq.mark_running(&job_id).await;
         let (chunks, error) =
-            process_document_inner(state, doc_id_typed, workspace_id, file_bytes, mime).await;
-        if let Some(err) = error {
-            jq.mark_failed(&job_id, err).await;
+            process_document_inner(state.clone(), doc_id_typed, workspace_id, file_bytes, mime)
+                .await;
+        if let Some(ref err) = error {
+            jq.mark_failed(&job_id, err.clone()).await;
+            state.webhook_dispatcher.dispatch(
+                WebhookEvent::JobFailed,
+                serde_json::json!({
+                    "job_id": job_id.0,
+                    "doc_id": doc_id_typed.0,
+                    "workspace_id": workspace_id.0,
+                    "error": err,
+                }),
+            );
         } else {
             jq.mark_completed(&job_id, chunks).await;
+            state.webhook_dispatcher.dispatch(
+                WebhookEvent::JobCompleted,
+                serde_json::json!({
+                    "job_id": job_id.0,
+                    "doc_id": doc_id_typed.0,
+                    "workspace_id": workspace_id.0,
+                    "chunks_indexed": chunks,
+                }),
+            );
         }
     });
 
@@ -802,11 +856,29 @@ pub async fn reprocess_all_documents(
         tokio::spawn(async move {
             jq.mark_running(&job_id).await;
             let (chunks, error) =
-                process_document_inner(s, doc_id, workspace_id, file_bytes, mime).await;
-            if let Some(err) = error {
-                jq.mark_failed(&job_id, err).await;
+                process_document_inner(s.clone(), doc_id, workspace_id, file_bytes, mime).await;
+            if let Some(ref err) = error {
+                jq.mark_failed(&job_id, err.clone()).await;
+                s.webhook_dispatcher.dispatch(
+                    WebhookEvent::JobFailed,
+                    serde_json::json!({
+                        "job_id": job_id.0,
+                        "doc_id": doc_id.0,
+                        "workspace_id": workspace_id.0,
+                        "error": err,
+                    }),
+                );
             } else {
                 jq.mark_completed(&job_id, chunks).await;
+                s.webhook_dispatcher.dispatch(
+                    WebhookEvent::JobCompleted,
+                    serde_json::json!({
+                        "job_id": job_id.0,
+                        "doc_id": doc_id.0,
+                        "workspace_id": workspace_id.0,
+                        "chunks_indexed": chunks,
+                    }),
+                );
             }
         });
         queued += 1;

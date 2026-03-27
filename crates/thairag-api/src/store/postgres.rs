@@ -11,8 +11,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport, OrgId,
-    SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
+    ApiKeyId, ConnectorId, ConnectorStatus, DeptId, DocId, IdpId, McpConnectorConfig, McpTransport,
+    OrgId, SyncMode, SyncRun, SyncRunId, SyncRunStatus, SyncState, UserId, WorkspaceId,
 };
 use uuid::Uuid;
 
@@ -769,10 +769,11 @@ impl KmStoreTrait for PostgresKmStore {
             external_id: None,
             is_super_admin: false,
             role: "viewer".into(),
+            disabled: false,
             created_at: Utc::now(),
         };
         block_on(sqlx::query(
-            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, disabled, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(user.id.0)
         .bind(&user.email)
@@ -782,6 +783,7 @@ impl KmStoreTrait for PostgresKmStore {
         .bind(&user.external_id)
         .bind(user.is_super_admin)
         .bind(&user.role)
+        .bind(user.disabled)
         .bind(user.created_at)
         .execute(&self.pool))
         .map_err(|e| ThaiRagError::Internal(format!("Postgres insert user: {e}")))?;
@@ -829,10 +831,11 @@ impl KmStoreTrait for PostgresKmStore {
             external_id: None,
             is_super_admin,
             role,
+            disabled: false,
             created_at: Utc::now(),
         };
         block_on(sqlx::query(
-            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO users (id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, disabled, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(user.id.0)
         .bind(&user.email)
@@ -842,6 +845,7 @@ impl KmStoreTrait for PostgresKmStore {
         .bind(&user.external_id)
         .bind(user.is_super_admin)
         .bind(&user.role)
+        .bind(user.disabled)
         .bind(user.created_at)
         .execute(&self.pool))
         .map_err(|e| ThaiRagError::Internal(format!("Postgres upsert user insert: {e}")))?;
@@ -864,13 +868,13 @@ impl KmStoreTrait for PostgresKmStore {
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
         let email_lower = email.to_lowercase();
         block_on(
-            sqlx::query_as::<_, (Uuid, String, String, String, String, Option<String>, bool, String, DateTime<Utc>)>(
-                "SELECT id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE email = $1",
+            sqlx::query_as::<_, (Uuid, String, String, String, String, Option<String>, bool, String, bool, DateTime<Utc>)>(
+                "SELECT id, email, name, password_hash, auth_provider, external_id, is_super_admin, role, COALESCE(disabled, false), created_at FROM users WHERE email = $1",
             )
             .bind(&email_lower)
             .fetch_one(&self.pool),
         )
-        .map(|(id, email, name, pw, auth_provider, external_id, is_super_admin, role, ca)| UserRecord {
+        .map(|(id, email, name, pw, auth_provider, external_id, is_super_admin, role, disabled, ca)| UserRecord {
             user: User {
                 id: UserId(id),
                 email,
@@ -879,6 +883,7 @@ impl KmStoreTrait for PostgresKmStore {
                 external_id,
                 is_super_admin,
                 role,
+                disabled,
                 created_at: ca,
             }.normalize_role(),
             password_hash: pw,
@@ -888,13 +893,13 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn get_user(&self, id: UserId) -> Result<User> {
         block_on(
-            sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, bool, String, DateTime<Utc>)>(
-                "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users WHERE id = $1",
+            sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, bool, String, bool, DateTime<Utc>)>(
+                "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, COALESCE(disabled, false), created_at FROM users WHERE id = $1",
             )
             .bind(id.0)
             .fetch_one(&self.pool),
         )
-        .map(|(id, email, name, auth_provider, external_id, is_super_admin, role, ca)| User {
+        .map(|(id, email, name, auth_provider, external_id, is_super_admin, role, disabled, ca)| User {
             id: UserId(id),
             email,
             name,
@@ -902,6 +907,7 @@ impl KmStoreTrait for PostgresKmStore {
             external_id,
             is_super_admin,
             role,
+            disabled,
             created_at: ca,
         }.normalize_role())
         .map_err(|_| ThaiRagError::NotFound(format!("User {id} not found")))
@@ -909,14 +915,14 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn list_users(&self) -> Vec<User> {
         block_on(
-            sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, bool, String, DateTime<Utc>)>(
-                "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, created_at FROM users",
+            sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, bool, String, bool, DateTime<Utc>)>(
+                "SELECT id, email, name, auth_provider, external_id, is_super_admin, role, COALESCE(disabled, false), created_at FROM users",
             )
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, email, name, auth_provider, external_id, is_super_admin, role, ca)| User {
+        .map(|(id, email, name, auth_provider, external_id, is_super_admin, role, disabled, ca)| User {
             id: UserId(id),
             email,
             name,
@@ -924,9 +930,24 @@ impl KmStoreTrait for PostgresKmStore {
             external_id,
             is_super_admin,
             role,
+            disabled,
             created_at: ca,
         }.normalize_role())
         .collect()
+    }
+
+    fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User> {
+        let result = block_on(
+            sqlx::query("UPDATE users SET disabled = $1 WHERE id = $2")
+                .bind(disabled)
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres set_user_disabled: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("User {id} not found")));
+        }
+        self.get_user(id)
     }
 
     // ── Identity Providers ─────────────────────────────────────────
@@ -2511,5 +2532,138 @@ impl KmStoreTrait for PostgresKmStore {
             q.fetch_one(&self.pool).await
         })
         .unwrap_or(0) as u64
+    }
+
+    // ── API Keys (M2M Auth) ──────────────────────────────────────────
+
+    fn create_api_key(
+        &self,
+        user_id: UserId,
+        name: String,
+        key_hash: String,
+        key_prefix: String,
+        role: String,
+    ) -> Result<super::ApiKeyRow> {
+        let id = ApiKeyId::new();
+        let now = chrono::Utc::now();
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO api_keys (id, name, key_hash, key_prefix, user_id, role, created_at, is_active)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)",
+            )
+            .bind(id.0)
+            .bind(&name)
+            .bind(&key_hash)
+            .bind(&key_prefix)
+            .bind(user_id.0)
+            .bind(&role)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to create API key: {e}")))?;
+
+        Ok(super::ApiKeyRow {
+            id,
+            name,
+            key_hash,
+            key_prefix,
+            user_id,
+            role,
+            created_at: now.to_rfc3339(),
+            last_used_at: None,
+            is_active: true,
+        })
+    }
+
+    fn get_api_key_by_hash(&self, key_hash: &str) -> Option<super::ApiKeyRow> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, name, key_hash, key_prefix, user_id, role, created_at, last_used_at, is_active
+                 FROM api_keys WHERE key_hash = $1",
+            )
+            .bind(key_hash)
+            .fetch_optional(&self.pool)
+            .await
+        })
+        .ok()
+        .flatten()
+        .map(|row| {
+            let id: Uuid = row.get("id");
+            let user_id: Uuid = row.get("user_id");
+            let created_at: DateTime<Utc> = row.get("created_at");
+            let last_used_at: Option<DateTime<Utc>> = row.get("last_used_at");
+            super::ApiKeyRow {
+                id: ApiKeyId(id),
+                name: row.get("name"),
+                key_hash: row.get("key_hash"),
+                key_prefix: row.get("key_prefix"),
+                user_id: UserId(user_id),
+                role: row.get("role"),
+                created_at: created_at.to_rfc3339(),
+                last_used_at: last_used_at.map(|dt| dt.to_rfc3339()),
+                is_active: row.get("is_active"),
+            }
+        })
+    }
+
+    fn list_api_keys(&self, user_id: UserId) -> Vec<super::ApiKeyRow> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, name, key_hash, key_prefix, user_id, role, created_at, last_used_at, is_active
+                 FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC",
+            )
+            .bind(user_id.0)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let id: Uuid = row.get("id");
+            let uid: Uuid = row.get("user_id");
+            let created_at: DateTime<Utc> = row.get("created_at");
+            let last_used_at: Option<DateTime<Utc>> = row.get("last_used_at");
+            super::ApiKeyRow {
+                id: ApiKeyId(id),
+                name: row.get("name"),
+                key_hash: row.get("key_hash"),
+                key_prefix: row.get("key_prefix"),
+                user_id: UserId(uid),
+                role: row.get("role"),
+                created_at: created_at.to_rfc3339(),
+                last_used_at: last_used_at.map(|dt| dt.to_rfc3339()),
+                is_active: row.get("is_active"),
+            }
+        })
+        .collect()
+    }
+
+    fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()> {
+        let result = block_on(async {
+            sqlx::query("UPDATE api_keys SET is_active = FALSE WHERE id = $1")
+                .bind(key_id.0)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to revoke API key: {e}")))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "API key {key_id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn touch_api_key(&self, key_id: ApiKeyId) {
+        let now = chrono::Utc::now();
+        let _ = block_on(async {
+            sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE id = $2")
+                .bind(now)
+                .bind(key_id.0)
+                .execute(&self.pool)
+                .await
+        });
     }
 }

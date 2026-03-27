@@ -187,13 +187,13 @@ impl JobQueue for RedisJobQueue {
     }
 
     async fn cancel(&self, job_id: &JobId) -> bool {
-        if let Some(mut job) = self.get(job_id).await {
-            if job.status == JobStatus::Queued || job.status == JobStatus::Running {
-                job.status = JobStatus::Cancelled;
-                job.completed_at = Some(Self::now());
-                self.save_job(&job).await;
-                return true;
-            }
+        if let Some(mut job) = self.get(job_id).await
+            && (job.status == JobStatus::Queued || job.status == JobStatus::Running)
+        {
+            job.status = JobStatus::Cancelled;
+            job.completed_at = Some(Self::now());
+            self.save_job(&job).await;
+            return true;
         }
         false
     }

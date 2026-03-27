@@ -120,6 +120,7 @@ async-trait = "0.1"
 # MCP
 rmcp = { version = "1.2", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 sha2 = "0.10"
+hmac = "0.12"
 cron = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
 
