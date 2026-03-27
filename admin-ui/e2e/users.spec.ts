@@ -8,7 +8,7 @@ test.describe('Users page', () => {
   });
 
   test('shows users table with columns', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Name' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
   });
