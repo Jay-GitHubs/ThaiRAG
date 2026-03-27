@@ -20,6 +20,26 @@ This starts ThaiRAG API, Admin UI, PostgreSQL, Qdrant, Keycloak (OIDC), and Open
 | Open WebUI | http://localhost:3000 | Login via Keycloak SSO |
 | Keycloak | http://localhost:9090 | `admin` / `admin` |
 
+### API Key Authentication
+
+ThaiRAG supports API key authentication as an alternative to JWT tokens.
+
+API keys use the `X-API-Key` header:
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-API-Key: trag_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+Create API keys via the Admin UI or API:
+```bash
+curl -X POST http://localhost:8080/api/auth/api-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Integration Key"}'
+```
+
 ### Authentication & User Identity
 
 Open WebUI authenticates to ThaiRAG using a static API key (configured automatically via `THAIRAG_OPENWEBUI_API_KEY` in `.env`). No JWT token management needed.
@@ -369,6 +389,30 @@ curl -X POST "http://localhost:8080/api/km/workspaces/$WORKSPACE_ID/documents" \
 
 ---
 
+## V2 API Integration
+
+ThaiRAG v2 API provides additional metadata with responses:
+- Search sources with document IDs and relevance scores
+- Intent classification
+- Processing time metrics
+
+V2 endpoints: `/v2/chat/completions`, `/v2/search`, `/v2/models`
+
+Version selection via URL path (`/v2/...`) or `X-API-Version: v2` header.
+
+---
+
+## WebSocket Chat
+
+For real-time bidirectional chat, connect to `/ws/chat`:
+```javascript
+const ws = new WebSocket('ws://localhost:8080/ws/chat?token=your-jwt');
+ws.send(JSON.stringify({ type: 'chat', content: 'Hello', session_id: 'optional-uuid' }));
+ws.onmessage = (event) => console.log(JSON.parse(event.data));
+```
+
+---
+
 ## Monitoring Integration
 
 ### Prometheus
@@ -392,11 +436,12 @@ Available metrics:
 
 ### Grafana
 
-Import or create dashboards using the Prometheus metrics above. Key panels:
-- Request rate and latency (p50, p95, p99)
+Grafana is included in Docker Compose on port 3001 with pre-configured dashboards:
+- API request rate and latency (p50, p95, p99)
 - Token consumption over time
 - Error rate by endpoint
 - Active sessions gauge
+- LLM call latency distribution
 
 ### Health Checks
 

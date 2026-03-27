@@ -2,7 +2,7 @@
 
 ## Crate Dependency Graph
 
-ThaiRAG is a Rust workspace with 14 crates organized in strict layers. Each layer depends only on layers below it.
+ThaiRAG is a Rust workspace with 15 crates organized in strict layers. Each layer depends only on layers below it.
 
 ```
                     ┌──────────────┐
@@ -44,15 +44,15 @@ ThaiRAG is a Rust workspace with 14 crates organized in strict layers. Each laye
                    └──────────────┘
 ```
 
-> **Note:** `thairag-mcp` (MCP Integration) sits alongside `thairag-agent`, providing MCP client connectivity, sync orchestration, and webhook notifications.
+> **Note:** `thairag-mcp` (MCP Integration) sits alongside `thairag-agent`, providing MCP client connectivity, sync orchestration, and webhook notifications. `thairag-provider-redis` also sits at this level, providing Redis-backed implementations of `SessionStoreTrait`, `EmbeddingCache`, and `JobQueue` for horizontal scaling.
 
 ## Crate Details
 
 ### thairag-core
 Foundation crate with zero external service dependencies.
-- **ID newtypes**: `OrgId`, `DeptId`, `WorkspaceId`, `DocumentId`, `ChunkId`, `UserId`, `IdpId`, `MemoryId` — all UUID-based with the `define_id!` macro
-- **Domain models**: `Organization`, `Department`, `Workspace`, `Document`, `TextChunk`, `User`, `IdentityProvider`
-- **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker` — all async trait-based
+- **ID newtypes**: `OrgId`, `DeptId`, `WorkspaceId`, `DocumentId`, `ChunkId`, `UserId`, `IdpId`, `MemoryId`, `JobId`, `WebhookId`, `ApiKeyId`, `AbTestId`, `EvalSetId`, `EntityId`, `BackupId` — all UUID-based with the `define_id!` macro
+- **Domain models**: `Organization`, `Department`, `Workspace`, `Document`, `TextChunk`, `User`, `IdentityProvider`, `Job`, `WebhookEvent`, `ApiKey`, `Entity`, `Relation`, `BackupManifest`, `ExtractedTable`, `ImageMetadata`
+- **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker`, `SessionStoreTrait`, `EmbeddingCache`, `JobQueue`, `DocumentPlugin`, `SearchPlugin`, `ChunkPlugin`, `VectorStoreExport` — all async trait-based
 - **Error types**: `ThaiRagError` enum covering validation, auth, not-found, provider errors
 - **Permission model**: `AccessScope` with workspace-level scoping
 
@@ -63,7 +63,7 @@ Layered configuration via the `config` crate:
 3. `config/local.toml` — local overrides (git-ignored)
 4. Environment variables — `THAIRAG__` prefix with `__` separator
 
-Key config sections: `server`, `auth`, `database`, `providers` (llm, embedding, vector_store, text_search, reranker), `search`, `document`.
+Key config sections: `server`, `auth`, `database`, `providers` (llm, embedding, vector_store, text_search, reranker), `search`, `document`, `session`, `embedding_cache`, `job_queue`, `redis`, `otel` (OpenTelemetry), `knowledge_graph`, `plugins`, `chat_pipeline` (with advanced RAG sub-configs: `self_rag`, `graph_rag`, `crag`, `speculative_rag`, `map_reduce`, `raptor`, `colbert`, `active_learning`, `context_compaction`, `personal_memory`, `multimodal`, `compression`, `auto_summarize`, `live_retrieval`, `conversation_memory`, `retrieval_refinement`, `tool_use`, `adaptive_threshold`).
 
 ### thairag-auth
 JWT-based authentication middleware for Axum:
@@ -83,13 +83,21 @@ Each provider crate implements one or more trait from `thairag-core`:
 
 | Crate | Trait | Implementations |
 |-------|-------|-----------------|
-| `thairag-provider-llm` | `LlmProvider` | Claude, OpenAI, Ollama |
-| `thairag-provider-embedding` | `EmbeddingProvider` | OpenAI, FastEmbed |
-| `thairag-provider-vectordb` | `VectorStore`, `PersonalMemoryStore` | Qdrant, InMemory |
+| `thairag-provider-llm` | `LlmProvider` | Claude, OpenAI, Ollama, Gemini, OpenAI-Compatible |
+| `thairag-provider-embedding` | `EmbeddingProvider` | OpenAI, FastEmbed, Cohere, Ollama |
+| `thairag-provider-vectordb` | `VectorStore`, `PersonalMemoryStore` | Qdrant, InMemory, ChromaDB, Milvus, Weaviate, PGVector, Pinecone |
 | `thairag-provider-search` | `SearchEngine` | Tantivy BM25 (disk-persisted via MmapDirectory) |
-| `thairag-provider-reranker` | `Reranker` | Cohere, Passthrough |
+| `thairag-provider-reranker` | `Reranker` | Cohere, Passthrough, Jina |
+| `thairag-provider-redis` | `SessionStoreTrait`, `EmbeddingCache`, `JobQueue` | Redis (via `redis::aio::ConnectionManager`) |
 
 All providers are instantiated via factory functions based on config, enabling runtime provider selection.
+
+### thairag-provider-redis
+Redis implementations for horizontal scaling:
+- **SessionStoreTrait** — Stores chat session history in Redis, enabling multiple API instances to share session state
+- **EmbeddingCache** — Caches embedding vectors by content hash, reducing duplicate embedding API calls across restarts and instances
+- **JobQueue** — Redis-backed async job queue for background tasks (sync runs, batch ingestion, re-indexing)
+- Connection pooling via `redis::aio::ConnectionManager` with automatic reconnection
 
 ### thairag-document
 Document ingestion pipeline:
@@ -119,6 +127,7 @@ RAG orchestrator with multi-agent pipeline:
 - **Context compaction** — Automatic summarization of older messages when conversation approaches the model's context window limit (Claude Code-style). Uses Thai-aware token estimation (~2 chars/token for Thai, ~4 chars/token for English)
 - **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
 - **Live source retrieval** — When the knowledge base returns no relevant results (empty context or avg relevance < 0.15), the pipeline automatically fetches content from active MCP connectors in real time. Uses `LiveRetrieval` agent to connect to configured connectors (OneDrive, web fetch, Slack, etc.) in parallel, read resources, and build a `CuratedContext` for the response generator. If more connectors than `max_connectors` are available, an LLM selects the most relevant ones
+- **Advanced RAG strategies** — Self-RAG (iterative self-critique and retrieval), Corrective RAG (CRAG, query correction on low confidence), Speculative RAG (draft-then-verify), Map-Reduce RAG (parallel chunk summarization), RAPTOR hierarchical summaries, ColBERT late-interaction reranking, Graph RAG (entity/relation extraction and graph traversal), contextual compression, multimodal RAG (image + table extraction), active learning (uncertainty sampling for feedback prioritization), conversation memory (cross-session user preference tracking), retrieval refinement (iterative query expansion), agentic tool use (LLM-driven function calling), adaptive quality thresholds (per-workspace auto-tuning), auto-summarization of long documents
 
 ### thairag-mcp
 MCP (Model Context Protocol) integration for connecting to external data sources:
@@ -131,18 +140,22 @@ MCP (Model Context Protocol) integration for connecting to external data sources
 
 ### thairag-api
 Axum HTTP server with:
-- **Routes**: Auth, Chat (OpenAI-compatible), KM hierarchy CRUD, Documents, Settings, Health, Feedback
-- **Stores**: SQLite (default), PostgreSQL, In-Memory — implementing `KmStoreTrait`
+- **Routes**: Auth, Chat (V1 OpenAI-compatible + V2 with metadata + WebSocket at `/ws/chat`), KM hierarchy CRUD, Documents (versioning, batch, ACL), Settings, Health, Feedback, Webhooks, Backup/Restore, Vector Migration, Rate Limit Stats, Jobs, Evaluation, A/B Tests, Plugins, Knowledge Graph, API Keys, Vault
+- **Stores**: SQLite (default), PostgreSQL, In-Memory — implementing `KmStoreTrait`. Session and cache stores optionally backed by Redis via `thairag-provider-redis`
 - **Middleware stack**: Request ID → Tracing → Security Headers → CORS → Metrics → Rate Limiting → Auth → CSRF
-- **Session management**: DashMap-based with 50-message cap and 1-hour auto-cleanup. Supports context compaction (replacing old messages with summaries)
+- **Session management**: DashMap-based (default) or Redis-backed (for multi-instance deployments), with 50-message cap and 1-hour auto-cleanup. Supports context compaction (replacing old messages with summaries)
+- **Plugin registry**: Loads `DocumentPlugin`, `SearchPlugin`, and `ChunkPlugin` implementations from config at startup, enabling extension without modifying core crates
+- **Embedding cache**: Optional in-process or Redis-backed cache keyed by content hash, reducing redundant embedding API calls
 - **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions
 
 ## Data Flow
 
 ### Chat Request Flow
 
+The V1 API (`POST /v1/chat/completions`) is OpenAI-compatible and returns only the generated message. The V2 API (`POST /v2/chat/completions`) returns additional metadata: `search_sources` (chunks used), `intent` (classified query type), and `processing_time_ms`. WebSocket chat at `/ws/chat` uses a JSON protocol for bidirectional streaming without SSE.
+
 ```
-Client POST /v1/chat/completions
+Client POST /v1/chat/completions  (or /v2/chat/completions for metadata)
     │
     ▼
 [Rate Limit] → [Auth Middleware] → [CSRF Guard]
@@ -291,15 +304,25 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - `organizations`, `departments`, `workspaces` — KM hierarchy
 - `documents` — Document metadata and original content
 - `document_chunks` — Stored chunks with content, used for Tantivy BM25 index rebuild on startup (FK to `documents` with `ON DELETE CASCADE`)
+- `document_versions` — Version history for documents with diff metadata
 - `permissions` — Scoped access control (org/dept/workspace level)
+- `workspace_acls` — Fine-grained workspace-level ACL entries
+- `document_acls` — Fine-grained document-level ACL entries
 - `identity_providers` — External IdP configuration
+- `api_keys` — Hashed API keys (SHA-256, `trag_` prefix) with scope and expiry
+- `webhooks` — Registered webhook endpoints and event subscriptions
+- `jobs` — Background job records with status, type, and result payload
+- `inference_logs` — Per-request LLM call logs for evaluation and cost tracking
 - `settings` — KV store for runtime configuration, feedback data, tuning parameters
 - `audit_log` — Security audit trail
+
+**Redis** serves as a complementary store (when configured) for: chat sessions, embedding vector cache (keyed by content hash), and the async job queue. Redis state is ephemeral and automatically rebuilt from the primary database on reconnect.
 
 ## Security Model
 
 ### Authentication
 - Local auth: Argon2 password hashing + JWT tokens (configurable expiry)
+- API key auth: `trag_`-prefixed keys stored as SHA-256 hashes; passed via `X-API-Key` header; support scopes (read-only, workspace-scoped, etc.) and optional expiry
 - External: OIDC/OAuth2/SAML/LDAP via identity provider management (protocol flows are stubbed)
 - First registered user becomes super admin
 - Optional admin seeding via environment variables
@@ -307,18 +330,19 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 ### Authorization
 - Role hierarchy: `super_admin` > `admin` > `editor` > `viewer`
 - Workspace-scoped permissions — users only access documents in their assigned workspaces
+- **Fine-grained ACLs** — Workspace-level ACL entries (`workspace_acls`) and document-level ACL entries (`document_acls`) allow granting or denying access at individual resource granularity, overriding role defaults
 - Super admins bypass all permission checks
 - **Open WebUI identity passthrough** — When Open WebUI sets `ENABLE_FORWARD_USER_INFO_HEADERS=true`, ThaiRAG resolves real user identity from `X-OpenWebUI-User-Email` header and applies per-user workspace permissions even through the shared API key
 - **Permission revocation** — On workspace access revocation, server-side sessions and personal memories for the affected user are cleared to prevent stale context leaks
 
 ### OWASP Hardening
-- **A01 Broken Access Control**: Role-based route guards, workspace scoping
-- **A02 Cryptographic Failures**: Argon2 password hashing, JWT with configurable secret
+- **A01 Broken Access Control**: Role-based route guards, workspace scoping, fine-grained ACLs
+- **A02 Cryptographic Failures**: Argon2 password hashing, JWT with configurable secret, SHA-256 API key hashing
 - **A04 Insecure Design**: CSRF protection on state-changing endpoints
 - **A05 Security Misconfiguration**: Security response headers (CSP, X-Frame-Options, nosniff, XSS protection)
 - **A07 Authentication Failures**: Brute-force protection (configurable max attempts + lockout), password complexity requirements
 - **A08 Software Integrity**: Request ID tracing, structured logging
-- **A09 Logging & Monitoring**: Audit log, Prometheus metrics, structured tracing
+- **A09 Logging & Monitoring**: Audit log (actions include: login, logout, api_key_created, api_key_revoked, document_uploaded, document_deleted, workspace_acl_changed, backup_created, backup_restored, webhook_triggered, job_queued, eval_run), Prometheus metrics, structured tracing
 
 ## Observability
 
@@ -327,6 +351,13 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - `http_request_duration_seconds{method, path}` — Latency histogram
 - `llm_tokens_total{type}` — Token usage (prompt/completion)
 - `active_sessions_total` — Current active chat sessions
+
+Prometheus scrapes ThaiRAG directly at `/metrics`. In scaled deployments (multiple replicas behind a load balancer), use Docker DNS service discovery — Prometheus can be configured with `dns_sd_configs` targeting the service name to discover all replicas automatically.
+
+Grafana dashboards (served on port 3001 when included in the Docker Compose stack) provide pre-built panels for request throughput, latency percentiles, LLM token spend, session counts, and search quality metrics.
+
+### OpenTelemetry
+When `otel.enabled = true`, ThaiRAG exports distributed traces and metrics via OTLP (gRPC or HTTP) to a configured collector endpoint. Trace context propagates through all pipeline stages (intent classification → retrieval → reranking → generation), enabling end-to-end latency attribution. The `otel.endpoint` config key (or `THAIRAG__OTEL__ENDPOINT` env var) points to the OTLP receiver.
 
 ### Structured Logging
 JSON-formatted logs with tracing spans:

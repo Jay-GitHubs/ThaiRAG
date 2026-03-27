@@ -56,6 +56,9 @@ The `docker-compose.yml` defines these services:
 | `admin-ui` | Built from admin-ui/Dockerfile | 8081 | Admin dashboard |
 | `postgres` | postgres:16-alpine | 5432 | Database |
 | `qdrant` | qdrant/qdrant:latest | 6333, 6334 | Vector database |
+| `redis` | redis:7-alpine | 6379 | Session store, embedding cache, job queue |
+| `prometheus` | prom/prometheus | 9090 | Metrics collection |
+| `grafana` | grafana/grafana | 3001 | Dashboards & visualization |
 | `ollama` | ollama/ollama (commented) | 11434 | Local LLM (free tier) |
 | `open-webui` | open-webui (commented) | 3000 | Chat interface (optional) |
 
@@ -86,6 +89,16 @@ THAIRAG__ADMIN__PASSWORD=SecurePassword123
 
 # MCP Connectors (optional)
 # THAIRAG__MCP__ENABLED=true
+
+# Redis (for scaling)
+# THAIRAG__SESSION__BACKEND=redis
+# THAIRAG__EMBEDDING_CACHE__BACKEND=redis
+# THAIRAG__JOB_QUEUE__BACKEND=redis
+# THAIRAG__REDIS__URL=redis://redis:6379
+
+# OpenTelemetry (optional)
+# THAIRAG__OTEL__ENABLED=true
+# THAIRAG__OTEL__ENDPOINT=http://localhost:4317
 ```
 
 2. **Start services:**
@@ -178,6 +191,9 @@ See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup incl
 | `postgres-data` | PostgreSQL database |
 | `thairag-data` | Tantivy BM25 search index (disk-persisted via MmapDirectory) |
 | `qdrant-data` | Qdrant vector storage |
+| `redis-data` | Redis persistence |
+| `prometheus-data` | Prometheus metrics storage |
+| `grafana-data` | Grafana dashboard data |
 | `ollama-models` | Ollama model files |
 
 > **Tantivy auto-recovery:** On startup, ThaiRAG automatically detects and removes stale Tantivy writer lock files (from previous crashes or ungraceful shutdowns). If the Tantivy index is empty but the database has stored chunks, the index is rebuilt automatically in batches. No manual intervention is needed after a container restart.
@@ -361,6 +377,56 @@ cd admin-ui && npx playwright test
 | `document.max_chunk_size` | `THAIRAG__DOCUMENT__MAX_CHUNK_SIZE` | `512` | Chunk size in tokens |
 | `document.chunk_overlap` | `THAIRAG__DOCUMENT__CHUNK_OVERLAP` | `64` | Overlap between chunks |
 
+### Session
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `session.backend` | `THAIRAG__SESSION__BACKEND` | `memory` | Backend: `memory` or `redis` |
+| `session.max_history` | `THAIRAG__SESSION__MAX_HISTORY` | `50` | Max messages stored per session |
+| `session.stale_timeout_secs` | `THAIRAG__SESSION__STALE_TIMEOUT_SECS` | `3600` | Auto-expire inactive sessions |
+
+### Embedding Cache
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `embedding_cache.backend` | `THAIRAG__EMBEDDING_CACHE__BACKEND` | `memory` | Backend: `memory` or `redis` |
+| `embedding_cache.max_entries` | `THAIRAG__EMBEDDING_CACHE__MAX_ENTRIES` | `10000` | Max cached embeddings (memory backend) |
+| `embedding_cache.ttl_secs` | `THAIRAG__EMBEDDING_CACHE__TTL_SECS` | `86400` | Cache entry TTL in seconds |
+
+### Job Queue
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `job_queue.backend` | `THAIRAG__JOB_QUEUE__BACKEND` | `memory` | Backend: `memory` or `redis` |
+| `job_queue.retention_secs` | `THAIRAG__JOB_QUEUE__RETENTION_SECS` | `86400` | How long to retain completed job records |
+
+### Redis
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `redis.url` | `THAIRAG__REDIS__URL` | `redis://localhost:6379` | Redis connection URL |
+
+### OpenTelemetry
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `otel.enabled` | `THAIRAG__OTEL__ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `otel.endpoint` | `THAIRAG__OTEL__ENDPOINT` | `http://localhost:4317` | OTLP gRPC collector endpoint |
+| `otel.service_name` | `THAIRAG__OTEL__SERVICE_NAME` | `thairag` | Service name reported to collector |
+
+### Knowledge Graph
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `knowledge_graph.enabled` | `THAIRAG__KNOWLEDGE_GRAPH__ENABLED` | `false` | Enable knowledge graph features |
+| `knowledge_graph.extract_on_ingest` | `THAIRAG__KNOWLEDGE_GRAPH__EXTRACT_ON_INGEST` | `false` | Auto-extract entities/relations on document ingest |
+
+### Plugins
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `plugins.enabled_plugins` | `THAIRAG__PLUGINS__ENABLED_PLUGINS` | `[]` | List of enabled plugin names |
+
 ---
 
 ## Production Checklist
@@ -380,6 +446,11 @@ cd admin-ui && npx playwright test
 - [ ] Set up health check monitoring on `/health?deep=true`
 - [ ] Verify SSE streaming works through any reverse proxies/load balancers (test the `/api/km/test-query-stream` endpoint)
 - [ ] Configure Chat Pipeline LLM mode (Use Chat LLM / Shared / Per-Agent) via Admin UI Settings
+- [ ] Configure Redis for session/cache/job queue if scaling horizontally
+- [ ] Set up Grafana dashboards for monitoring
+- [ ] Configure OpenTelemetry if using distributed tracing
+- [ ] Enable knowledge graph extraction if needed
+- [ ] Configure backup schedule
 
 ---
 
