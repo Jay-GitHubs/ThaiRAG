@@ -370,6 +370,7 @@ pub struct SearchAnalyticsFilter {
     pub to: Option<String>,
     pub workspace_id: Option<String>,
     pub user_id: Option<String>,
+    #[serde(default)]
     pub zero_results_only: bool,
     pub limit: Option<usize>,
     pub offset: Option<usize>,

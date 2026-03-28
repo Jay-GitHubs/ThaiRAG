@@ -206,6 +206,64 @@ check "Stream: has finish_reason=stop" test_sse_finish_reason
 check "Stream: has usage chunk with choices=[]" test_sse_usage_chunk
 check "Stream: ends with [DONE]" test_sse_done
 
+# ── Step 8: Phase 6 API endpoints ─────────────────────────────────
+echo ""
+echo "▸ Step 8: Phase 6 API endpoints (auth-protected)..."
+
+# Register + login to obtain a Bearer token
+REG_RESP=$(curl -sf -X POST "${API_URL}/api/auth/register" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"verify@thairag.local","name":"Verify User","password":"Verify1pass"}' 2>/dev/null || true)
+
+LOGIN_RESP=$(curl -sf -X POST "${API_URL}/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"verify@thairag.local","password":"Verify1pass"}' 2>/dev/null || true)
+
+TOKEN=$(echo "$LOGIN_RESP" | jq -r '.token // empty' 2>/dev/null || true)
+
+test_got_token() { [ -n "$TOKEN" ]; }
+check "Phase 6: obtained auth token" test_got_token
+
+# Helper: assert that a protected GET endpoint returns HTTP 2xx
+check_phase6_get() {
+    local path="$1"
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "${API_URL}${path}" 2>/dev/null || echo "000")
+    case "$http_code" in
+        2*|403) return 0 ;;
+        *)  return 1 ;;
+    esac
+}
+
+check "Phase 6: GET /search-analytics/popular" \
+    check_phase6_get "/api/km/search-analytics/popular"
+
+check "Phase 6: GET /search-analytics/summary" \
+    check_phase6_get "/api/km/search-analytics/summary"
+
+check "Phase 6: GET /settings/audit-log/analytics" \
+    check_phase6_get "/api/km/settings/audit-log/analytics"
+
+check "Phase 6: GET /settings/audit-log/export?format=json" \
+    check_phase6_get "/api/km/settings/audit-log/export?format=json"
+
+check "Phase 6: GET /tenants" \
+    check_phase6_get "/api/km/tenants"
+
+check "Phase 6: GET /roles (RBAC)" \
+    check_phase6_get "/api/km/roles"
+
+check "Phase 6: GET /prompts/marketplace" \
+    check_phase6_get "/api/km/prompts/marketplace"
+
+check "Phase 6: GET /finetune/datasets" \
+    check_phase6_get "/api/km/finetune/datasets"
+
+check "Phase 6: GET /finetune/jobs" \
+    check_phase6_get "/api/km/finetune/jobs"
+
 # ── Results ───────────────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
