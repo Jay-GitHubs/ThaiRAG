@@ -44,6 +44,26 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Identity Provider Support** — Local auth (Argon2 + JWT) with OIDC/OAuth2/SAML/LDAP management
 - **Production Hardened** — Rate limiting, CSRF protection, OWASP security headers, Prometheus metrics, audit logging, brute-force protection
 
+### Phase 6 Platform Features
+
+- **Search Analytics** — Automatic query tracking with popular-query rankings, zero-result detection, and click-through rate (CTR) stats to identify coverage gaps
+- **Document Lineage** — Full attribution chain from a generated response back through retrieved chunks to source documents, surfaced per answer
+- **Audit Log Export & Analytics** — Export audit records as CSV or JSON; built-in aggregations show action counts by type, user, and day for compliance reporting
+- **Agent Memory Persistence** — Per-user long-term memory stored in PostgreSQL with configurable relevance decay, surfaced automatically during RAG retrieval
+- **Multi-tenancy** — Tenant management with per-tenant quotas, usage tracking, and isolated data scoping
+- **RBAC v2 (Custom Roles)** — Fine-grained permission matrix with resource-level access control; create and assign custom roles beyond the built-in super-admin/member tiers
+- **Document Collaboration** — Inline comments, annotations, and structured review workflows for collaborative document curation
+- **Prompt Marketplace** — Share, rate, categorize, and fork prompt templates; browse community contributions directly from the admin UI
+- **Search Quality Regression Tests** — Golden query sets with expected results; CI-ready regression runner that fails when retrieval quality drops below threshold
+- **Streaming Reranking** — SSE-based progressive delivery of search results as reranking scores become available, reducing perceived latency
+- **Embedding Fine-tuning Pipeline** — Training data collection and management interface with job tracking for domain-adapted embedding models
+
+### Developer Tools
+
+- **Python SDK** (`sdks/python/`) — Typed `httpx`-based client with full Pydantic model coverage for all API responses; supports sync and async usage
+- **TypeScript SDK** (`sdks/typescript/`) — Typed `fetch`-based client with TypeScript interfaces generated from the API schema; ESM and CJS builds included
+- **Deployment CLI** (`crates/thairag-cli/`) — `trag` command-line tool with subcommands for health checks, config inspection, database backup, and rolling deploys
+
 ## Architecture
 
 ```
@@ -93,7 +113,7 @@ External Services (Docker Compose):
   PostgreSQL · Qdrant · Redis · Prometheus · Grafana · Keycloak
 ```
 
-**15 Rust crates** organized in a layered dependency graph:
+**16 Rust crates** organized in a layered dependency graph:
 
 | Layer | Crates | Purpose |
 |-------|--------|---------|
@@ -105,6 +125,7 @@ External Services (Docker Compose):
 | Integration | `thairag-mcp` | MCP client, sync engine, scheduler, webhooks |
 | Intelligence | `thairag-agent` | Orchestrator with intent classification + RAG |
 | Server | `thairag-api` | Axum HTTP server, routes, middleware, stores |
+| Tooling | `thairag-cli` | `trag` deployment CLI — health, config, backup, deploy |
 
 ## Quick Start
 
@@ -266,9 +287,54 @@ GET  /admin/rate-limits/stats            # Rate limit analytics
 # Search Quality & A/B Testing
 GET|POST /eval/query-sets                # Evaluation query sets (RAGAS)
 GET|POST /ab-tests                       # A/B testing configurations
+GET|POST /eval/regression/golden-queries # Golden query sets for regression tests
+POST     /eval/regression/run            # Run search quality regression check
 
 # Plugins
 GET  /plugins                            # List registered plugins
+
+# Search Analytics (Phase 6)
+GET  /analytics/search/popular           # Popular queries with hit counts
+GET  /analytics/search/zero-results      # Queries returning no results
+GET  /analytics/search/ctr              # Click-through rate stats per query
+
+# Document Lineage (Phase 6)
+GET  /lineage/response/{id}              # Attribution chain: response → chunks → documents
+
+# Audit Log Export (Phase 6)
+GET  /settings/audit-log/export          # Export audit log (?format=csv|json)
+GET  /settings/audit-log/analytics       # Action counts by type/user/day
+
+# Agent Memory (Phase 6)
+GET|POST   /memory/{user_id}             # Read / write per-user long-term memory
+DELETE     /memory/{user_id}/{entry_id}  # Remove a memory entry
+
+# Multi-tenancy (Phase 6)
+GET|POST   /admin/tenants                # List / create tenants
+GET|PUT    /admin/tenants/{id}           # Get / update tenant (quotas, metadata)
+GET        /admin/tenants/{id}/usage     # Per-tenant usage stats
+
+# RBAC v2 — Custom Roles (Phase 6)
+GET|POST   /admin/roles                  # List / create custom roles
+GET|PUT|DEL /admin/roles/{id}            # Manage role definition
+POST       /admin/roles/{id}/assign      # Assign role to user
+
+# Document Collaboration (Phase 6)
+GET|POST   /workspaces/{id}/documents/{doc_id}/comments    # List / add comments
+PUT|DEL    /workspaces/{id}/documents/{doc_id}/comments/{c} # Edit / delete comment
+POST       /workspaces/{id}/documents/{doc_id}/review       # Submit for review
+POST       /workspaces/{id}/documents/{doc_id}/review/approve # Approve review
+
+# Prompt Marketplace (Phase 6)
+GET|POST   /marketplace/prompts          # Browse / publish prompt templates
+GET        /marketplace/prompts/{id}     # Template detail with ratings
+POST       /marketplace/prompts/{id}/fork # Fork a template
+POST       /marketplace/prompts/{id}/rate # Rate a template
+
+# Embedding Fine-tuning (Phase 6)
+GET|POST   /finetune/embedding/datasets  # Manage training datasets
+POST       /finetune/embedding/jobs      # Start a fine-tuning job
+GET        /finetune/embedding/jobs/{id} # Job status and metrics
 ```
 
 See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documentation.
@@ -283,6 +349,9 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 | [API Reference](docs/API_REFERENCE.md) | All endpoints with request/response schemas |
 | [Integration Guide](docs/INTEGRATION_GUIDE.md) | Open WebUI, OIDC/SSO, external systems |
 | [Scaling Guide](docs/scaling.md) | Horizontal scaling with Redis, load balancing |
+| [Python SDK](sdks/python/README.md) | Typed `httpx` client — installation, quickstart, API reference |
+| [TypeScript SDK](sdks/typescript/README.md) | Typed `fetch` client — installation, quickstart, API reference |
+| [CLI Reference](crates/thairag-cli/README.md) | `trag` command reference — health, config, backup, deploy |
 
 ## Testing
 
