@@ -11,7 +11,7 @@ use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::{VectorStore, VectorStoreExport};
 use thairag_core::types::{DocId, DocumentChunk, ExportedVector, SearchQuery, SearchResult};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 pub struct QdrantVectorStore {
     client: Qdrant,
@@ -45,7 +45,55 @@ impl QdrantVectorStore {
             .await
             .map_err(|e| ThaiRagError::VectorStore(format!("Failed to check collection: {e}")))?;
 
-        if !exists {
+        if exists {
+            // Check if existing collection dimension matches the requested dimension.
+            // If the user switched embedding models the sizes will differ, causing silent
+            // failures on upsert/search.  Recreate the collection in that case.
+            let needs_recreate = match self.client.collection_info(&self.collection).await {
+                Ok(info) => {
+                    let existing_dim = info
+                        .result
+                        .and_then(|r| r.config)
+                        .and_then(|c| c.params)
+                        .and_then(|p| p.vectors_config)
+                        .and_then(|vc| match vc.config {
+                            Some(qdrant_client::qdrant::vectors_config::Config::Params(params)) => {
+                                Some(params.size)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    existing_dim != dimension as u64
+                }
+                Err(_) => false,
+            };
+
+            if needs_recreate {
+                warn!(
+                    collection = %self.collection,
+                    expected_dim = dimension,
+                    "Qdrant collection has wrong vector dimension, recreating \
+                     (existing vectors are incompatible with the current embedding model)"
+                );
+                self.client
+                    .delete_collection(&self.collection)
+                    .await
+                    .map_err(|e| {
+                        ThaiRagError::VectorStore(format!("Failed to delete collection: {e}"))
+                    })?;
+                self.client
+                    .create_collection(
+                        CreateCollectionBuilder::new(&self.collection).vectors_config(
+                            VectorParamsBuilder::new(dimension as u64, Distance::Cosine),
+                        ),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ThaiRagError::VectorStore(format!("Failed to recreate collection: {e}"))
+                    })?;
+                info!(collection = %self.collection, dimension, "Recreated Qdrant collection with new dimension");
+            }
+        } else {
             self.client
                 .create_collection(
                     CreateCollectionBuilder::new(&self.collection).vectors_config(
@@ -117,6 +165,11 @@ impl VectorStore for QdrantVectorStore {
     async fn search(&self, embedding: &[f32], query: &SearchQuery) -> Result<Vec<SearchResult>> {
         // No access: not unrestricted and no workspace permissions
         if !query.unrestricted && query.workspace_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Collection has never been initialised — nothing has been indexed yet.
+        if !self.collection_ready.load(Ordering::Relaxed) {
             return Ok(vec![]);
         }
 
