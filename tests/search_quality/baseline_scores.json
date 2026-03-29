@@ -1,0 +1,7 @@
+{
+  "avg_recall_at_k": 0.60,
+  "avg_mrr": 0.55,
+  "note": "Initial baseline — update after first full evaluation run against a seeded corpus.",
+  "recorded_at": "2026-03-29",
+  "query_count": 5
+}

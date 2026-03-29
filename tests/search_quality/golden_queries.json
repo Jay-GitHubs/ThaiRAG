@@ -1,0 +1,37 @@
+[
+  {
+    "id": "q1",
+    "query": "What is ThaiRAG and what does it do?",
+    "k": 5,
+    "expected_doc_ids": [],
+    "expected_keywords": ["ThaiRAG", "RAG", "retrieval"]
+  },
+  {
+    "id": "q2",
+    "query": "How do I configure the embedding provider?",
+    "k": 5,
+    "expected_doc_ids": [],
+    "expected_keywords": ["embedding", "provider", "config"]
+  },
+  {
+    "id": "q3",
+    "query": "What document formats are supported for upload?",
+    "k": 5,
+    "expected_doc_ids": [],
+    "expected_keywords": ["pdf", "docx", "markdown"]
+  },
+  {
+    "id": "q4",
+    "query": "How does hybrid search work in ThaiRAG?",
+    "k": 5,
+    "expected_doc_ids": [],
+    "expected_keywords": ["hybrid", "vector", "BM25"]
+  },
+  {
+    "id": "q5",
+    "query": "What authentication methods are available?",
+    "k": 5,
+    "expected_doc_ids": [],
+    "expected_keywords": ["JWT", "auth", "token"]
+  }
+]

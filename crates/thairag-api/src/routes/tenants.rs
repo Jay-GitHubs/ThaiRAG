@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::store::{Tenant, TenantQuota, TenantUsage};
+use thairag_core::ThaiRagError;
 use thairag_core::types::OrgId;
 
 // ── DTOs ────────────────────────────────────────────────────────────
@@ -33,12 +34,69 @@ pub struct ListResponse<T: Serialize> {
     pub total: usize,
 }
 
+// ── Validation ────────────────────────────────────────────────────────
+
+fn validate_tenant_name(name: &str) -> Result<(), ApiError> {
+    if name.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "tenant name must not be empty".into(),
+        )));
+    }
+    if name.len() > 255 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "tenant name must not exceed 255 characters".into(),
+        )));
+    }
+    Ok(())
+}
+
+fn validate_tenant_plan(plan: &str) -> Result<(), ApiError> {
+    if plan.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "tenant plan must not be empty".into(),
+        )));
+    }
+    Ok(())
+}
+
+fn validate_quota(quota: &TenantQuota) -> Result<(), ApiError> {
+    // All quota values must be positive (> 0)
+    if quota.max_documents == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "max_documents must be greater than 0".into(),
+        )));
+    }
+    if quota.max_storage_bytes == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "max_storage_bytes must be greater than 0".into(),
+        )));
+    }
+    if quota.max_queries_per_day == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "max_queries_per_day must be greater than 0".into(),
+        )));
+    }
+    if quota.max_users == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "max_users must be greater than 0".into(),
+        )));
+    }
+    if quota.max_workspaces == 0 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "max_workspaces must be greater than 0".into(),
+        )));
+    }
+    Ok(())
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────
 
 pub async fn create_tenant(
     State(state): State<AppState>,
     AppJson(body): AppJson<CreateTenantRequest>,
 ) -> Result<(StatusCode, Json<Tenant>), ApiError> {
+    validate_tenant_name(&body.name)?;
+    validate_tenant_plan(&body.plan)?;
     let tenant = state.km_store.insert_tenant(body.name, body.plan)?;
     Ok((StatusCode::CREATED, Json(tenant)))
 }
@@ -62,6 +120,8 @@ pub async fn update_tenant(
     Path(id): Path<String>,
     AppJson(body): AppJson<UpdateTenantRequest>,
 ) -> Result<Json<Tenant>, ApiError> {
+    validate_tenant_name(&body.name)?;
+    validate_tenant_plan(&body.plan)?;
     let tenant = state.km_store.update_tenant(&id, body.name, body.plan)?;
     Ok(Json(tenant))
 }
@@ -84,6 +144,7 @@ pub async fn set_quota(
     Path(id): Path<String>,
     AppJson(quota): AppJson<TenantQuota>,
 ) -> Result<Json<TenantQuota>, ApiError> {
+    validate_quota(&quota)?;
     state.km_store.set_tenant_quota(&id, &quota)?;
     Ok(Json(quota))
 }

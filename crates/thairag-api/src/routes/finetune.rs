@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::store::{FinetuneJob, TrainingDataset, TrainingPair};
+use thairag_core::ThaiRagError;
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -36,6 +37,17 @@ pub struct ListResponse<T: Serialize> {
     pub total: usize,
 }
 
+// ── Validation ────────────────────────────────────────────────────────
+
+fn validate_nonempty(value: &str, field: &str) -> Result<(), ApiError> {
+    if value.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'{field}' must not be empty"
+        ))));
+    }
+    Ok(())
+}
+
 // ── Dataset Handlers ─────────────────────────────────────────────────
 
 /// GET /api/km/finetune/datasets
@@ -55,6 +67,7 @@ pub async fn create_dataset(
     State(state): State<AppState>,
     AppJson(body): AppJson<CreateDatasetRequest>,
 ) -> Result<(StatusCode, Json<TrainingDataset>), ApiError> {
+    validate_nonempty(&body.name, "name")?;
     let description = body.description.unwrap_or_default();
     let ds = state
         .km_store
@@ -105,6 +118,8 @@ pub async fn add_pair(
     Path(dataset_id): Path<String>,
     AppJson(body): AppJson<AddPairRequest>,
 ) -> Result<(StatusCode, Json<TrainingPair>), ApiError> {
+    validate_nonempty(&body.query, "query")?;
+    validate_nonempty(&body.positive_doc, "positive_doc")?;
     let pair = TrainingPair {
         id: Uuid::new_v4().to_string(),
         dataset_id,
@@ -148,6 +163,8 @@ pub async fn create_job(
     State(state): State<AppState>,
     AppJson(body): AppJson<CreateJobRequest>,
 ) -> Result<(StatusCode, Json<FinetuneJob>), ApiError> {
+    validate_nonempty(&body.dataset_id, "dataset_id")?;
+    validate_nonempty(&body.base_model, "base_model")?;
     // Verify dataset exists
     state
         .km_store

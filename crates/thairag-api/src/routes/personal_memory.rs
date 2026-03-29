@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::error::ApiError;
@@ -19,6 +20,37 @@ pub struct LimitParam {
     pub limit: Option<usize>,
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────
+
+/// Validate that the path user_id is a valid UUID.
+fn validate_user_id_uuid(user_id: &str) -> Result<(), ApiError> {
+    user_id.parse::<uuid::Uuid>().map_err(|_| {
+        ApiError(ThaiRagError::Validation(format!(
+            "'user_id' must be a valid UUID, got: {user_id}"
+        )))
+    })?;
+    Ok(())
+}
+
+/// Ensure the caller is either a super_admin or is accessing their own memories.
+fn require_self_or_super_admin(
+    claims: &AuthClaims,
+    state: &crate::app_state::AppState,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    // If super_admin, always allow
+    if require_super_admin(claims, state).is_ok() {
+        return Ok(());
+    }
+    // Otherwise the caller must be the user themselves
+    if claims.sub == user_id {
+        return Ok(());
+    }
+    Err(ApiError(ThaiRagError::Authorization(
+        "You may only access your own memories".into(),
+    )))
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────
 
 /// GET /api/km/users/{user_id}/memories
@@ -28,7 +60,8 @@ pub async fn list_memories(
     Path(user_id): Path<String>,
     Query(params): Query<LimitParam>,
 ) -> Result<Json<Vec<PersonalMemoryRow>>, ApiError> {
-    require_super_admin(&claims, &state)?;
+    validate_user_id_uuid(&user_id)?;
+    require_self_or_super_admin(&claims, &state, &user_id)?;
     let limit = params.limit.unwrap_or(50).min(200);
     let memories = state.km_store.list_personal_memories(&user_id, limit);
     Ok(Json(memories))
@@ -40,8 +73,8 @@ pub async fn delete_memory(
     Extension(claims): Extension<AuthClaims>,
     Path((user_id, memory_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    require_super_admin(&claims, &state)?;
-    let _ = user_id; // validated by path
+    validate_user_id_uuid(&user_id)?;
+    require_self_or_super_admin(&claims, &state, &user_id)?;
     state
         .km_store
         .delete_personal_memory(&memory_id)
@@ -55,7 +88,8 @@ pub async fn delete_all_memories(
     Extension(claims): Extension<AuthClaims>,
     Path(user_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_super_admin(&claims, &state)?;
+    validate_user_id_uuid(&user_id)?;
+    require_self_or_super_admin(&claims, &state, &user_id)?;
     state
         .km_store
         .delete_all_personal_memories(&user_id)

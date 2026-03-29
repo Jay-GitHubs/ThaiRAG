@@ -459,6 +459,19 @@ impl ChatPipeline {
                     } else {
                         Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
                     };
+                    m.retrieved_chunks = results
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| thairag_core::types::RetrievedChunkMeta {
+                            chunk_id: r.chunk.chunk_id.to_string(),
+                            doc_id: r.chunk.doc_id.to_string(),
+                            doc_title: None,
+                            content_preview: r.chunk.content.chars().take(200).collect(),
+                            score: r.score,
+                            rank: i as u32,
+                            contributed: true,
+                        })
+                        .collect();
                 });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
@@ -610,6 +623,19 @@ impl ChatPipeline {
             } else {
                 Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
             };
+            m.retrieved_chunks = results
+                .iter()
+                .enumerate()
+                .map(|(i, r)| thairag_core::types::RetrievedChunkMeta {
+                    chunk_id: r.chunk.chunk_id.to_string(),
+                    doc_id: r.chunk.doc_id.to_string(),
+                    doc_title: None,
+                    content_preview: r.chunk.content.chars().take(200).collect(),
+                    score: r.score,
+                    rank: i as u32,
+                    contributed: true,
+                })
+                .collect();
         });
 
         // ── ColBERT reranking (skip if budget low — needs at least 3 more calls) ──
@@ -1344,6 +1370,19 @@ impl ChatPipeline {
                     } else {
                         Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
                     };
+                    m.retrieved_chunks = results
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| thairag_core::types::RetrievedChunkMeta {
+                            chunk_id: r.chunk.chunk_id.to_string(),
+                            doc_id: r.chunk.doc_id.to_string(),
+                            doc_title: None,
+                            content_preview: r.chunk.content.chars().take(200).collect(),
+                            score: r.score,
+                            rank: i as u32,
+                            contributed: true,
+                        })
+                        .collect();
                 });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);
@@ -1439,6 +1478,19 @@ impl ChatPipeline {
                     } else {
                         Some(results.iter().map(|r| r.score).sum::<f32>() / results.len() as f32)
                     };
+                    m.retrieved_chunks = results
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| thairag_core::types::RetrievedChunkMeta {
+                            chunk_id: r.chunk.chunk_id.to_string(),
+                            doc_id: r.chunk.doc_id.to_string(),
+                            doc_title: None,
+                            content_preview: r.chunk.content.chars().take(200).collect(),
+                            score: r.score,
+                            rank: i as u32,
+                            contributed: true,
+                        })
+                        .collect();
                 });
 
                 self.emit_progress(&progress, "context_curator", StageStatus::Started, None);

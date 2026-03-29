@@ -31,6 +31,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Build CLI
+        run: cargo build -p thairag-cli
+
   admin-ui:
     name: Admin UI Build
     runs-on: ubuntu-latest
@@ -49,12 +52,46 @@ jobs:
       - name: Build
         run: cd admin-ui && npm run build
 
+  typescript-sdk:
+    name: TypeScript SDK Type-Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: Install dependencies
+        run: cd sdks/typescript && npm install
+
+      - name: Type-check
+        run: cd sdks/typescript && npx tsc --noEmit
+
+  python-sdk:
+    name: Python SDK Import Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SDK
+        run: cd sdks/python && pip install -e .
+
+      - name: Import check
+        run: python -c "from thairag import ThaiRAGClient; print('ThaiRAGClient import OK')"
+
   # On PRs: just verify images build
   docker-build:
     name: Docker Build
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [check, admin-ui]
+    needs: [check, admin-ui, typescript-sdk, python-sdk]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,7 +103,7 @@ jobs:
     name: Publish Docker Images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    needs: [check, admin-ui]
+    needs: [check, admin-ui, typescript-sdk, python-sdk]
     permissions:
       contents: read
       packages: write

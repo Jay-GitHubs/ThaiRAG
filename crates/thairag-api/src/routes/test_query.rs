@@ -17,7 +17,7 @@ use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::routes::chat::build_searchable_scopes;
 use crate::routes::feedback;
-use crate::store::InferenceLogEntry;
+use crate::store::{InferenceLogEntry, LineageRecord, SearchAnalyticsEvent};
 
 #[derive(Deserialize)]
 pub struct TestQueryRequest {
@@ -354,6 +354,55 @@ pub async fn test_query(
         });
     }
 
+    // ── Search Analytics ──
+    {
+        let result_count = chunks_retrieved as u32;
+        let user_id_str = claims.sub.parse::<Uuid>().ok().map(|u| u.to_string());
+        let event = SearchAnalyticsEvent {
+            id: Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            query_text: req.query.chars().take(2000).collect(),
+            user_id: user_id_str,
+            workspace_id: Some(workspace_id.to_string()),
+            result_count,
+            latency_ms: search_ms,
+            zero_results: result_count == 0,
+        };
+        let store = state.km_store.clone();
+        tokio::spawn(async move {
+            store.insert_search_event(&event);
+        });
+    }
+
+    // ── Document Lineage ──
+    if !chunks.is_empty() {
+        let lineage_response_id = response_id.clone();
+        let lineage_query: String = req.query.chars().take(2000).collect();
+        let lineage_chunks = chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| LineageRecord {
+                id: Uuid::new_v4().to_string(),
+                response_id: lineage_response_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                query_text: lineage_query.clone(),
+                chunk_id: c.chunk_id.clone(),
+                doc_id: c.doc_id.clone(),
+                doc_title: c.doc_title.clone(),
+                chunk_text_preview: c.content.chars().take(200).collect(),
+                score: c.score,
+                rank: i as u32,
+                contributed: true,
+            })
+            .collect::<Vec<_>>();
+        let store = state.km_store.clone();
+        tokio::spawn(async move {
+            for record in &lineage_chunks {
+                store.insert_lineage_record(record);
+            }
+        });
+    }
+
     let provider_info = ProviderInfo {
         llm_kind,
         llm_model,
@@ -534,6 +583,26 @@ pub async fn test_query_stream(
             .collect();
         let chunks_retrieved = chunks.len();
 
+        // ── Search Analytics (streaming) ──
+        {
+            let result_count = chunks_retrieved as u32;
+            let user_id_str = claims.sub.parse::<Uuid>().ok().map(|u| u.to_string());
+            let event = SearchAnalyticsEvent {
+                id: Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                query_text: query_text.chars().take(2000).collect(),
+                user_id: user_id_str,
+                workspace_id: Some(workspace_id.to_string()),
+                result_count,
+                latency_ms: search_ms,
+                zero_results: result_count == 0,
+            };
+            let store = state_clone.km_store.clone();
+            tokio::spawn(async move {
+                store.insert_search_event(&event);
+            });
+        }
+
         // Step 2: Generate RAG answer — stream pipeline progress in real-time
         let golden_examples = feedback::load_golden_examples_for_workspace(
             &state_clone,
@@ -647,8 +716,41 @@ pub async fn test_query_stream(
                     (format!("{:?}", p.providers_config.llm.kind).to_lowercase(), p.providers_config.llm.model.clone())
                 };
 
+                let stream_response_id = Uuid::new_v4().to_string();
+
+                // ── Document Lineage (streaming) ──
+                if !chunks.is_empty() {
+                    let lineage_response_id = stream_response_id.clone();
+                    let lineage_query: String = chunks.first()
+                        .map(|_| query_text.chars().take(2000).collect())
+                        .unwrap_or_default();
+                    let lineage_chunks = chunks
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| LineageRecord {
+                            id: Uuid::new_v4().to_string(),
+                            response_id: lineage_response_id.clone(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            query_text: lineage_query.clone(),
+                            chunk_id: c.chunk_id.clone(),
+                            doc_id: c.doc_id.clone(),
+                            doc_title: c.doc_title.clone(),
+                            chunk_text_preview: c.content.chars().take(200).collect(),
+                            score: c.score,
+                            rank: i as u32,
+                            contributed: true,
+                        })
+                        .collect::<Vec<_>>();
+                    let store = state_clone.km_store.clone();
+                    tokio::spawn(async move {
+                        for record in &lineage_chunks {
+                            store.insert_lineage_record(record);
+                        }
+                    });
+                }
+
                 let response = TestQueryResponse {
-                    response_id: Uuid::new_v4().to_string(),
+                    response_id: stream_response_id,
                     query: query_text,
                     chunks,
                     answer: llm_resp.content,

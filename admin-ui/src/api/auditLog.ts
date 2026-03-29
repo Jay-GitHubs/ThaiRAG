@@ -12,10 +12,11 @@ export interface AuditLogEntry {
 }
 
 export interface AuditAnalytics {
-  by_action: { action: string; count: number }[];
-  by_day: { date: string; count: number }[];
+  actions_by_type: [string, number][];
+  actions_by_user: [string, number][];
+  events_per_day: [string, number][];
   total_events: number;
-  success_rate: number;
+  success_rate?: number;
 }
 
 export interface AuditLogFilter {
