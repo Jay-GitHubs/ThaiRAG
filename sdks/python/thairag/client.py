@@ -238,6 +238,253 @@ class ThaiRAGClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ── Search Analytics ───────────────────────────────────────────────
+
+    def get_search_analytics_popular(
+        self, from_date=None, to_date=None, limit=20
+    ) -> list:
+        """Get popular search queries."""
+        params = {"limit": limit}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        resp = self.session.get(
+            f"{self.base_url}/api/km/search-analytics/popular",
+            headers=self.headers,
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_search_analytics_summary(self, from_date=None, to_date=None) -> dict:
+        """Get search analytics summary."""
+        params = {}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        resp = self.session.get(
+            f"{self.base_url}/api/km/search-analytics/summary",
+            headers=self.headers,
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Lineage ────────────────────────────────────────────────────────
+
+    def get_lineage_by_response(self, response_id: str) -> list:
+        """Get lineage records for a response."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/lineage/response/{response_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_lineage_by_document(self, document_id: str) -> list:
+        """Get lineage records for a document."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/lineage/document/{document_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Audit Log ──────────────────────────────────────────────────────
+
+    def export_audit_log(
+        self, format="json", from_date=None, to_date=None, action=None
+    ):
+        """Export the audit log."""
+        params = {"format": format}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        if action:
+            params["action"] = action
+        resp = self.session.get(
+            f"{self.base_url}/api/km/settings/audit-log/export",
+            headers=self.headers,
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_audit_analytics(self, from_date=None, to_date=None) -> dict:
+        """Get audit log analytics."""
+        params = {}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        resp = self.session.get(
+            f"{self.base_url}/api/km/settings/audit-log/analytics",
+            headers=self.headers,
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Tenants ────────────────────────────────────────────────────────
+
+    def list_tenants(self) -> list:
+        """List all tenants."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/tenants", headers=self.headers
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_tenant(self, name: str, plan: str = "free") -> dict:
+        """Create a new tenant."""
+        resp = self.session.post(
+            f"{self.base_url}/api/km/tenants",
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"name": name, "plan": plan},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_tenant(self, tenant_id: str) -> None:
+        """Delete a tenant."""
+        resp = self.session.delete(
+            f"{self.base_url}/api/km/tenants/{tenant_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+
+    # ── Roles ──────────────────────────────────────────────────────────
+
+    def list_roles(self) -> list:
+        """List all custom roles."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/roles", headers=self.headers
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_role(
+        self, name: str, description: str = "", permissions=None
+    ) -> dict:
+        """Create a custom role."""
+        resp = self.session.post(
+            f"{self.base_url}/api/km/roles",
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={
+                "name": name,
+                "description": description,
+                "permissions": permissions or [],
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_role(self, role_id: str) -> None:
+        """Delete a custom role."""
+        resp = self.session.delete(
+            f"{self.base_url}/api/km/roles/{role_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+
+    # ── Prompt Marketplace ─────────────────────────────────────────────
+
+    def list_prompts(self, category=None, search=None) -> list:
+        """List prompt templates in the marketplace."""
+        params = {}
+        if category:
+            params["category"] = category
+        if search:
+            params["search"] = search
+        resp = self.session.get(
+            f"{self.base_url}/api/km/prompts/marketplace",
+            headers=self.headers,
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_prompt(
+        self,
+        name: str,
+        content: str,
+        category: str = "general",
+        variables=None,
+    ) -> dict:
+        """Create a prompt template."""
+        resp = self.session.post(
+            f"{self.base_url}/api/km/prompts/marketplace",
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={
+                "name": name,
+                "content": content,
+                "category": category,
+                "variables": variables or [],
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_prompt(self, prompt_id: str) -> None:
+        """Delete a prompt template."""
+        resp = self.session.delete(
+            f"{self.base_url}/api/km/prompts/marketplace/{prompt_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+
+    # ── Fine-tuning ────────────────────────────────────────────────────
+
+    def list_finetune_datasets(self) -> list:
+        """List fine-tuning datasets."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/finetune/datasets", headers=self.headers
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_finetune_dataset(
+        self, name: str, description: str = ""
+    ) -> dict:
+        """Create a fine-tuning dataset."""
+        resp = self.session.post(
+            f"{self.base_url}/api/km/finetune/datasets",
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"name": name, "description": description},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_finetune_jobs(self) -> list:
+        """List fine-tuning jobs."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/finetune/jobs", headers=self.headers
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Personal Memory ────────────────────────────────────────────────
+
+    def list_memories(self, user_id: str) -> list:
+        """List personal memories for a user."""
+        resp = self.session.get(
+            f"{self.base_url}/api/km/users/{user_id}/memories",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_memory(self, user_id: str, memory_id: str) -> None:
+        """Delete a personal memory for a user."""
+        resp = self.session.delete(
+            f"{self.base_url}/api/km/users/{user_id}/memories/{memory_id}",
+            headers=self.headers,
+        )
+        resp.raise_for_status()
+
     # ── Context manager ────────────────────────────────────────────────
 
     def close(self) -> None:
