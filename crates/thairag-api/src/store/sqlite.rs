@@ -3980,10 +3980,22 @@ impl KmStoreTrait for SqliteKmStore {
             .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
             .unwrap_or(0);
 
+        let queries_today: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_analytics_events sae \
+                 JOIN workspaces w ON sae.workspace_id = w.id \
+                 JOIN departments dp ON w.dept_id = dp.id \
+                 JOIN tenant_org_mapping tom ON dp.org_id = tom.org_id \
+                 WHERE tom.tenant_id = ?1 AND sae.timestamp >= date('now')",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
         super::TenantUsage {
             current_documents: current_documents as u64,
             current_storage_bytes: current_storage_bytes as u64,
-            queries_today: 0,
+            queries_today: queries_today as u64,
             current_users: current_users as u64,
             current_workspaces: current_workspaces as u64,
         }
