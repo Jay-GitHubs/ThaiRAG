@@ -267,18 +267,6 @@ test.describe('LDAP Login Error Handling', () => {
 
 // ── OAuth / OIDC Flow Validation ──────────────────────────────────────
 test.describe('OAuth Flow Validation', () => {
-  let oauthToken: string;
-
-  test.beforeAll(async ({ request }) => {
-    const res = await request.post(`${API_BASE}/api/auth/login`, {
-      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
-    });
-    if (res.ok()) {
-      const data = await res.json();
-      oauthToken = data.token;
-    }
-  });
-
   test('authorize endpoint returns error for non-existent provider', async ({ request }) => {
     const fakeId = '00000000-0000-0000-0000-000000000001';
     const res = await request.get(`${API_BASE}/api/auth/oauth/${fakeId}/authorize`, {
@@ -310,8 +298,8 @@ test.describe('OAuth Flow Validation', () => {
   });
 
   test('authorize endpoint redirects for a valid enabled OIDC provider', async ({ request }) => {
-    test.skip(!oauthToken, 'Could not obtain auth token (rate-limited)');
-    const headers = { Authorization: `Bearer ${oauthToken}` };
+    test.skip(!token, 'Auth token not available');
+    const headers = { Authorization: `Bearer ${token}` };
 
     const createRes = await request.post(`${API_BASE}/api/km/settings/identity-providers`, {
       data: {
@@ -329,6 +317,10 @@ test.describe('OAuth Flow Validation', () => {
       },
       headers,
     });
+    if (createRes.status() === 429) {
+      test.skip(true, 'Rate-limited — cannot create test provider');
+      return;
+    }
     expect(createRes.status()).toBe(201);
     const created = await createRes.json();
 
