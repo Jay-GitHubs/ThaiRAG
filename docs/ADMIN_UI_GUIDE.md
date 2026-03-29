@@ -26,6 +26,13 @@ The ThaiRAG Admin UI is a React + Ant Design application for managing the entire
 20. [Health](#health)
 21. [Config Snapshots](#config-snapshots)
 22. [Collapsible Settings](#collapsible-settings)
+23. [Search Analytics](#search-analytics)
+24. [Lineage](#lineage)
+25. [Audit Log](#audit-log)
+26. [Tenants](#tenants)
+27. [Roles](#roles)
+28. [Prompt Marketplace](#prompt-marketplace)
+29. [Fine-tuning](#fine-tuning)
 
 ## Access Control
 
@@ -689,6 +696,200 @@ All settings sections across the Admin UI use collapsible panels (Ant Design `Co
 All remaining settings tabs (Identity Providers, Chat Pipeline, Prompts, Vector DB, Ollama Management, Local Auth) wrap their content in collapsible sections following the same pattern.
 
 Sections remember their expanded/collapsed state within the current page session.
+
+---
+
+## Search Analytics
+
+**Path:** `/search-analytics` | **Min role:** `admin`
+
+Understand query patterns and retrieval health across all workspaces.
+
+### Summary Stats
+- Cards showing total queries, unique queries, average results per query, and zero-result rate over the selected date range
+
+### Popular Queries Table
+- Ranked list of the most frequently asked queries with hit count and average result count
+- Click any query to open a detail panel showing example responses and the chunks returned
+
+### Zero-Result Queries Table
+- Lists queries that returned no retrievable chunks, sorted by frequency
+- Helps identify gaps in the knowledge base — each row includes query text, timestamp, and workspace
+
+### Date Range Filter
+- Date picker in the page header filters all tables and stats cards simultaneously
+- Defaults to the last 7 days; presets for last 30 days and custom range
+
+**API endpoints used:**
+- `GET /api/search-analytics/summary` — aggregate stats
+- `GET /api/search-analytics/popular` — popular queries list
+- `GET /api/search-analytics/zero-results` — zero-result queries list
+
+---
+
+## Lineage
+
+**Path:** `/lineage` | **Min role:** `admin`
+
+Trace the provenance chain from a chat response back to the exact source chunks and documents that produced it.
+
+### By Response Tab
+- Enter a response ID (UUID) in the search box and click **Lookup**
+- Displays the lineage chain: Response → Retrieved Chunks → Source Documents
+- Each chunk card shows: chunk index, score, document name, workspace, and a snippet of the chunk text
+- Clicking a document name opens the document detail in the Documents page
+
+### By Document Tab
+- Enter a document ID to see all responses that were influenced by that document
+- Useful for auditing: "which answers were generated using this document?"
+- Table columns: Response ID, Query (truncated), Timestamp, Workspace, Relevance Score
+
+**API endpoints used:**
+- `GET /api/lineage/response/{id}` — fetch attribution chain for a response
+- `GET /api/lineage/document/{id}` — fetch responses attributed to a document
+
+---
+
+## Audit Log
+
+**Path:** `/audit-log` | **Min role:** `admin`
+
+Immutable log of all admin and user actions across the platform.
+
+### Log Browser Tab
+- Filterable table of audit events with columns: Timestamp, User, Action, Resource Type, Resource ID, Status (Success/Failure), IP Address
+- **Filters:** Date range, user email, action type (e.g., `document.upload`, `settings.update`), status
+- **Search:** Full-text search across action and resource fields
+- **Export:** Download the current filtered view as CSV or JSON
+
+### Analytics Tab
+- **Events by Action Type** — Bar chart breaking down event counts by action category
+- **Events per Day** — Line chart showing daily audit event volume over the selected date range
+- **Success Rate** — Donut chart showing the ratio of successful to failed actions
+- All charts respect the date range filter set in the tab header
+
+**API endpoints used:**
+- `GET /api/audit-log/events` — paginated event list with filter params
+- `GET /api/audit-log/analytics` — aggregated chart data
+- `GET /api/audit-log/export` — streaming CSV/JSON export
+
+---
+
+## Tenants
+
+**Path:** `/tenants` | **Min role:** `super_admin`
+
+Manage multi-tenant isolation for organizations hosted on the same ThaiRAG instance.
+
+### Tenant Table
+- Columns: **Name**, **Status** (Active / Suspended tag), **Plan**, **Created**, **Actions**
+- Click a tenant row to expand quota details inline
+
+### Create Tenant
+- Click **"Create Tenant"** to open a modal form
+- Fields: Tenant Name, Plan tier, initial Status
+- On save, an isolated database namespace and default workspace are provisioned automatically
+
+### Quota Management
+- Expand a tenant row to see current usage vs. quota limits:
+  - Documents, workspaces, monthly tokens, storage (MB)
+- Click **Edit Quotas** to adjust limits per tenant without changing the plan
+- Suspending a tenant blocks all API requests for that tenant while preserving data
+
+**API endpoints used:**
+- `GET /api/tenants` — list tenants
+- `POST /api/tenants` — create tenant
+- `PATCH /api/tenants/{id}` — update tenant (status, quotas)
+- `DELETE /api/tenants/{id}` — delete tenant with cascade confirmation
+
+---
+
+## Roles
+
+**Path:** `/roles` | **Min role:** `super_admin`
+
+Define custom roles with granular permission sets to supplement the built-in `viewer`, `editor`, `admin`, and `super_admin` roles.
+
+### Role List
+- Table showing role **Name**, **Description**, **Permission Count**, **Assigned Users**, and **Actions** (Edit, Delete)
+- Built-in roles are shown as read-only rows; only custom roles can be edited or deleted
+
+### Create Role
+- Click **"Create Role"** to open the role editor
+- Enter a name and optional description, then configure permissions in the matrix grid
+
+### Permission Matrix Grid
+- Rows represent resource types (Documents, Workspaces, Users, Settings, Connectors, etc.)
+- Columns represent actions (Read, Write, Delete, Admin)
+- Toggle individual cells to grant or deny that action on that resource type
+- Changes are previewed live in a summary list before saving
+
+**API endpoints used:**
+- `GET /api/roles` — list all roles
+- `POST /api/roles` — create custom role
+- `PUT /api/roles/{id}` — update role permissions
+- `DELETE /api/roles/{id}` — delete custom role
+
+---
+
+## Prompt Marketplace
+
+**Path:** `/prompt-marketplace` | **Min role:** `editor`
+
+Browse, create, and manage reusable prompt templates that can be applied to any workspace or pipeline stage.
+
+### Browse Grid
+- Card grid layout showing all available templates
+- Each card displays: Template name, category tag (e.g., Customer Support, Legal, HR), author, and a short description
+- Click a card to open a detail drawer with the full prompt text and usage instructions
+
+### Filtering and Search
+- **Category filter** — Dropdown to filter templates by category
+- **Search box** — Full-text search across template names and descriptions
+- **My Templates** toggle — Show only templates created by the logged-in user
+
+### Create Template
+- Click **"Create Template"** to open the template editor
+- Fields: Name, Category, Description, Prompt Text (with variable placeholder support `{{variable_name}}`), Visibility (public / private)
+- **Test** button previews the prompt with sample variable values before saving
+
+**API endpoints used:**
+- `GET /api/prompt-marketplace/templates` — list templates with optional filters
+- `POST /api/prompt-marketplace/templates` — create template
+- `PUT /api/prompt-marketplace/templates/{id}` — update template
+- `DELETE /api/prompt-marketplace/templates/{id}` — delete template
+
+---
+
+## Fine-tuning
+
+**Path:** `/fine-tuning` | **Min role:** `super_admin`
+
+Prepare training datasets from feedback and golden examples, then launch fine-tuning jobs against compatible LLM providers.
+
+### Datasets Tab
+- Table showing all training datasets with columns: Name, Source (golden examples / feedback / manual), Record Count, Created, Status
+- **Create Dataset** button opens a modal to:
+  - Name the dataset
+  - Choose source: export golden examples, export positive feedback pairs, or upload a JSONL file
+  - Preview a sample of the records before confirming
+- Datasets are stored as JSONL files and can be downloaded at any time
+
+### Jobs Tab
+- Table showing fine-tuning jobs with columns: Job ID, Dataset, Provider, Model, Status (Pending / Running / Completed / Failed), Started, Duration
+- **Create Job** button opens a form to:
+  - Select a dataset
+  - Choose the provider (OpenAI, Ollama) and base model
+  - Set hyperparameters: epochs, learning rate multiplier, batch size
+- Running jobs display a progress bar with estimated completion time
+- Completed jobs show the resulting fine-tuned model ID, which can be copied into the LLM Provider settings
+
+**API endpoints used:**
+- `GET /api/fine-tuning/datasets` — list datasets
+- `POST /api/fine-tuning/datasets` — create dataset
+- `GET /api/fine-tuning/jobs` — list jobs
+- `POST /api/fine-tuning/jobs` — create and start a fine-tuning job
+- `GET /api/fine-tuning/jobs/{id}` — poll job status
 
 ---
 

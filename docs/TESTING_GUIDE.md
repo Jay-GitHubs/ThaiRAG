@@ -27,6 +27,13 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 17. [Smoke Testing](#17-smoke-testing) — end-to-end smoke test script
 18. [Context Compaction & Personal Memory](#18-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
 19. [Open WebUI Permission Enforcement](#19-open-webui-permission-enforcement) — user identity passthrough, per-user scoping, revocation, SSE keepalive
+20. [Live Source Retrieval](#20-live-source-retrieval) — MCP connector fallback, timeout handling, feature toggle
+21. [Search Analytics](#21-search-analytics) — event recording, popular queries, zero-result queries, summary stats, date filtering
+22. [Document Lineage](#22-document-lineage) — attribution chain, chunks used in responses, lineage record creation
+23. [Audit Log Export & Analytics](#23-audit-log-export--analytics) — JSON/CSV export, action analytics, date range and type filtering
+24. [Multi-tenancy & RBAC v2](#24-multi-tenancy--rbac-v2) — tenant CRUD, quota management, custom role CRUD, role assignment
+25. [Prompt Marketplace & Fine-tuning](#25-prompt-marketplace--fine-tuning) — prompt template CRUD, rating, forking, finetune datasets, job listing
+26. [Automated E2E Testing (Phase 6)](#26-automated-e2e-testing-phase-6) — Phase 6 Playwright test suite, test files, running instructions
 
 ---
 
@@ -3180,3 +3187,396 @@ curl -X PUT http://localhost:8080/api/km/settings/chat-pipeline \
 - No `live_retrieval` pipeline stage appears
 - The response is the standard "I don't have enough information" message
 - Zero additional latency from live retrieval
+
+---
+
+## 21. Search Analytics
+
+### Purpose
+
+Verify that the system records search events after chat queries and exposes analytics endpoints for popular queries, zero-result queries, and summary statistics.
+
+### Prerequisites
+
+- ThaiRAG API running and authenticated (`TOKEN` set)
+- At least one chat query sent so there are recorded events to retrieve
+- Super admin credentials
+
+### 21.1 Verify Search Events Are Recorded
+
+Send a chat query to generate a search event:
+
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","messages":[{"role":"user","content":"What is ThaiRAG?"}],"stream":false}' \
+  | jq '.choices[0].message.content'
+```
+
+**Pass criteria:** Response returns without error; a search event is now recorded internally.
+
+### 21.2 Popular Queries
+
+```bash
+curl -s http://localhost:8080/api/km/search-analytics/popular \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns a JSON array of query strings with hit counts, ordered by frequency descending.
+
+### 21.3 Zero-Result Queries
+
+```bash
+curl -s http://localhost:8080/api/km/search-analytics/zero-results \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns a JSON array of queries that returned no knowledge-base results. The list may be empty if all queries matched documents.
+
+### 21.4 Summary Statistics
+
+```bash
+curl -s http://localhost:8080/api/km/search-analytics/summary \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Response includes total query count, unique query count, zero-result count, and average results per query.
+
+### 21.5 Date Range Filtering
+
+```bash
+FROM=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+curl -s "http://localhost:8080/api/km/search-analytics/popular?from=${FROM}&to=${TO}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Only events within the specified date range are returned. Queries outside the window are excluded.
+
+---
+
+## 22. Document Lineage
+
+### Purpose
+
+Verify that the system records which document chunks contributed to a response and exposes lineage endpoints for both the response side and the document side.
+
+### Prerequisites
+
+- ThaiRAG API running and authenticated (`TOKEN` set)
+- At least one document ingested and one RAG chat query completed so lineage records exist
+- Workspace ID available (`WS_ID`)
+
+### 22.1 Lineage Records Are Created After a Chat Query
+
+Send a RAG query and capture the response ID:
+
+```bash
+RESPONSE=$(curl -s http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","messages":[{"role":"user","content":"Summarize the uploaded document."}],"stream":false}')
+
+RESP_ID=$(echo "$RESPONSE" | jq -r '.id')
+echo "Response ID: $RESP_ID"
+```
+
+**Pass criteria:** The `id` field is present in the response. The system has recorded which chunks were used.
+
+### 22.2 Attribution Chain for a Response
+
+```bash
+curl -s "http://localhost:8080/api/km/lineage/response/${RESP_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns a list of chunk references (document ID, chunk index, relevance score) that contributed to this response.
+
+### 22.3 Chunks Used Per Document
+
+```bash
+# Replace DOC_ID with an actual document ID from section 6
+curl -s "http://localhost:8080/api/km/lineage/document/${DOC_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns a list of response IDs and timestamps where chunks from this document were cited.
+
+---
+
+## 23. Audit Log Export & Analytics
+
+### Purpose
+
+Verify that audit log entries can be exported in JSON and CSV formats, and that the analytics endpoint provides aggregated action counts by type, user, and day.
+
+### Prerequisites
+
+- ThaiRAG API running and authenticated as super admin (`TOKEN` set)
+- Some system actions already performed (login, document upload, settings change) so the audit log is populated
+
+### 23.1 Export Audit Log as JSON
+
+```bash
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=json" \
+  -H "Authorization: Bearer $TOKEN" | jq '.[0:3]'
+```
+
+**Pass criteria:** Returns a JSON array of audit entries. Each entry has `id`, `action`, `user_id`, `timestamp`, and `details` fields.
+
+### 23.2 Export Audit Log as CSV
+
+```bash
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=csv" \
+  -H "Authorization: Bearer $TOKEN" | head -5
+```
+
+**Pass criteria:** First line is a CSV header row (`id,action,user_id,timestamp,...`). Subsequent lines are comma-separated data rows.
+
+### 23.3 Audit Log Analytics
+
+```bash
+curl -s "http://localhost:8080/api/km/settings/audit-log/analytics" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns aggregated counts broken down by action type (e.g., `login`, `document_upload`, `settings_change`), by user ID, and by day.
+
+### 23.4 Date Range and Action Type Filtering
+
+```bash
+FROM=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+TO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=json&from=${FROM}&to=${TO}&action=login" \
+  -H "Authorization: Bearer $TOKEN" | jq 'length'
+```
+
+**Pass criteria:** Only `login` actions within the last 7 days are returned. Entries outside the date range or with a different action type are excluded.
+
+---
+
+## 24. Multi-tenancy & RBAC v2
+
+### Purpose
+
+Verify tenant isolation, quota management, and custom role CRUD with fine-grained permission matrices.
+
+### Prerequisites
+
+- ThaiRAG API running and authenticated as super admin (`TOKEN` set)
+
+### 24.1 Tenant CRUD
+
+```bash
+# Create a tenant
+TENANT=$(curl -s -X POST http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Acme Corp","slug":"acme"}')
+TENANT_ID=$(echo "$TENANT" | jq -r '.id')
+echo "Tenant ID: $TENANT_ID"
+
+# Read
+curl -s "http://localhost:8080/api/km/tenants/${TENANT_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq '{id,name,slug}'
+
+# Update
+curl -s -X PUT "http://localhost:8080/api/km/tenants/${TENANT_ID}" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Acme Corporation"}' | jq '{id,name}'
+
+# Delete
+curl -s -X DELETE "http://localhost:8080/api/km/tenants/${TENANT_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Create returns `201` with tenant object; read returns the tenant; update reflects name change; delete returns `204` or success message.
+
+### 24.2 Tenant Quota Management
+
+```bash
+curl -s -X PUT "http://localhost:8080/api/km/tenants/${TENANT_ID}/quota" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"max_documents":500,"max_storage_mb":2048,"max_users":50}' | jq .
+```
+
+**Pass criteria:** Quota is updated and reflected when reading the tenant. Exceeding the quota on document upload returns a `429` or `403` with a quota-exceeded message.
+
+### 24.3 Custom Role CRUD
+
+```bash
+# Create role
+ROLE=$(curl -s -X POST http://localhost:8080/api/km/roles \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"analyst","permissions":["documents:read","search:read"]}')
+ROLE_ID=$(echo "$ROLE" | jq -r '.id')
+
+# List roles
+curl -s http://localhost:8080/api/km/roles \
+  -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+
+# Update role permissions
+curl -s -X PUT "http://localhost:8080/api/km/roles/${ROLE_ID}" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"permissions":["documents:read","search:read","analytics:read"]}' | jq .
+
+# Delete role
+curl -s -X DELETE "http://localhost:8080/api/km/roles/${ROLE_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Role is created with the specified permissions; list includes the new role; update reflects added permissions; delete removes the role.
+
+### 24.4 Role Assignment and Permission Matrix
+
+```bash
+# Assign role to a user (replace USER_ID and ROLE_ID)
+curl -s -X POST "http://localhost:8080/api/km/users/${USER_ID}/roles" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"role_id\":\"${ROLE_ID}\"}" | jq .
+```
+
+**Pass criteria:** User now has the permissions defined in the assigned role. Accessing a protected endpoint with that user's token succeeds for allowed actions and returns `403` for denied actions.
+
+---
+
+## 25. Prompt Marketplace & Fine-tuning
+
+### Purpose
+
+Verify prompt template CRUD, community rating and forking, fine-tuning dataset management, and job listing.
+
+### Prerequisites
+
+- ThaiRAG API running and authenticated (`TOKEN` set)
+- Super admin credentials for write operations
+
+### 25.1 Prompt Template CRUD
+
+```bash
+# Create
+PROMPT=$(curl -s -X POST http://localhost:8080/api/km/prompts/marketplace \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Concise Summarizer","description":"Summarize in 3 bullets","template":"Summarize the following in 3 bullet points:\n\n{context}","tags":["summarization","concise"]}')
+PROMPT_ID=$(echo "$PROMPT" | jq -r '.id')
+echo "Prompt ID: $PROMPT_ID"
+
+# List all templates
+curl -s http://localhost:8080/api/km/prompts/marketplace \
+  -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+
+# Delete
+curl -s -X DELETE "http://localhost:8080/api/km/prompts/marketplace/${PROMPT_ID}" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Template is created and appears in the listing; delete removes it from the list.
+
+### 25.2 Template Rating and Forking
+
+```bash
+# Rate a template (1-5)
+curl -s -X POST "http://localhost:8080/api/km/prompts/marketplace/${PROMPT_ID}/rate" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"rating":5}' | jq .
+
+# Fork a template into a private copy
+FORK=$(curl -s -X POST "http://localhost:8080/api/km/prompts/marketplace/${PROMPT_ID}/fork" \
+  -H "Authorization: Bearer $TOKEN" | jq .)
+echo "$FORK" | jq '{id,name,forked_from}'
+```
+
+**Pass criteria:** Rating returns updated average rating; fork returns a new template with `forked_from` referencing the original ID.
+
+### 25.3 Fine-tuning Dataset CRUD
+
+```bash
+# Create dataset
+DATASET=$(curl -s -X POST http://localhost:8080/api/km/finetune/datasets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Q&A Dataset v1","description":"Curated QA pairs from support tickets"}')
+DATASET_ID=$(echo "$DATASET" | jq -r '.id')
+
+# List datasets
+curl -s http://localhost:8080/api/km/finetune/datasets \
+  -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+```
+
+**Pass criteria:** Dataset is created and appears in the listing with the correct name and description.
+
+### 25.4 Fine-tuning Job Listing
+
+```bash
+curl -s http://localhost:8080/api/km/finetune/jobs \
+  -H "Authorization: Bearer $TOKEN" | jq .
+```
+
+**Pass criteria:** Returns a JSON array of fine-tuning jobs (may be empty). Each job entry includes `id`, `dataset_id`, `status`, and `created_at` fields.
+
+---
+
+## 26. Automated E2E Testing (Phase 6)
+
+### Purpose
+
+Document and execute the Playwright e2e test suite that covers all Phase 6 features — search analytics, document lineage, audit export, multi-tenancy, prompt marketplace, fine-tuning, and per-agent LLM configuration.
+
+### Prerequisites
+
+- ThaiRAG API running on port 8080
+- Admin UI running on port 8081 (`docker compose up -d` or `cd admin-ui && npm run dev`)
+- Node.js 18+ and Playwright installed (`cd admin-ui && npm install`)
+- Fresh or known-good database state (first registered user becomes super_admin)
+
+### 26.1 Test Files and Coverage
+
+| File | Tests | Description |
+|------|-------|-------------|
+| `e2e/phase6.spec.ts` | 38 | UI tests for all Phase 6 pages: search analytics dashboard, lineage viewer, audit export, tenant management, role management, prompt marketplace, fine-tuning |
+| `e2e/auth-providers.spec.ts` | 21 | Identity provider CRUD, OAuth flow configuration, SSO enable/disable, UI validation |
+| `e2e/multi-doc-chat.spec.ts` | 4 | Multi-document RAG stress tests — upload multiple docs, query across them, verify attribution (requires Qdrant + LLM) |
+| `e2e/per-agent-llm.spec.ts` | 2 | Verify per-agent LLM model configuration is saved and reflected in the pipeline settings UI |
+| `e2e/pipeline-stages.spec.ts` | 4 | Pipeline stage visibility in SSE streaming responses and correct rendering in the test chat UI |
+
+### 26.2 Running the Phase 6 Test Suite
+
+```bash
+cd admin-ui
+
+# Run all tests in headed mode (recommended for initial verification)
+npx playwright test --headed
+
+# Run only Phase 6 tests
+npx playwright test e2e/phase6.spec.ts --headed
+
+# Run all tests headless (CI mode)
+npx playwright test
+```
+
+### 26.3 Infrastructure-dependent Tests
+
+Some tests require external services (Qdrant vector database and a running LLM):
+
+- `multi-doc-chat.spec.ts` — requires Qdrant on port 6333 and an LLM provider responding on the configured base URL
+- `per-agent-llm.spec.ts` — requires the LLM provider to be reachable for model list validation
+
+**Graceful skip behavior:** When the required services are not available, these tests automatically skip rather than fail. This allows the full suite to run in minimal environments (e.g., free tier with in-memory vector store) without blocking CI.
+
+To confirm which tests were skipped vs. passed:
+
+```bash
+npx playwright test --reporter=list 2>&1 | grep -E '(skipped|passed|failed)'
+```
+
+**Pass criteria:** All non-infrastructure tests pass. Infrastructure-dependent tests either pass (when services are available) or are marked as skipped (when services are absent). Zero unexpected failures.

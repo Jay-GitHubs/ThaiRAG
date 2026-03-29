@@ -37,7 +37,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Background Job Queue** — Async job processing with SSE streaming for progress updates
 - **Redis Backends** — Optional Redis for session storage, embedding cache, and job queue (horizontal scaling)
 - **Advanced RAG** — Self-RAG, Corrective RAG, Speculative RAG, Map-Reduce RAG, RAPTOR, ColBERT reranking, Active Learning, Context Compaction, Personal Memory
-- **Admin UI** — React + Ant Design dashboard for managing the entire platform (19+ pages) with pipeline stages visualization and config snapshots management
+- **Admin UI** — React + Ant Design dashboard for managing the entire platform (25+ pages) with pipeline stages visualization and config snapshots management
 - **Dark Mode + i18n** — Light/dark theme toggle with Thai and English localization
 - **Mobile Responsive UI** — Admin UI adapts to mobile and tablet screen sizes
 - **Rate Limiting Dashboard** — Real-time rate limit analytics and per-client usage stats
@@ -344,7 +344,7 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 | Document | Description |
 |----------|-------------|
 | [Architecture Guide](docs/ARCHITECTURE.md) | Crate dependency graph, data flow, pipeline design |
-| [Admin UI Guide](docs/ADMIN_UI_GUIDE.md) | Complete manual for all 19+ admin pages |
+| [Admin UI Guide](docs/ADMIN_UI_GUIDE.md) | Complete manual for all 25+ admin pages |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Docker, configuration, production setup |
 | [API Reference](docs/API_REFERENCE.md) | All endpoints with request/response schemas |
 | [Integration Guide](docs/INTEGRATION_GUIDE.md) | Open WebUI, OIDC/SSO, external systems |
@@ -356,14 +356,17 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 ## Testing
 
 ```bash
-# Backend tests (326+ tests)
+# Backend tests (332+ tests)
 cargo test
 
 # Admin UI type check
 cd admin-ui && npx tsc --noEmit
 
-# Playwright e2e tests (48+ tests)
+# Playwright e2e tests (173+ tests)
 cd admin-ui && npx playwright test
+
+# Load tests (requires k6)
+cd tests/load && k6 run k6-smoke.js
 ```
 
 ## License
