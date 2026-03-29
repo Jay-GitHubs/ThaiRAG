@@ -105,3 +105,80 @@ export interface ChatOptions {
   max_tokens?: number;
   [key: string]: unknown;
 }
+
+export interface SearchAnalyticsPopular {
+  query: string;
+  count: number;
+}
+
+export interface SearchAnalyticsSummary {
+  total_queries: number;
+  avg_latency_ms: number;
+  zero_result_rate: number;
+}
+
+export interface LineageRecord {
+  response_id: string;
+  chunk_id: string;
+  doc_id: string;
+  score: number;
+  rank: number;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  user_email?: string;
+  action: string;
+  detail: string;
+  success: boolean;
+}
+
+export interface AuditAnalytics {
+  actions_by_type: [string, number][];
+  events_per_day: [string, number][];
+  total_events: number;
+  success_rate?: number;
+}
+
+export interface Tenant {
+  id: string;
+  name: string;
+  plan: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Permission {
+  resource: string;
+  actions: string[];
+}
+
+export interface CustomRole {
+  id: string;
+  name: string;
+  description: string;
+  permissions: Permission[];
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  content: string;
+  category: string;
+  variables: string[];
+}
+
+export interface FinetuneDataset {
+  id: string;
+  name: string;
+  description: string;
+  pair_count: number;
+}
+
+export interface FinetuneJob {
+  id: string;
+  dataset_id: string;
+  status: string;
+  created_at: string;
+}

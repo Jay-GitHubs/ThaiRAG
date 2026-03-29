@@ -3534,9 +3534,9 @@ impl KmStoreTrait for PostgresKmStore {
         let row = block_on(async {
             sqlx::query(&format!(
                 "SELECT COUNT(*) as total,
-                 SUM(CASE WHEN zero_results THEN 1 ELSE 0 END) as zero_cnt,
-                 AVG(latency_ms::FLOAT) as avg_latency,
-                 AVG(result_count::FLOAT) as avg_results
+                 COALESCE(SUM(CASE WHEN zero_results THEN 1 ELSE 0 END), 0) as zero_cnt,
+                 COALESCE(AVG(latency_ms::FLOAT), 0) as avg_latency,
+                 COALESCE(AVG(result_count::FLOAT), 0) as avg_results
                  FROM search_analytics_events {where_clause}"
             ))
             .fetch_optional(&self.pool)
