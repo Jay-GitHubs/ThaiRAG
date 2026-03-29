@@ -104,6 +104,7 @@ pub const SUPPORTED_MIME_TYPES: &[&str] = &[
     "image/png",
     "image/jpeg",
     "image/webp",
+    "image/gif",
 ];
 
 impl DocumentProcessor for MarkdownConverter {
@@ -122,7 +123,7 @@ impl DocumentProcessor for MarkdownConverter {
                 convert_xlsx(raw)
             }
             // Image types: return a placeholder — actual description is done by the pipeline
-            "image/png" | "image/jpeg" | "image/webp" => {
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
                 Ok(format!("[Image: {mime_type}, {} bytes]", raw.len()))
             }
             _ => Err(ThaiRagError::Validation(format!(

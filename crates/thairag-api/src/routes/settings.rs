@@ -700,6 +700,11 @@ pub async fn update_provider_config(
 
     tracing::info!("Provider config updated and hot-reloaded by super admin");
 
+    state.webhook_dispatcher.dispatch(
+        thairag_core::types::WebhookEvent::SettingsChanged,
+        serde_json::json!({ "section": "providers" }),
+    );
+
     Ok(Json(config_to_response(&pc)))
 }
 
@@ -2081,6 +2086,11 @@ pub async fn update_document_config(
         }
     }
 
+    state.webhook_dispatcher.dispatch(
+        thairag_core::types::WebhookEvent::SettingsChanged,
+        serde_json::json!({ "section": "document" }),
+    );
+
     Ok(Json(DocumentConfigResponse {
         max_chunk_size: eff_max_chunk_size,
         chunk_overlap: eff_chunk_overlap,
@@ -3299,6 +3309,11 @@ pub async fn update_chat_pipeline_config(
             }
         }
     }
+
+    state.webhook_dispatcher.dispatch(
+        thairag_core::types::WebhookEvent::SettingsChanged,
+        serde_json::json!({ "section": "chat_pipeline" }),
+    );
 
     let eff_response = get_effective_chat_pipeline_scoped(&state.config, &*state.km_store, &scope);
     Ok(Json(build_chat_pipeline_response_from_config(

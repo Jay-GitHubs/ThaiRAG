@@ -386,6 +386,10 @@ pub struct ChunkMetadata {
     /// Content type of this chunk (text, image, table, mixed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<DocumentContentType>,
+    /// MIME type of the source content (e.g. "image/png", "image/jpeg").
+    /// Set for image chunks; absent for text chunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
 }
 
 // ── AI Document Preprocessing Types ─────────────────────────────────
@@ -946,6 +950,7 @@ pub enum WebhookEvent {
     DocumentIngested,
     SyncCompleted,
     SyncFailed,
+    SettingsChanged,
 }
 
 impl std::fmt::Display for WebhookEvent {
@@ -956,6 +961,7 @@ impl std::fmt::Display for WebhookEvent {
             Self::DocumentIngested => write!(f, "document_ingested"),
             Self::SyncCompleted => write!(f, "sync_completed"),
             Self::SyncFailed => write!(f, "sync_failed"),
+            Self::SettingsChanged => write!(f, "settings_changed"),
         }
     }
 }

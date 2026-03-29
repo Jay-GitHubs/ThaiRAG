@@ -272,15 +272,12 @@ impl DocumentPipeline {
             } else {
                 // No LLM configured — use metadata placeholder
                 let meta = image::extract_image_metadata(raw, mime_type);
-                format!(
-                    "[Image: {} format, {} bytes, no vision LLM configured]",
-                    meta.format, meta.size_bytes
-                )
+                image::format_placeholder_description(&meta)
             }
         } else {
             // Image description disabled — use metadata placeholder
             let meta = image::extract_image_metadata(raw, mime_type);
-            format!("[Image: {} format, {} bytes]", meta.format, meta.size_bytes)
+            image::format_placeholder_description(&meta)
         };
 
         let metadata = image::extract_image_metadata(raw, mime_type);
@@ -302,6 +299,7 @@ impl DocumentPipeline {
             metadata: Some(ChunkMetadata {
                 content_type: Some(DocumentContentType::Image),
                 chunk_type: Some("image_description".to_string()),
+                mime_type: Some(mime_type.to_string()),
                 ..Default::default()
             }),
         }])
@@ -431,5 +429,139 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].content, "Hello async");
         assert!(chunks[0].metadata.is_none());
+    }
+
+    /// Build a minimal valid PNG in memory (1x1 white pixel, no actual IDAT compression).
+    fn make_minimal_png(width: u32, height: u32) -> Vec<u8> {
+        let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        // IHDR length = 13
+        data.extend_from_slice(&13u32.to_be_bytes());
+        data.extend_from_slice(b"IHDR");
+        data.extend_from_slice(&width.to_be_bytes());
+        data.extend_from_slice(&height.to_be_bytes());
+        // bit depth, color type, compression, filter, interlace
+        data.extend_from_slice(&[8, 2, 0, 0, 0]);
+        // CRC placeholder (4 bytes)
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        data
+    }
+
+    /// Build a minimal valid GIF89a header for the given dimensions.
+    fn make_minimal_gif(width: u16, height: u16) -> Vec<u8> {
+        let mut data = b"GIF89a".to_vec();
+        data.extend_from_slice(&width.to_le_bytes());
+        data.extend_from_slice(&height.to_le_bytes());
+        // packed field, bg color index, pixel aspect ratio
+        data.extend_from_slice(&[0x00, 0x00, 0x00]);
+        data
+    }
+
+    #[tokio::test]
+    async fn process_image_png_creates_single_chunk_with_metadata() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let png_bytes = make_minimal_png(640, 480);
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let chunks = pipeline
+            .process(&png_bytes, "image/png", doc_id, ws_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(chunks.len(), 1, "Image should produce exactly one chunk");
+        assert_eq!(chunks[0].doc_id, doc_id);
+        assert_eq!(chunks[0].workspace_id, ws_id);
+        assert_eq!(chunks[0].chunk_index, 0);
+
+        // Content should contain format and dimension info
+        let content = &chunks[0].content;
+        assert!(
+            content.contains("PNG"),
+            "Content should mention PNG format, got: {content}"
+        );
+        assert!(
+            content.contains("640x480"),
+            "Content should mention dimensions, got: {content}"
+        );
+
+        // Metadata should mark this as an image chunk
+        let meta = chunks[0]
+            .metadata
+            .as_ref()
+            .expect("Image chunk must have metadata");
+        assert_eq!(
+            meta.content_type,
+            Some(thairag_core::types::DocumentContentType::Image)
+        );
+        assert_eq!(meta.chunk_type.as_deref(), Some("image_description"));
+        assert_eq!(meta.mime_type.as_deref(), Some("image/png"));
+    }
+
+    #[tokio::test]
+    async fn process_image_gif_creates_single_chunk_with_metadata() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let gif_bytes = make_minimal_gif(320, 240);
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let chunks = pipeline
+            .process(&gif_bytes, "image/gif", doc_id, ws_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            chunks.len(),
+            1,
+            "GIF image should produce exactly one chunk"
+        );
+
+        let content = &chunks[0].content;
+        assert!(
+            content.contains("GIF"),
+            "Content should mention GIF format, got: {content}"
+        );
+        assert!(
+            content.contains("320x240"),
+            "Content should mention dimensions, got: {content}"
+        );
+
+        let meta = chunks[0]
+            .metadata
+            .as_ref()
+            .expect("Image chunk must have metadata");
+        assert_eq!(
+            meta.content_type,
+            Some(thairag_core::types::DocumentContentType::Image)
+        );
+        assert_eq!(meta.mime_type.as_deref(), Some("image/gif"));
+    }
+
+    #[tokio::test]
+    async fn process_image_jpeg_fallback_for_unknown_dims() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        // Use fake JPEG bytes (no valid SOF marker, so dims will be None)
+        let fake_jpeg = b"\xFF\xD8\xFF\xE0fake jpeg content";
+        let doc_id = DocId::new();
+        let ws_id = WorkspaceId::new();
+
+        let chunks = pipeline
+            .process(fake_jpeg, "image/jpeg", doc_id, ws_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(chunks.len(), 1);
+        let content = &chunks[0].content;
+        assert!(
+            content.contains("JPEG"),
+            "Content should mention JPEG format, got: {content}"
+        );
+        // When dims are unknown the placeholder says "unknown"
+        assert!(
+            content.contains("unknown"),
+            "Content should mention unknown dims, got: {content}"
+        );
+
+        let meta = chunks[0].metadata.as_ref().unwrap();
+        assert_eq!(meta.mime_type.as_deref(), Some("image/jpeg"));
     }
 }
