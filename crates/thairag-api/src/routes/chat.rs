@@ -25,7 +25,7 @@ use thairag_core::types::{
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::routes::feedback;
-use crate::store::InferenceLogEntry;
+use crate::store::{InferenceLogEntry, LineageRecord, SearchAnalyticsEvent};
 
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -620,7 +620,7 @@ async fn handle_non_stream(
     let response_id = format!("chatcmpl-{}", Uuid::new_v4());
     let response_length = llm_resp.content.len() as u32;
 
-    // ── Inference Logging ──────────────────────────────────────────
+    // ── Inference Logging + Analytics ─────────────────────────────
     {
         let total_ms = request_start.elapsed().as_millis() as u64;
         let meta = metadata_cell.lock().unwrap().clone();
@@ -641,9 +641,9 @@ async fn handle_non_stream(
             session_id: session_id.map(|s| s.0.to_string()),
             response_id: response_id.clone(),
             query_text: user_query.chars().take(2000).collect(),
-            detected_language: meta.language,
-            intent: meta.intent,
-            complexity: meta.complexity,
+            detected_language: meta.language.clone(),
+            intent: meta.intent.clone(),
+            complexity: meta.complexity.clone(),
             llm_kind,
             llm_model,
             settings_scope: format!("{:?}", settings_scope),
@@ -654,13 +654,13 @@ async fn handle_non_stream(
             generation_ms: meta.generation_ms,
             chunks_retrieved: meta.chunks_retrieved,
             avg_chunk_score: meta.avg_chunk_score,
-            self_rag_decision: meta.self_rag_decision,
+            self_rag_decision: meta.self_rag_decision.clone(),
             self_rag_confidence: meta.self_rag_confidence,
             quality_guard_pass: meta.quality_guard_pass,
             relevance_score: meta.relevance_score,
             hallucination_score: meta.hallucination_score,
             completeness_score: meta.completeness_score,
-            pipeline_route: meta.pipeline_route,
+            pipeline_route: meta.pipeline_route.clone(),
             agents_used: serde_json::to_string(
                 &pipeline_stages.iter().map(|s| &s.stage).collect::<Vec<_>>(),
             )
@@ -670,6 +670,53 @@ async fn handle_non_stream(
             response_length,
             feedback_score: None,
         };
+
+        // ── Search Analytics ──
+        if let Some(search_ms) = meta.search_ms {
+            let result_count = meta.chunks_retrieved.unwrap_or(0);
+            let event = SearchAnalyticsEvent {
+                id: Uuid::new_v4().to_string(),
+                timestamp: Utc::now().to_rfc3339(),
+                query_text: user_query.chars().take(2000).collect(),
+                user_id: user_id.map(|u| u.0.to_string()),
+                workspace_id: scope.workspace_ids.first().map(|w| w.0.to_string()),
+                result_count,
+                latency_ms: search_ms,
+                zero_results: result_count == 0,
+            };
+            let store = state.km_store.clone();
+            tokio::spawn(async move {
+                store.insert_search_event(&event);
+            });
+        }
+
+        // ── Document Lineage ──
+        if !meta.retrieved_chunks.is_empty() {
+            let lineage_response_id = response_id.clone();
+            let lineage_query = user_query.chars().take(2000).collect::<String>();
+            let chunk_metas = meta.retrieved_chunks.clone();
+            let store = state.km_store.clone();
+            tokio::spawn(async move {
+                let now = chrono::Utc::now().to_rfc3339();
+                for chunk in &chunk_metas {
+                    let record = LineageRecord {
+                        id: Uuid::new_v4().to_string(),
+                        response_id: lineage_response_id.clone(),
+                        timestamp: now.clone(),
+                        query_text: lineage_query.clone(),
+                        chunk_id: chunk.chunk_id.clone(),
+                        doc_id: chunk.doc_id.clone(),
+                        doc_title: chunk.doc_title.clone(),
+                        chunk_text_preview: chunk.content_preview.clone(),
+                        score: chunk.score,
+                        rank: chunk.rank,
+                        contributed: chunk.contributed,
+                    };
+                    store.insert_lineage_record(&record);
+                }
+            });
+        }
+
         let store = state.km_store.clone();
         tokio::spawn(async move {
             store.insert_inference_log(&entry);
@@ -1011,7 +1058,7 @@ async fn handle_stream(
         };
         yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap()));
 
-        // Inference logging
+        // Inference logging + analytics
         {
             let total_ms = request_start.elapsed().as_millis() as u64;
             let meta = metadata_cell.lock().unwrap().clone();
@@ -1030,10 +1077,10 @@ async fn handle_stream(
                 dept_id: None,
                 session_id: session_id.map(|s| s.0.to_string()),
                 response_id: id.clone(),
-                query_text: user_query_text,
-                detected_language: meta.language,
-                intent: meta.intent,
-                complexity: meta.complexity,
+                query_text: user_query_text.clone(),
+                detected_language: meta.language.clone(),
+                intent: meta.intent.clone(),
+                complexity: meta.complexity.clone(),
                 llm_kind,
                 llm_model,
                 settings_scope: format!("{:?}", settings_scope),
@@ -1044,13 +1091,13 @@ async fn handle_stream(
                 generation_ms: meta.generation_ms,
                 chunks_retrieved: meta.chunks_retrieved,
                 avg_chunk_score: meta.avg_chunk_score,
-                self_rag_decision: meta.self_rag_decision,
+                self_rag_decision: meta.self_rag_decision.clone(),
                 self_rag_confidence: meta.self_rag_confidence,
                 quality_guard_pass: meta.quality_guard_pass,
                 relevance_score: meta.relevance_score,
                 hallucination_score: meta.hallucination_score,
                 completeness_score: meta.completeness_score,
-                pipeline_route: meta.pipeline_route,
+                pipeline_route: meta.pipeline_route.clone(),
                 agents_used: serde_json::to_string(&stage_names)
                     .unwrap_or_else(|_| "[]".into()),
                 status: "success".into(),
@@ -1058,6 +1105,53 @@ async fn handle_stream(
                 response_length,
                 feedback_score: None,
             };
+
+            // ── Search Analytics ──
+            if let Some(search_ms) = meta.search_ms {
+                let result_count = meta.chunks_retrieved.unwrap_or(0);
+                let event = SearchAnalyticsEvent {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    query_text: user_query_text.clone(),
+                    user_id: user_id.map(|u| u.0.to_string()),
+                    workspace_id: scope.workspace_ids.first().map(|w| w.0.to_string()),
+                    result_count,
+                    latency_ms: search_ms,
+                    zero_results: result_count == 0,
+                };
+                let store = state.km_store.clone();
+                tokio::spawn(async move {
+                    store.insert_search_event(&event);
+                });
+            }
+
+            // ── Document Lineage ──
+            if !meta.retrieved_chunks.is_empty() {
+                let lineage_response_id = id.clone();
+                let lineage_query = user_query_text.clone();
+                let chunk_metas = meta.retrieved_chunks.clone();
+                let store = state.km_store.clone();
+                tokio::spawn(async move {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    for chunk in &chunk_metas {
+                        let record = LineageRecord {
+                            id: Uuid::new_v4().to_string(),
+                            response_id: lineage_response_id.clone(),
+                            timestamp: now.clone(),
+                            query_text: lineage_query.clone(),
+                            chunk_id: chunk.chunk_id.clone(),
+                            doc_id: chunk.doc_id.clone(),
+                            doc_title: chunk.doc_title.clone(),
+                            chunk_text_preview: chunk.content_preview.clone(),
+                            score: chunk.score,
+                            rank: chunk.rank,
+                            contributed: chunk.contributed,
+                        };
+                        store.insert_lineage_record(&record);
+                    }
+                });
+            }
+
             let store = state.km_store.clone();
             tokio::spawn(async move {
                 store.insert_inference_log(&entry);

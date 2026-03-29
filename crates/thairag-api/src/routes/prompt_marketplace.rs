@@ -57,6 +57,12 @@ pub struct ListQuery {
     pub offset: Option<usize>,
 }
 
+// ── Constants ────────────────────────────────────────────────────────
+
+const MAX_TEMPLATE_CONTENT_LEN: usize = 50_000;
+const MAX_TEMPLATE_NAME_LEN: usize = 255;
+const MAX_LIST_LIMIT: usize = 100;
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn user_id_from_claims(claims: &AuthClaims) -> String {
@@ -100,13 +106,15 @@ pub async fn list_templates(
     Extension(_claims): Extension<AuthClaims>,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<Vec<PromptTemplate>>, ApiError> {
+    let limit = params.limit.map(|l| l.min(MAX_LIST_LIMIT)).or(Some(20));
+    let offset = params.offset.or(Some(0));
     let filter = PromptTemplateFilter {
         category: params.category,
         search: params.search,
         is_public: params.is_public,
         author_id: params.author_id,
-        limit: params.limit,
-        offset: params.offset,
+        limit,
+        offset,
     };
     let templates = state.km_store.list_prompt_templates(&filter);
     Ok(Json(templates))
@@ -121,8 +129,20 @@ pub async fn create_template(
     if req.name.trim().is_empty() {
         return Err(ThaiRagError::Validation("name must not be empty".into()).into());
     }
+    if req.name.len() > MAX_TEMPLATE_NAME_LEN {
+        return Err(ThaiRagError::Validation(format!(
+            "name must not exceed {MAX_TEMPLATE_NAME_LEN} characters"
+        ))
+        .into());
+    }
     if req.content.trim().is_empty() {
         return Err(ThaiRagError::Validation("content must not be empty".into()).into());
+    }
+    if req.content.len() > MAX_TEMPLATE_CONTENT_LEN {
+        return Err(ThaiRagError::Validation(format!(
+            "content must not exceed {MAX_TEMPLATE_CONTENT_LEN} characters"
+        ))
+        .into());
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -191,6 +211,15 @@ pub async fn update_template(
     can_mutate(&state, &template, &user_id)?;
 
     if let Some(name) = req.name {
+        if name.trim().is_empty() {
+            return Err(ThaiRagError::Validation("name must not be empty".into()).into());
+        }
+        if name.len() > MAX_TEMPLATE_NAME_LEN {
+            return Err(ThaiRagError::Validation(format!(
+                "name must not exceed {MAX_TEMPLATE_NAME_LEN} characters"
+            ))
+            .into());
+        }
         template.name = name;
     }
     if let Some(desc) = req.description {
@@ -200,6 +229,15 @@ pub async fn update_template(
         template.category = cat;
     }
     if let Some(content) = req.content {
+        if content.trim().is_empty() {
+            return Err(ThaiRagError::Validation("content must not be empty".into()).into());
+        }
+        if content.len() > MAX_TEMPLATE_CONTENT_LEN {
+            return Err(ThaiRagError::Validation(format!(
+                "content must not exceed {MAX_TEMPLATE_CONTENT_LEN} characters"
+            ))
+            .into());
+        }
         template.content = content;
     }
     if let Some(vars) = req.variables {

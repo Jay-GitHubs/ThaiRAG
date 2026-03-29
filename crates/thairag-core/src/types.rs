@@ -180,6 +180,18 @@ pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<PipelineProgress>;
 /// by `ChatPipeline::process()` and consumed by the inference logger.
 pub type MetadataCell = Arc<Mutex<PipelineMetadata>>;
 
+/// A lightweight record of a single retrieved chunk for lineage tracking.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RetrievedChunkMeta {
+    pub chunk_id: String,
+    pub doc_id: String,
+    pub doc_title: Option<String>,
+    pub content_preview: String,
+    pub score: f32,
+    pub rank: u32,
+    pub contributed: bool,
+}
+
 /// Metadata collected during pipeline execution for inference logging.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineMetadata {
@@ -197,6 +209,9 @@ pub struct PipelineMetadata {
     pub completeness_score: Option<f32>,
     pub search_ms: Option<u64>,
     pub generation_ms: Option<u64>,
+    /// Per-chunk data for lineage tracking (populated when search results are available).
+    #[serde(default)]
+    pub retrieved_chunks: Vec<RetrievedChunkMeta>,
 }
 
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────

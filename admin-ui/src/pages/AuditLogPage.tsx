@@ -327,13 +327,13 @@ function AnalyticsTab() {
               <Card>
                 <Statistic
                   title="Success Rate"
-                  value={(analytics.success_rate * 100).toFixed(1)}
+                  value={((analytics.success_rate ?? 1) * 100).toFixed(1)}
                   suffix="%"
                   valueStyle={{
                     color:
-                      analytics.success_rate >= 0.95
+                      (analytics.success_rate ?? 1) >= 0.95
                         ? '#52c41a'
-                        : analytics.success_rate >= 0.8
+                        : (analytics.success_rate ?? 1) >= 0.8
                         ? '#faad14'
                         : '#cf1322',
                   }}
@@ -345,9 +345,9 @@ function AnalyticsTab() {
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={12}>
               <Card title="Events by Action Type">
-                {analytics.by_action.length > 0 ? (
+                {(analytics.actions_by_type ?? []).length > 0 ? (
                   <SimpleBarChart
-                    data={analytics.by_action as unknown as Record<string, unknown>[]}
+                    data={(analytics.actions_by_type ?? []).map(([action, count]) => ({ action, count })) as unknown as Record<string, unknown>[]}
                     labelKey="action"
                     valueKey="count"
                     color="#1677ff"
@@ -360,9 +360,9 @@ function AnalyticsTab() {
             </Col>
             <Col xs={24} lg={12}>
               <Card title="Events Per Day">
-                {analytics.by_day.length > 0 ? (
+                {(analytics.events_per_day ?? []).length > 0 ? (
                   <SimpleBarChart
-                    data={analytics.by_day as unknown as Record<string, unknown>[]}
+                    data={(analytics.events_per_day ?? []).map(([date, count]) => ({ date, count })) as unknown as Record<string, unknown>[]}
                     labelKey="date"
                     valueKey="count"
                     color="#52c41a"

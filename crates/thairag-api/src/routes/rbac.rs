@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::store::{CustomRole, RolePermission};
+use thairag_core::ThaiRagError;
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -30,12 +31,34 @@ pub struct ListResponse<T: Serialize> {
     pub total: usize,
 }
 
+// ── Validation ────────────────────────────────────────────────────────
+
+fn validate_role_request(name: &str, permissions: &[RolePermission]) -> Result<(), ApiError> {
+    if name.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "role name must not be empty".into(),
+        )));
+    }
+    if name.len() > 100 {
+        return Err(ApiError(ThaiRagError::Validation(
+            "role name must not exceed 100 characters".into(),
+        )));
+    }
+    if permissions.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "permissions must not be empty".into(),
+        )));
+    }
+    Ok(())
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────
 
 pub async fn create_role(
     State(state): State<AppState>,
     AppJson(body): AppJson<CreateRoleRequest>,
 ) -> Result<(StatusCode, Json<CustomRole>), ApiError> {
+    validate_role_request(&body.name, &body.permissions)?;
     let role = CustomRole {
         id: uuid::Uuid::new_v4().to_string(),
         name: body.name,
@@ -67,6 +90,7 @@ pub async fn update_role(
     Path(id): Path<String>,
     AppJson(body): AppJson<UpdateRoleRequest>,
 ) -> Result<Json<CustomRole>, ApiError> {
+    validate_role_request(&body.name, &body.permissions)?;
     let existing = state.km_store.get_custom_role(&id)?;
     let updated = CustomRole {
         id: existing.id,

@@ -1,0 +1,54 @@
+name: Search Quality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/thairag-search/**"
+      - "crates/thairag-agent/**"
+      - "tests/search_quality/**"
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Minimum acceptable score ratio vs baseline (e.g. 0.90)"
+        required: false
+        default: "0.90"
+
+env:
+  THAIRAG_API_URL: http://localhost:8080
+
+jobs:
+  search-quality:
+    name: Search Quality Regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ThaiRAG (free tier)
+        run: docker compose up -d
+        env:
+          THAIRAG_TIER: free
+
+      - name: Wait for API to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health; then
+              echo "API is up"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 5
+          done
+
+      - name: Run search quality evaluation
+        run: |
+          THRESHOLD=${{ github.event.inputs.threshold || '0.90' }} \
+          bash scripts/search-quality-ci.sh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-quality-results
+          path: /tmp/search-quality-results.json
+          retention-days: 30

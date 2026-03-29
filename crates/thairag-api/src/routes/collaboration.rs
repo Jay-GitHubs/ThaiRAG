@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::store::{DocumentAnnotation, DocumentComment, DocumentReview};
+use thairag_core::ThaiRagError;
 
 // ── DTOs ────────────────────────────────────────────────────────────
 
@@ -48,6 +49,45 @@ pub struct ListResponse<T: Serialize> {
     pub total: usize,
 }
 
+// ── Validation ────────────────────────────────────────────────────────
+
+const MAX_CONTENT_LEN: usize = 10_000;
+
+fn validate_content(text: &str, field: &str) -> Result<(), ApiError> {
+    if text.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'{field}' must not be empty"
+        ))));
+    }
+    if text.len() > MAX_CONTENT_LEN {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'{field}' must not exceed {MAX_CONTENT_LEN} characters"
+        ))));
+    }
+    Ok(())
+}
+
+fn validate_user_id(user_id: &str, field: &str) -> Result<(), ApiError> {
+    if user_id.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'{field}' must not be empty"
+        ))));
+    }
+    Ok(())
+}
+
+const VALID_REVIEW_STATUSES: &[&str] = &["pending", "approved", "rejected", "changes_requested"];
+
+fn validate_review_status(status: &str) -> Result<(), ApiError> {
+    if !VALID_REVIEW_STATUSES.contains(&status) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "review status must be one of: {}",
+            VALID_REVIEW_STATUSES.join(", ")
+        ))));
+    }
+    Ok(())
+}
+
 // ── Comment Handlers ─────────────────────────────────────────────────
 
 pub async fn create_comment(
@@ -55,6 +95,8 @@ pub async fn create_comment(
     Path((_ws_id, doc_id)): Path<(String, String)>,
     AppJson(body): AppJson<CreateCommentRequest>,
 ) -> Result<(StatusCode, Json<DocumentComment>), ApiError> {
+    validate_user_id(&body.user_id, "user_id")?;
+    validate_content(&body.text, "text")?;
     let comment = DocumentComment {
         id: uuid::Uuid::new_v4().to_string(),
         doc_id,
@@ -92,6 +134,8 @@ pub async fn create_annotation(
     Path((_ws_id, doc_id)): Path<(String, String)>,
     AppJson(body): AppJson<CreateAnnotationRequest>,
 ) -> Result<(StatusCode, Json<DocumentAnnotation>), ApiError> {
+    validate_user_id(&body.user_id, "user_id")?;
+    validate_content(&body.text, "text")?;
     let annotation = DocumentAnnotation {
         id: uuid::Uuid::new_v4().to_string(),
         doc_id,
@@ -131,13 +175,23 @@ pub async fn create_review(
     Path((_ws_id, doc_id)): Path<(String, String)>,
     AppJson(body): AppJson<CreateReviewRequest>,
 ) -> Result<(StatusCode, Json<DocumentReview>), ApiError> {
+    validate_user_id(&body.reviewer_id, "reviewer_id")?;
+    let status = body.status.unwrap_or_else(|| "pending".to_string());
+    validate_review_status(&status)?;
+    if let Some(ref c) = body.comments
+        && c.len() > MAX_CONTENT_LEN
+    {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'comments' must not exceed {MAX_CONTENT_LEN} characters"
+        ))));
+    }
     let now = Utc::now().to_rfc3339();
     let review = DocumentReview {
         id: uuid::Uuid::new_v4().to_string(),
         doc_id,
         reviewer_id: body.reviewer_id,
         reviewer_name: body.reviewer_name,
-        status: body.status.unwrap_or_else(|| "pending".to_string()),
+        status,
         comments: body.comments,
         created_at: now.clone(),
         updated_at: now,
@@ -160,6 +214,14 @@ pub async fn update_review_status(
     Path((_ws_id, _doc_id, review_id)): Path<(String, String, String)>,
     AppJson(body): AppJson<UpdateReviewStatusRequest>,
 ) -> Result<StatusCode, ApiError> {
+    validate_review_status(&body.status)?;
+    if let Some(ref c) = body.comments
+        && c.len() > MAX_CONTENT_LEN
+    {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "'comments' must not exceed {MAX_CONTENT_LEN} characters"
+        ))));
+    }
     state
         .km_store
         .update_review_status(&review_id, &body.status, body.comments.as_deref())?;

@@ -4,6 +4,7 @@ use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 
 use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
 
 use crate::app_state::AppState;
 use crate::error::ApiError;
@@ -18,6 +19,18 @@ pub struct LimitParam {
     pub limit: Option<usize>,
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────
+
+/// Validate that a path parameter is a valid UUID string.
+fn validate_uuid_param(value: &str, field: &str) -> Result<(), ApiError> {
+    value.parse::<uuid::Uuid>().map_err(|_| {
+        ApiError(ThaiRagError::Validation(format!(
+            "'{field}' must be a valid UUID, got: {value}"
+        )))
+    })?;
+    Ok(())
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────
 
 /// GET /api/km/lineage/response/{response_id}
@@ -27,6 +40,7 @@ pub async fn get_response_lineage(
     Path(response_id): Path<String>,
 ) -> Result<Json<Vec<LineageRecord>>, ApiError> {
     require_super_admin(&claims, &state)?;
+    validate_uuid_param(&response_id, "response_id")?;
     let records = state.km_store.get_lineage_for_response(&response_id);
     Ok(Json(records))
 }
@@ -39,6 +53,7 @@ pub async fn get_document_lineage(
     Query(params): Query<LimitParam>,
 ) -> Result<Json<Vec<LineageRecord>>, ApiError> {
     require_super_admin(&claims, &state)?;
+    validate_uuid_param(&doc_id, "doc_id")?;
     let limit = params.limit.unwrap_or(50).min(500);
     let records = state.km_store.get_lineage_for_document(&doc_id, limit);
     Ok(Json(records))

@@ -122,7 +122,7 @@ if (( ${#backup_files[@]} > MAX_BACKUPS )); then
         rm -f "$old_file"
         # Remove the corresponding JSON directory
         rm -rf "$BACKUP_DIR/${old_basename}-tables"
-        ((removed++))
+        ((removed++)) || true
     done
     success "Removed ${removed} old backup(s)"
 else
