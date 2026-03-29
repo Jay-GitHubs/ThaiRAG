@@ -2394,10 +2394,24 @@ impl KmStoreTrait for MemoryKmStore {
 
         let current_users = users.len() as u64;
 
+        let today = chrono::Utc::now().date_naive().to_string();
+        let events = self.search_events.read().unwrap();
+        let queries_today = events
+            .iter()
+            .filter(|e| {
+                e.workspace_id
+                    .as_ref()
+                    .map(|wid| ws_ids.iter().any(|w| w.0.to_string() == *wid))
+                    .unwrap_or(false)
+                    && e.timestamp.starts_with(&today)
+            })
+            .count() as u64;
+        drop(events);
+
         super::TenantUsage {
             current_documents,
             current_storage_bytes,
-            queries_today: 0,
+            queries_today,
             current_users,
             current_workspaces,
         }
