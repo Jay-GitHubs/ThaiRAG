@@ -22,7 +22,7 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 12. [Error Handling](#12-error-handling)
 13. [Observability](#13-observability)
 14. [Admin UI](#14-admin-ui) — includes Settings page, IdP management, user enhancements, role-based sidebar
-15. [Automated Testing](#15-automated-testing) — backend tests, Playwright e2e, security test coverage
+15. [Automated Testing](#15-automated-testing) — backend tests (334), Playwright e2e (178), infrastructure skip patterns, rate-limiting, load testing, search quality regression, security test coverage
 16. [OWASP LLM Top 10 Security](#16-owasp-llm-top-10-security) — prompt injection defense, error sanitization, input validation, CSRF, audit log
 17. [Smoke Testing](#17-smoke-testing) — end-to-end smoke test script
 18. [Context Compaction & Personal Memory](#18-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
@@ -2466,38 +2466,89 @@ npm run dev
 
 ### Purpose
 
-Verify the system using automated test suites — backend unit/integration tests and Playwright e2e tests.
+Verify the system using automated test suites -- backend unit/integration tests and Playwright e2e tests. This section covers the full test infrastructure including how to run specific suites, handle infrastructure dependencies, and perform load and quality testing.
 
-### 15.1Backend Tests (Rust)
+### 15.1 Backend Tests (Rust)
 
 ```bash
+# Run all backend tests
 cargo test
+
+# Run tests for a specific crate
+cargo test -p thairag-core
+cargo test -p thairag-api
+
+# Run a specific test by name
+cargo test -p thairag-auth -- login_locks_after_max_attempts
+
+# Run tests with output (for debugging)
+cargo test -p thairag-api -- --nocapture
 ```
 
-**Current test count:** 185 tests across workspace
+**Current test count:** 334 tests across the workspace
 
-Key test categories:
-- **Password policy**: `register_rejects_short_password`, `register_rejects_no_uppercase`, `register_rejects_no_digit`
-- **Brute-force protection**: `login_locks_after_max_attempts`
-- **Login tracker unit tests**: `tracks_failed_attempts_and_locks`, `success_clears_tracking`, `case_insensitive`, `lockout_remaining_returns_positive`
-- **Auth flow**: `register_and_login`, `login_wrong_password`
-- **KM CRUD**: `km_crud_flow`, `document_crud`, full permission matrix tests
-- **Streaming**: SSE streaming with usage stats
+#### Test Categories by Crate
 
-### 15.2Playwright E2E Tests
+| Crate | Category | Example Tests |
+|-------|----------|---------------|
+| `thairag-core` | Type definitions, ID newtypes, error types | `id_newtype_roundtrip`, `error_display` |
+| `thairag-config` | Config loading, tier merging, env overrides | `default_config_loads`, `tier_override`, `env_override_prefix` |
+| `thairag-auth` | Password policy, brute-force, JWT | `register_rejects_short_password`, `register_rejects_no_uppercase`, `register_rejects_no_digit`, `login_locks_after_max_attempts`, `tracks_failed_attempts_and_locks`, `success_clears_tracking`, `case_insensitive`, `lockout_remaining_returns_positive` |
+| `thairag-document` | Chunking, format conversion | `chunk_text_basic`, `chunk_overlap`, `pdf_extraction`, `markdown_to_chunks` |
+| `thairag-search` | Hybrid search, RRF merge, BM25 | `rrf_merge_scores`, `vector_weight_applied`, `bm25_tokenization` |
+| `thairag-agent` | Intent classification, RAG pipeline, RAPTOR | `classify_greeting`, `classify_rag_query`, `raptor_cluster` |
+| `thairag-provider-llm` | LLM streaming, usage stats | `streaming_usage_side_channel`, `ollama_response_parse` |
+| `thairag-provider-embedding` | Embedding dimension, caching | `fastembed_dimension`, `cache_hit_returns_cached` |
+| `thairag-provider-vectordb` | Vector store CRUD | `inmemory_upsert_search`, `qdrant_collection_create` |
+| `thairag-api` | Route handlers, middleware, integration | `register_and_login`, `login_wrong_password`, `km_crud_flow`, `document_crud`, `permission_matrix`, `sse_streaming_usage` |
+
+#### Integration Tests
+
+Integration tests in `thairag-api` spin up a full axum server with in-memory backends and test HTTP endpoints end-to-end. These tests cover:
+
+- Auth flow (register, login, token validation, refresh)
+- KM hierarchy CRUD with permission enforcement
+- Document upload, chunking, and retrieval
+- Chat completions (streaming and non-streaming)
+- Rate limiting and concurrent request limits
+- Health check (basic and deep)
+- Metrics endpoint
+- Search analytics event recording
+- Document lineage creation
+- Multi-tenancy tenant isolation
+- Audit log recording
+
+### 15.2 Playwright E2E Tests
 
 ```bash
 cd admin-ui
-npx playwright test --headed    # Headed mode (visible browser)
-npx playwright test              # Headless mode (CI)
+
+# Run all tests in headed mode (recommended for initial verification)
+npx playwright test --headed
+
+# Run all tests headless (CI mode)
+npx playwright test
+
+# Run a specific spec file
+npx playwright test e2e/phase6.spec.ts --headed
+
+# Run tests matching a name pattern
+npx playwright test -g "search analytics" --headed
+
+# Run with verbose reporter (shows pass/skip/fail per test)
+npx playwright test --reporter=list
+
+# Generate HTML report after test run
+npx playwright show-report
 ```
 
-**Current test count:** 51 tests (1 setup + 50 specs)
+**Current test count:** 178 e2e tests (1 setup + 177 specs). Of these, 168 pass and 10 are skipped (infrastructure-dependent tests that auto-skip when Qdrant or LLM is unavailable).
 
-Test files:
+#### Complete Test File Inventory
+
 | File | Tests | Description |
 |------|-------|-------------|
-| `auth.setup.ts` | 1 | Registers test users via API |
+| `auth.setup.ts` | 1 | Registers test users via API (setup project, runs before all specs) |
 | `login.spec.ts` | 4 | Login form, invalid credentials, success, logout |
 | `comprehensive.spec.ts` | 23 | Auth session, navigation, KM CRUD, users, documents, permissions, theme |
 | `km.spec.ts` | 1 | Full KM hierarchy CRUD |
@@ -2509,12 +2560,148 @@ Test files:
 | `health.spec.ts` | 5 | System health, deep check, metrics |
 | `security.spec.ts` | 7 | OWASP headers, password policy, brute-force lockout |
 | `chat-pipeline.spec.ts` | 10 | Pipeline switch, agent panels, LLM modes, persistence, save |
-| `advanced-features.spec.ts` | 10 | Context Compaction & Personal Memory toggles, parameters, persistence |
+| `advanced-features.spec.ts` | 10 | Context Compaction and Personal Memory toggles, parameters, persistence |
 | `presets.spec.ts` | 7 | Chat presets CRUD, selection, defaults |
 | `settings-debug.spec.ts` | 2 | Settings page debug/diagnostics |
-| `pipeline-stages.spec.ts` | 5 | Pipeline stages API, SSE streaming, UI rendering |
+| `connectors.spec.ts` | 5 | MCP connector CRUD, sync trigger, status display |
+| `scoped-settings.spec.ts` | 7 | Per-org/per-workspace settings override and inheritance |
+| `jobs.spec.ts` | 4 | Background job listing, status tracking, document processing jobs |
+| `phase6.spec.ts` | 37 | All Phase 6 UI pages: search analytics dashboard, lineage viewer, audit export, tenant management, role management, prompt marketplace, fine-tuning |
+| `analytics-lineage.spec.ts` | 5 | Search analytics and document lineage integration: verifies analytics events and lineage records are created after RAG queries |
+| `auth-providers.spec.ts` | 20 | Identity provider CRUD, OAuth flow configuration, SSO enable/disable, OIDC/SAML/LDAP form validation |
+| `multi-doc-chat.spec.ts` | 4 | Multi-document RAG stress tests: upload multiple docs, query across them, verify attribution (requires Qdrant + LLM) |
+| `per-agent-llm.spec.ts` | 2 | Per-agent LLM model configuration save and persistence in pipeline settings UI |
+| `pipeline-stages.spec.ts` | 4 | Pipeline stage visibility in SSE streaming responses and correct rendering in test chat UI |
 
 > **Note:** Config snapshots are tested as part of the settings e2e tests (snapshot create, restore, and delete flows are covered in the existing settings test suite).
+
+#### Phase 6 Test Coverage
+
+Phase 6 added several new test files and updated existing ones:
+
+- **`analytics-lineage.spec.ts`** (5 tests) -- Creates a KM hierarchy with documents, performs a RAG query via the chat API, then verifies that search analytics events were recorded and document lineage records were created. Tests the fire-and-forget recording path that runs in a background `tokio::spawn` task.
+
+- **`auth-providers.spec.ts`** (20 tests) -- Expanded from the initial identity provider tests. Covers CRUD operations for all provider types (OIDC, OAuth2, SAML, LDAP), form validation for required fields, enable/disable toggling, test connectivity, and deletion with confirmation. Tests that provider-specific configuration fields appear dynamically based on selected type.
+
+- **`per-agent-llm.spec.ts`** (2 tests) -- Verifies that per-agent LLM model overrides can be configured in the pipeline settings UI and that the selected models persist across page reloads. Requires an LLM provider to be reachable for model list population.
+
+- **`pipeline-stages.spec.ts`** (4 tests) -- Tests that the test chat page correctly displays pipeline stage progress events from the SSE stream. Verifies stage names (intent classification, context retrieval, reranking, response generation) appear in order and that timing information is displayed.
+
+- **`multi-doc-chat.spec.ts`** (4 tests) -- End-to-end RAG tests that upload multiple documents to a workspace, issue queries that span document boundaries, and verify that response attribution includes chunks from the correct source documents. Requires Qdrant and a functioning LLM.
+
+- **`phase6.spec.ts`** (37 tests) -- Comprehensive UI tests for all Phase 6 admin pages: search analytics dashboard (charts, filters, export), document lineage viewer (attribution chain display), audit log export (JSON/CSV format selection, date range filtering), tenant management (CRUD, quota display), custom role management (CRUD, permission matrix), prompt marketplace (template CRUD, rating, forking), and embedding fine-tuning (dataset creation, job launch, progress tracking).
+
+### 15.3 Handling Infrastructure Unavailability
+
+Some e2e tests require external services (Qdrant, a running LLM) that may not be available in all environments. These tests use a **graceful skip pattern**:
+
+```typescript
+test.beforeAll(async ({ request }) => {
+  // Probe Qdrant availability
+  try {
+    const res = await request.get('http://localhost:6333/healthz');
+    if (!res.ok()) test.skip();
+  } catch {
+    test.skip(); // Qdrant not reachable
+  }
+});
+```
+
+Tests that use this pattern:
+- `multi-doc-chat.spec.ts` -- requires Qdrant on port 6333 and a working LLM
+- `per-agent-llm.spec.ts` -- requires an LLM provider for model list validation
+- `analytics-lineage.spec.ts` -- certain tests skip if embedding/vector store is unavailable
+
+This allows the full test suite to run in minimal environments (free tier with in-memory vector store) without blocking CI. To verify which tests were skipped:
+
+```bash
+npx playwright test --reporter=list 2>&1 | grep -E '(skipped|passed|failed)'
+```
+
+### 15.4 Rate-Limiting Considerations in Auth Tests
+
+The `security.spec.ts` brute-force lockout test deliberately triggers the rate limiter by sending multiple failed login attempts. Be aware of the following:
+
+- The test sends 5+ failed login attempts to trigger lockout. If rate limiting is configured more aggressively than the default (10 req/s), the test may fail due to HTTP 429 responses before reaching the lockout threshold.
+- After running the brute-force test, the test account may be temporarily locked. Subsequent tests that need to log in should either use a different test account or wait for the lockout period to expire.
+- The auth setup project (`auth.setup.ts`) runs before all spec files and registers fresh test users, so lockout state from a previous run does not carry over if the database is reset between runs.
+- If running tests repeatedly without resetting the database, increase `THAIRAG__AUTH__LOCKOUT_SECS` to a lower value (e.g., 5) to speed up lockout expiry between runs.
+
+### 15.5 Load Testing with k6
+
+For load testing the ThaiRAG API under realistic conditions, use [k6](https://k6.io/):
+
+```javascript
+// k6-load-test.js
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export const options = {
+  stages: [
+    { duration: '30s', target: 10 },   // Ramp up to 10 users
+    { duration: '1m',  target: 10 },   // Hold at 10 users
+    { duration: '30s', target: 50 },   // Ramp to 50 users
+    { duration: '1m',  target: 50 },   // Hold at 50
+    { duration: '30s', target: 0 },    // Ramp down
+  ],
+};
+
+export default function () {
+  const res = http.post(
+    'http://localhost:8080/v1/chat/completions',
+    JSON.stringify({
+      model: 'ThaiRAG-1.0',
+      messages: [{ role: 'user', content: 'What is our security policy?' }],
+      stream: false,
+    }),
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${__ENV.TOKEN}`,
+      },
+    }
+  );
+  check(res, {
+    'status is 200': (r) => r.status === 200,
+    'response has content': (r) => JSON.parse(r.body).choices[0].message.content.length > 0,
+  });
+  sleep(1);
+}
+```
+
+Run with: `TOKEN=your-jwt k6 run k6-load-test.js`
+
+Key metrics to monitor during load tests:
+- `http_req_duration` (p95, p99) -- response latency
+- `http_req_failed` -- error rate
+- `http_reqs` -- throughput
+- Prometheus metrics at `/metrics` -- LLM token consumption, active sessions
+
+### 15.6 Search Quality Regression Testing
+
+To prevent search quality regressions when changing embedding models, chunking parameters, or search weights, maintain a set of ground-truth query-answer pairs:
+
+1. **Create a test corpus** -- a small set of documents with known content.
+2. **Define expected results** -- for each test query, list the document IDs or chunk texts that should appear in the top-k results.
+3. **Run regression checks** after configuration changes:
+
+```bash
+# Upload test corpus
+for doc in test-corpus/*.txt; do
+  curl -X POST "http://localhost:8080/api/km/workspaces/$WS_ID/documents/upload" \
+    -H "Authorization: Bearer $TOKEN" \
+    -F "file=@$doc"
+done
+
+# Query and verify results
+curl -s "http://localhost:8080/v2/search" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "security policy", "top_k": 5}' \
+  | jq '.results[].document_id'
+```
+
+Compare the returned document IDs against your expected results. Automate this in CI by writing a script that exits non-zero if recall drops below a threshold (e.g., 80% of expected documents appear in the top-k).
 
 **Playwright configuration** (`admin-ui/playwright.config.ts`):
 - Base URL: `http://localhost:8081`
@@ -2527,7 +2714,7 @@ Test files:
 - Admin UI running on port 8081 (Docker or `npm run dev`)
 - Fresh database recommended (first registered user becomes super_admin)
 
-### 15.3Security Test Coverage
+### 15.7 Security Test Coverage
 
 The `security.spec.ts` Playwright tests verify OWASP Top 10 hardening:
 
@@ -3530,7 +3717,7 @@ curl -s http://localhost:8080/api/km/finetune/jobs \
 
 ### Purpose
 
-Document and execute the Playwright e2e test suite that covers all Phase 6 features — search analytics, document lineage, audit export, multi-tenancy, prompt marketplace, fine-tuning, and per-agent LLM configuration.
+Document and execute the Playwright e2e test suite that covers all Phase 6 features -- search analytics, document lineage, audit export, multi-tenancy, prompt marketplace, fine-tuning, and per-agent LLM configuration.
 
 ### Prerequisites
 
@@ -3543,9 +3730,10 @@ Document and execute the Playwright e2e test suite that covers all Phase 6 featu
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `e2e/phase6.spec.ts` | 38 | UI tests for all Phase 6 pages: search analytics dashboard, lineage viewer, audit export, tenant management, role management, prompt marketplace, fine-tuning |
-| `e2e/auth-providers.spec.ts` | 21 | Identity provider CRUD, OAuth flow configuration, SSO enable/disable, UI validation |
-| `e2e/multi-doc-chat.spec.ts` | 4 | Multi-document RAG stress tests — upload multiple docs, query across them, verify attribution (requires Qdrant + LLM) |
+| `e2e/phase6.spec.ts` | 37 | UI tests for all Phase 6 pages: search analytics dashboard, lineage viewer, audit export, tenant management, role management, prompt marketplace, fine-tuning |
+| `e2e/analytics-lineage.spec.ts` | 5 | Search analytics and document lineage integration: verifies events and lineage records are created after RAG queries |
+| `e2e/auth-providers.spec.ts` | 20 | Identity provider CRUD, OAuth flow configuration, SSO enable/disable, OIDC/SAML/LDAP form validation |
+| `e2e/multi-doc-chat.spec.ts` | 4 | Multi-document RAG stress tests -- upload multiple docs, query across them, verify attribution (requires Qdrant + LLM) |
 | `e2e/per-agent-llm.spec.ts` | 2 | Verify per-agent LLM model configuration is saved and reflected in the pipeline settings UI |
 | `e2e/pipeline-stages.spec.ts` | 4 | Pipeline stage visibility in SSE streaming responses and correct rendering in the test chat UI |
 
@@ -3560,6 +3748,12 @@ npx playwright test --headed
 # Run only Phase 6 tests
 npx playwright test e2e/phase6.spec.ts --headed
 
+# Run analytics and lineage integration tests
+npx playwright test e2e/analytics-lineage.spec.ts --headed
+
+# Run only infrastructure-dependent tests (requires Qdrant + LLM)
+npx playwright test e2e/multi-doc-chat.spec.ts e2e/per-agent-llm.spec.ts --headed
+
 # Run all tests headless (CI mode)
 npx playwright test
 ```
@@ -3568,15 +3762,18 @@ npx playwright test
 
 Some tests require external services (Qdrant vector database and a running LLM):
 
-- `multi-doc-chat.spec.ts` — requires Qdrant on port 6333 and an LLM provider responding on the configured base URL
-- `per-agent-llm.spec.ts` — requires the LLM provider to be reachable for model list validation
+- `multi-doc-chat.spec.ts` -- requires Qdrant on port 6333 and an LLM provider responding on the configured base URL
+- `per-agent-llm.spec.ts` -- requires the LLM provider to be reachable for model list validation
+- `analytics-lineage.spec.ts` -- certain assertions skip if embedding/vector store is not available
 
-**Graceful skip behavior:** When the required services are not available, these tests automatically skip rather than fail. This allows the full suite to run in minimal environments (e.g., free tier with in-memory vector store) without blocking CI.
+**Graceful skip behavior:** When the required services are not available, these tests automatically skip rather than fail. This allows the full suite to run in minimal environments (e.g., free tier with in-memory vector store) without blocking CI. See Section 15.3 for details on the skip pattern implementation.
 
 To confirm which tests were skipped vs. passed:
 
 ```bash
 npx playwright test --reporter=list 2>&1 | grep -E '(skipped|passed|failed)'
 ```
+
+**Current results:** 178 total e2e tests. 168 passed, 10 skipped (infrastructure-dependent). Zero unexpected failures.
 
 **Pass criteria:** All non-infrastructure tests pass. Infrastructure-dependent tests either pass (when services are available) or are marked as skipped (when services are absent). Zero unexpected failures.
