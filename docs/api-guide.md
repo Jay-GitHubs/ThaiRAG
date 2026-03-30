@@ -241,6 +241,398 @@ GET    /api/km/settings/feedback/stats      # Feedback statistics (super admin)
 
 ---
 
+## Search Analytics
+
+### Popular Queries
+```bash
+curl -s http://localhost:8080/api/km/search-analytics/popular \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns the most frequently searched queries, ranked by count. Useful for understanding what users are looking for and identifying content gaps.
+
+### Analytics Summary
+```bash
+curl -s http://localhost:8080/api/km/search-analytics/summary \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns aggregated search metrics including total queries, average latency, zero-result rate, and top workspaces by query volume.
+
+---
+
+## Document Lineage
+
+Track the provenance of RAG responses back to their source documents and chunks.
+
+### Response Lineage
+```bash
+curl -s http://localhost:8080/api/km/lineage/response/{response_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns the full lineage for a chat response: which documents and chunks were retrieved, their scores, and how they contributed to the generated answer.
+
+### Document Lineage
+```bash
+curl -s http://localhost:8080/api/km/lineage/document/{doc_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns all responses that referenced a given document, showing how the document has been used across queries.
+
+---
+
+## Audit Log (Extended)
+
+### Export Audit Log
+```bash
+# Export as JSON
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=json" \
+  -H "Authorization: Bearer $TOKEN" -o audit-log.json
+
+# Export as CSV
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=csv" \
+  -H "Authorization: Bearer $TOKEN" -o audit-log.csv
+```
+
+Exports the full audit log in the specified format. Supports `json` and `csv`. Super admin only.
+
+### Audit Log Analytics
+```bash
+curl -s http://localhost:8080/api/km/settings/audit-log/analytics \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns aggregated audit analytics: event counts by action type, most active users, and activity trends over time.
+
+---
+
+## Personal Memory
+
+Per-user memories that persist across chat sessions when `personal_memory_enabled` is turned on in the chat pipeline settings.
+
+### List Memories
+```bash
+curl -s http://localhost:8080/api/km/users/{user_id}/memories \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns all stored memories for a user, including content, relevance score, and creation timestamp.
+
+### Delete a Memory
+```bash
+curl -s -X DELETE http://localhost:8080/api/km/users/{user_id}/memories/{memory_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Deletes a specific memory entry. Users can delete their own memories; super admins can delete any user's memories.
+
+---
+
+## Multi-Tenancy
+
+Isolate organizations into separate tenants with quota management.
+
+### List Tenants
+```bash
+curl -s http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Create a Tenant
+```bash
+curl -s -X POST http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Corp", "max_users": 50, "max_documents": 10000, "max_storage_mb": 5120}'
+```
+
+### Get a Tenant
+```bash
+curl -s http://localhost:8080/api/km/tenants/{tenant_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Update a Tenant
+```bash
+curl -s -X PUT http://localhost:8080/api/km/tenants/{tenant_id} \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Acme Corp (Updated)", "max_users": 100}'
+```
+
+### Delete a Tenant
+```bash
+curl -s -X DELETE http://localhost:8080/api/km/tenants/{tenant_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Get Tenant Quota
+```bash
+curl -s http://localhost:8080/api/km/tenants/{tenant_id}/quota \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns the tenant's configured limits (max users, documents, storage).
+
+### Get Tenant Usage
+```bash
+curl -s http://localhost:8080/api/km/tenants/{tenant_id}/usage \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns current usage against quota (active users, document count, storage used).
+
+### Assign Organization to Tenant
+```bash
+curl -s -X POST http://localhost:8080/api/km/tenants/{tenant_id}/orgs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"org_id": "org-uuid"}'
+```
+
+Associates an organization with a tenant, applying the tenant's quotas and isolation policies.
+
+---
+
+## Custom Roles
+
+Define custom roles with fine-grained permissions beyond the built-in `viewer`, `admin`, and `super_admin` roles.
+
+### List Roles
+```bash
+curl -s http://localhost:8080/api/km/roles \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Create a Role
+```bash
+curl -s -X POST http://localhost:8080/api/km/roles \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "content_manager", "description": "Can manage documents but not settings", "permissions": ["documents.read", "documents.write", "documents.delete"]}'
+```
+
+### Get a Role
+```bash
+curl -s http://localhost:8080/api/km/roles/{role_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Update a Role
+```bash
+curl -s -X PUT http://localhost:8080/api/km/roles/{role_id} \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Updated description", "permissions": ["documents.read", "documents.write"]}'
+```
+
+### Delete a Role
+```bash
+curl -s -X DELETE http://localhost:8080/api/km/roles/{role_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Document Collaboration
+
+Collaborate on documents with comments, annotations, and review workflows.
+
+### Comments
+
+```bash
+# Add a comment
+curl -s -X POST http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/comments \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "This section needs updating.", "chunk_index": 3}'
+
+# List comments
+curl -s http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/comments \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Annotations
+
+```bash
+# Add an annotation (anchored to a text range)
+curl -s -X POST http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/annotations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Verify this claim", "start_offset": 120, "end_offset": 180, "label": "needs-review"}'
+
+# List annotations
+curl -s http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/annotations \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Reviews
+
+```bash
+# Submit a review
+curl -s -X POST http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/reviews \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "approved", "comment": "Content is accurate and up to date."}'
+
+# List reviews
+curl -s http://localhost:8080/api/km/workspaces/{ws_id}/documents/{doc_id}/reviews \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Review statuses: `pending`, `approved`, `rejected`, `changes_requested`.
+
+---
+
+## Prompt Marketplace
+
+Share, discover, and reuse prompt templates across the organization.
+
+### List Prompts
+```bash
+curl -s http://localhost:8080/api/km/prompts \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Supports query parameters: `?category=rag&sort=popular&page=1&per_page=20`.
+
+### Create a Prompt
+```bash
+curl -s -X POST http://localhost:8080/api/km/prompts \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Summarizer", "description": "Concise document summarization", "content": "Summarize the following document in 3 bullet points:\n\n{context}", "category": "summarization", "tags": ["summary", "concise"]}'
+```
+
+### Get a Prompt
+```bash
+curl -s http://localhost:8080/api/km/prompts/{prompt_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Update a Prompt
+```bash
+curl -s -X PUT http://localhost:8080/api/km/prompts/{prompt_id} \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Updated description", "content": "Updated template..."}'
+```
+
+### Delete a Prompt
+```bash
+curl -s -X DELETE http://localhost:8080/api/km/prompts/{prompt_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Rate a Prompt
+```bash
+curl -s -X POST http://localhost:8080/api/km/prompts/{prompt_id}/rate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"rating": 5, "comment": "Works great for technical docs"}'
+```
+
+Rating is an integer from 1 to 5.
+
+### Fork a Prompt
+```bash
+curl -s -X POST http://localhost:8080/api/km/prompts/{prompt_id}/fork \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Summarizer (Thai)", "content": "สรุปเอกสารต่อไปนี้ใน 3 หัวข้อ:\n\n{context}"}'
+```
+
+Creates a new prompt based on an existing one, preserving a link to the original for attribution.
+
+---
+
+## Embedding Fine-Tuning
+
+Fine-tune embedding models on your domain-specific data to improve retrieval quality.
+
+### Datasets
+
+```bash
+# List datasets
+curl -s http://localhost:8080/api/km/finetune/datasets \
+  -H "Authorization: Bearer $TOKEN"
+
+# Create a dataset
+curl -s -X POST http://localhost:8080/api/km/finetune/datasets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Legal QA Pairs", "description": "Query-document pairs from legal workspace", "workspace_id": "ws-uuid"}'
+
+# Get a dataset
+curl -s http://localhost:8080/api/km/finetune/datasets/{dataset_id} \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete a dataset
+curl -s -X DELETE http://localhost:8080/api/km/finetune/datasets/{dataset_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Jobs
+
+```bash
+# List fine-tuning jobs
+curl -s http://localhost:8080/api/km/finetune/jobs \
+  -H "Authorization: Bearer $TOKEN"
+
+# Create a fine-tuning job
+curl -s -X POST http://localhost:8080/api/km/finetune/jobs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_id": "dataset-uuid", "base_model": "text-embedding-3-small", "epochs": 3, "learning_rate": 0.0001}'
+
+# Get job status
+curl -s http://localhost:8080/api/km/finetune/jobs/{job_id} \
+  -H "Authorization: Bearer $TOKEN"
+
+# Cancel a job
+curl -s -X DELETE http://localhost:8080/api/km/finetune/jobs/{job_id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Job statuses: `queued`, `running`, `completed`, `failed`, `cancelled`.
+
+---
+
+## Streaming Reranking Search
+
+Run a hybrid search with streaming results via Server-Sent Events. Chunks are sent incrementally as they are retrieved and reranked, allowing the client to display results progressively.
+
+```bash
+curl -s -N -X POST http://localhost:8080/api/km/workspaces/{ws_id}/search-stream \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "contract termination clause", "top_k": 10}'
+```
+
+**SSE event types:**
+
+- `event: chunk` -- A reranked chunk result with score, content, and document metadata.
+- `event: summary` -- Final summary with total chunks, timing, and retrieval stats.
+- `data: [DONE]` -- Stream complete.
+
+Example stream:
+```
+event: chunk
+data: {"chunk_id":"uuid","doc_id":"uuid","content":"The contract may be terminated...","score":0.94,"chunk_index":7,"doc_title":"Service Agreement"}
+
+event: chunk
+data: {"chunk_id":"uuid","doc_id":"uuid","content":"Termination notice must be...","score":0.87,"chunk_index":12,"doc_title":"Service Agreement"}
+
+event: summary
+data: {"total_chunks":10,"search_ms":45,"rerank_ms":120,"total_ms":165}
+
+data: [DONE]
+```
+
+---
+
 ## Additional Endpoints
 
 For complete endpoint documentation including the following, see [API_REFERENCE.md](API_REFERENCE.md):

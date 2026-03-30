@@ -2,7 +2,7 @@
 
 ## Crate Dependency Graph
 
-ThaiRAG is a Rust workspace with 15 crates organized in strict layers. Each layer depends only on layers below it.
+ThaiRAG is a Rust workspace with 16 crates organized in strict layers. Each layer depends only on layers below it.
 
 ```
                     ┌──────────────┐
@@ -44,7 +44,7 @@ ThaiRAG is a Rust workspace with 15 crates organized in strict layers. Each laye
                    └──────────────┘
 ```
 
-> **Note:** `thairag-mcp` (MCP Integration) sits alongside `thairag-agent`, providing MCP client connectivity, sync orchestration, and webhook notifications. `thairag-provider-redis` also sits at this level, providing Redis-backed implementations of `SessionStoreTrait`, `EmbeddingCache`, and `JobQueue` for horizontal scaling.
+> **Note:** `thairag-mcp` (MCP Integration) sits alongside `thairag-agent`, providing MCP client connectivity, sync orchestration, and webhook notifications. `thairag-provider-redis` also sits at this level, providing Redis-backed implementations of `SessionStoreTrait`, `EmbeddingCache`, and `JobQueue` for horizontal scaling. `thairag-cli` is a standalone binary crate that communicates with the API server over HTTP and has no direct dependency on internal crates.
 
 ## Crate Details
 
@@ -147,6 +147,13 @@ Axum HTTP server with:
 - **Plugin registry**: Loads `DocumentPlugin`, `SearchPlugin`, and `ChunkPlugin` implementations from config at startup, enabling extension without modifying core crates
 - **Embedding cache**: Optional in-process or Redis-backed cache keyed by content hash, reducing redundant embedding API calls
 - **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions
+
+### thairag-cli
+Command-line interface for managing the ThaiRAG platform remotely:
+- **Standalone binary** — Communicates with the API server over HTTP (configurable via `--url` or `THAIRAG_URL` env var)
+- **Authentication** — Supports API key auth via `--api-key` or `THAIRAG_API_KEY` env var
+- **Subcommands** — `health` (with `--deep` flag), `status`, and management commands for KM hierarchy, documents, and system operations
+- Dependencies: `clap`, `colored`, `reqwest`, `serde_json`
 
 ## Data Flow
 
@@ -315,6 +322,16 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - `inference_logs` — Per-request LLM call logs for evaluation and cost tracking
 - `settings` — KV store for runtime configuration, feedback data, tuning parameters
 - `audit_log` — Security audit trail
+- `search_analytics_events` — Per-query search telemetry (latency, result count, zero-result flag)
+- `lineage_records` — Response-to-chunk-to-document attribution chain
+- `personal_memories` — DB-backed personal memory rows with type, importance, and relevance scores
+- `tenants` — Multi-tenant definitions with plan and active status
+- `tenant_org_mapping` — Maps organizations to tenants for data isolation
+- `custom_roles` — RBAC v2 custom role definitions with granular permissions
+- `prompt_templates` — Prompt marketplace templates with ratings and versioning
+- `training_datasets`, `training_pairs`, `finetune_jobs` — Embedding fine-tuning pipeline tables
+- `document_comments`, `document_annotations`, `document_reviews` — Document collaboration
+- `regression_runs` — Search quality regression test results
 
 **Redis** serves as a complementary store (when configured) for: chat sessions, embedding vector cache (keyed by content hash), and the async job queue. Redis state is ephemeral and automatically rebuilt from the primary database on reconnect.
 
@@ -366,3 +383,128 @@ JSON-formatted logs with tracing spans:
 ```
 
 Configure log level via `RUST_LOG` environment variable.
+
+## Phase 6: Analytics, Governance, and Platform Features
+
+### Search Analytics Pipeline
+
+Every chat request records search telemetry via a fire-and-forget pattern. After the RAG pipeline completes (in both streaming and non-streaming code paths), `chat.rs` constructs a `SearchAnalyticsEvent` capturing the query text (truncated to 2000 chars), user ID, workspace ID, result count, search latency in milliseconds, and a zero-results flag. The event is written to the `search_analytics_events` table via `tokio::spawn`, so the response is never blocked by analytics persistence.
+
+The store exposes several query methods on this data:
+- `list_search_events` with time-range, workspace, user, and zero-results-only filtering
+- `get_popular_queries` returning top queries by frequency with average result count and latency
+- `get_search_analytics_summary` producing aggregate metrics: total searches, zero-result count, average latency, average results, and searches-per-day time series
+
+### Document Lineage Tracking
+
+After each chat response is generated, the system records which document chunks contributed to it. For every chunk in `meta.retrieved_chunks`, a `LineageRecord` is inserted (also via `tokio::spawn` fire-and-forget) linking:
+
+```
+response_id  --->  chunk_id  --->  doc_id
+     │                │              │
+     │                │              └─ doc_title (human-readable)
+     │                └─ chunk_text_preview, score, rank
+     └─ query_text, timestamp, contributed (bool)
+```
+
+The `contributed` flag distinguishes chunks that were actually included in the LLM context from those that were retrieved but filtered out by reranking or score thresholds. Two query directions are supported:
+- `get_lineage_for_response(response_id)` — "What sources backed this answer?"
+- `get_lineage_for_document(doc_id, limit)` — "Which queries have cited this document?"
+
+### Multi-tenancy Architecture
+
+Multi-tenancy adds a layer above the existing organization hierarchy. A `Tenant` has an ID, name, plan (e.g., "free", "standard", "enterprise"), and active flag. The `tenant_org_mapping` table maps organizations to tenants, enforcing that each org belongs to at most one tenant.
+
+**Quota enforcement** is defined per tenant via `TenantQuota`:
+- `max_documents` (default 1,000)
+- `max_storage_bytes` (default 10 GB)
+- `max_queries_per_day` (default 10,000)
+- `max_users` (default 50)
+- `max_workspaces` (default 20)
+
+Current usage is tracked via `TenantUsage` (documents, storage, daily queries, users, workspaces). The store provides `get_tenant_usage` to compute live counts and `get_tenant_quota` / `set_tenant_quota` for configuration. Data isolation is achieved by joining through `tenant_org_mapping` — queries for tenant-scoped data resolve the tenant's org IDs first, then filter all downstream tables (workspaces, documents, chunks) by those orgs.
+
+### RBAC v2 Custom Roles
+
+Phase 6 extends the fixed role hierarchy (`viewer` < `editor` < `admin` < `super_admin`) with user-defined custom roles. A `CustomRole` consists of:
+- **name** and **description** — Human-readable identifiers
+- **permissions** — A list of `RolePermission` entries, each specifying a **resource** (e.g., `"documents"`, `"workspaces"`, `"settings"`, `"analytics"`) and a set of **actions** (e.g., `["read", "write", "delete"]`)
+- **is_system** — Flag distinguishing built-in system roles (which cannot be deleted) from user-created roles
+
+Custom roles are managed via `insert_custom_role`, `get_custom_role`, `list_custom_roles`, `update_custom_role`, and `delete_custom_role` on `KmStoreTrait`. They complement rather than replace the existing role hierarchy — a user can be assigned a custom role that grants specific resource-action combinations not covered by the fixed tiers.
+
+### Qdrant Dimension Auto-detection
+
+The `QdrantVectorStore` in `thairag-provider-vectordb` uses lazy collection initialization with automatic dimension mismatch detection. On the first `upsert` call, `ensure_collection(dimension)` is invoked:
+
+1. If the collection does not exist, it is created with the given dimension and Cosine distance.
+2. If the collection exists, the current vector dimension is read from `collection_info`. If the existing dimension differs from the requested dimension (which happens when the user switches embedding models), the collection is **deleted and recreated** with the new dimension. A warning is logged indicating that existing vectors are incompatible.
+3. An `AtomicBool` (`collection_ready`) short-circuits subsequent checks after the first successful initialization.
+
+On `delete_all`, the `collection_ready` flag is reset to `false`, so the next upsert will re-check and potentially create a fresh collection with whatever dimension the new embedding model produces.
+
+### Streaming Reranking
+
+The `Reranker` trait in `thairag-core` exposes a `rerank_stream` method alongside the standard `rerank`:
+
+```rust
+async fn rerank_stream(
+    &self,
+    query: &str,
+    results: Vec<SearchResult>,
+) -> Result<Vec<SearchResult>>
+```
+
+The default implementation delegates to `rerank()`, so existing providers (Cohere, Jina, Passthrough) work without modification. The streaming variant is used by the test-query SSE pipeline (`test_query::stream`), where reranking results are emitted progressively as `pipeline_progress` events. This allows the admin UI to show reranked results appearing incrementally rather than waiting for the full batch.
+
+### Agent Memory Persistence
+
+Personal memories extracted during context compaction are persisted to the `personal_memories` database table via `KmStoreTrait`. Each `PersonalMemoryRow` stores:
+- **user_id** — Owner of the memory
+- **memory_type** — One of `preference`, `fact`, `decision`, `conversation`, `correction`
+- **summary** — The extracted memory text
+- **topics** — JSON array of topic tags
+- **importance** — Float weight (0.0 to 1.0)
+- **relevance_score** — Decays over time; used to rank memories when injecting into context
+- **created_at** / **last_accessed_at** — Timestamps for decay calculation
+
+During chat, the system embeds the user's query and performs a vector similarity search against the user's memory store (via `PersonalMemoryStore` trait on the VectorDB provider). Top-K results are injected as a system context message. The DB-backed storage ensures memories survive container restarts, complementing the vector store which holds the embeddings for similarity search.
+
+Store operations: `insert_personal_memory`, `list_personal_memories` (with limit), `delete_personal_memory`, `delete_all_personal_memories` (used on permission revocation), and `count_personal_memories`.
+
+### Prompt Marketplace
+
+The prompt marketplace provides a shared repository of reusable prompt templates. A `PromptTemplate` includes:
+- **name**, **description**, **category** — For discovery and filtering
+- **content** — The actual prompt text with `{{variable}}` placeholders
+- **variables** — List of expected variable names
+- **author_id** / **author_name** — Creator attribution
+- **version** — Monotonically increasing version number
+- **is_public** — Whether the template is visible to all users or only the author
+- **rating_avg** / **rating_count** — Aggregate user ratings
+
+Key operations on `KmStoreTrait`:
+- **CRUD** — `insert_prompt_template`, `get_prompt_template`, `update_prompt_template`, `delete_prompt_template`
+- **Discovery** — `list_prompt_templates` with `PromptTemplateFilter` supporting category, free-text search, public/private, author, and pagination
+- **Rating** — `rate_prompt_template` accepts a `PromptRating` (template_id, user_id, rating 1-5) and updates the template's aggregate scores
+- **Forking** — `fork_prompt_template` creates a copy under a new author, enabling users to customize community templates while preserving attribution to the original
+
+### Embedding Fine-tuning Pipeline
+
+The embedding fine-tuning pipeline allows creating domain-specific embedding models from user feedback and curated query-document pairs. The lifecycle involves three entities:
+
+1. **Training Datasets** (`TrainingDataset`) — Named collections with a description and pair count. Created via `insert_training_dataset`, listed, retrieved, or deleted.
+
+2. **Training Pairs** (`TrainingPair`) — Individual query-to-document relevance examples within a dataset:
+   - `query` — The search query text
+   - `positive_doc` — A document excerpt that is relevant to the query
+   - `negative_doc` (optional) — A document excerpt that is not relevant (for contrastive learning)
+
+3. **Fine-tune Jobs** (`FinetuneJob`) — Execution records tracking:
+   - `dataset_id` — Which dataset to train on
+   - `base_model` — The starting embedding model
+   - `status` — Lifecycle state: `pending` -> `running` -> `completed` | `failed`
+   - `metrics` — JSON blob with training metrics (loss, accuracy, etc.) populated on completion
+   - `output_model_path` — Path to the resulting fine-tuned model
+
+Job status transitions are managed via `update_finetune_job_status`. The admin UI can list all jobs, inspect metrics, and configure the output model as the active embedding provider.

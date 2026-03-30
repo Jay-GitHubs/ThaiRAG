@@ -452,3 +452,481 @@ curl -f http://localhost:8080/health?deep=true || alert
 ```
 
 This probes all configured providers and returns non-200 if any are unhealthy.
+
+---
+
+## Python SDK Integration
+
+The ThaiRAG Python SDK provides a high-level client for interacting with the ThaiRAG API, including Phase 6 features like search analytics, document lineage, and multi-tenancy management.
+
+### Installation
+
+```bash
+pip install thairag
+```
+
+### Basic Usage
+
+```python
+from thairag import ThaiRAGClient
+
+client = ThaiRAGClient(
+    base_url="http://localhost:8080",
+    api_key="trag_your_api_key_here",
+)
+
+# Chat completion (uses OpenAI-compatible endpoint internally)
+response = client.chat("What documents do we have about security?")
+print(response.content)
+print(response.sources)  # Document attribution
+
+# Streaming
+for chunk in client.chat_stream("Summarize our HR policies"):
+    print(chunk.content, end="")
+```
+
+### Search Analytics
+
+```python
+# Get popular queries over the last 30 days
+popular = client.analytics.popular_queries(days=30, limit=10)
+for q in popular:
+    print(f"{q.query} - {q.count} times")
+
+# Get zero-result queries (queries that returned no documents)
+zero_results = client.analytics.zero_result_queries(days=7)
+for q in zero_results:
+    print(f"No results for: {q.query}")
+
+# Get summary statistics
+stats = client.analytics.summary(days=30)
+print(f"Total queries: {stats.total_queries}")
+print(f"Avg results per query: {stats.avg_results}")
+print(f"Zero-result rate: {stats.zero_result_rate:.1%}")
+```
+
+### Document Lineage
+
+```python
+# Get lineage for a specific response (which chunks contributed)
+lineage = client.lineage.get_response_lineage(response_id="uuid-here")
+for record in lineage.chunks:
+    print(f"Document: {record.document_title}")
+    print(f"Chunk: {record.chunk_text[:100]}...")
+    print(f"Relevance: {record.relevance_score:.3f}")
+```
+
+### Multi-tenancy
+
+```python
+# Create a tenant
+tenant = client.tenants.create(
+    name="Acme Corp",
+    slug="acme",
+    quota={"max_documents": 5000, "max_storage_mb": 10240, "max_users": 100},
+)
+
+# List tenants
+tenants = client.tenants.list()
+
+# Switch tenant context for subsequent operations
+client.set_tenant("acme")
+```
+
+### Document Ingestion
+
+```python
+# Upload a file
+client.documents.upload(
+    workspace_id="ws-uuid",
+    file_path="/path/to/report.pdf",
+    title="Q1 2026 Report",
+)
+
+# Upload from text
+client.documents.create(
+    workspace_id="ws-uuid",
+    title="Meeting Notes",
+    content="Discussion points from the team meeting...",
+    format="text/plain",
+)
+```
+
+---
+
+## TypeScript SDK Integration
+
+### Installation
+
+```bash
+npm install thairag
+# or
+yarn add thairag
+```
+
+### Basic Usage
+
+```typescript
+import { ThaiRAGClient } from 'thairag';
+
+const client = new ThaiRAGClient({
+  baseUrl: 'http://localhost:8080',
+  apiKey: 'trag_your_api_key_here',
+});
+
+// Chat completion
+const response = await client.chat('What is our security policy?');
+console.log(response.content);
+console.log(response.sources); // Document attribution
+
+// Streaming
+const stream = client.chatStream('Summarize our HR policies');
+for await (const chunk of stream) {
+  process.stdout.write(chunk.content);
+}
+```
+
+### Using the OpenAI-compatible Interface
+
+Since ThaiRAG implements the OpenAI API, you can also use the standard OpenAI SDK directly:
+
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:8080/v1',
+  apiKey: 'trag_your_api_key_here',
+});
+
+const response = await client.chat.completions.create({
+  model: 'ThaiRAG-1.0',
+  messages: [{ role: 'user', content: 'Hello' }],
+});
+```
+
+### Search Analytics
+
+```typescript
+// Popular queries
+const popular = await client.analytics.popularQueries({ days: 30, limit: 10 });
+popular.forEach((q) => console.log(`${q.query} - ${q.count} times`));
+
+// Zero-result queries
+const zeroResults = await client.analytics.zeroResultQueries({ days: 7 });
+
+// Summary stats
+const stats = await client.analytics.summary({ days: 30 });
+console.log(`Total queries: ${stats.totalQueries}`);
+```
+
+### KM Hierarchy Management
+
+```typescript
+// Create organization -> department -> workspace
+const org = await client.km.createOrg({ name: 'Engineering' });
+const dept = await client.km.createDept(org.id, { name: 'Backend' });
+const ws = await client.km.createWorkspace(dept.id, { name: 'API Docs' });
+
+// Upload document
+await client.documents.upload(ws.id, {
+  file: fs.createReadStream('/path/to/doc.pdf'),
+  title: 'API Reference',
+});
+```
+
+---
+
+## Deployment CLI Integration in CI/CD
+
+The ThaiRAG deployment CLI can be integrated into CI/CD pipelines for automated health checks, backups, and deployments.
+
+### GitHub Actions Example
+
+```yaml
+name: Deploy ThaiRAG
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pre-deployment backup
+        run: thairag backup create --output /backups/pre-deploy-${{ github.sha }}
+
+      - name: Validate configuration
+        run: thairag config validate
+
+      - name: Deploy new version
+        run: thairag deploy --tag ${{ github.sha }}
+
+      - name: Post-deployment health check
+        run: |
+          sleep 10
+          thairag health --deep || {
+            echo "Health check failed, rolling back"
+            thairag deploy --tag ${{ env.PREVIOUS_TAG }}
+            exit 1
+          }
+
+      - name: Verify search quality
+        run: |
+          thairag status | grep -q "index_health: ok"
+```
+
+### Scheduled Backup (Cron)
+
+```bash
+# /etc/cron.d/thairag-backup
+0 2 * * * root thairag backup create --output /backups/$(date +\%Y\%m\%d) 2>&1 | logger -t thairag-backup
+```
+
+---
+
+## Search Analytics Integration
+
+Search analytics provides visibility into query patterns, helping you identify knowledge gaps and optimize your document corpus.
+
+### Tracking Query Patterns
+
+Every RAG query automatically records an analytics event when `search_analytics.enabled=true`. Events include:
+
+- Query text
+- Number of results returned
+- Response time (milliseconds)
+- Whether the query was a zero-result query
+- Timestamp
+- User ID (if authenticated)
+
+### API Endpoints
+
+```bash
+# Get popular queries
+curl "http://localhost:8080/api/km/analytics/popular-queries?days=30&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get zero-result queries (knowledge gaps)
+curl "http://localhost:8080/api/km/analytics/zero-result-queries?days=7" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get summary statistics
+curl "http://localhost:8080/api/km/analytics/summary?days=30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Zero-Result Analysis
+
+Zero-result queries indicate topics that users are asking about but your knowledge base does not cover. Use this data to:
+
+1. Identify missing documents that should be added to the knowledge base.
+2. Detect terminology mismatches between user queries and document content (consider adding synonyms or adjusting chunking).
+3. Track the zero-result rate over time to measure knowledge base completeness.
+
+### Integrating with External Analytics
+
+Export analytics data for external dashboards (e.g., Grafana, Kibana):
+
+```bash
+# Export raw analytics events as JSON
+curl "http://localhost:8080/api/km/analytics/export?format=json&from=2026-01-01&to=2026-03-30" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o analytics-export.json
+```
+
+---
+
+## Document Lineage for Compliance
+
+Document lineage tracks which document chunks contributed to each RAG response, providing an attribution chain for compliance and audit purposes.
+
+### How It Works
+
+1. When a RAG query is processed, the search pipeline identifies the most relevant chunks.
+2. After the response is generated, a lineage record is created (fire-and-forget via background task) linking the response to the specific chunks used.
+3. Each lineage record includes: response ID, chunk IDs, document IDs, relevance scores, and timestamp.
+
+### API Endpoints
+
+```bash
+# Get lineage for a specific response
+curl "http://localhost:8080/api/km/lineage/responses/$RESPONSE_ID" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get all lineage records for a document (which responses cited this document)
+curl "http://localhost:8080/api/km/lineage/documents/$DOCUMENT_ID" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Response Attribution Format
+
+```json
+{
+  "response_id": "uuid",
+  "query": "What is our data retention policy?",
+  "timestamp": "2026-03-30T10:15:00Z",
+  "chunks_used": [
+    {
+      "chunk_id": "uuid",
+      "document_id": "uuid",
+      "document_title": "Data Governance Policy v3",
+      "chunk_text": "Data shall be retained for a minimum of...",
+      "relevance_score": 0.923
+    }
+  ]
+}
+```
+
+### Compliance Use Cases
+
+- **Regulatory audit** -- demonstrate that AI responses are grounded in approved documents.
+- **Source verification** -- allow users to trace any answer back to its source material.
+- **Document impact analysis** -- before updating or deleting a document, see which responses have cited it.
+- **Quality assurance** -- review lineage records to verify that the RAG pipeline is retrieving relevant content.
+
+---
+
+## Audit Log Export for SIEM Integration
+
+ThaiRAG records structured audit events for security-relevant actions. These logs can be exported for ingestion into SIEM systems (Splunk, Elastic Security, Microsoft Sentinel, etc.).
+
+### Audited Actions
+
+- User login (success and failure)
+- User registration
+- Permission grants and revocations
+- User deletion
+- Document upload and deletion
+- KM hierarchy changes (org, dept, workspace CRUD)
+- Settings changes
+- API key creation and revocation
+- Identity provider configuration changes
+
+### Export API
+
+```bash
+# Export audit logs as JSON (for SIEM ingestion)
+curl "http://localhost:8080/api/km/audit/export?format=json&from=2026-03-01&to=2026-03-30" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o audit-log.json
+
+# Export as CSV (for spreadsheet analysis)
+curl "http://localhost:8080/api/km/audit/export?format=csv&from=2026-03-01&to=2026-03-30" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o audit-log.csv
+
+# Filter by action type
+curl "http://localhost:8080/api/km/audit/export?format=json&action=login_failed&from=2026-03-01" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Audit Log Analytics
+
+```bash
+# Get action counts by type (useful for dashboards)
+curl "http://localhost:8080/api/km/audit/analytics?from=2026-03-01&to=2026-03-30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Returns counts grouped by action type, useful for creating security dashboards that track login failures, permission changes, and other security-relevant events.
+
+### SIEM Integration Pattern
+
+For continuous ingestion, set up a scheduled job that exports audit logs since the last export:
+
+```bash
+#!/bin/bash
+LAST_EXPORT=$(cat /var/lib/thairag/last-audit-export 2>/dev/null || echo "1970-01-01")
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+curl -s "http://localhost:8080/api/km/audit/export?format=json&from=$LAST_EXPORT&to=$NOW" \
+  -H "Authorization: Bearer $TOKEN" \
+  | /opt/splunk/bin/splunk add oneshot -sourcetype thairag_audit
+
+echo "$NOW" > /var/lib/thairag/last-audit-export
+```
+
+---
+
+## Multi-tenancy Integration Patterns
+
+Multi-tenancy allows a single ThaiRAG deployment to serve multiple isolated organizations.
+
+### Tenant Provisioning
+
+```bash
+# Create a new tenant
+curl -X POST http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Corp",
+    "slug": "acme",
+    "quota": {
+      "max_documents": 5000,
+      "max_storage_mb": 10240,
+      "max_users": 100
+    }
+  }'
+
+# List all tenants
+curl http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get tenant details including usage
+curl http://localhost:8080/api/km/tenants/$TENANT_ID \
+  -H "Authorization: Bearer $TOKEN"
+
+# Update tenant quota
+curl -X PATCH http://localhost:8080/api/km/tenants/$TENANT_ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"quota": {"max_documents": 10000}}'
+```
+
+### Tenant-scoped Operations
+
+When multi-tenancy is enabled, all KM operations (orgs, departments, workspaces, documents) are scoped to the authenticated user's tenant. Super admins can operate across tenants by specifying the `X-Tenant-ID` header:
+
+```bash
+# Super admin: operate within a specific tenant
+curl http://localhost:8080/api/km/orgs \
+  -H "Authorization: Bearer $SUPER_ADMIN_TOKEN" \
+  -H "X-Tenant-ID: $TENANT_ID"
+```
+
+### Tenant Isolation Guarantees
+
+- **Data isolation** -- each tenant's documents, embeddings, and search indices are logically separated.
+- **Query isolation** -- RAG queries only search within the authenticated user's tenant boundary.
+- **User isolation** -- users belong to exactly one tenant; user lists and management are tenant-scoped.
+- **Quota enforcement** -- document counts, storage usage, and user counts are enforced per tenant.
+
+### SaaS Integration Pattern
+
+For SaaS applications that provision ThaiRAG tenants programmatically:
+
+```python
+# When a new customer signs up in your SaaS app:
+import requests
+
+def provision_thairag_tenant(customer_name: str, plan: str):
+    quotas = {
+        "starter": {"max_documents": 500, "max_storage_mb": 1024, "max_users": 10},
+        "business": {"max_documents": 5000, "max_storage_mb": 10240, "max_users": 100},
+        "enterprise": {"max_documents": 50000, "max_storage_mb": 102400, "max_users": 1000},
+    }
+
+    response = requests.post(
+        "http://thairag:8080/api/km/tenants",
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        json={
+            "name": customer_name,
+            "slug": customer_name.lower().replace(" ", "-"),
+            "quota": quotas[plan],
+        },
+    )
+    return response.json()["id"]
+```

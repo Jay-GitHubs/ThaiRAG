@@ -19,6 +19,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Chat Persistence** — Test chat history preserved across page navigation via sessionStorage
 - **Collapsible Settings UI** — All settings sections are collapsible for a cleaner interface
 - **Embedding Protection** — Warns before destructive embedding model changes, auto-saves snapshot before applying
+- **Qdrant Dimension Auto-Detection** — Automatically detects vector dimension from embeddings; recreates collections when dimensions change (e.g., after switching embedding models)
 - **Plugin System** — DocumentPlugin / SearchPlugin / ChunkPlugin interfaces with built-in plugins and runtime registration
 - **Multi-Modal RAG** — Image vision description and table extraction from PDFs via vision-capable LLMs
 - **API Versioning** — V1 OpenAI-compatible endpoint + V2 with metadata, sources, and intent in responses
@@ -57,6 +58,10 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Search Quality Regression Tests** — Golden query sets with expected results; CI-ready regression runner that fails when retrieval quality drops below threshold
 - **Streaming Reranking** — SSE-based progressive delivery of search results as reranking scores become available, reducing perceived latency
 - **Embedding Fine-tuning Pipeline** — Training data collection and management interface with job tracking for domain-adapted embedding models
+- **Python SDK** (`sdks/python/`) — Typed `httpx`-based client with full Pydantic model coverage; sync and async usage
+- **TypeScript SDK** (`sdks/typescript/`) — Typed `fetch`-based client with generated TypeScript interfaces; ESM and CJS builds
+- **Deployment CLI** (`crates/thairag-cli/`) — `trag` command-line tool for health checks, config inspection, backup, and rolling deploys
+- **Tenant Usage Fix** — Corrected `queries_today` computation across all three store backends (PostgreSQL, SQLite, in-memory)
 
 ### Developer Tools
 
@@ -356,13 +361,13 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 ## Testing
 
 ```bash
-# Backend tests (332+ tests)
+# Backend tests (334 tests)
 cargo test
 
 # Admin UI type check
 cd admin-ui && npx tsc --noEmit
 
-# Playwright e2e tests (173+ tests)
+# Playwright e2e tests (178 tests)
 cd admin-ui && npx playwright test
 
 # Load tests (requires k6)
