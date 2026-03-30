@@ -427,6 +427,81 @@ cd admin-ui && npx playwright test
 |-----|-------------|---------|-------------|
 | `plugins.enabled_plugins` | `THAIRAG__PLUGINS__ENABLED_PLUGINS` | `[]` | List of enabled plugin names |
 
+### Multi-tenancy
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `multi_tenancy.enabled` | `THAIRAG__MULTI_TENANCY__ENABLED` | `false` | Enable multi-tenant isolation |
+| `multi_tenancy.default_quota_docs` | `THAIRAG__MULTI_TENANCY__DEFAULT_QUOTA_DOCS` | `1000` | Default document quota per tenant |
+| `multi_tenancy.default_quota_storage_mb` | `THAIRAG__MULTI_TENANCY__DEFAULT_QUOTA_STORAGE_MB` | `5120` | Default storage quota per tenant (MB) |
+| `multi_tenancy.default_quota_users` | `THAIRAG__MULTI_TENANCY__DEFAULT_QUOTA_USERS` | `50` | Default user quota per tenant |
+
+To enable multi-tenancy:
+
+1. Set `THAIRAG__MULTI_TENANCY__ENABLED=true` in your environment or config file.
+2. Restart the ThaiRAG service.
+3. Provision tenants via the Admin UI (Settings > Multi-tenancy) or the API:
+
+```bash
+curl -X POST http://localhost:8080/api/km/tenants \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Corp",
+    "slug": "acme",
+    "quota": {
+      "max_documents": 5000,
+      "max_storage_mb": 10240,
+      "max_users": 100
+    }
+  }'
+```
+
+Each tenant receives its own isolated KM hierarchy (Org > Dept > Workspace > Documents). Users are assigned to tenants, and all queries are scoped to the tenant boundary. Super admins can manage all tenants; tenant admins can manage only their own.
+
+### Search Analytics
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `search_analytics.enabled` | `THAIRAG__SEARCH_ANALYTICS__ENABLED` | `true` | Enable search analytics event recording |
+| `search_analytics.retention_days` | `THAIRAG__SEARCH_ANALYTICS__RETENTION_DAYS` | `90` | Days to retain analytics data before automatic cleanup |
+
+When enabled, every RAG query records an analytics event (fire-and-forget via `tokio::spawn` to avoid impacting response latency). Events capture query text, result count, response time, and whether any results were returned. The Admin UI provides a Search Analytics dashboard showing popular queries, zero-result queries, and summary statistics with date range filtering.
+
+### Personal Memory
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `chat_pipeline.personal_memory_enabled` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_ENABLED` | `false` | Enable per-user memory across sessions |
+| `chat_pipeline.personal_memory_max_per_user` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MAX_PER_USER` | `200` | Maximum memory entries stored per user |
+| `chat_pipeline.personal_memory_top_k` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_TOP_K` | `5` | Number of memories retrieved per query |
+| `chat_pipeline.personal_memory_decay_factor` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_DECAY_FACTOR` | `0.95` | Relevance decay rate (0.0-1.0) |
+| `chat_pipeline.personal_memory_min_relevance` | `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_MIN_RELEVANCE` | `0.1` | Prune memories below this relevance score |
+
+To enable personal memory, set `THAIRAG__CHAT_PIPELINE__PERSONAL_MEMORY_ENABLED=true`. The system automatically extracts user preferences and facts from conversations and stores them per user. On subsequent queries, relevant memories are retrieved and injected into the LLM context for personalized responses. Memories are pruned when they exceed `max_per_user` or fall below `min_relevance` after decay.
+
+### Embedding Fine-tuning
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `embedding_finetune.enabled` | `THAIRAG__EMBEDDING_FINETUNE__ENABLED` | `false` | Enable embedding fine-tuning features |
+| `embedding_finetune.backend` | `THAIRAG__EMBEDDING_FINETUNE__BACKEND` | `local` | Fine-tuning backend: `local` or `remote` |
+
+Embedding fine-tuning allows training domain-specific embedding models from your document corpus. When enabled, the Admin UI exposes a Fine-tuning page where you can create training datasets from existing documents, launch fine-tuning jobs, and track their progress. The `local` backend runs fine-tuning on the same machine; `remote` delegates to an external training service.
+
+Fine-tuning is disabled by default because it is compute-intensive and requires sufficient GPU/CPU resources. Enable it only when you have a meaningful document corpus and want to improve retrieval quality for domain-specific terminology.
+
+### Qdrant Dimension Auto-detection
+
+When using Qdrant as the vector store, ThaiRAG automatically detects and handles embedding dimension mismatches. If you switch embedding models (e.g., from `text-embedding-3-small` at 1536 dimensions to `text-embedding-3-large` at 3072 dimensions), the following happens on startup:
+
+1. ThaiRAG queries the existing Qdrant collection for its configured vector dimension.
+2. If the dimension does not match the current embedding model's output dimension, ThaiRAG logs a warning and recreates the collection with the correct dimension.
+3. All existing vectors are invalidated (they were generated with a different model and are incompatible).
+4. If the Tantivy BM25 index contains chunks, those chunks are re-embedded in batches using the new model and re-indexed into Qdrant.
+
+This means switching embedding models is a safe operation -- no manual Qdrant administration is needed -- but be aware that re-embedding a large corpus takes time and incurs API costs if using a hosted embedding provider.
+
 ---
 
 ## Production Checklist
@@ -462,3 +537,93 @@ The project includes a GitHub Actions workflow (`.github/workflows/ci.yml`):
 2. **Clippy linting** — `cargo clippy -- -D warnings`
 3. **Tests** — `cargo test`
 4. **Docker build** — Verifies the Docker image builds successfully
+
+---
+
+## Deployment CLI
+
+ThaiRAG includes a deployment CLI (`thairag`) for operational tasks. The CLI connects to a running ThaiRAG instance and provides commands for health monitoring, configuration inspection, and backup management.
+
+### Health Check
+
+```bash
+# Basic health check (returns OK/DEGRADED/UNHEALTHY)
+thairag health
+
+# Deep health check — probes all configured providers (embedding, vector store, LLM)
+thairag health --deep
+```
+
+The `--deep` flag is equivalent to calling `GET /health?deep=true`. Use it in monitoring scripts and CI/CD pipelines to verify all dependencies are reachable.
+
+### Status
+
+```bash
+# Show service status: uptime, active sessions, document count, index health
+thairag status
+```
+
+Displays a summary of the running instance including version, tier, uptime, number of active sessions, total documents indexed, and Tantivy/Qdrant index health.
+
+### Configuration
+
+```bash
+# Show the resolved configuration (merges default + tier + local + env overrides)
+thairag config show
+
+# Show only a specific section
+thairag config show --section providers
+
+# Validate configuration without starting the server
+thairag config validate
+```
+
+Sensitive values (API keys, JWT secrets, database passwords) are redacted in the output. Use `--show-secrets` to display them (requires `--yes-i-know-what-i-am-doing` flag).
+
+### Backup
+
+```bash
+# Create a backup (PostgreSQL dump + Qdrant snapshot + Tantivy index archive)
+thairag backup create
+
+# Create a backup with a custom output directory
+thairag backup create --output /backups/$(date +%Y%m%d)
+
+# List available backups
+thairag backup list
+
+# Restore from a backup
+thairag backup restore --from /backups/20260330
+```
+
+Backups include the PostgreSQL database, Qdrant collection snapshots, and the Tantivy BM25 index directory. The `create` command produces a timestamped archive in the configured backup directory (default: `/data/backups`). Always create a backup before Docker volume rebuilds or embedding model changes.
+
+### Deploy
+
+```bash
+# Pull latest images and restart services with zero-downtime rolling update
+thairag deploy
+
+# Deploy a specific version
+thairag deploy --tag v1.2.3
+
+# Dry-run: show what would change without applying
+thairag deploy --dry-run
+```
+
+The `deploy` command orchestrates a rolling update: it pulls the specified image tag, stops the old container, starts the new one, waits for the health check to pass, and rolls back automatically if the health check fails within 60 seconds.
+
+### CI/CD Integration
+
+Use the CLI in CI/CD pipelines for automated verification and operations:
+
+```bash
+# Post-deployment verification
+thairag health --deep || { echo "Deployment health check failed"; exit 1; }
+
+# Scheduled backup (e.g., daily cron job)
+thairag backup create --output /backups/$(date +%Y%m%d)
+
+# Pre-deployment config validation
+thairag config validate || { echo "Invalid configuration"; exit 1; }
+```
