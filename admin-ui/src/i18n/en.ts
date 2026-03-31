@@ -1,4 +1,11 @@
 const en: Record<string, string> = {
+  // Sidebar menu groups
+  'menu.group.content': 'Content',
+  'menu.group.chatSearch': 'Chat & Search',
+  'menu.group.analytics': 'Analytics & Quality',
+  'menu.group.access': 'Access Control',
+  'menu.group.system': 'System',
+
   // Sidebar menu items
   'menu.dashboard': 'Dashboard',
   'menu.kmHierarchy': 'KM Hierarchy',
