@@ -1,4 +1,11 @@
 const th: Record<string, string> = {
+  // Sidebar menu groups
+  'menu.group.content': 'เนื้อหา',
+  'menu.group.chatSearch': 'แชทและค้นหา',
+  'menu.group.analytics': 'วิเคราะห์และคุณภาพ',
+  'menu.group.access': 'การควบคุมการเข้าถึง',
+  'menu.group.system': 'ระบบ',
+
   // Sidebar menu items
   'menu.dashboard': 'แดชบอร์ด',
   'menu.kmHierarchy': 'โครงสร้างฐานความรู้',
