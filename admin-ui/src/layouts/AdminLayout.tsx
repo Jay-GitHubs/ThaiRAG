@@ -28,7 +28,10 @@ import {
   SearchOutlined,
   AuditOutlined,
   CodeOutlined,
+  DatabaseOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { useThemeMode } from '../theme/ThemeContext';
@@ -47,34 +50,81 @@ const ROLE_LEVEL: Record<UserRole, number> = {
   viewer: 1,
 };
 
-// Menu items with translation keys instead of hardcoded labels
-const baseMenuItems: { key: string; icon: React.ReactNode; labelKey: string; minRole: UserRole }[] = [
+type MenuItem = { key: string; icon: React.ReactNode; labelKey: string; minRole: UserRole };
+type MenuGroup = {
+  groupKey: string;
+  labelKey: string;
+  icon: React.ReactNode;
+  items: MenuItem[];
+};
+
+// Top-level items (no group)
+const topLevelItems: MenuItem[] = [
   { key: '/', icon: <DashboardOutlined />, labelKey: 'menu.dashboard', minRole: 'viewer' },
-  { key: '/km', icon: <ApartmentOutlined />, labelKey: 'menu.kmHierarchy', minRole: 'editor' },
-  { key: '/documents', icon: <FileTextOutlined />, labelKey: 'menu.documents', minRole: 'editor' },
-  { key: '/knowledge-graph', icon: <NodeIndexOutlined />, labelKey: 'menu.knowledgeGraph', minRole: 'editor' },
-  { key: '/test-chat', icon: <MessageOutlined />, labelKey: 'menu.testChat', minRole: 'editor' },
-  { key: '/prompt-marketplace', icon: <CodeOutlined />, labelKey: 'menu.promptMarketplace', minRole: 'editor' },
-  { key: '/users', icon: <TeamOutlined />, labelKey: 'menu.users', minRole: 'admin' },
-  { key: '/tenants', icon: <TeamOutlined />, labelKey: 'menu.tenants', minRole: 'super_admin' },
-  { key: '/permissions', icon: <SafetyOutlined />, labelKey: 'menu.permissions', minRole: 'admin' },
-  { key: '/roles', icon: <SafetyOutlined />, labelKey: 'menu.roles', minRole: 'super_admin' },
-  { key: '/usage', icon: <BarChartOutlined />, labelKey: 'menu.usageCosts', minRole: 'admin' },
-  { key: '/feedback', icon: <FundOutlined />, labelKey: 'menu.feedbackTuning', minRole: 'admin' },
-  { key: '/analytics', icon: <LineChartOutlined />, labelKey: 'menu.analytics', minRole: 'admin' },
-  { key: '/search-analytics', icon: <SearchOutlined />, labelKey: 'menu.searchAnalytics', minRole: 'admin' },
-  { key: '/lineage', icon: <ApartmentOutlined />, labelKey: 'menu.lineage', minRole: 'admin' },
-  { key: '/connectors', icon: <ApiOutlined />, labelKey: 'menu.connectors', minRole: 'super_admin' },
-  { key: '/inference-logs', icon: <FileSearchOutlined />, labelKey: 'menu.inferenceLogs', minRole: 'super_admin' },
-  { key: '/eval', icon: <ExperimentOutlined />, labelKey: 'menu.searchEval', minRole: 'super_admin' },
-  { key: '/finetune', icon: <ExperimentOutlined />, labelKey: 'menu.finetune', minRole: 'super_admin' },
-  { key: '/ab-tests', icon: <SplitCellsOutlined />, labelKey: 'menu.abTesting', minRole: 'super_admin' },
-  { key: '/backup', icon: <CloudDownloadOutlined />, labelKey: 'menu.backupRestore', minRole: 'super_admin' },
-  { key: '/rate-limits', icon: <StopOutlined />, labelKey: 'menu.rateLimits', minRole: 'super_admin' },
-  { key: '/vector-migration', icon: <SwapOutlined />, labelKey: 'menu.vectorMigration', minRole: 'super_admin' },
-  { key: '/audit-log', icon: <AuditOutlined />, labelKey: 'menu.auditLog', minRole: 'super_admin' },
-  { key: '/settings', icon: <SettingOutlined />, labelKey: 'menu.settings', minRole: 'super_admin' },
   { key: '/system', icon: <HeartOutlined />, labelKey: 'menu.health', minRole: 'viewer' },
+];
+
+// Grouped menu items by use case
+const menuGroups: MenuGroup[] = [
+  {
+    groupKey: 'content',
+    labelKey: 'menu.group.content',
+    icon: <DatabaseOutlined />,
+    items: [
+      { key: '/km', icon: <ApartmentOutlined />, labelKey: 'menu.kmHierarchy', minRole: 'editor' },
+      { key: '/documents', icon: <FileTextOutlined />, labelKey: 'menu.documents', minRole: 'editor' },
+      { key: '/knowledge-graph', icon: <NodeIndexOutlined />, labelKey: 'menu.knowledgeGraph', minRole: 'editor' },
+      { key: '/prompt-marketplace', icon: <CodeOutlined />, labelKey: 'menu.promptMarketplace', minRole: 'editor' },
+    ],
+  },
+  {
+    groupKey: 'chatSearch',
+    labelKey: 'menu.group.chatSearch',
+    icon: <MessageOutlined />,
+    items: [
+      { key: '/test-chat', icon: <MessageOutlined />, labelKey: 'menu.testChat', minRole: 'editor' },
+      { key: '/search-analytics', icon: <SearchOutlined />, labelKey: 'menu.searchAnalytics', minRole: 'admin' },
+      { key: '/lineage', icon: <ApartmentOutlined />, labelKey: 'menu.lineage', minRole: 'admin' },
+    ],
+  },
+  {
+    groupKey: 'analytics',
+    labelKey: 'menu.group.analytics',
+    icon: <LineChartOutlined />,
+    items: [
+      { key: '/analytics', icon: <LineChartOutlined />, labelKey: 'menu.analytics', minRole: 'admin' },
+      { key: '/usage', icon: <BarChartOutlined />, labelKey: 'menu.usageCosts', minRole: 'admin' },
+      { key: '/feedback', icon: <FundOutlined />, labelKey: 'menu.feedbackTuning', minRole: 'admin' },
+      { key: '/inference-logs', icon: <FileSearchOutlined />, labelKey: 'menu.inferenceLogs', minRole: 'super_admin' },
+      { key: '/eval', icon: <ExperimentOutlined />, labelKey: 'menu.searchEval', minRole: 'super_admin' },
+      { key: '/ab-tests', icon: <SplitCellsOutlined />, labelKey: 'menu.abTesting', minRole: 'super_admin' },
+    ],
+  },
+  {
+    groupKey: 'access',
+    labelKey: 'menu.group.access',
+    icon: <SafetyOutlined />,
+    items: [
+      { key: '/users', icon: <TeamOutlined />, labelKey: 'menu.users', minRole: 'admin' },
+      { key: '/permissions', icon: <SafetyOutlined />, labelKey: 'menu.permissions', minRole: 'admin' },
+      { key: '/tenants', icon: <AppstoreOutlined />, labelKey: 'menu.tenants', minRole: 'super_admin' },
+      { key: '/roles', icon: <SafetyOutlined />, labelKey: 'menu.roles', minRole: 'super_admin' },
+    ],
+  },
+  {
+    groupKey: 'system',
+    labelKey: 'menu.group.system',
+    icon: <SettingOutlined />,
+    items: [
+      { key: '/settings', icon: <SettingOutlined />, labelKey: 'menu.settings', minRole: 'super_admin' },
+      { key: '/connectors', icon: <ApiOutlined />, labelKey: 'menu.connectors', minRole: 'super_admin' },
+      { key: '/finetune', icon: <ExperimentOutlined />, labelKey: 'menu.finetune', minRole: 'super_admin' },
+      { key: '/backup', icon: <CloudDownloadOutlined />, labelKey: 'menu.backupRestore', minRole: 'super_admin' },
+      { key: '/rate-limits', icon: <StopOutlined />, labelKey: 'menu.rateLimits', minRole: 'super_admin' },
+      { key: '/vector-migration', icon: <SwapOutlined />, labelKey: 'menu.vectorMigration', minRole: 'super_admin' },
+      { key: '/audit-log', icon: <AuditOutlined />, labelKey: 'menu.auditLog', minRole: 'super_admin' },
+    ],
+  },
 ];
 
 const languageOptions: { key: Locale; label: string }[] = [
@@ -103,18 +153,48 @@ export function AdminLayout() {
   const userRole = user?.role ?? 'viewer';
   const userLevel = ROLE_LEVEL[userRole] ?? 1;
 
-  const menuItems = baseMenuItems
-    .filter((item) => userLevel >= ROLE_LEVEL[item.minRole])
-    .map((item) => ({
-      key: item.key,
-      icon: item.icon,
-      label: t(item.labelKey),
-    }));
+  // Build grouped menu items
+  const menuItems: MenuProps['items'] = [];
 
-  const selectedKey = menuItems.find((item) => {
-    if (item.key === '/') return location.pathname === '/';
-    return location.pathname.startsWith(item.key);
-  })?.key || '/';
+  // Add top-level items first
+  for (const item of topLevelItems) {
+    if (userLevel >= ROLE_LEVEL[item.minRole]) {
+      menuItems.push({ key: item.key, icon: item.icon, label: t(item.labelKey) });
+    }
+  }
+
+  // Add grouped items as collapsible sub-menus
+  for (const group of menuGroups) {
+    const visibleChildren = group.items.filter(
+      (item) => userLevel >= ROLE_LEVEL[item.minRole],
+    );
+    if (visibleChildren.length === 0) continue;
+    menuItems.push({
+      key: group.groupKey,
+      icon: group.icon,
+      label: t(group.labelKey),
+      children: visibleChildren.map((item) => ({
+        key: item.key,
+        icon: item.icon,
+        label: t(item.labelKey),
+      })),
+    });
+  }
+
+  // Find selected key across all items (flat + grouped)
+  const allFlatKeys = [
+    ...topLevelItems.map((i) => i.key),
+    ...menuGroups.flatMap((g) => g.items.map((i) => i.key)),
+  ];
+  const selectedKey = allFlatKeys.find((key) => {
+    if (key === '/') return location.pathname === '/';
+    return location.pathname.startsWith(key);
+  }) || '/';
+
+  // Auto-open the group containing the selected key
+  const openKeys = menuGroups
+    .filter((g) => g.items.some((i) => i.key === selectedKey))
+    .map((g) => g.groupKey);
 
   const handleMenuClick = ({ key }: { key: string }) => {
     navigate(key);
@@ -134,6 +214,7 @@ export function AdminLayout() {
         theme="dark"
         mode="inline"
         selectedKeys={[selectedKey]}
+        defaultOpenKeys={openKeys}
         items={menuItems}
         onClick={handleMenuClick}
       />
@@ -154,6 +235,7 @@ export function AdminLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[selectedKey]}
+            defaultOpenKeys={openKeys}
             items={menuItems}
             onClick={handleMenuClick}
           />
