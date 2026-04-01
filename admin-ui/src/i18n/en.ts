@@ -5,6 +5,7 @@ const en: Record<string, string> = {
   'menu.group.analytics': 'Analytics & Quality',
   'menu.group.access': 'Access Control',
   'menu.group.system': 'System',
+  'menu.group.ai': 'AI / Models',
 
   // Sidebar menu items
   'menu.dashboard': 'Dashboard',
@@ -32,6 +33,7 @@ const en: Record<string, string> = {
   'menu.roles': 'Roles',
   'menu.settings': 'Settings',
   'menu.health': 'Health',
+  'menu.plugins': 'Plugins',
 
   // Header
   'header.loggedInAs': 'Logged in as {email}',
@@ -494,6 +496,56 @@ const en: Record<string, string> = {
   'quickstart.step4.desc': 'Send a test query in Test Chat to verify everything works.',
   'quickstart.step5.title': 'Add Users (Optional)',
   'quickstart.step5.desc': 'Create user accounts and assign roles for your team.',
+
+  // Fine-tuning — Import & Export
+  'finetune.import.title': 'Import from Feedback',
+  'finetune.import.button': 'Import from Feedback',
+  'finetune.import.source': 'Source',
+  'finetune.import.source.positive': 'Positive Feedback',
+  'finetune.import.source.golden': 'Golden Examples',
+  'finetune.import.source.both': 'Both',
+  'finetune.import.minScore': 'Min Chunk Score (0 = no filter)',
+  'finetune.import.ok': 'Import',
+  'finetune.import.success': 'Imported {imported} pairs ({skipped} duplicates skipped)',
+  'finetune.import.error': 'Failed to import feedback',
+  'finetune.export.button': 'Export',
+  'finetune.export.openai': 'Export OpenAI JSONL',
+  'finetune.export.alpaca': 'Export Alpaca JSONL',
+  'finetune.export.error': 'Export failed',
+
+  // Fine-tuning — Training Jobs
+  'finetune.job.start': 'Start',
+  'finetune.job.cancel': 'Cancel',
+  'finetune.job.delete': 'Delete',
+  'finetune.job.logs': 'Logs',
+  'finetune.job.createTitle': 'Create Fine-tuning Job',
+  'finetune.job.startSuccess': 'Training started',
+  'finetune.job.cancelSuccess': 'Training cancelled',
+  'finetune.job.deleteSuccess': 'Job deleted',
+  'finetune.config.preset': 'Quality Preset',
+  'finetune.config.preset.quick': 'Quick',
+  'finetune.config.preset.quick.desc': '1 epoch, higher LR, rank 8 — fast iteration',
+  'finetune.config.preset.standard': 'Standard',
+  'finetune.config.preset.standard.desc': '3 epochs, balanced settings — recommended',
+  'finetune.config.preset.thorough': 'Thorough',
+  'finetune.config.preset.thorough.desc': '5 epochs, lower LR, rank 32 — best quality',
+  'finetune.config.epochs': 'Epochs',
+  'finetune.config.learningRate': 'Learning Rate',
+  'finetune.config.loraRank': 'LoRA Rank',
+  'finetune.config.loraAlpha': 'LoRA Alpha',
+  'finetune.config.batchSize': 'Batch Size',
+  'finetune.config.warmupRatio': 'Warmup Ratio',
+  'finetune.config.maxSeqLength': 'Max Seq Length',
+  'finetune.config.quantization': 'GGUF Quantization',
+  'finetune.config.modelSource': 'Model Source',
+  'finetune.config.advanced': 'Advanced Settings',
+  'finetune.status.pending': 'Pending',
+  'finetune.status.running': 'Running',
+  'finetune.status.completed': 'Completed',
+  'finetune.status.failed': 'Failed',
+  'finetune.status.cancelled': 'Cancelled',
+  'finetune.output.title': 'Output Model',
+  'finetune.output.registerOllama': 'Register with Ollama',
 };
 
 export default en;

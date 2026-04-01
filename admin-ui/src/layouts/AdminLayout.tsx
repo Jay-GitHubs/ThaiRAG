@@ -30,6 +30,7 @@ import {
   CodeOutlined,
   DatabaseOutlined,
   AppstoreOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -77,6 +78,14 @@ const menuGroups: MenuGroup[] = [
       { key: '/km', icon: <ApartmentOutlined />, labelKey: 'menu.kmHierarchy', minRole: 'editor' },
       { key: '/documents', icon: <FileTextOutlined />, labelKey: 'menu.documents', minRole: 'editor' },
       { key: '/knowledge-graph', icon: <NodeIndexOutlined />, labelKey: 'menu.knowledgeGraph', minRole: 'editor' },
+    ],
+  },
+  {
+    groupKey: 'ai',
+    labelKey: 'menu.group.ai',
+    icon: <RobotOutlined />,
+    items: [
+      { key: '/finetune', icon: <ExperimentOutlined />, labelKey: 'menu.finetune', minRole: 'super_admin' },
       { key: '/prompt-marketplace', icon: <CodeOutlined />, labelKey: 'menu.promptMarketplace', minRole: 'editor' },
     ],
   },
@@ -121,11 +130,11 @@ const menuGroups: MenuGroup[] = [
     items: [
       { key: '/settings', icon: <SettingOutlined />, labelKey: 'menu.settings', minRole: 'super_admin' },
       { key: '/connectors', icon: <ApiOutlined />, labelKey: 'menu.connectors', minRole: 'super_admin' },
-      { key: '/finetune', icon: <ExperimentOutlined />, labelKey: 'menu.finetune', minRole: 'super_admin' },
       { key: '/backup', icon: <CloudDownloadOutlined />, labelKey: 'menu.backupRestore', minRole: 'super_admin' },
       { key: '/rate-limits', icon: <StopOutlined />, labelKey: 'menu.rateLimits', minRole: 'super_admin' },
       { key: '/vector-migration', icon: <SwapOutlined />, labelKey: 'menu.vectorMigration', minRole: 'super_admin' },
       { key: '/audit-log', icon: <AuditOutlined />, labelKey: 'menu.auditLog', minRole: 'super_admin' },
+      { key: '/plugins', icon: <AppstoreOutlined />, labelKey: 'menu.plugins', minRole: 'super_admin' },
     ],
   },
 ];
@@ -252,7 +261,7 @@ export function AdminLayout() {
           placement="left"
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
-          width={256}
+          width={screens.xs ? 240 : 280}
           styles={{
             body: { padding: 0, backgroundColor: '#001529' },
             header: { display: 'none' },

@@ -487,10 +487,24 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             delete(finetune::delete_pair),
         )
         .route(
+            "/finetune/datasets/{id}/import-feedback",
+            post(finetune::import_feedback),
+        )
+        .route(
+            "/finetune/datasets/{id}/export",
+            get(finetune::export_dataset),
+        )
+        .route(
             "/finetune/jobs",
             get(finetune::list_jobs).post(finetune::create_job),
         )
-        .route("/finetune/jobs/{id}", get(finetune::get_job))
+        .route(
+            "/finetune/jobs/{id}",
+            get(finetune::get_job).delete(finetune::delete_job),
+        )
+        .route("/finetune/jobs/{id}/start", post(finetune::start_job))
+        .route("/finetune/jobs/{id}/cancel", post(finetune::cancel_job))
+        .route("/finetune/jobs/{id}/logs", get(finetune::get_job_logs))
         // Prompt Marketplace
         .route(
             "/prompts/marketplace",

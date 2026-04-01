@@ -47,6 +47,11 @@ impl PostgresKmStore {
             .await
             .map_err(|e| ThaiRagError::Config(format!("Postgres schema failed: {e}")))?;
 
+        // Incremental migrations for columns added after initial schema
+        let _ = sqlx::query("ALTER TABLE finetune_jobs ADD COLUMN IF NOT EXISTS config TEXT")
+            .execute(&pool)
+            .await;
+
         Ok(Self { pool })
     }
 }
@@ -4689,7 +4694,7 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn list_training_datasets(&self) -> Vec<super::TrainingDataset> {
         block_on(
-            sqlx::query_as::<_, (String, String, String, i64, chrono::DateTime<chrono::Utc>)>(
+            sqlx::query_as::<_, (String, String, String, i32, chrono::DateTime<chrono::Utc>)>(
                 "SELECT id, name, description, pair_count, created_at FROM training_datasets ORDER BY created_at DESC",
             )
             .fetch_all(&self.pool),
@@ -4708,7 +4713,7 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn get_training_dataset(&self, id: &str) -> Result<super::TrainingDataset> {
         block_on(
-            sqlx::query_as::<_, (String, String, String, i64, chrono::DateTime<chrono::Utc>)>(
+            sqlx::query_as::<_, (String, String, String, i32, chrono::DateTime<chrono::Utc>)>(
                 "SELECT id, name, description, pair_count, created_at FROM training_datasets WHERE id = $1",
             )
             .bind(id)
@@ -4832,7 +4837,7 @@ impl KmStoreTrait for PostgresKmStore {
             .unwrap_or_else(|_| chrono::Utc::now());
         block_on(
             sqlx::query(
-                "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(&job.id)
             .bind(&job.dataset_id)
@@ -4840,6 +4845,7 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(&job.status)
             .bind(&job.metrics)
             .bind(&job.output_model_path)
+            .bind(&job.config)
             .bind(ca)
             .bind(ua)
             .execute(&self.pool),
@@ -4850,20 +4856,21 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
         block_on(
-            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs WHERE id = $1",
+            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at FROM finetune_jobs WHERE id = $1",
             )
             .bind(id)
             .fetch_optional(&self.pool),
         )
         .map_err(|e| ThaiRagError::Internal(format!("get_finetune_job: {e}")))?
-        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, ca, ua)| super::FinetuneJob {
+        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, config, ca, ua)| super::FinetuneJob {
             id,
             dataset_id,
             base_model,
             status,
             metrics,
             output_model_path,
+            config,
             created_at: ca.to_rfc3339(),
             updated_at: ua.to_rfc3339(),
         })
@@ -4872,20 +4879,21 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
         block_on(
-            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC",
+            sqlx::query_as::<_, (String, String, String, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+                "SELECT id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC",
             )
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, ca, ua)| super::FinetuneJob {
+        .map(|(id, dataset_id, base_model, status, metrics, output_model_path, config, ca, ua)| super::FinetuneJob {
             id,
             dataset_id,
             base_model,
             status,
             metrics,
             output_model_path,
+            config,
             created_at: ca.to_rfc3339(),
             updated_at: ua.to_rfc3339(),
         })
@@ -4910,6 +4918,49 @@ impl KmStoreTrait for PostgresKmStore {
             .execute(&self.pool),
         )
         .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_status: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn update_finetune_job_full(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+        output_model_path: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let result = block_on(
+            sqlx::query(
+                "UPDATE finetune_jobs SET status=$2, metrics=COALESCE($3, metrics), output_model_path=COALESCE($4, output_model_path), updated_at=$5 WHERE id=$1",
+            )
+            .bind(id)
+            .bind(status)
+            .bind(metrics)
+            .bind(output_model_path)
+            .bind(now)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_full: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_finetune_job(&self, id: &str) -> Result<()> {
+        let result = block_on(
+            sqlx::query("DELETE FROM finetune_jobs WHERE id=$1")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("delete_finetune_job: {e}")))?;
         if result.rows_affected() == 0 {
             return Err(ThaiRagError::NotFound(format!(
                 "FinetuneJob {id} not found"

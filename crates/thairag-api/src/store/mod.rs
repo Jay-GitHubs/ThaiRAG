@@ -568,9 +568,10 @@ pub struct FinetuneJob {
     pub id: String,
     pub dataset_id: String,
     pub base_model: String,
-    pub status: String,          // "pending", "running", "completed", "failed"
+    pub status: String, // "pending", "running", "completed", "failed", "cancelled"
     pub metrics: Option<String>, // JSON
     pub output_model_path: Option<String>,
+    pub config: Option<String>, // JSON-serialized TrainingConfig
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1075,6 +1076,14 @@ pub trait KmStoreTrait: Send + Sync {
         status: &str,
         metrics: Option<&str>,
     ) -> Result<()>;
+    fn update_finetune_job_full(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+        output_model_path: Option<&str>,
+    ) -> Result<()>;
+    fn delete_finetune_job(&self, id: &str) -> Result<()>;
 }
 
 /// Factory function to create the appropriate KM store.

@@ -19,6 +19,7 @@ pub mod rate_limit;
 pub mod routes;
 pub mod session;
 pub mod store;
+pub mod training_runner;
 pub mod vault;
 pub mod vector_migration;
 pub mod webhook;

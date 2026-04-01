@@ -48,6 +48,7 @@ impl SqliteKmStore {
             "ALTER TABLE documents ADD COLUMN refresh_schedule TEXT",
             "ALTER TABLE documents ADD COLUMN last_refreshed_at TEXT",
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE finetune_jobs ADD COLUMN config TEXT",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -4718,8 +4719,8 @@ impl KmStoreTrait for SqliteKmStore {
     fn insert_finetune_job(&self, job: &super::FinetuneJob) -> Result<super::FinetuneJob> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![job.id, job.dataset_id, job.base_model, job.status, job.metrics, job.output_model_path, job.created_at, job.updated_at],
+            "INSERT INTO finetune_jobs (id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![job.id, job.dataset_id, job.base_model, job.status, job.metrics, job.output_model_path, job.config, job.created_at, job.updated_at],
         )
         .map_err(|e| ThaiRagError::Internal(format!("insert_finetune_job: {e}")))?;
         Ok(job.clone())
@@ -4728,7 +4729,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs WHERE id = ?1",
+            "SELECT id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at FROM finetune_jobs WHERE id = ?1",
             params![id],
             |row| {
                 Ok(super::FinetuneJob {
@@ -4738,8 +4739,9 @@ impl KmStoreTrait for SqliteKmStore {
                     status: row.get(3)?,
                     metrics: row.get(4)?,
                     output_model_path: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
+                    config: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
                 })
             },
         )
@@ -4749,7 +4751,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, dataset_id, base_model, status, metrics, output_model_path, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC")
+            .prepare("SELECT id, dataset_id, base_model, status, metrics, output_model_path, config, created_at, updated_at FROM finetune_jobs ORDER BY created_at DESC")
             .unwrap();
         stmt.query_map([], |row| {
             Ok(super::FinetuneJob {
@@ -4759,8 +4761,9 @@ impl KmStoreTrait for SqliteKmStore {
                 status: row.get(3)?,
                 metrics: row.get(4)?,
                 output_model_path: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                config: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })
         .unwrap()
@@ -4782,6 +4785,42 @@ impl KmStoreTrait for SqliteKmStore {
                 params![id, status, metrics, now],
             )
             .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_status: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn update_finetune_job_full(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+        output_model_path: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let n = conn
+            .execute(
+                "UPDATE finetune_jobs SET status = ?2, metrics = COALESCE(?3, metrics), output_model_path = COALESCE(?4, output_model_path), updated_at = ?5 WHERE id = ?1",
+                params![id, status, metrics, output_model_path, now],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("update_finetune_job_full: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound(format!(
+                "FinetuneJob {id} not found"
+            )));
+        }
+        Ok(())
+    }
+
+    fn delete_finetune_job(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute("DELETE FROM finetune_jobs WHERE id = ?1", params![id])
+            .map_err(|e| ThaiRagError::Internal(format!("delete_finetune_job: {e}")))?;
         if n == 0 {
             return Err(ThaiRagError::NotFound(format!(
                 "FinetuneJob {id} not found"
