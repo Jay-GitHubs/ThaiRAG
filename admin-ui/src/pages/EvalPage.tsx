@@ -19,6 +19,7 @@ import {
   Spin,
   Tag,
   Tooltip,
+  Tour,
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -43,6 +44,9 @@ import type {
   EvalMetrics,
   QueryEvalResult,
 } from '../api/eval';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getEvalSteps } from '../tours/steps/eval';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -75,6 +79,9 @@ function MetricCard({ title, value, suffix }: { title: string; value: number; su
 // ── Main Page ───────────────────────────────────────────────────────
 
 export default function EvalPage() {
+  const { t } = useI18n();
+  const tour = useTour('eval');
+
   const [querySets, setQuerySets] = useState<EvalQuerySet[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -400,12 +407,15 @@ export default function EvalPage() {
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
-          <Title level={3} style={{ margin: 0 }}>
-            Search Quality Evaluation
-          </Title>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Title level={3} style={{ margin: 0 }}>
+              Search Quality Evaluation
+            </Title>
+            <TourGuideButton tourId="eval" />
+          </div>
         </Col>
         <Col>
-          <Space>
+          <Space data-tour="eval-actions">
             <Button icon={<ReloadOutlined />} onClick={loadSets}>
               Refresh
             </Button>
@@ -419,7 +429,7 @@ export default function EvalPage() {
         </Col>
       </Row>
 
-      <Card title="Query Sets" style={{ marginBottom: 24 }}>
+      <Card title="Query Sets" style={{ marginBottom: 24 }} data-tour="eval-table">
         <Table
           dataSource={querySets}
           columns={setColumns}
@@ -433,6 +443,7 @@ export default function EvalPage() {
       {/* Results Section */}
       {selectedSet && (
         <Card
+          data-tour="eval-results"
           title={`Results: ${selectedSet.name}`}
           extra={
             <Button
@@ -580,6 +591,12 @@ export default function EvalPage() {
           </Form.Item>
         </Form>
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getEvalSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </div>
   );
 }

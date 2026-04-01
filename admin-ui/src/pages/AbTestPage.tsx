@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Typography, Card, Button, Table, Tag, Space, Modal, Form, Input, InputNumber,
-  message, Popconfirm, Descriptions, Row, Col, Statistic, Collapse, Spin,
+  message, Popconfirm, Descriptions, Row, Col, Statistic, Collapse, Spin, Tour,
 } from 'antd';
 import {
   PlusOutlined, PlayCircleOutlined, DeleteOutlined, EyeOutlined,
   TrophyOutlined, SwapOutlined,
 } from '@ant-design/icons';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getAbTestSteps } from '../tours/steps/abTest';
 import type { ColumnsType } from 'antd/es/table';
 import {
   listAbTests, createAbTest, deleteAbTest, runAbTest, compareAbTest,
@@ -17,6 +20,9 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 export default function AbTestPage() {
+  const { t } = useI18n();
+  const tour = useTour('ab-tests');
+
   const [tests, setTests] = useState<AbTest[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -236,13 +242,16 @@ export default function AbTestPage() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={3} style={{ margin: 0 }}>A/B Testing</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Title level={3} style={{ margin: 0 }}>A/B Testing</Title>
+          <TourGuideButton tourId="ab-tests" />
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="ab-create">
           New Test
         </Button>
       </div>
 
-      <Card>
+      <Card data-tour="ab-table">
         <Table
           columns={columns}
           dataSource={tests}
@@ -498,6 +507,12 @@ export default function AbTestPage() {
           </>
         )}
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getAbTestSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </div>
   );
 }

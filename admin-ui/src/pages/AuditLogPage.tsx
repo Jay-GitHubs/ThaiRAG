@@ -15,6 +15,7 @@ import {
   Empty,
   Spin,
   Tooltip,
+  Tour,
   message,
   theme,
 } from 'antd';
@@ -33,6 +34,9 @@ import {
   getAuditAnalytics,
 } from '../api/auditLog';
 import type { AuditLogEntry, AuditAnalytics } from '../api/auditLog';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getAuditLogSteps } from '../tours/steps/auditLog';
 
 const { RangePicker } = DatePicker;
 
@@ -224,7 +228,7 @@ function LogBrowserTab() {
 
   return (
     <>
-      <Card size="small" style={{ marginBottom: 16 }}>
+      <Card size="small" style={{ marginBottom: 16 }} data-tour="audit-filters">
         <Space wrap>
           <RangePicker
             value={dateRange}
@@ -253,21 +257,24 @@ function LogBrowserTab() {
               { label: 'Settings Change', value: 'settings_change' },
             ]}
           />
-          <Button icon={<CloudDownloadOutlined />} onClick={handleExportJson} loading={exporting} size="small">
-            Export JSON
-          </Button>
-          <Button icon={<CloudDownloadOutlined />} onClick={handleExportCsv} loading={exporting} size="small">
-            Export CSV
-          </Button>
+          <span data-tour="audit-export">
+            <Button icon={<CloudDownloadOutlined />} onClick={handleExportJson} loading={exporting} size="small">
+              Export JSON
+            </Button>
+            <Button icon={<CloudDownloadOutlined />} onClick={handleExportCsv} loading={exporting} size="small" style={{ marginLeft: 8 }}>
+              Export CSV
+            </Button>
+          </span>
         </Space>
       </Card>
 
       <Table<AuditLogEntry>
+        data-tour="audit-table"
         dataSource={entries}
         rowKey="id"
         columns={columns}
         loading={loading}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `${t} events` }}
+        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `${total} events` }}
         size="small"
         scroll={{ x: 'max-content' }}
       />
@@ -383,17 +390,23 @@ function AnalyticsTab() {
 // ── Main Page ─────────────────────────────────────────────────────
 
 export default function AuditLogPage() {
+  const { t } = useI18n();
+  const tour = useTour('audit-log');
+
   return (
     <>
-      <Space align="baseline" style={{ marginBottom: 16 }}>
-        <AuditOutlined style={{ fontSize: 18 }} />
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Audit Log
-        </Typography.Title>
-        <Tooltip title="A tamper-evident record of all admin and system actions for compliance and security review.">
-          <QuestionCircleOutlined style={{ fontSize: 16 }} />
-        </Tooltip>
-      </Space>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Space align="baseline" style={{ marginBottom: 16 }}>
+          <AuditOutlined style={{ fontSize: 18 }} />
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Audit Log
+          </Typography.Title>
+          <Tooltip title="A tamper-evident record of all admin and system actions for compliance and security review.">
+            <QuestionCircleOutlined style={{ fontSize: 16 }} />
+          </Tooltip>
+        </Space>
+        <TourGuideButton tourId="audit-log" />
+      </div>
 
       <Tabs
         defaultActiveKey="logs"
@@ -417,6 +430,12 @@ export default function AuditLogPage() {
             children: <AnalyticsTab />,
           },
         ]}
+      />
+      <Tour
+        open={tour.isActive}
+        steps={getAuditLogSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
       />
     </>
   );

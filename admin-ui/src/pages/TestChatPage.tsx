@@ -15,6 +15,7 @@ import {
   Modal,
   message,
   theme,
+  Tour,
 } from 'antd';
 import {
   SendOutlined,
@@ -43,6 +44,9 @@ import { useWorkspaces } from '../hooks/useWorkspaces';
 import { testQueryStream } from '../api/testQuery';
 import { submitFeedback } from '../api/feedback';
 import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress } from '../api/types';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getTestChatSteps } from '../tours/steps/testChat';
 
 interface ChatEntry {
   role: 'user' | 'assistant';
@@ -114,6 +118,8 @@ export function TestChatPage() {
   const [commentText, setCommentText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { token: themeToken } = theme.useToken();
+  const { t } = useI18n();
+  const tour = useTour('test-chat');
 
   const handleTimeoutChange = (value: number) => {
     setTimeoutMs(value);
@@ -332,14 +338,15 @@ export function TestChatPage() {
 
   return (
     <>
-      <Space align="baseline" style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Typography.Title level={4} style={{ margin: 0 }}>Test KM Chat</Typography.Title>
         <Tooltip title="Test your knowledge base by asking questions. The system searches for relevant document chunks, then generates an answer using your configured LLM. Use thumbs up/down to rate answers — this feedback auto-tunes the system over time.">
           <QuestionCircleOutlined style={{ color: themeToken.colorTextSecondary, fontSize: 16 }} />
         </Tooltip>
-      </Space>
+        <TourGuideButton tourId="test-chat" />
+      </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16 }} wrap data-tour="chat-ws-select">
         <Select
           placeholder="Select Organization"
           style={{ width: 200 }}
@@ -395,6 +402,7 @@ export function TestChatPage() {
         <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 280px)' }}>
           {/* Messages area */}
           <div
+            data-tour="chat-response"
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -517,7 +525,7 @@ export function TestChatPage() {
 
                 {/* Pipeline stages */}
                 {msg.pipelineStages && msg.pipelineStages.length > 0 && (
-                  <div style={{ maxWidth: '80%', marginTop: 8 }}>
+                  <div data-tour="chat-pipeline" style={{ maxWidth: '80%', marginTop: 8 }}>
                     <Collapse
                       size="small"
                       items={[
@@ -810,6 +818,7 @@ export function TestChatPage() {
           {/* Input area */}
           <Space.Compact style={{ width: '100%' }}>
             <Input.TextArea
+              data-tour="chat-input"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onPressEnter={(e) => {
@@ -834,6 +843,7 @@ export function TestChatPage() {
               />
             </Tooltip>
             <Button
+              data-tour="chat-send"
               type="primary"
               icon={<SendOutlined />}
               onClick={handleSend}
@@ -874,6 +884,12 @@ export function TestChatPage() {
           autoSize={{ minRows: 3, maxRows: 6 }}
         />
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getTestChatSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

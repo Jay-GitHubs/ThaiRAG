@@ -11,6 +11,7 @@ import {
   Empty,
   Spin,
   message,
+  Tour,
 } from 'antd';
 import {
   ApartmentOutlined,
@@ -20,6 +21,9 @@ import {
 } from '@ant-design/icons';
 import { getLineageByResponse, getLineageByDocument } from '../api/lineage';
 import type { LineageRecord } from '../api/lineage';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getLineageSteps } from '../tours/steps/lineage';
 
 const lineageColumns = [
   {
@@ -114,7 +118,7 @@ function ByResponseTab() {
   return (
     <>
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Space>
+        <Space data-tour="lineage-input">
           <Input
             placeholder="Enter response ID..."
             value={responseId}
@@ -141,14 +145,16 @@ function ByResponseTab() {
       )}
 
       {!loading && records.length > 0 && (
-        <Table<LineageRecord>
-          dataSource={records}
-          rowKey={(r) => `${r.response_id}-${r.chunk_id}`}
-          columns={lineageColumns}
-          pagination={{ pageSize: 20 }}
-          size="small"
-          scroll={{ x: 'max-content' }}
-        />
+        <div data-tour="lineage-results">
+          <Table<LineageRecord>
+            dataSource={records}
+            rowKey={(r) => `${r.response_id}-${r.chunk_id}`}
+            columns={lineageColumns}
+            pagination={{ pageSize: 20 }}
+            size="small"
+            scroll={{ x: 'max-content' }}
+          />
+        </div>
       )}
     </>
   );
@@ -222,16 +228,21 @@ function ByDocumentTab() {
 }
 
 export default function LineagePage() {
+  const { t } = useI18n();
+  const tour = useTour('lineage');
+
   return (
     <>
-      <Space align="baseline" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <ApartmentOutlined style={{ fontSize: 18 }} />
         <Typography.Title level={4} style={{ margin: 0 }}>
           Lineage
         </Typography.Title>
-      </Space>
+        <TourGuideButton tourId="lineage" />
+      </div>
 
       <Tabs
+        data-tour="lineage-tabs"
         defaultActiveKey="response"
         items={[
           {
@@ -245,6 +256,12 @@ export default function LineagePage() {
             children: <ByDocumentTab />,
           },
         ]}
+      />
+      <Tour
+        open={tour.isActive}
+        steps={getLineageSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
       />
     </>
   );

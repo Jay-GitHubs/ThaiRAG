@@ -6,6 +6,7 @@ import {
   Table,
   Tag,
   Tooltip,
+  Tour,
   Typography,
   message,
 } from 'antd';
@@ -39,6 +40,9 @@ import { ConnectorFormModal } from '../components/connectors/ConnectorFormModal'
 import { TemplatePickerModal } from '../components/connectors/TemplatePickerModal';
 import { SyncHistoryModal } from '../components/connectors/SyncHistoryModal';
 import { cronToHuman } from '../components/connectors/CronPicker';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getConnectorsSteps } from '../tours/steps/connectors';
 
 const statusColor: Record<string, string> = {
   active: 'success',
@@ -63,6 +67,9 @@ export function ConnectorsPage() {
   const pauseMut = usePauseConnector();
   const resumeMut = useResumeConnector();
   const testMut = useTestConnection();
+
+  const { t } = useI18n();
+  const tour = useTour('connectors');
 
   const [formOpen, setFormOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -266,11 +273,14 @@ export function ConnectorsPage() {
 
   return (
     <>
-      <Typography.Title level={4}>
-        <ApiOutlined /> MCP Connectors
-      </Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={4}>
+          <ApiOutlined /> MCP Connectors
+        </Typography.Title>
+        <TourGuideButton tourId="connectors" />
+      </div>
 
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} data-tour="connectors-add">
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -287,6 +297,7 @@ export function ConnectorsPage() {
       </Space>
 
       <Table<Connector>
+        data-tour="connectors-list"
         rowKey="id"
         columns={columns}
         dataSource={data?.data}
@@ -318,6 +329,12 @@ export function ConnectorsPage() {
         connectorName={historyConnector?.name ?? ''}
         open={!!historyConnector}
         onClose={() => setHistoryConnector(null)}
+      />
+      <Tour
+        open={tour.isActive}
+        steps={getConnectorsSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
       />
     </>
   );

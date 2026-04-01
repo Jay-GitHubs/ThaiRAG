@@ -31,10 +31,12 @@ import { RolesPage } from './pages/RolesPage';
 import PromptMarketplacePage from './pages/PromptMarketplacePage';
 import FinetunePage from './pages/FinetunePage';
 import { I18nProvider } from './i18n';
+import { TourProvider } from './tours';
 
 export function App() {
   return (
     <I18nProvider>
+    <TourProvider>
     <BrowserRouter>
       <Routes>
         <Route element={<AuthLayout />}>
@@ -76,6 +78,7 @@ export function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </TourProvider>
     </I18nProvider>
   );
 }
