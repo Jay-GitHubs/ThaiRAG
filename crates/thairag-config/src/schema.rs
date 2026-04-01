@@ -1327,6 +1327,12 @@ impl Default for SearchQualityConfig {
 pub struct EmbeddingFinetuneConfig {
     pub enabled: bool,
     pub output_dir: String,
+    #[serde(default = "default_python_path")]
+    pub python_path: String,
+    #[serde(default = "default_finetune_script_path")]
+    pub finetune_script_path: String,
+    #[serde(default = "default_finetune_output_dir")]
+    pub finetune_output_dir: String,
 }
 
 impl Default for EmbeddingFinetuneConfig {
@@ -1334,8 +1340,23 @@ impl Default for EmbeddingFinetuneConfig {
         Self {
             enabled: false,
             output_dir: "./data/finetuned_models".into(),
+            python_path: default_python_path(),
+            finetune_script_path: default_finetune_script_path(),
+            finetune_output_dir: default_finetune_output_dir(),
         }
     }
+}
+
+fn default_python_path() -> String {
+    "python3".into()
+}
+
+fn default_finetune_script_path() -> String {
+    "scripts/finetune/train.py".into()
+}
+
+fn default_finetune_output_dir() -> String {
+    "/data/finetune".into()
 }
 
 fn default_memory_backend() -> String {
