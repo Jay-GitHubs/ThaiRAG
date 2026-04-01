@@ -1,52 +1,196 @@
 /* ── Mobile Responsive Utilities ─────────────────────────────────── */
 
-@media (max-width: 768px) {
-  /* Table horizontal scroll */
+/* Extra-small devices (phones, < 576px) */
+@media (max-width: 575px) {
   .ant-table-wrapper {
     overflow-x: auto;
   }
 
-  /* Card grid adjustments */
+  .ant-table-wrapper .ant-table {
+    min-width: 500px;
+  }
+
   .ant-card {
     margin-bottom: 8px;
   }
 
-  /* Reduce content padding */
+  .ant-layout-content {
+    padding: 8px !important;
+    margin: 8px !important;
+  }
+
+  .mobile-menu-btn {
+    display: flex !important;
+  }
+
+  .header-user-text {
+    display: none !important;
+  }
+
+  .header-btn-text {
+    display: none !important;
+  }
+
+  /* Full-screen modals on very small screens */
+  .ant-modal {
+    max-width: calc(100vw - 16px) !important;
+    margin: 8px auto !important;
+    top: 8px !important;
+  }
+
+  .ant-modal .ant-modal-body {
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
+  }
+
+  .ant-form-item {
+    margin-bottom: 8px;
+  }
+
+  /* Drawer takes full width on small phones */
+  .ant-drawer .ant-drawer-content-wrapper {
+    max-width: 100vw !important;
+  }
+
+  /* Stack button groups vertically */
+  .ant-space-horizontal {
+    flex-wrap: wrap;
+  }
+
+  /* Compact card headers */
+  .ant-card-head-title {
+    font-size: 14px;
+  }
+
+  .ant-card-extra {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Tabs: scrollable on mobile */
+  .ant-tabs-nav {
+    margin-bottom: 8px !important;
+  }
+
+  /* Typography adjustments */
+  h3.ant-typography {
+    font-size: 18px !important;
+  }
+
+  /* Reduce stat card number size */
+  .ant-statistic-content-value {
+    font-size: 20px !important;
+  }
+
+  /* Tag compact */
+  .ant-tag {
+    margin-inline-end: 4px;
+    font-size: 11px;
+  }
+}
+
+/* Small devices (large phones, 576px-768px) */
+@media (max-width: 768px) {
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+
+  .ant-card {
+    margin-bottom: 8px;
+  }
+
   .ant-layout-content {
     padding: 12px !important;
     margin: 12px !important;
   }
 
-  /* Mobile hamburger button */
   .mobile-menu-btn {
     display: flex !important;
   }
 
-  /* Hide user email text on mobile */
   .header-user-text {
     display: none !important;
   }
 
-  /* Hide button text labels on mobile, keep icons */
   .header-btn-text {
     display: none !important;
   }
 
-  /* Make modals responsive on mobile */
   .ant-modal {
     max-width: calc(100vw - 32px) !important;
     margin: 16px auto !important;
   }
 
-  /* Compact form layout on mobile */
   .ant-form-item {
     margin-bottom: 12px;
   }
 }
 
-@media (min-width: 769px) {
-  /* Hide hamburger on desktop */
+/* Medium devices (tablets, 769px-992px) */
+@media (min-width: 769px) and (max-width: 992px) {
   .mobile-menu-btn {
     display: none !important;
+  }
+
+  /* Slightly compact layout for tablets */
+  .ant-layout-content {
+    padding: 16px !important;
+    margin: 16px !important;
+  }
+}
+
+/* Desktop (993px+) */
+@media (min-width: 769px) {
+  .mobile-menu-btn {
+    display: none !important;
+  }
+}
+
+/* ── Table Responsive Helpers ─────────────────────────────────────── */
+
+/* Hide lower-priority columns on small screens */
+@media (max-width: 768px) {
+  .responsive-hide-sm {
+    display: none !important;
+  }
+}
+
+@media (max-width: 575px) {
+  .responsive-hide-xs {
+    display: none !important;
+  }
+}
+
+/* ── Touch-Friendly Targets ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* Ensure adequate touch targets (44px min per WCAG) */
+  .ant-btn-sm {
+    min-height: 36px;
+    min-width: 36px;
+  }
+
+  .ant-switch {
+    min-width: 44px;
+  }
+
+  /* Better spacing for action buttons in tables */
+  .ant-table-cell .ant-space {
+    gap: 4px !important;
+  }
+}
+
+/* ── Print Styles ─────────────────────────────────────────────────── */
+
+@media print {
+  .ant-layout-sider,
+  .ant-layout-header,
+  .mobile-menu-btn {
+    display: none !important;
+  }
+
+  .ant-layout-content {
+    margin: 0 !important;
+    padding: 0 !important;
   }
 }

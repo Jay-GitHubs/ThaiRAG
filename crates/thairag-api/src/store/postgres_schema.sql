@@ -527,6 +527,7 @@ CREATE TABLE IF NOT EXISTS finetune_jobs (
     status              TEXT NOT NULL DEFAULT 'pending',
     metrics             TEXT,
     output_model_path   TEXT,
+    config              TEXT,
     created_at          TIMESTAMPTZ NOT NULL,
     updated_at          TIMESTAMPTZ NOT NULL
 );

@@ -361,8 +361,8 @@ test.describe('Fine-tuning page', () => {
     await navigateTo(page, 'Fine-tuning');
   });
 
-  test('shows Embedding Fine-tuning heading', async ({ page }) => {
-    await expect(page.getByText('Embedding Fine-tuning')).toBeVisible();
+  test('shows Fine-tuning heading', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: /Fine-tuning/ })).toBeVisible();
   });
 
   test('shows Datasets and Jobs tabs', async ({ page }) => {

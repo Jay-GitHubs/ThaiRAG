@@ -834,6 +834,7 @@ pub struct AppState {
     pub job_queue: Arc<dyn thairag_core::traits::JobQueue>,
     pub webhook_dispatcher: crate::webhook::WebhookDispatcher,
     pub plugin_registry: Arc<crate::plugin_registry::PluginRegistry>,
+    pub training_runner: Arc<crate::training_runner::TrainingRunner>,
     providers: Arc<RwLock<ProviderBundle>>,
     pub scoped_pipeline_cache: ScopedPipelineCache,
     migration_status: crate::vector_migration::SharedMigrationStatus,
@@ -1017,6 +1018,7 @@ impl AppState {
             job_queue: Arc::new(crate::job_queue::InMemoryJobQueue::new()),
             webhook_dispatcher,
             plugin_registry,
+            training_runner: Arc::new(crate::training_runner::TrainingRunner::new()),
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
             migration_status: Arc::new(tokio::sync::RwLock::new(
@@ -1261,6 +1263,10 @@ impl AppState {
             );
         }
 
+        // Recover interrupted finetune jobs
+        let training_runner = Arc::new(crate::training_runner::TrainingRunner::new());
+        crate::training_runner::TrainingRunner::recover_interrupted_jobs(&*km_store);
+
         Self {
             config: Arc::new(config),
             jwt,
@@ -1279,6 +1285,7 @@ impl AppState {
             job_queue,
             webhook_dispatcher,
             plugin_registry,
+            training_runner,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
             migration_status: Arc::new(tokio::sync::RwLock::new(

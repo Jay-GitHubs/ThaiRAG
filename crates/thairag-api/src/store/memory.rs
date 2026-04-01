@@ -64,7 +64,7 @@ pub struct MemoryKmStore {
     prompt_ratings: RwLock<Vec<super::PromptRating>>,
     training_datasets: RwLock<HashMap<String, super::TrainingDataset>>,
     training_pairs: RwLock<Vec<super::TrainingPair>>,
-    finetune_jobs: RwLock<HashMap<String, super::FinetuneJob>>,
+    finetune_jobs: RwLock<HashMap<String, crate::store::FinetuneJob>>,
 }
 
 impl Default for MemoryKmStore {
@@ -2839,7 +2839,10 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
-    fn insert_finetune_job(&self, job: &super::FinetuneJob) -> Result<super::FinetuneJob> {
+    fn insert_finetune_job(
+        &self,
+        job: &crate::store::FinetuneJob,
+    ) -> Result<crate::store::FinetuneJob> {
         self.finetune_jobs
             .write()
             .unwrap()
@@ -2847,7 +2850,7 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(job.clone())
     }
 
-    fn get_finetune_job(&self, id: &str) -> Result<super::FinetuneJob> {
+    fn get_finetune_job(&self, id: &str) -> Result<crate::store::FinetuneJob> {
         self.finetune_jobs
             .read()
             .unwrap()
@@ -2856,8 +2859,8 @@ impl KmStoreTrait for MemoryKmStore {
             .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))
     }
 
-    fn list_finetune_jobs(&self) -> Vec<super::FinetuneJob> {
-        let mut jobs: Vec<super::FinetuneJob> = self
+    fn list_finetune_jobs(&self) -> Vec<crate::store::FinetuneJob> {
+        let mut jobs: Vec<crate::store::FinetuneJob> = self
             .finetune_jobs
             .read()
             .unwrap()
@@ -2883,6 +2886,35 @@ impl KmStoreTrait for MemoryKmStore {
             job.metrics = Some(m.to_string());
         }
         job.updated_at = Utc::now().to_rfc3339();
+        Ok(())
+    }
+
+    fn update_finetune_job_full(
+        &self,
+        id: &str,
+        status: &str,
+        metrics: Option<&str>,
+        output_model_path: Option<&str>,
+    ) -> Result<()> {
+        let mut jobs = self.finetune_jobs.write().unwrap();
+        let job = jobs
+            .get_mut(id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))?;
+        job.status = status.to_string();
+        if let Some(m) = metrics {
+            job.metrics = Some(m.to_string());
+        }
+        if let Some(p) = output_model_path {
+            job.output_model_path = Some(p.to_string());
+        }
+        job.updated_at = Utc::now().to_rfc3339();
+        Ok(())
+    }
+
+    fn delete_finetune_job(&self, id: &str) -> Result<()> {
+        let mut jobs = self.finetune_jobs.write().unwrap();
+        jobs.remove(id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("FinetuneJob {id} not found")))?;
         Ok(())
     }
 }
@@ -3306,5 +3338,106 @@ mod tests {
         assert!(store.get_org(org.id).is_ok());
         assert!(store.get_dept(dept.id).is_ok());
         assert!(store.get_workspace(ws.id).is_err());
+    }
+
+    // ── Fine-tune Job Tests ──────────────────────────────────────────
+
+    fn make_test_job(id: &str) -> crate::store::FinetuneJob {
+        let now = chrono::Utc::now().to_rfc3339();
+        crate::store::FinetuneJob {
+            id: id.to_string(),
+            dataset_id: "ds-1".to_string(),
+            base_model: "llama3.2:3b".to_string(),
+            status: "pending".to_string(),
+            metrics: None,
+            output_model_path: None,
+            config: Some(r#"{"epochs":3}"#.to_string()),
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn finetune_job_crud() {
+        let store = MemoryKmStore::new();
+        let job = make_test_job("job-1");
+        let inserted = store.insert_finetune_job(&job).unwrap();
+        assert_eq!(inserted.id, "job-1");
+        assert_eq!(inserted.config.as_deref(), Some(r#"{"epochs":3}"#));
+
+        let fetched = store.get_finetune_job("job-1").unwrap();
+        assert_eq!(fetched.status, "pending");
+        assert_eq!(fetched.base_model, "llama3.2:3b");
+
+        let jobs = store.list_finetune_jobs();
+        assert_eq!(jobs.len(), 1);
+    }
+
+    #[test]
+    fn finetune_job_update_full() {
+        let store = MemoryKmStore::new();
+        store.insert_finetune_job(&make_test_job("job-2")).unwrap();
+
+        store
+            .update_finetune_job_full(
+                "job-2",
+                "completed",
+                Some(r#"{"final_loss":0.12}"#),
+                Some("/data/finetune/model.gguf"),
+            )
+            .unwrap();
+
+        let job = store.get_finetune_job("job-2").unwrap();
+        assert_eq!(job.status, "completed");
+        assert_eq!(job.metrics.as_deref(), Some(r#"{"final_loss":0.12}"#));
+        assert_eq!(
+            job.output_model_path.as_deref(),
+            Some("/data/finetune/model.gguf")
+        );
+    }
+
+    #[test]
+    fn finetune_job_update_full_preserves_existing() {
+        let store = MemoryKmStore::new();
+        let mut job = make_test_job("job-3");
+        job.metrics = Some("old".to_string());
+        job.output_model_path = Some("/old/path".to_string());
+        store.insert_finetune_job(&job).unwrap();
+
+        // Update with None for metrics and output_model_path should preserve old values
+        store
+            .update_finetune_job_full("job-3", "running", None, None)
+            .unwrap();
+
+        let updated = store.get_finetune_job("job-3").unwrap();
+        assert_eq!(updated.status, "running");
+        assert_eq!(updated.metrics.as_deref(), Some("old"));
+        assert_eq!(updated.output_model_path.as_deref(), Some("/old/path"));
+    }
+
+    #[test]
+    fn finetune_job_delete() {
+        let store = MemoryKmStore::new();
+        store.insert_finetune_job(&make_test_job("job-4")).unwrap();
+
+        store.delete_finetune_job("job-4").unwrap();
+        assert!(store.get_finetune_job("job-4").is_err());
+        assert_eq!(store.list_finetune_jobs().len(), 0);
+    }
+
+    #[test]
+    fn finetune_job_delete_not_found() {
+        let store = MemoryKmStore::new();
+        assert!(store.delete_finetune_job("nonexistent").is_err());
+    }
+
+    #[test]
+    fn finetune_job_update_full_not_found() {
+        let store = MemoryKmStore::new();
+        assert!(
+            store
+                .update_finetune_job_full("nonexistent", "failed", None, None)
+                .is_err()
+        );
     }
 }

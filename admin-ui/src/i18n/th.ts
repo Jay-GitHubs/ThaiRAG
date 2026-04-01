@@ -5,6 +5,7 @@ const th: Record<string, string> = {
   'menu.group.analytics': 'วิเคราะห์และคุณภาพ',
   'menu.group.access': 'การควบคุมการเข้าถึง',
   'menu.group.system': 'ระบบ',
+  'menu.group.ai': 'AI / โมเดล',
 
   // Sidebar menu items
   'menu.dashboard': 'แดชบอร์ด',
@@ -32,6 +33,7 @@ const th: Record<string, string> = {
   'menu.roles': 'บทบาท',
   'menu.settings': 'ตั้งค่า',
   'menu.health': 'สถานะระบบ',
+  'menu.plugins': 'ปลั๊กอิน',
 
   // Header
   'header.loggedInAs': 'เข้าสู่ระบบเป็น {email}',
@@ -494,6 +496,56 @@ const th: Record<string, string> = {
   'quickstart.step4.desc': 'ส่งคำถามทดสอบในทดสอบแชทเพื่อตรวจสอบว่าทุกอย่างทำงาน',
   'quickstart.step5.title': 'เพิ่มผู้ใช้ (ไม่บังคับ)',
   'quickstart.step5.desc': 'สร้างบัญชีผู้ใช้และกำหนดบทบาทสำหรับทีมของคุณ',
+
+  // Fine-tuning — นำเข้า & ส่งออก
+  'finetune.import.title': 'นำเข้าจาก Feedback',
+  'finetune.import.button': 'นำเข้าจาก Feedback',
+  'finetune.import.source': 'แหล่งข้อมูล',
+  'finetune.import.source.positive': 'Feedback เชิงบวก',
+  'finetune.import.source.golden': 'ตัวอย่าง Golden',
+  'finetune.import.source.both': 'ทั้งสอง',
+  'finetune.import.minScore': 'คะแนน Chunk ขั้นต่ำ (0 = ไม่กรอง)',
+  'finetune.import.ok': 'นำเข้า',
+  'finetune.import.success': 'นำเข้า {imported} คู่ (ข้าม {skipped} คู่ซ้ำ)',
+  'finetune.import.error': 'ไม่สามารถนำเข้า Feedback ได้',
+  'finetune.export.button': 'ส่งออก',
+  'finetune.export.openai': 'ส่งออก OpenAI JSONL',
+  'finetune.export.alpaca': 'ส่งออก Alpaca JSONL',
+  'finetune.export.error': 'ส่งออกล้มเหลว',
+
+  // Fine-tuning — งานฝึกสอน
+  'finetune.job.start': 'เริ่ม',
+  'finetune.job.cancel': 'ยกเลิก',
+  'finetune.job.delete': 'ลบ',
+  'finetune.job.logs': 'บันทึก',
+  'finetune.job.createTitle': 'สร้างงาน Fine-tuning',
+  'finetune.job.startSuccess': 'เริ่มฝึกสอนแล้ว',
+  'finetune.job.cancelSuccess': 'ยกเลิกการฝึกสอนแล้ว',
+  'finetune.job.deleteSuccess': 'ลบงานแล้ว',
+  'finetune.config.preset': 'คุณภาพพรีเซ็ต',
+  'finetune.config.preset.quick': 'เร็ว',
+  'finetune.config.preset.quick.desc': '1 epoch, LR สูง, rank 8 — ทดสอบเร็ว',
+  'finetune.config.preset.standard': 'มาตรฐาน',
+  'finetune.config.preset.standard.desc': '3 epochs, ตั้งค่าสมดุล — แนะนำ',
+  'finetune.config.preset.thorough': 'ละเอียด',
+  'finetune.config.preset.thorough.desc': '5 epochs, LR ต่ำ, rank 32 — คุณภาพสูงสุด',
+  'finetune.config.epochs': 'จำนวนรอบ',
+  'finetune.config.learningRate': 'อัตราการเรียนรู้',
+  'finetune.config.loraRank': 'LoRA Rank',
+  'finetune.config.loraAlpha': 'LoRA Alpha',
+  'finetune.config.batchSize': 'ขนาดแบทช์',
+  'finetune.config.warmupRatio': 'อัตราส่วน Warmup',
+  'finetune.config.maxSeqLength': 'ความยาวลำดับสูงสุด',
+  'finetune.config.quantization': 'GGUF Quantization',
+  'finetune.config.modelSource': 'แหล่งโมเดล',
+  'finetune.config.advanced': 'ตั้งค่าขั้นสูง',
+  'finetune.status.pending': 'รอดำเนินการ',
+  'finetune.status.running': 'กำลังฝึก',
+  'finetune.status.completed': 'เสร็จสิ้น',
+  'finetune.status.failed': 'ล้มเหลว',
+  'finetune.status.cancelled': 'ยกเลิกแล้ว',
+  'finetune.output.title': 'โมเดลที่ได้',
+  'finetune.output.registerOllama': 'ลงทะเบียนกับ Ollama',
 };
 
 export default th;
