@@ -13,10 +13,13 @@ import {
   Tag,
   Typography,
   message,
+  Tour,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getTenantsSteps } from '../tours/steps/tenants';
 import type { Tenant, TenantQuota, TenantUsage } from '../api/tenants';
 import {
   listTenants,
@@ -54,6 +57,7 @@ function usagePercent(current: number, max: number): number {
 
 export function TenantsPage() {
   const { t } = useI18n();
+  const tour = useTour('tenants');
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -224,10 +228,13 @@ export function TenantsPage() {
 
   return (
     <>
-      <Typography.Title level={4}>{t('tenants.title')}</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>{t('tenants.title')}</Typography.Title>
+        <TourGuideButton tourId="tenants" />
+      </div>
 
       <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="tenants-create">
           {t('tenants.create')}
         </Button>
       </Space>
@@ -240,6 +247,7 @@ export function TenantsPage() {
         pagination={{ pageSize: 20, showSizeChanger: true }}
         size="middle"
         scroll={{ x: 'max-content' }}
+        data-tour="tenants-table"
       />
 
       {/* Create Tenant Modal */}
@@ -275,6 +283,7 @@ export function TenantsPage() {
 
       {/* Quota & Edit Modal */}
       <Modal
+        data-tour="tenants-detail"
         title={selectedTenant ? `${t('tenants.manageQuota')} — ${selectedTenant.name}` : ''}
         open={quotaOpen}
         onCancel={() => setQuotaOpen(false)}
@@ -363,6 +372,12 @@ export function TenantsPage() {
           )}
         </Form>
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getTenantsSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

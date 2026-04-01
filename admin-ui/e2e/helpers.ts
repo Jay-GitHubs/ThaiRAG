@@ -4,8 +4,17 @@ export const TEST_EMAIL = 'playwright@test.com';
 export const TEST_PASSWORD = 'Test1234!';
 export const API_BASE = 'http://localhost:8080';
 
+/** Suppress guided tours and quick start from auto-starting during tests. */
+export async function suppressTours(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('thairag-tour-state', '{}');
+    localStorage.setItem('thairag-quickstart-dismissed', 'true');
+  });
+}
+
 /** Login via the UI and wait for dashboard to load. */
 export async function login(page: Page) {
+  await suppressTours(page);
   await page.goto('/login');
   await page.getByPlaceholder('Email').fill(TEST_EMAIL);
   await page.getByPlaceholder('Password').fill(TEST_PASSWORD);

@@ -18,6 +18,7 @@ import {
   Tooltip,
   Badge,
   Divider,
+  Tour,
 } from 'antd';
 import {
   PlusOutlined,
@@ -41,6 +42,8 @@ import {
 import type { PromptTemplate, CreateTemplateRequest } from '../api/promptMarketplace';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth/useAuth';
+import { useTour, TourGuideButton } from '../tours';
+import { getPromptsSteps } from '../tours/steps/prompts';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -73,6 +76,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function PromptMarketplacePage() {
   const { t } = useI18n();
   const { user } = useAuth();
+  const tour = useTour('prompts');
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -246,16 +250,19 @@ export default function PromptMarketplacePage() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={2} style={{ margin: 0 }}>
-          {t('prompts.title')}
-        </Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Title level={2} style={{ margin: 0 }}>
+            {t('prompts.title')}
+          </Title>
+          <TourGuideButton tourId="prompts" />
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="prompts-create">
           {t('prompts.create')}
         </Button>
       </div>
 
       {/* Filters */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }} data-tour="prompts-search">
         <Col xs={24} sm={12} md={10}>
           <Input
             placeholder={t('prompts.searchPlaceholder')}
@@ -288,7 +295,7 @@ export default function PromptMarketplacePage() {
             <Text type="secondary">{t('prompts.noTemplates')}</Text>
           </Card>
         ) : (
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} data-tour="prompts-grid">
             {templates.map((template) => (
               <Col xs={24} sm={12} lg={8} xl={6} key={template.id}>
                 <Card
@@ -558,6 +565,13 @@ export default function PromptMarketplacePage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Tour
+        open={tour.isActive}
+        steps={getPromptsSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
 
       {/* Edit Modal */}
       <Modal

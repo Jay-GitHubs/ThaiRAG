@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { Layout, Menu, Typography, Button, Dropdown, Drawer, Grid, theme } from 'antd';
 import {
   DashboardOutlined,
@@ -37,7 +37,10 @@ import { useAuth } from '../auth/useAuth';
 import { useThemeMode } from '../theme/ThemeContext';
 import { useI18n } from '../i18n';
 import type { Locale } from '../i18n';
+import { QuestionCircleOutlined } from '@ant-design/icons';
 import type { UserRole } from '../api/types';
+import { GuidesDrawer } from '../tours';
+import { TourContext } from '../tours';
 
 const { Sider, Header, Content } = Layout;
 const { useBreakpoint } = Grid;
@@ -141,6 +144,7 @@ export function AdminLayout() {
   const { mode, toggle: toggleTheme } = useThemeMode();
   const { token: themeToken } = theme.useToken();
   const { locale, setLocale, t } = useI18n();
+  const tourCtx = useContext(TourContext);
   const screens = useBreakpoint();
 
   const isMobile = !screens.lg;
@@ -225,7 +229,7 @@ export function AdminLayout() {
     <Layout style={{ minHeight: '100vh' }}>
       {/* Desktop sidebar */}
       {!isMobile && (
-        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}>
+        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} data-tour="sidebar">
           <div style={{ padding: 16, textAlign: 'center' }}>
             <Typography.Text strong style={{ color: '#fff', fontSize: collapsed ? 14 : 18 }}>
               {collapsed ? 'TR' : 'ThaiRAG Admin'}
@@ -289,6 +293,13 @@ export function AdminLayout() {
                 {t('header.loggedInAs', { email: user.email })}
               </Typography.Text>
             )}
+            <Button
+              icon={<QuestionCircleOutlined />}
+              onClick={() => tourCtx.setGuidesOpen(true)}
+              title={t('tour.guidesTitle')}
+              size={isMobile ? 'small' : 'middle'}
+              data-tour="guides-button"
+            />
             <Dropdown
               menu={{
                 items: languageOptions.map((opt) => ({
@@ -319,6 +330,7 @@ export function AdminLayout() {
           <Outlet />
         </Content>
       </Layout>
+      <GuidesDrawer />
     </Layout>
   );
 }

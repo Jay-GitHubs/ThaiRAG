@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Typography } from 'antd';
+import { Row, Col, Typography, Tour } from 'antd';
 import { KmTree } from '../components/km/KmTree';
 import { OrgPanel } from '../components/km/OrgPanel';
 import { DeptPanel } from '../components/km/DeptPanel';
 import { WorkspacePanel } from '../components/km/WorkspacePanel';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getKmHierarchySteps } from '../tours/steps/kmHierarchy';
 
 export interface KmSelection {
   type: 'org' | 'dept' | 'workspace';
@@ -18,6 +21,8 @@ export interface KmSelection {
 export function KmPage() {
   const [selection, setSelection] = useState<KmSelection | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const { t } = useI18n();
+  const tour = useTour('km-hierarchy');
 
   const onMutated = () => setRefreshKey((k) => k + 1);
 
@@ -27,12 +32,15 @@ export function KmPage() {
 
   return (
     <>
-      <Typography.Title level={4}>KM Hierarchy</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>KM Hierarchy</Typography.Title>
+        <TourGuideButton tourId="km-hierarchy" />
+      </div>
       <Row gutter={16}>
-        <Col xs={24} md={8} lg={6}>
+        <Col xs={24} md={8} lg={6} data-tour="km-tree">
           <KmTree onSelect={setSelection} refreshKey={refreshKey} onMutated={onMutated} />
         </Col>
-        <Col xs={24} md={16} lg={18}>
+        <Col xs={24} md={16} lg={18} data-tour="km-detail">
           {!selection && (
             <Typography.Text type="secondary">Select an item from the tree</Typography.Text>
           )}
@@ -56,6 +64,12 @@ export function KmPage() {
           )}
         </Col>
       </Row>
+      <Tour
+        open={tour.isActive}
+        steps={getKmHierarchySteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }
