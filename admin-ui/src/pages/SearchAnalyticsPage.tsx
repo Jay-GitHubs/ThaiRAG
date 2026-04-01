@@ -11,6 +11,7 @@ import {
   Spin,
   Empty,
   Tooltip,
+  Tour,
 } from 'antd';
 import {
   SearchOutlined,
@@ -31,10 +32,15 @@ import type {
   PopularQuery,
   SearchAnalyticsEvent,
 } from '../api/searchAnalytics';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getSearchAnalyticsSteps } from '../tours/steps/searchAnalytics';
 
 const { RangePicker } = DatePicker;
 
 export default function SearchAnalyticsPage() {
+  const { t } = useI18n();
+  const tour = useTour('search-analytics');
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [summary, setSummary] = useState<SearchAnalyticsSummary | null>(null);
   const [popularQueries, setPopularQueries] = useState<PopularQuery[]>([]);
@@ -136,14 +142,15 @@ export default function SearchAnalyticsPage() {
           gap: 8,
         }}
       >
-        <Space align="baseline">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             Search Analytics
           </Typography.Title>
           <Tooltip title="Insights into search query patterns, zero-result queries, and latency trends.">
             <QuestionCircleOutlined style={{ fontSize: 16 }} />
           </Tooltip>
-        </Space>
+          <TourGuideButton tourId="search-analytics" />
+        </div>
         <RangePicker
           value={dateRange}
           onChange={(v) => setDateRange(v as [Dayjs, Dayjs] | null)}
@@ -167,7 +174,7 @@ export default function SearchAnalyticsPage() {
       ) : (
         <>
           {/* Summary Stats */}
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} data-tour="sa-stats">
             <Col xs={24} sm={12} lg={6}>
               <Card>
                 <Statistic
@@ -223,7 +230,7 @@ export default function SearchAnalyticsPage() {
           </Row>
 
           {/* Popular Queries */}
-          <Card title="Popular Queries" style={{ marginTop: 16 }} loading={loading}>
+          <Card data-tour="sa-popular" title="Popular Queries" style={{ marginTop: 16 }} loading={loading}>
             {popularQueries.length > 0 ? (
               <Table<PopularQuery>
                 dataSource={popularQueries}
@@ -239,7 +246,7 @@ export default function SearchAnalyticsPage() {
           </Card>
 
           {/* Zero-Result Queries */}
-          <Card title="Zero-Result Queries" style={{ marginTop: 16 }} loading={loading}>
+          <Card data-tour="sa-zero" title="Zero-Result Queries" style={{ marginTop: 16 }} loading={loading}>
             {zeroResultEvents.length > 0 ? (
               <Table<SearchAnalyticsEvent>
                 dataSource={zeroResultEvents}
@@ -255,6 +262,12 @@ export default function SearchAnalyticsPage() {
           </Card>
         </>
       )}
+      <Tour
+        open={tour.isActive}
+        steps={getSearchAnalyticsSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

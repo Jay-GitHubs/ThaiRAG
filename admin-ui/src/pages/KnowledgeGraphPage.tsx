@@ -19,6 +19,7 @@ import {
   Col,
   Statistic,
   Tooltip,
+  Tour,
 } from 'antd';
 import {
   DeleteOutlined,
@@ -41,6 +42,10 @@ import type {
   EntityWithRelations,
   KnowledgeGraph,
 } from '../api/knowledgeGraph';
+
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getKnowledgeGraphSteps } from '../tours/steps/knowledgeGraph';
 
 const { Title, Text } = Typography;
 
@@ -300,6 +305,8 @@ function ForceGraph({
 // ── Main Page Component ─────────────────────────────────────────────
 
 export default function KnowledgeGraphPage() {
+  const { t } = useI18n();
+  const tour = useTour('knowledge-graph');
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -491,23 +498,28 @@ export default function KnowledgeGraphPage() {
 
   return (
     <div>
-      <Title level={3}>Knowledge Graph</Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Title level={3} style={{ margin: 0 }}>Knowledge Graph</Title>
+        <TourGuideButton tourId="knowledge-graph" />
+      </div>
       <Text type="secondary">
         Explore entities and relationships extracted from your documents.
       </Text>
 
       <Card style={{ marginTop: 16 }}>
         <Space wrap style={{ marginBottom: 16 }}>
-          <Select
-            placeholder="Select workspace"
-            value={selectedWorkspace || undefined}
-            onChange={setSelectedWorkspace}
-            style={{ width: 250 }}
-            options={workspaces.map((ws) => ({
-              value: ws.id,
-              label: ws.dept_name ? `${ws.dept_name} / ${ws.name}` : ws.name,
-            }))}
-          />
+          <span data-tour="kg-ws-select">
+            <Select
+              placeholder="Select workspace"
+              value={selectedWorkspace || undefined}
+              onChange={setSelectedWorkspace}
+              style={{ width: 250 }}
+              options={workspaces.map((ws) => ({
+                value: ws.id,
+                label: ws.dept_name ? `${ws.dept_name} / ${ws.name}` : ws.name,
+              }))}
+            />
+          </span>
 
           <Select
             placeholder="Filter by type"
@@ -527,21 +539,23 @@ export default function KnowledgeGraphPage() {
             allowClear
           />
 
-          <Button.Group>
-            <Button
-              type={viewMode === 'table' ? 'primary' : 'default'}
-              onClick={() => setViewMode('table')}
-            >
-              Table
-            </Button>
-            <Button
-              type={viewMode === 'graph' ? 'primary' : 'default'}
-              onClick={() => setViewMode('graph')}
-              icon={<NodeIndexOutlined />}
-            >
-              Graph
-            </Button>
-          </Button.Group>
+          <span data-tour="kg-view-toggle">
+            <Button.Group>
+              <Button
+                type={viewMode === 'table' ? 'primary' : 'default'}
+                onClick={() => setViewMode('table')}
+              >
+                Table
+              </Button>
+              <Button
+                type={viewMode === 'graph' ? 'primary' : 'default'}
+                onClick={() => setViewMode('graph')}
+                icon={<NodeIndexOutlined />}
+              >
+                Graph
+              </Button>
+            </Button.Group>
+          </span>
 
           <Button icon={<ReloadOutlined />} onClick={viewMode === 'graph' ? loadGraph : loadEntities}>
             Refresh
@@ -572,7 +586,7 @@ export default function KnowledgeGraphPage() {
           </Row>
         )}
 
-        <Spin spinning={loading}>
+        <Spin spinning={loading} data-tour="kg-content">
           {viewMode === 'table' ? (
             <Table
               dataSource={entities}
@@ -592,6 +606,13 @@ export default function KnowledgeGraphPage() {
           )}
         </Spin>
       </Card>
+
+      <Tour
+        open={tour.isActive}
+        steps={getKnowledgeGraphSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
 
       {/* Entity Detail Drawer */}
       <Drawer

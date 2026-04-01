@@ -1,4 +1,5 @@
-import { Row, Col, Card, Statistic, Badge, Typography, Spin } from 'antd';
+import { useEffect } from 'react';
+import { Row, Col, Card, Statistic, Badge, Typography, Spin, Tour } from 'antd';
 import {
   BankOutlined,
   TeamOutlined,
@@ -10,12 +11,19 @@ import { useOrgs } from '../hooks/useOrgs';
 import { useUsers } from '../hooks/useUsers';
 import { useHealth, useMetrics } from '../hooks/useHealth';
 import { parsePrometheusMetric } from '../api/metrics';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { QuickStartCard } from '../components/dashboard/QuickStartCard';
+import { isFirstVisit } from '../tours/tourStorage';
+import { getDashboardSteps } from '../tours/steps/dashboard';
 
 export function DashboardPage() {
   const orgs = useOrgs();
   const users = useUsers();
   const health = useHealth();
   const metrics = useMetrics();
+  const { t } = useI18n();
+  const tour = useTour('dashboard');
 
   const metricsText = metrics.data || '';
   const activeSessions = parsePrometheusMetric(metricsText, 'active_sessions_total');
@@ -24,10 +32,22 @@ export function DashboardPage() {
 
   const isHealthy = health.data?.status === 'ok';
 
+  // Auto-start welcome tour on first visit
+  useEffect(() => {
+    if (isFirstVisit()) {
+      const timer = setTimeout(() => tour.start(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <>
-      <Typography.Title level={4}>Dashboard</Typography.Title>
-      <Row gutter={[16, 16]}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>Dashboard</Typography.Title>
+        <TourGuideButton tourId="dashboard" />
+      </div>
+      <QuickStartCard />
+      <Row gutter={[16, 16]} data-tour="stats-row">
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic
@@ -74,7 +94,7 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
+          <Card data-tour="health-card">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>Health Status</span>
               {health.isLoading ? (
@@ -89,6 +109,12 @@ export function DashboardPage() {
           </Card>
         </Col>
       </Row>
+      <Tour
+        open={tour.isActive}
+        steps={getDashboardSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

@@ -9,12 +9,15 @@ import {
   Space,
   Table,
   Tag,
+  Tour,
   Typography,
   message,
 } from 'antd';
 import { PlusOutlined, EditOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getRolesSteps } from '../tours/steps/roles';
 import type { CustomRole, RolePermission } from '../api/roles';
 import { listRoles, createRole, updateRole, deleteRole } from '../api/roles';
 
@@ -116,6 +119,7 @@ function usePermMatrix(initial?: RolePermission[]) {
 
 export function RolesPage() {
   const { t } = useI18n();
+  const tour = useTour('roles');
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -255,10 +259,13 @@ export function RolesPage() {
 
   return (
     <>
-      <Typography.Title level={4}>{t('roles.title')}</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>{t('roles.title')}</Typography.Title>
+        <TourGuideButton tourId="roles" />
+      </div>
 
       <Space style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="roles-create">
           {t('roles.create')}
         </Button>
       </Space>
@@ -271,6 +278,7 @@ export function RolesPage() {
         pagination={{ pageSize: 20, showSizeChanger: true }}
         size="middle"
         scroll={{ x: 'max-content' }}
+        data-tour="roles-table"
       />
 
       {/* Create Role Modal */}
@@ -337,6 +345,12 @@ export function RolesPage() {
           </Form.Item>
         </Form>
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getRolesSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

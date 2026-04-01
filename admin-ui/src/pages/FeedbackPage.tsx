@@ -19,6 +19,7 @@ import {
   Spin,
   message,
   theme,
+  Tour,
 } from 'antd';
 import {
   LikeOutlined,
@@ -41,20 +42,29 @@ import {
   updateRetrievalParams,
 } from '../api/settings';
 import type { FeedbackEntry, DocumentBoost, GoldenExample } from '../api/types';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getFeedbackSteps } from '../tours/steps/feedback';
 
 export function FeedbackPage() {
+  const { t } = useI18n();
+  const tour = useTour('feedback');
   return (
     <>
       <Space align="baseline" style={{ marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Feedback & Auto-Tuning
-        </Typography.Title>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Feedback & Auto-Tuning
+          </Typography.Title>
+          <TourGuideButton tourId="feedback" />
+        </div>
         <Tooltip title="User feedback from Test Chat is collected here. The system uses this data to automatically improve answer quality: document relevance scoring, quality thresholds, and retrieval parameters.">
           <QuestionCircleOutlined style={{ fontSize: 16 }} />
         </Tooltip>
       </Space>
 
       <Tabs
+        data-tour="feedback-tabs"
         defaultActiveKey="overview"
         items={[
           { key: 'overview', label: 'Overview', children: <OverviewTab /> },
@@ -63,6 +73,12 @@ export function FeedbackPage() {
           { key: 'golden', label: 'Golden Examples', children: <GoldenExamplesTab /> },
           { key: 'tuning', label: 'Retrieval Tuning', children: <RetrievalTuningTab /> },
         ]}
+      />
+      <Tour
+        open={tour.isActive}
+        steps={getFeedbackSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
       />
     </>
   );
@@ -82,7 +98,7 @@ function OverviewTab() {
 
   return (
     <>
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} data-tour="feedback-stats">
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic title="Total Feedback" value={total} prefix={<ThunderboltOutlined />} />
@@ -123,7 +139,7 @@ function OverviewTab() {
         </Col>
       </Row>
 
-      <Card style={{ marginTop: 16 }} title="Quality Guard Threshold">
+      <Card style={{ marginTop: 16 }} title="Quality Guard Threshold" data-tour="feedback-content">
         <Row gutter={[16, 16]}>
           <Col xs={12} sm={8}>
             <Statistic

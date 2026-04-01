@@ -14,6 +14,7 @@ import {
   Empty,
   Progress,
   theme,
+  Tour,
 } from 'antd';
 import {
   ThunderboltOutlined,
@@ -29,6 +30,9 @@ import { useInferenceAnalytics } from '../hooks/useInferenceLogs';
 import type { InferenceLogEntry } from '../api/types';
 import { useQuery } from '@tanstack/react-query';
 import { exportInferenceLogs } from '../api/inferenceLogs';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getAnalyticsSteps } from '../tours/steps/analytics';
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -302,6 +306,8 @@ function StackedBarChart({
 // ── Main Page ────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
+  const { t } = useI18n();
+  const tour = useTour('analytics');
   const [range, setRange] = useState<TimeRange>('7d');
   const filter = useMemo(() => rangeToFilter(range), [range]);
 
@@ -369,15 +375,17 @@ export default function AnalyticsPage() {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-        <Space align="baseline">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             Analytics
           </Typography.Title>
           <Tooltip title="Query volume, latency trends, popular topics, and token usage derived from inference logs.">
             <QuestionCircleOutlined style={{ fontSize: 16 }} />
           </Tooltip>
-        </Space>
+          <TourGuideButton tourId="analytics" />
+        </div>
         <Select
+          data-tour="analytics-time"
           value={range}
           onChange={setRange}
           style={{ width: 140 }}
@@ -390,7 +398,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* ── Top Stats Row ─────────────────────────────────────────── */}
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} data-tour="analytics-stats">
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic
@@ -435,6 +443,7 @@ export default function AnalyticsPage() {
       </Row>
 
       {/* ── Query Volume Chart ────────────────────────────────────── */}
+      <div data-tour="analytics-charts">
       <Card
         title={
           <Space>
@@ -645,6 +654,13 @@ export default function AnalyticsPage() {
           />
         </Card>
       )}
+      </div>
+      <Tour
+        open={tour.isActive}
+        steps={getAnalyticsSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

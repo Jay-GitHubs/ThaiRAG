@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import { TEST_EMAIL, TEST_PASSWORD, API_BASE, login, navigateTo, suppressTours } from './helpers';
 
 /**
  * Debug test for pipeline stages visibility.
@@ -206,14 +206,10 @@ test.describe('Pipeline Stages Debug', () => {
 
   test('4. UI test - pipeline stages render in Test Chat', async ({ page }) => {
     // Login
-    await page.goto('/login');
-    await page.getByPlaceholder('Email').fill(TEST_EMAIL);
-    await page.getByPlaceholder('Password').fill(TEST_PASSWORD);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    await page.waitForURL('/', { timeout: 10_000 });
+    await login(page);
 
     // Navigate to Test Chat
-    await page.getByRole('menu').getByText('Test Chat', { exact: true }).click();
+    await navigateTo(page, 'Test Chat');
     await page.waitForTimeout(1000);
 
     // Select org/dept/workspace

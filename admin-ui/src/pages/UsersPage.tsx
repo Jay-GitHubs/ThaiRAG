@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react';
-import { Button, Input, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Button, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tour, Typography, message } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useUsers, useDeleteUser, useUpdateUserRole, useUpdateUserStatus } from '../hooks/useUsers';
 import { useAuth } from '../auth/useAuth';
 import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getUsersSteps } from '../tours/steps/users';
 import type { User, UserRole } from '../api/types';
 
 const providerColors: Record<string, string> = {
@@ -30,6 +32,7 @@ export function UsersPage() {
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState('');
   const { t } = useI18n();
+  const tour = useTour('users');
 
   const roleOptions: { label: string; value: UserRole }[] = [
     { label: t('role.viewer'), value: 'viewer' },
@@ -199,8 +202,11 @@ export function UsersPage() {
 
   return (
     <>
-      <Typography.Title level={4}>{t('users.title')}</Typography.Title>
-      <Space style={{ marginBottom: 16 }} wrap>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>{t('users.title')}</Typography.Title>
+        <TourGuideButton tourId="users" />
+      </div>
+      <Space style={{ marginBottom: 16 }} wrap data-tour="users-search">
         <Input
           placeholder={t('users.searchPlaceholder')}
           prefix={<SearchOutlined />}
@@ -221,6 +227,13 @@ export function UsersPage() {
         pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
         size="middle"
         scroll={{ x: 'max-content' }}
+        data-tour="users-table"
+      />
+      <Tour
+        open={tour.isActive}
+        steps={getUsersSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
       />
     </>
   );

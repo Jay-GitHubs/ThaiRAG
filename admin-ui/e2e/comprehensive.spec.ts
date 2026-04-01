@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
 
 // ─── Auth & Session ───────────────────────────────────────────────────
 
@@ -47,8 +47,8 @@ test.describe('Auth & Session', () => {
   test('session survives navigating to another page then refreshing', async ({ page }) => {
     await login(page);
 
-    // Navigate to Users page
-    await page.getByRole('menu').getByText('Users', { exact: true }).click();
+    // Navigate to Users page (inside Access Control submenu)
+    await navigateTo(page, 'Users');
     await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
 
     // Refresh on the Users page
@@ -121,13 +121,13 @@ test.describe('Navigation', () => {
     ];
 
     for (const { menu, heading } of pages) {
-      await page.getByRole('menu').getByText(menu, { exact: true }).click();
+      await navigateTo(page, menu);
       await expect(page.getByRole('heading', { name: heading })).toBeVisible({ timeout: 5000 });
     }
   });
 
   test('sidebar highlights active menu item', async ({ page }) => {
-    await page.getByRole('menu').getByText('Users', { exact: true }).click();
+    await navigateTo(page, 'Users');
     await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible();
 
     const menuItem = page.getByRole('menu').locator('.ant-menu-item-selected');
@@ -156,7 +156,7 @@ test.describe('Dashboard', () => {
 test.describe('KM Hierarchy', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('KM Hierarchy', { exact: true }).click();
+    await navigateTo(page, 'KM Hierarchy');
     await expect(page.getByRole('heading', { name: 'KM Hierarchy' })).toBeVisible();
   });
 
@@ -240,7 +240,7 @@ test.describe('KM Hierarchy', () => {
 test.describe('Users Page', () => {
   test('shows user list with expected columns', async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('Users', { exact: true }).click();
+    await navigateTo(page, 'Users');
 
     await expect(page.getByRole('columnheader', { name: 'Name' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Email' })).toBeVisible();
@@ -257,7 +257,7 @@ test.describe('Users Page', () => {
 test.describe('Health Page', () => {
   test('shows health status and metrics', async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('Health', { exact: true }).click();
+    await navigateTo(page, 'Health');
 
     await expect(page.getByText('System Health')).toBeVisible();
     await expect(page.getByText('Health Check')).toBeVisible();
@@ -269,7 +269,7 @@ test.describe('Health Page', () => {
 
   test('deep health check works', async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('Health', { exact: true }).click();
+    await navigateTo(page, 'Health');
 
     await page.getByRole('button', { name: 'Run Deep Check' }).click();
     await expect(page.getByText('ok')).toBeVisible({ timeout: 10000 });
@@ -281,7 +281,7 @@ test.describe('Health Page', () => {
 test.describe('Documents Page', () => {
   test('shows cascade selectors that filter correctly', async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('Documents', { exact: true }).click();
+    await navigateTo(page, 'Documents');
 
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
@@ -302,7 +302,7 @@ test.describe('Documents Page', () => {
 test.describe('Permissions Page', () => {
   test('shows org selector and placeholder text', async ({ page }) => {
     await login(page);
-    await page.getByRole('menu').getByText('Permissions', { exact: true }).click();
+    await navigateTo(page, 'Permissions');
 
     await expect(page.getByRole('heading', { name: 'Permissions' })).toBeVisible();
     await expect(page.getByText('Select an organization to manage permissions.')).toBeVisible();
@@ -339,7 +339,7 @@ test.describe('Theme', () => {
     expect(newBg).not.toBe(initialBg);
 
     // Navigate — theme should persist
-    await page.getByRole('menu').getByText('Users', { exact: true }).click();
+    await navigateTo(page, 'Users');
     await page.waitForTimeout(300);
 
     const afterNavBg = await page.evaluate(() => document.body.style.background);
@@ -380,16 +380,17 @@ test.describe('Sidebar', () => {
   test('sidebar collapses and expands', async ({ page }) => {
     await login(page);
 
-    await expect(page.getByText('ThaiRAG Admin')).toBeVisible();
+    const sider = page.locator('.ant-layout-sider');
+    await expect(sider.getByText('ThaiRAG Admin')).toBeVisible();
 
     const trigger = page.locator('.ant-layout-sider-trigger');
     await trigger.click();
     await page.waitForTimeout(500);
 
-    await expect(page.getByText('TR')).toBeVisible();
+    await expect(sider.getByText('TR', { exact: true })).toBeVisible();
 
     await trigger.click();
     await page.waitForTimeout(500);
-    await expect(page.getByText('ThaiRAG Admin')).toBeVisible();
+    await expect(sider.getByText('ThaiRAG Admin')).toBeVisible();
   });
 });

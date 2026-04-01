@@ -14,6 +14,7 @@ import {
   Divider,
   Tag,
   List,
+  Tour,
 } from 'antd';
 import {
   CloudDownloadOutlined,
@@ -24,6 +25,9 @@ import {
 } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import client from '../api/client';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getBackupSteps } from '../tours/steps/backup';
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
@@ -63,6 +67,9 @@ interface RestoreResult {
 }
 
 export default function BackupPage() {
+  const { t } = useI18n();
+  const tour = useTour('backup');
+
   // Create backup state
   const [includeSettings, setIncludeSettings] = useState(true);
   const [includeUsers, setIncludeUsers] = useState(true);
@@ -171,10 +178,14 @@ export default function BackupPage() {
 
   return (
     <>
-      <Title level={4}>Backup & Restore</Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Title level={4}>Backup & Restore</Title>
+        <TourGuideButton tourId="backup" />
+      </div>
 
       {/* ── Create Backup ─────────────────────────────────────────── */}
       <Card
+        data-tour="backup-create"
         title={
           <Space>
             <CloudDownloadOutlined />
@@ -188,7 +199,7 @@ export default function BackupPage() {
           data to include:
         </Text>
 
-        <Space direction="vertical" style={{ marginBottom: 16 }}>
+        <Space direction="vertical" style={{ marginBottom: 16 }} data-tour="backup-list">
           <Checkbox checked={includeSettings} onChange={(e) => setIncludeSettings(e.target.checked)}>
             Settings (global config, provider settings)
           </Checkbox>
@@ -217,6 +228,7 @@ export default function BackupPage() {
 
       {/* ── Restore from Backup ───────────────────────────────────── */}
       <Card
+        data-tour="backup-restore"
         title={
           <Space>
             <CloudUploadOutlined />
@@ -423,6 +435,12 @@ export default function BackupPage() {
         />
         <p>Are you sure you want to proceed?</p>
       </Modal>
+      <Tour
+        open={tour.isActive}
+        steps={getBackupSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }

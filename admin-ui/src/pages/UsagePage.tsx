@@ -1,4 +1,4 @@
-import { Row, Col, Card, Statistic, Typography, Tag, Descriptions, Spin, Tooltip, Empty } from 'antd';
+import { Row, Col, Card, Statistic, Typography, Tag, Descriptions, Spin, Tooltip, Empty, Tour } from 'antd';
 import {
   DollarOutlined,
   ThunderboltOutlined,
@@ -10,6 +10,9 @@ import { useQuery } from '@tanstack/react-query';
 import { getUsageStats } from '../api/settings';
 import { useMetrics } from '../hooks/useHealth';
 import { parsePrometheusMetric } from '../api/metrics';
+import { useI18n } from '../i18n';
+import { useTour, TourGuideButton } from '../tours';
+import { getUsageSteps } from '../tours/steps/usage';
 
 const PROVIDER_LABELS: Record<string, string> = {
   ollama: 'Ollama (Local)',
@@ -37,6 +40,9 @@ function formatTokenCount(n: number): string {
 }
 
 export function UsagePage() {
+  const { t } = useI18n();
+  const tour = useTour('usage');
+
   const usage = useQuery({
     queryKey: ['usage-stats'],
     queryFn: getUsageStats,
@@ -53,7 +59,10 @@ export function UsagePage() {
 
   return (
     <>
-      <Typography.Title level={4}>Usage & Costs</Typography.Title>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Typography.Title level={4} style={{ margin: 0 }}>Usage & Costs</Typography.Title>
+        <TourGuideButton tourId="usage" />
+      </div>
 
       {usage.isLoading ? (
         <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
@@ -62,8 +71,8 @@ export function UsagePage() {
       ) : (
         <>
           {/* Cost summary */}
-          <Row gutter={[16, 16]}>
-            <Col xs={24} sm={12} lg={6}>
+          <Row gutter={[16, 16]} data-tour="usage-tokens">
+            <Col xs={24} sm={12} lg={6} data-tour="usage-cost">
               <Card>
                 <Statistic
                   title={
@@ -127,7 +136,7 @@ export function UsagePage() {
           </Row>
 
           {/* Provider details */}
-          <Card style={{ marginTop: 16 }} title="Provider Configuration">
+          <Card style={{ marginTop: 16 }} title="Provider Configuration" data-tour="usage-provider">
             <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small">
               <Descriptions.Item label="LLM Provider">
                 <Tag icon={<CloudOutlined />} color={isLocal ? 'green' : 'blue'}>
@@ -212,6 +221,12 @@ export function UsagePage() {
           )}
         </>
       )}
+      <Tour
+        open={tour.isActive}
+        steps={getUsageSteps(t)}
+        onClose={tour.end}
+        onFinish={tour.complete}
+      />
     </>
   );
 }
