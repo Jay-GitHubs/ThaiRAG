@@ -26,12 +26,22 @@ impl Vault {
             bytes
         } else {
             let key_path = std::path::Path::new(data_dir).join("encryption.key");
-            if key_path.exists() {
-                let hex_key =
-                    std::fs::read_to_string(&key_path).expect("Failed to read encryption.key file");
-                let bytes =
-                    hex::decode(hex_key.trim()).expect("encryption.key must contain valid hex");
-                assert_eq!(bytes.len(), 32, "encryption.key must be exactly 32 bytes");
+            // Try to load existing key file; fall through to generation if invalid
+            let loaded = if key_path.exists() {
+                std::fs::read_to_string(&key_path)
+                    .ok()
+                    .and_then(|hex_key| {
+                        let trimmed = hex_key.trim();
+                        if trimmed.is_empty() {
+                            return None;
+                        }
+                        hex::decode(trimmed).ok()
+                    })
+                    .filter(|bytes| bytes.len() == 32)
+            } else {
+                None
+            };
+            if let Some(bytes) = loaded {
                 tracing::info!(
                     path = %key_path.display(),
                     "Vault: loaded encryption key from file"

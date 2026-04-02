@@ -988,9 +988,15 @@ impl AppState {
             config.auth.lockout_duration_secs,
         );
 
-        // Use a temporary directory for the test vault encryption key
-        let test_vault_dir =
-            std::env::temp_dir().join(format!("thairag-test-vault-{}", std::process::id()));
+        // Use a unique temporary directory per invocation to avoid race conditions in parallel tests
+        let test_vault_dir = std::env::temp_dir().join(format!(
+            "thairag-test-vault-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         let vault = Arc::new(Vault::init(
             test_vault_dir.to_str().unwrap_or("/tmp/thairag-test-vault"),
         ));
