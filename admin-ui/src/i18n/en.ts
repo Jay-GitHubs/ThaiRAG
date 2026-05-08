@@ -22,7 +22,6 @@ const en: Record<string, string> = {
   'menu.lineage': 'Lineage',
   'menu.connectors': 'Connectors',
   'menu.inferenceLogs': 'Inference Logs',
-  'menu.guardrails': 'Guardrails',
   'menu.searchEval': 'Search Eval',
   'menu.finetune': 'Fine-tuning',
   'menu.abTesting': 'A/B Testing',
@@ -100,15 +99,6 @@ const en: Record<string, string> = {
   'users.enabled': 'User enabled',
   'users.disabled': 'User disabled',
   'users.statusUpdateFailed': 'Failed to update status',
-  'users.add': 'Add User',
-  'users.addTitle': 'Create Local User',
-  'users.addSuccess': 'User created',
-  'users.addFailed': 'Failed to create user',
-  'users.fieldEmail': 'Email',
-  'users.fieldName': 'Name',
-  'users.fieldPassword': 'Password',
-  'users.fieldRole': 'Role',
-  'users.passwordHint': 'Min 8 chars, with uppercase, lowercase, and digit.',
 
   // Table columns
   'column.name': 'Name',

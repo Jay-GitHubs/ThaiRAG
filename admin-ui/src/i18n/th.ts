@@ -22,7 +22,6 @@ const th: Record<string, string> = {
   'menu.lineage': 'สืบสายที่มา',
   'menu.connectors': 'ตัวเชื่อมต่อ',
   'menu.inferenceLogs': 'บันทึกการอนุมาน',
-  'menu.guardrails': 'การ์ดเรล',
   'menu.searchEval': 'ประเมินการค้นหา',
   'menu.finetune': 'ปรับแต่ง Embedding',
   'menu.abTesting': 'การทดสอบ A/B',
@@ -100,15 +99,6 @@ const th: Record<string, string> = {
   'users.enabled': 'เปิดใช้งานผู้ใช้แล้ว',
   'users.disabled': 'ปิดใช้งานผู้ใช้แล้ว',
   'users.statusUpdateFailed': 'ไม่สามารถอัปเดตสถานะได้',
-  'users.add': 'เพิ่มผู้ใช้',
-  'users.addTitle': 'สร้างผู้ใช้ภายใน',
-  'users.addSuccess': 'สร้างผู้ใช้แล้ว',
-  'users.addFailed': 'ไม่สามารถสร้างผู้ใช้ได้',
-  'users.fieldEmail': 'อีเมล',
-  'users.fieldName': 'ชื่อ',
-  'users.fieldPassword': 'รหัสผ่าน',
-  'users.fieldRole': 'บทบาท',
-  'users.passwordHint': 'อย่างน้อย 8 ตัวอักษร ประกอบด้วยตัวพิมพ์ใหญ่ ตัวพิมพ์เล็ก และตัวเลข',
 
   // Table columns
   'column.name': 'ชื่อ',

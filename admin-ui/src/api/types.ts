@@ -538,27 +538,6 @@ export interface ChatPipelineConfigResponse {
   live_retrieval_max_connectors: number;
   live_retrieval_max_content_chars: number;
   live_retrieval_llm?: LlmProviderInfo;
-  // Guardrails (PR1)
-  input_guardrails_enabled: boolean;
-  output_guardrails_enabled: boolean;
-  guardrails: GuardrailsConfig;
-}
-
-export interface GuardrailsConfig {
-  max_query_chars: number;
-  detect_thai_id: boolean;
-  detect_thai_phone: boolean;
-  detect_email: boolean;
-  detect_credit_card: boolean;
-  detect_secrets: boolean;
-  detect_prompt_injection: boolean;
-  blocklist_phrases: string[];
-  /** "block" | "sanitize" */
-  input_on_violation: string;
-  /** "block" | "redact" | "regenerate" */
-  output_on_violation: string;
-  redaction_token: string;
-  fail_open: boolean;
 }
 
 export interface UpdateChatPipelineRequest {
@@ -688,10 +667,6 @@ export interface UpdateChatPipelineRequest {
   live_retrieval_max_content_chars?: number;
   live_retrieval_llm?: LlmConfigUpdate;
   remove_live_retrieval_llm?: boolean;
-  // Guardrails (PR1)
-  input_guardrails_enabled?: boolean;
-  output_guardrails_enabled?: boolean;
-  guardrails?: GuardrailsConfig;
 }
 
 // ── Feedback ─────────────────────────────────────────────────────────
@@ -1108,10 +1083,6 @@ export interface InferenceLogEntry {
   error_message: string | null;
   response_length: number;
   feedback_score: number | null;
-  // Guardrails (PR1) — optional for backward compatibility.
-  input_guardrails_pass?: boolean | null;
-  output_guardrails_pass?: boolean | null;
-  guardrail_violation_codes?: string;
 }
 
 export interface InferenceLogListResponse {

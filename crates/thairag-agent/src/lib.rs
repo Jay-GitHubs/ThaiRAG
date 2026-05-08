@@ -7,7 +7,6 @@ pub mod contextual_compression;
 pub mod conversation_memory;
 pub mod corrective_rag;
 pub mod graph_rag;
-pub mod guardrails;
 pub mod language_adapter;
 pub mod live_retrieval;
 pub mod map_reduce;

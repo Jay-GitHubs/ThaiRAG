@@ -627,22 +627,6 @@ impl ProviderBundle {
                     as Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>
             });
 
-            // ── Guardrails (PR1): build only when respective master switch is on ──
-            let input_guardrails = if chat.input_guardrails_enabled {
-                Some(Arc::new(thairag_agent::guardrails::InputGuardrails::new(
-                    chat.guardrails.clone(),
-                )))
-            } else {
-                None
-            };
-            let output_guardrails = if chat.output_guardrails_enabled {
-                Some(Arc::new(thairag_agent::guardrails::OutputGuardrails::new(
-                    chat.guardrails.clone(),
-                )))
-            } else {
-                None
-            };
-
             Some(Arc::new(ChatPipeline::new(
                 Arc::clone(&llm),
                 Arc::clone(&search_engine),
@@ -668,8 +652,6 @@ impl ProviderBundle {
                 al,
                 live_retrieval,
                 connector_provider,
-                input_guardrails,
-                output_guardrails,
                 chat.clone(),
                 Arc::clone(&prompts),
                 doc_resolver,

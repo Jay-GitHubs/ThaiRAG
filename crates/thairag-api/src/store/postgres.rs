@@ -52,15 +52,6 @@ impl PostgresKmStore {
             .execute(&pool)
             .await;
 
-        // Guardrails columns on inference_logs (PR1).
-        for stmt in [
-            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS input_guardrails_pass BOOLEAN",
-            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS output_guardrails_pass BOOLEAN",
-            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS guardrail_violation_codes TEXT NOT NULL DEFAULT ''",
-        ] {
-            let _ = sqlx::query(stmt).execute(&pool).await;
-        }
-
         Ok(Self { pool })
     }
 }
@@ -2236,8 +2227,7 @@ impl KmStoreTrait for PostgresKmStore {
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                     pipeline_route, agents_used,
                     status, error_message, response_length,
-                    feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    feedback_score
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8,
                     $9, $10, $11, $12,
@@ -2248,8 +2238,7 @@ impl KmStoreTrait for PostgresKmStore {
                     $25, $26, $27, $28,
                     $29, $30,
                     $31, $32, $33,
-                    $34,
-                    $35, $36, $37
+                    $34
                 )",
             )
             .bind(&entry.id)
@@ -2286,9 +2275,6 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(&entry.error_message)
             .bind(entry.response_length as i32)
             .bind(entry.feedback_score.map(|v| v as i16))
-            .bind(entry.input_guardrails_pass)
-            .bind(entry.output_guardrails_pass)
-            .bind(&entry.guardrail_violation_codes)
             .execute(&self.pool),
         );
 
@@ -2326,8 +2312,7 @@ impl KmStoreTrait for PostgresKmStore {
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                     pipeline_route, agents_used,
                     status, error_message, response_length,
-                    feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    feedback_score
              FROM inference_logs WHERE 1=1",
         );
         let mut param_idx: usize = 1;
@@ -2468,11 +2453,6 @@ impl KmStoreTrait for PostgresKmStore {
                 error_message: row.get("error_message"),
                 response_length: row.get::<i32, _>("response_length") as u32,
                 feedback_score: feedback_raw.map(|v| v as i8),
-                input_guardrails_pass: row.get("input_guardrails_pass"),
-                output_guardrails_pass: row.get("output_guardrails_pass"),
-                guardrail_violation_codes: row
-                    .try_get("guardrail_violation_codes")
-                    .unwrap_or_default(),
             }
         })
         .collect()

@@ -86,17 +86,6 @@ impl SqliteKmStore {
             .map_err(|e| ThaiRagError::Config(format!("Settings migration failed: {e}")))?;
         }
 
-        // Migration: add guardrails columns to inference_logs (PR1).
-        // Idempotent — silently no-ops on already-migrated DBs.
-        for stmt in [
-            "ALTER TABLE inference_logs ADD COLUMN input_guardrails_pass INTEGER",
-            "ALTER TABLE inference_logs ADD COLUMN output_guardrails_pass INTEGER",
-            "ALTER TABLE inference_logs ADD COLUMN guardrail_violation_codes TEXT NOT NULL DEFAULT ''",
-        ] {
-            // SQLite returns "duplicate column name" if the column already exists; ignore.
-            let _ = conn.execute(stmt, []);
-        }
-
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -2283,14 +2272,12 @@ impl KmStoreTrait for SqliteKmStore {
                 chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
                 quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                 pipeline_route, agents_used, status, error_message, response_length,
-                feedback_score,
-                input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                feedback_score
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                 ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28,
-                ?29, ?30, ?31, ?32, ?33, ?34,
-                ?35, ?36, ?37
+                ?29, ?30, ?31, ?32, ?33, ?34
             )",
             params![
                 entry.id,
@@ -2327,9 +2314,6 @@ impl KmStoreTrait for SqliteKmStore {
                 entry.error_message,
                 entry.response_length as i32,
                 entry.feedback_score.map(|v| v as i32),
-                entry.input_guardrails_pass.map(|v| v as i32),
-                entry.output_guardrails_pass.map(|v| v as i32),
-                entry.guardrail_violation_codes,
             ],
         )
         .ok();
@@ -2417,8 +2401,7 @@ impl KmStoreTrait for SqliteKmStore {
                     chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                     pipeline_route, agents_used, status, error_message, response_length,
-                    feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    feedback_score
              FROM inference_logs {where_clause}
              ORDER BY timestamp DESC
              LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
@@ -2468,9 +2451,6 @@ impl KmStoreTrait for SqliteKmStore {
                 error_message: row.get(31)?,
                 response_length: row.get::<_, i32>(32)? as u32,
                 feedback_score: row.get::<_, Option<i32>>(33)?.map(|v| v as i8),
-                input_guardrails_pass: row.get::<_, Option<i32>>(34)?.map(|v| v != 0),
-                output_guardrails_pass: row.get::<_, Option<i32>>(35)?.map(|v| v != 0),
-                guardrail_violation_codes: row.get(36).unwrap_or_default(),
             })
         })
         .unwrap()
