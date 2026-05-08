@@ -2211,6 +2211,13 @@ pub struct ChatPipelineConfigResponse {
     pub live_retrieval_max_content_chars: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live_retrieval_llm: Option<LlmProviderInfo>,
+    // Source Citation Footer
+    pub source_footer_enabled: bool,
+    pub source_footer_max: usize,
+    // Guardrails (PR1)
+    pub input_guardrails_enabled: bool,
+    pub output_guardrails_enabled: bool,
+    pub guardrails: thairag_config::schema::GuardrailsConfig,
 }
 
 #[derive(Deserialize)]
@@ -2341,6 +2348,13 @@ pub struct UpdateChatPipelineRequest {
     pub live_retrieval_max_content_chars: Option<usize>,
     pub live_retrieval_llm: Option<UpdateLlmConfig>,
     pub remove_live_retrieval_llm: Option<bool>,
+    // Source Citation Footer
+    pub source_footer_enabled: Option<bool>,
+    pub source_footer_max: Option<usize>,
+    // Guardrails (PR1)
+    pub input_guardrails_enabled: Option<bool>,
+    pub output_guardrails_enabled: Option<bool>,
+    pub guardrails: Option<thairag_config::schema::GuardrailsConfig>,
 }
 
 pub fn get_effective_chat_pipeline(state: &AppState) -> thairag_config::schema::ChatPipelineConfig {
@@ -2682,6 +2696,23 @@ where
         live_retrieval_llm: s("chat_pipeline.live_retrieval_llm")
             .and_then(|v| serde_json::from_str(&v).ok())
             .or_else(|| cp.live_retrieval_llm.clone()),
+        // Source Citation Footer
+        source_footer_enabled: s("chat_pipeline.source_footer_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.source_footer_enabled),
+        source_footer_max: s("chat_pipeline.source_footer_max")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.source_footer_max),
+        // Guardrails (PR1)
+        input_guardrails_enabled: s("chat_pipeline.input_guardrails_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.input_guardrails_enabled),
+        output_guardrails_enabled: s("chat_pipeline.output_guardrails_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.output_guardrails_enabled),
+        guardrails: s("chat_pipeline.guardrails")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_else(|| cp.guardrails.clone()),
     }
 }
 
@@ -2781,6 +2812,11 @@ fn build_chat_pipeline_response_from_config(
         live_retrieval_max_connectors: eff.live_retrieval_max_connectors,
         live_retrieval_max_content_chars: eff.live_retrieval_max_content_chars,
         live_retrieval_llm: eff.live_retrieval_llm.as_ref().map(llm_config_to_info),
+        source_footer_enabled: eff.source_footer_enabled,
+        source_footer_max: eff.source_footer_max,
+        input_guardrails_enabled: eff.input_guardrails_enabled,
+        output_guardrails_enabled: eff.output_guardrails_enabled,
+        guardrails: eff.guardrails.clone(),
     }
 }
 
@@ -3028,6 +3064,25 @@ pub async fn update_chat_pipeline_config(
         live_retrieval_max_content_chars,
         "chat_pipeline.live_retrieval_max_content_chars"
     );
+    // Source Citation Footer
+    persist_bool!(source_footer_enabled, "chat_pipeline.source_footer_enabled");
+    persist_num!(source_footer_max, "chat_pipeline.source_footer_max");
+    // Guardrails (PR1)
+    persist_bool!(
+        input_guardrails_enabled,
+        "chat_pipeline.input_guardrails_enabled"
+    );
+    persist_bool!(
+        output_guardrails_enabled,
+        "chat_pipeline.output_guardrails_enabled"
+    );
+    if let Some(ref g) = req.guardrails
+        && let Ok(json) = serde_json::to_string(g)
+    {
+        state
+            .km_store
+            .set_scoped_setting("chat_pipeline.guardrails", scope_type, &scope_id, &json);
+    }
 
     // Helper: persist LLM config (scoped)
     fn persist_chat_llm(
@@ -5290,7 +5345,7 @@ pub struct InferenceLogFilterQuery {
 }
 
 impl InferenceLogFilterQuery {
-    fn to_filter(&self, default_limit: usize) -> crate::store::InferenceLogFilter {
+    pub fn to_filter(&self, default_limit: usize) -> crate::store::InferenceLogFilter {
         crate::store::InferenceLogFilter {
             workspace_id: self.workspace_id.clone(),
             user_id: self.user_id.clone(),
