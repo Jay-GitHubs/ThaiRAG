@@ -10,6 +10,7 @@ pub mod documents;
 pub mod eval;
 pub mod feedback;
 pub mod finetune;
+pub mod guardrails;
 pub mod health;
 pub mod km;
 pub mod knowledge_graph;
@@ -158,7 +159,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 .delete(km::revoke_workspace_permission),
         )
         // Users
-        .route("/users", get(km::list_users))
+        .route("/users", get(km::list_users).post(km::create_user))
         .route("/users/{user_id}", delete(km::delete_user))
         .route("/users/{user_id}/role", put(km::update_user_role))
         .route("/users/{user_id}/status", put(km::update_user_status))
@@ -281,6 +282,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/inference-analytics",
             get(settings::get_inference_analytics),
         )
+        // Guardrails monitoring (PR2)
+        .route("/guardrails/stats", get(guardrails::get_stats))
+        .route("/guardrails/violations", get(guardrails::list_violations))
+        .route("/guardrails/preview", post(guardrails::preview))
         // Documents
         .route(
             "/workspaces/{workspace_id}/documents",

@@ -227,7 +227,11 @@ CREATE TABLE IF NOT EXISTS inference_logs (
     status            TEXT NOT NULL DEFAULT 'success',
     error_message     TEXT,
     response_length   INTEGER NOT NULL DEFAULT 0,
-    feedback_score    INTEGER
+    feedback_score    INTEGER,
+    -- Guardrails (PR1) — codes only, never matched values.
+    input_guardrails_pass    INTEGER,
+    output_guardrails_pass   INTEGER,
+    guardrail_violation_codes TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_inference_logs_timestamp ON inference_logs(timestamp);

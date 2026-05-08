@@ -268,6 +268,12 @@ pub struct InferenceLogEntry {
     pub response_length: u32,
     // Feedback (updated later)
     pub feedback_score: Option<i8>,
+    // Guardrails (PR1) — None if the stage didn't run.
+    pub input_guardrails_pass: Option<bool>,
+    pub output_guardrails_pass: Option<bool>,
+    /// Comma-separated violation codes. Empty string when no violations.
+    /// Codes only — never matched substrings, to keep the table PDPA-safe.
+    pub guardrail_violation_codes: String,
 }
 
 #[derive(Debug, Clone, Default)]
