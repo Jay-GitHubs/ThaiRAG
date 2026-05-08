@@ -758,6 +758,15 @@ pub struct ChatPipelineConfig {
     #[serde(default)]
     pub personal_memory_llm: Option<LlmConfig>,
 
+    // ── Feature: Source Citation Footer ──
+    /// Append a markdown "Sources" footer to chat completions so end-user clients
+    /// (e.g. Open WebUI) can show where the answer came from.
+    #[serde(default = "default_true_val")]
+    pub source_footer_enabled: bool,
+    /// Max number of sources listed in the footer.
+    #[serde(default = "default_source_footer_max")]
+    pub source_footer_max: usize,
+
     // ── Feature: Live Source Retrieval ──
     /// Enable live retrieval from MCP connectors when vector DB has no results.
     #[serde(default)]
@@ -774,6 +783,17 @@ pub struct ChatPipelineConfig {
     /// Separate LLM for connector selection (uses main LLM if not set).
     #[serde(default)]
     pub live_retrieval_llm: Option<LlmConfig>,
+
+    // ── Feature: Guardrails (PR1) ──
+    /// Enable input-side guardrails (run before query analyzer).
+    #[serde(default)]
+    pub input_guardrails_enabled: bool,
+    /// Enable output-side guardrails (run after response generation / quality guard).
+    #[serde(default)]
+    pub output_guardrails_enabled: bool,
+    /// Detector + policy configuration. Uses defaults if absent.
+    #[serde(default)]
+    pub guardrails: GuardrailsConfig,
 }
 
 fn default_max_chat_orchestrator_calls() -> u32 {
@@ -902,6 +922,9 @@ fn default_live_retrieval_max_connectors() -> u32 {
 fn default_live_retrieval_max_content_chars() -> usize {
     30_000
 }
+fn default_source_footer_max() -> usize {
+    5
+}
 
 impl Default for ChatPipelineConfig {
     fn default() -> Self {
@@ -1005,14 +1028,97 @@ impl Default for ChatPipelineConfig {
             personal_memory_decay_factor: default_personal_memory_decay_factor(),
             personal_memory_min_relevance: default_personal_memory_min_relevance(),
             personal_memory_llm: None,
+            // Source Citation Footer
+            source_footer_enabled: true,
+            source_footer_max: default_source_footer_max(),
             // Live Source Retrieval
             live_retrieval_enabled: false,
             live_retrieval_timeout_secs: default_live_retrieval_timeout_secs(),
             live_retrieval_max_connectors: default_live_retrieval_max_connectors(),
             live_retrieval_max_content_chars: default_live_retrieval_max_content_chars(),
             live_retrieval_llm: None,
+            // Guardrails (off by default — opt-in)
+            input_guardrails_enabled: false,
+            output_guardrails_enabled: false,
+            guardrails: GuardrailsConfig::default(),
         }
     }
+}
+
+// ── Guardrails Config ────────────────────────────────────────────────
+
+/// Detector toggles and policy for input/output guardrails.
+/// All detectors default to OFF — operators opt in per detector.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct GuardrailsConfig {
+    /// Maximum query length in characters (rejected if exceeded).
+    #[serde(default = "default_max_query_chars")]
+    pub max_query_chars: usize,
+    /// Detect Thai national ID (13 digits + checksum).
+    #[serde(default)]
+    pub detect_thai_id: bool,
+    /// Detect Thai phone numbers (+66 / 0X-XXX-XXXX).
+    #[serde(default)]
+    pub detect_thai_phone: bool,
+    /// Detect email addresses.
+    #[serde(default)]
+    pub detect_email: bool,
+    /// Detect credit card numbers (Luhn-validated).
+    #[serde(default)]
+    pub detect_credit_card: bool,
+    /// Detect API secrets (AWS keys, JWTs, GitHub PAT, generic high-entropy).
+    #[serde(default)]
+    pub detect_secrets: bool,
+    /// Detect prompt-injection / jailbreak patterns (regex set, multilingual).
+    #[serde(default)]
+    pub detect_prompt_injection: bool,
+    /// Custom blocklist phrases (case-insensitive substring match).
+    #[serde(default)]
+    pub blocklist_phrases: Vec<String>,
+    /// What to do on input violation: "block" or "sanitize".
+    #[serde(default = "default_input_action")]
+    pub input_on_violation: String,
+    /// What to do on output violation: "block", "redact", or "regenerate".
+    #[serde(default = "default_output_action")]
+    pub output_on_violation: String,
+    /// Replacement token for redacted spans.
+    #[serde(default = "default_redaction_token")]
+    pub redaction_token: String,
+    /// Fail-open on detector errors (true = pass through; false = treat as violation).
+    #[serde(default = "default_true_val")]
+    pub fail_open: bool,
+}
+
+impl Default for GuardrailsConfig {
+    fn default() -> Self {
+        Self {
+            max_query_chars: default_max_query_chars(),
+            detect_thai_id: false,
+            detect_thai_phone: false,
+            detect_email: false,
+            detect_credit_card: false,
+            detect_secrets: false,
+            detect_prompt_injection: false,
+            blocklist_phrases: Vec::new(),
+            input_on_violation: default_input_action(),
+            output_on_violation: default_output_action(),
+            redaction_token: default_redaction_token(),
+            fail_open: true,
+        }
+    }
+}
+
+fn default_max_query_chars() -> usize {
+    8000
+}
+fn default_input_action() -> String {
+    "block".to_string()
+}
+fn default_output_action() -> String {
+    "redact".to_string()
+}
+fn default_redaction_token() -> String {
+    "[REDACTED]".to_string()
 }
 
 fn default_true_val() -> bool {
