@@ -212,24 +212,6 @@ pub struct PipelineMetadata {
     /// Per-chunk data for lineage tracking (populated when search results are available).
     #[serde(default)]
     pub retrieved_chunks: Vec<RetrievedChunkMeta>,
-    /// Guardrail outcomes. None = stage not run; Some(true) = passed; Some(false) = blocked or sanitized.
-    #[serde(default)]
-    pub input_guardrails_pass: Option<bool>,
-    #[serde(default)]
-    pub output_guardrails_pass: Option<bool>,
-    /// Violation codes that fired (e.g. "PII_THAI_ID", "PROMPT_INJECTION").
-    /// Codes only — never matched substrings, to keep logs PDPA-safe.
-    #[serde(default)]
-    pub guardrail_violations: Vec<GuardrailViolationMeta>,
-}
-
-/// Lightweight violation record for inference logging.
-/// Stores only the violation code, severity, and stage — never the matched text.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GuardrailViolationMeta {
-    pub code: String,
-    pub severity: String,
-    pub stage: String,
 }
 
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
@@ -238,20 +220,10 @@ pub struct GuardrailViolationMeta {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
-    /// Optional image attachments for vision-capable models.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub images: Vec<ImageContent>,
-}
-
-impl ChatMessage {
-    /// Returns true if this message contains image attachments.
-    pub fn has_images(&self) -> bool {
-        !self.images.is_empty()
-    }
 }
 
 /// An image attachment for vision-capable LLMs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ImageContent {
     /// Base64-encoded image data.
     pub base64_data: String,

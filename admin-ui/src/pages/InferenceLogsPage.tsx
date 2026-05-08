@@ -89,7 +89,6 @@ function inferenceLogsToCsv(entries: InferenceLogEntry[]): string {
     'self_rag_confidence', 'quality_guard_pass', 'relevance_score',
     'hallucination_score', 'completeness_score', 'pipeline_route',
     'agents_used', 'status', 'error_message', 'response_length', 'feedback_score',
-    'input_guardrails_pass', 'output_guardrails_pass', 'guardrail_violation_codes',
   ] as const;
   const rows = entries.map(e =>
     headers.map(h => {
@@ -361,24 +360,6 @@ function LogBrowserTab() {
         if (v === 1) return <Tag color="green" icon={<LikeOutlined />}>+1</Tag>;
         if (v === -1) return <Tag color="red" icon={<DislikeOutlined />}>-1</Tag>;
         return <Typography.Text type="secondary">-</Typography.Text>;
-      },
-    },
-    {
-      title: 'Guardrails',
-      width: 140,
-      render: (_: unknown, r: InferenceLogEntry) => {
-        const codes = (r.guardrail_violation_codes || '').split(',').filter(Boolean);
-        if (codes.length === 0) {
-          if (r.input_guardrails_pass == null && r.output_guardrails_pass == null) {
-            return <Typography.Text type="secondary">-</Typography.Text>;
-          }
-          return <Tag color="success">clean</Tag>;
-        }
-        return (
-          <Tooltip title={codes.join(', ')}>
-            <Tag color="red">{codes.length} violation{codes.length === 1 ? '' : 's'}</Tag>
-          </Tooltip>
-        );
       },
     },
   ];

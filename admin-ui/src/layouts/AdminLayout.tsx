@@ -108,7 +108,6 @@ const menuGroups: MenuGroup[] = [
       { key: '/usage', icon: <BarChartOutlined />, labelKey: 'menu.usageCosts', minRole: 'admin' },
       { key: '/feedback', icon: <FundOutlined />, labelKey: 'menu.feedbackTuning', minRole: 'admin' },
       { key: '/inference-logs', icon: <FileSearchOutlined />, labelKey: 'menu.inferenceLogs', minRole: 'super_admin' },
-      { key: '/guardrails', icon: <SafetyOutlined />, labelKey: 'menu.guardrails', minRole: 'super_admin' },
       { key: '/eval', icon: <ExperimentOutlined />, labelKey: 'menu.searchEval', minRole: 'super_admin' },
       { key: '/ab-tests', icon: <SplitCellsOutlined />, labelKey: 'menu.abTesting', minRole: 'super_admin' },
     ],

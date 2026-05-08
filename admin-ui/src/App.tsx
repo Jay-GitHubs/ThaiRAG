@@ -16,7 +16,6 @@ import { UsagePage } from './pages/UsagePage';
 import { FeedbackPage } from './pages/FeedbackPage';
 import { ConnectorsPage } from './pages/ConnectorsPage';
 import InferenceLogsPage from './pages/InferenceLogsPage';
-import GuardrailsPage from './pages/GuardrailsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import EvalPage from './pages/EvalPage';
 import AbTestPage from './pages/AbTestPage';
@@ -31,7 +30,6 @@ import { TenantsPage } from './pages/TenantsPage';
 import { RolesPage } from './pages/RolesPage';
 import PromptMarketplacePage from './pages/PromptMarketplacePage';
 import FinetunePage from './pages/FinetunePage';
-import PluginsPage from './pages/PluginsPage';
 import { I18nProvider } from './i18n';
 import { TourProvider } from './tours';
 
@@ -62,7 +60,6 @@ export function App() {
           <Route path="/connectors" element={<RoleRoute minRole="super_admin"><ConnectorsPage /></RoleRoute>} />
           <Route path="/analytics" element={<RoleRoute minRole="admin"><AnalyticsPage /></RoleRoute>} />
           <Route path="/inference-logs" element={<RoleRoute minRole="super_admin"><InferenceLogsPage /></RoleRoute>} />
-          <Route path="/guardrails" element={<RoleRoute minRole="super_admin"><GuardrailsPage /></RoleRoute>} />
           <Route path="/eval" element={<RoleRoute minRole="super_admin"><EvalPage /></RoleRoute>} />
           <Route path="/ab-tests" element={<RoleRoute minRole="super_admin"><AbTestPage /></RoleRoute>} />
           <Route path="/knowledge-graph" element={<RoleRoute minRole="editor"><KnowledgeGraphPage /></RoleRoute>} />
@@ -76,7 +73,6 @@ export function App() {
           <Route path="/roles" element={<RoleRoute minRole="super_admin"><RolesPage /></RoleRoute>} />
           <Route path="/prompt-marketplace" element={<RoleRoute minRole="editor"><PromptMarketplacePage /></RoleRoute>} />
           <Route path="/finetune" element={<RoleRoute minRole="super_admin"><FinetunePage /></RoleRoute>} />
-          <Route path="/plugins" element={<RoleRoute minRole="super_admin"><PluginsPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>

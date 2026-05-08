@@ -15,7 +15,6 @@ use thairag_core::types::{ChatMessage, MetadataCell, PipelineMetadata, SearchQue
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
-use crate::plugin_hooks;
 use crate::routes::chat::build_searchable_scopes;
 use crate::routes::feedback;
 use crate::store::{InferenceLogEntry, LineageRecord, SearchAnalyticsEvent};
@@ -149,12 +148,8 @@ pub async fn test_query(
     let p = state.providers();
     let retrieval_params = feedback::load_retrieval_params(&state);
     let search_start = Instant::now();
-
-    // Apply pre-search plugins to transform the query
-    let transformed_query = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
-
     let search_query = SearchQuery {
-        text: transformed_query,
+        text: req.query.clone(),
         top_k: retrieval_params.top_k,
         workspace_ids: vec![ws_id],
         unrestricted: false,
@@ -165,9 +160,6 @@ pub async fn test_query(
         .await
         .map_err(ApiError::from)?;
     let search_ms = search_start.elapsed().as_millis() as u64;
-
-    // Apply post-search plugins to filter/re-rank results
-    search_results = plugin_hooks::apply_post_search(&state.plugin_registry, search_results);
 
     // Apply document boost/penalty from feedback
     let boost_map = feedback::get_document_boost_map(&state);
@@ -237,13 +229,11 @@ pub async fn test_query(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
-            images: vec![],
         });
     }
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: req.query.clone(),
-        images: vec![],
     });
 
     let available_scopes = build_searchable_scopes(&state, &scope);
@@ -357,14 +347,6 @@ pub async fn test_query(
             error_message: None,
             response_length,
             feedback_score: None,
-            input_guardrails_pass: meta.input_guardrails_pass,
-            output_guardrails_pass: meta.output_guardrails_pass,
-            guardrail_violation_codes: meta
-                .guardrail_violations
-                .iter()
-                .map(|v| v.code.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
         };
         let store = state.km_store.clone();
         tokio::spawn(async move {
@@ -514,9 +496,7 @@ pub async fn test_query_stream(
     let available_scopes = build_searchable_scopes(&state, &scope);
     let p = state.providers();
     let retrieval_params = feedback::load_retrieval_params(&state);
-
-    // Apply pre-search plugins to transform the query
-    let query_text = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
+    let query_text = req.query.clone();
 
     // Capture what we need for the background task
     let state_clone = state.clone();
@@ -565,9 +545,6 @@ pub async fn test_query_stream(
                 return;
             }
         };
-
-        // Apply post-search plugins to filter/re-rank results
-        search_results = plugin_hooks::apply_post_search(&state_clone.plugin_registry, search_results);
 
         // Apply document boost/penalty
         let boost_map = feedback::get_document_boost_map(&state_clone);
@@ -644,13 +621,11 @@ pub async fn test_query_stream(
                     "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                      Use these examples as a guide for style and quality, but answer based on the retrieved context."
                 ),
-                images: vec![],
             });
         }
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: query_text.clone(),
-            images: vec![],
         });
 
         let (progress_tx, mut progress_rx) =
@@ -957,9 +932,7 @@ pub async fn search_stream(
 
     let p = state.providers();
     let retrieval_params = feedback::load_retrieval_params(&state);
-
-    // Apply pre-search plugins to transform the query
-    let query_text = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
+    let query_text = req.query.clone();
     let state_clone = state.clone();
 
     let sse_stream = async_stream::stream! {
@@ -983,9 +956,6 @@ pub async fn search_stream(
                 return;
             }
         };
-
-        // Apply post-search plugins to filter/re-rank results
-        search_results = plugin_hooks::apply_post_search(&state_clone.plugin_registry, search_results);
 
         // Apply document boost/penalty from feedback
         let boost_map = feedback::get_document_boost_map(&state_clone);

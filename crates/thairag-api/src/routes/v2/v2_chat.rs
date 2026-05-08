@@ -312,7 +312,6 @@ async fn handle_v2_non_stream(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
-            images: vec![],
         }];
         msgs.extend(full_messages.clone());
         msgs
@@ -367,7 +366,6 @@ async fn handle_v2_non_stream(
         let assistant_msg = ChatMessage {
             role: "assistant".to_string(),
             content: llm_resp.content.clone(),
-            images: vec![],
         };
         state
             .session_store
@@ -434,14 +432,6 @@ async fn handle_v2_non_stream(
             error_message: None,
             response_length,
             feedback_score: None,
-            input_guardrails_pass: meta.input_guardrails_pass,
-            output_guardrails_pass: meta.output_guardrails_pass,
-            guardrail_violation_codes: meta
-                .guardrail_violations
-                .iter()
-                .map(|v| v.code.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
         };
         let store = state.km_store.clone();
         tokio::spawn(async move {
@@ -460,7 +450,6 @@ async fn handle_v2_non_stream(
             message: ChatMessage {
                 role: "assistant".to_string(),
                 content: llm_resp.content,
-                images: vec![],
             },
             finish_reason: "stop".to_string(),
         }],
@@ -509,7 +498,6 @@ async fn handle_v2_stream(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
-            images: vec![],
         }];
         msgs.extend(full_messages.clone());
         msgs
@@ -647,7 +635,6 @@ async fn handle_v2_stream(
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
                 content: full_content,
-                images: vec![],
             };
             state_clone.session_store.append(sid, last_user_msg, assistant_msg, user_id).await;
         }

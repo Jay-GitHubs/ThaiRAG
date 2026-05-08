@@ -698,21 +698,6 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
   const [liveRetrievalMaxConnectors, setLiveRetrievalMaxConnectors] = useState(3);
   const [liveRetrievalMaxContentChars, setLiveRetrievalMaxContentChars] = useState(30000);
 
-  // Guardrails (PR1)
-  const [inputGuardrailsEnabled, setInputGuardrailsEnabled] = useState(false);
-  const [outputGuardrailsEnabled, setOutputGuardrailsEnabled] = useState(false);
-  const [grMaxQueryChars, setGrMaxQueryChars] = useState(8000);
-  const [grDetectThaiId, setGrDetectThaiId] = useState(false);
-  const [grDetectThaiPhone, setGrDetectThaiPhone] = useState(false);
-  const [grDetectEmail, setGrDetectEmail] = useState(false);
-  const [grDetectCreditCard, setGrDetectCreditCard] = useState(false);
-  const [grDetectSecrets, setGrDetectSecrets] = useState(false);
-  const [grDetectPromptInjection, setGrDetectPromptInjection] = useState(false);
-  const [grBlocklistPhrases, setGrBlocklistPhrases] = useState<string>('');
-  const [grInputAction, setGrInputAction] = useState<'block' | 'sanitize'>('block');
-  const [grOutputAction, setGrOutputAction] = useState<'block' | 'redact' | 'regenerate'>('redact');
-  const [grRedactionToken, setGrRedactionToken] = useState('[REDACTED]');
-
   // Sync state
   const [syncedModels, setSyncedModels] = useState<AvailableModel[] | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -828,28 +813,6 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
       setLiveRetrievalMaxConnectors(data.live_retrieval_max_connectors);
       setLiveRetrievalMaxContentChars(data.live_retrieval_max_content_chars);
 
-      // Guardrails (PR1)
-      setInputGuardrailsEnabled(data.input_guardrails_enabled);
-      setOutputGuardrailsEnabled(data.output_guardrails_enabled);
-      const g = data.guardrails;
-      if (g) {
-        setGrMaxQueryChars(g.max_query_chars);
-        setGrDetectThaiId(g.detect_thai_id);
-        setGrDetectThaiPhone(g.detect_thai_phone);
-        setGrDetectEmail(g.detect_email);
-        setGrDetectCreditCard(g.detect_credit_card);
-        setGrDetectSecrets(g.detect_secrets);
-        setGrDetectPromptInjection(g.detect_prompt_injection);
-        setGrBlocklistPhrases((g.blocklist_phrases || []).join('\n'));
-        setGrInputAction((g.input_on_violation === 'sanitize' ? 'sanitize' : 'block') as 'block' | 'sanitize');
-        setGrOutputAction(
-          (['block', 'redact', 'regenerate'].includes(g.output_on_violation)
-            ? g.output_on_violation
-            : 'redact') as 'block' | 'redact' | 'regenerate',
-        );
-        setGrRedactionToken(g.redaction_token || '[REDACTED]');
-      }
-
       // Load feedback stats if adaptive threshold is relevant
       try {
         const stats = await getFeedbackStats();
@@ -949,26 +912,6 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         live_retrieval_timeout_secs: liveRetrievalTimeoutSecs,
         live_retrieval_max_connectors: liveRetrievalMaxConnectors,
         live_retrieval_max_content_chars: liveRetrievalMaxContentChars,
-        // Guardrails (PR1)
-        input_guardrails_enabled: inputGuardrailsEnabled,
-        output_guardrails_enabled: outputGuardrailsEnabled,
-        guardrails: {
-          max_query_chars: grMaxQueryChars,
-          detect_thai_id: grDetectThaiId,
-          detect_thai_phone: grDetectThaiPhone,
-          detect_email: grDetectEmail,
-          detect_credit_card: grDetectCreditCard,
-          detect_secrets: grDetectSecrets,
-          detect_prompt_injection: grDetectPromptInjection,
-          blocklist_phrases: grBlocklistPhrases
-            .split('\n')
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0),
-          input_on_violation: grInputAction,
-          output_on_violation: grOutputAction,
-          redaction_token: grRedactionToken,
-          fail_open: true,
-        },
       };
 
       // LLM configs based on mode
@@ -2089,168 +2032,6 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                       </Space>
                     )}
                     {featureLlmForm('live_retrieval', liveRetrievalEnabled)}
-                  </Space>
-                ),
-              },
-              {
-                key: 'guardrails',
-                label: (
-                  <Space>
-                    <span>Guardrails (PR1)</span>
-                    <Tag color={inputGuardrailsEnabled ? 'green' : 'default'}>
-                      Input: {inputGuardrailsEnabled ? 'ON' : 'OFF'}
-                    </Tag>
-                    <Tag color={outputGuardrailsEnabled ? 'green' : 'default'}>
-                      Output: {outputGuardrailsEnabled ? 'ON' : 'OFF'}
-                    </Tag>
-                  </Space>
-                ),
-                children: (
-                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                    <Paragraph style={{ margin: 0 }}>
-                      Deterministic detectors run before query analysis (input) and after response generation
-                      (output). All detectors are off by default — enable per detector to fit your compliance
-                      needs (e.g. PDPA: Thai ID + phone). Codes only are logged; matched values never leave the
-                      process.
-                    </Paragraph>
-                    <Space size="large" wrap>
-                      <Tooltip title="Run input guardrails before query analyzer">
-                        <Space direction="vertical" size={2}>
-                          <Text type="secondary">Input Guardrails</Text>
-                          <Switch
-                            checked={inputGuardrailsEnabled}
-                            onChange={setInputGuardrailsEnabled}
-                          />
-                        </Space>
-                      </Tooltip>
-                      <Tooltip title="Run output guardrails after response generation">
-                        <Space direction="vertical" size={2}>
-                          <Text type="secondary">Output Guardrails</Text>
-                          <Switch
-                            checked={outputGuardrailsEnabled}
-                            onChange={setOutputGuardrailsEnabled}
-                          />
-                        </Space>
-                      </Tooltip>
-                      <Tooltip title="Maximum query length in characters; over-limit queries are rejected.">
-                        <Space direction="vertical" size={2}>
-                          <Text type="secondary">Max Query Chars <QuestionCircleOutlined /></Text>
-                          <InputNumber
-                            min={500}
-                            max={32000}
-                            step={500}
-                            value={grMaxQueryChars}
-                            onChange={(v) => setGrMaxQueryChars(v ?? 8000)}
-                            style={{ width: 110 }}
-                          />
-                        </Space>
-                      </Tooltip>
-                    </Space>
-
-                    {(inputGuardrailsEnabled || outputGuardrailsEnabled) && (
-                      <>
-                        <Divider style={{ margin: '8px 0' }}>Detectors</Divider>
-                        <Space size="large" wrap>
-                          <Tooltip title="Thai national ID with mod-11 checksum (CRITICAL severity)">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Thai ID</Text>
-                              <Switch checked={grDetectThaiId} onChange={setGrDetectThaiId} />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Thai phone numbers (+66, 0X-XXX-XXXX)">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Thai Phone</Text>
-                              <Switch checked={grDetectThaiPhone} onChange={setGrDetectThaiPhone} />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Email addresses">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Email</Text>
-                              <Switch checked={grDetectEmail} onChange={setGrDetectEmail} />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Credit card numbers (Luhn-validated)">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Credit Card</Text>
-                              <Switch
-                                checked={grDetectCreditCard}
-                                onChange={setGrDetectCreditCard}
-                              />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="API keys, JWTs, GitHub PAT, AWS keys">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Secrets</Text>
-                              <Switch checked={grDetectSecrets} onChange={setGrDetectSecrets} />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Common prompt-injection / jailbreak patterns (TH+EN)">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Prompt Injection</Text>
-                              <Switch
-                                checked={grDetectPromptInjection}
-                                onChange={setGrDetectPromptInjection}
-                              />
-                            </Space>
-                          </Tooltip>
-                        </Space>
-
-                        <Divider style={{ margin: '8px 0' }}>Policy</Divider>
-                        <Space size="large" wrap>
-                          <Tooltip title="Action when input violations are found (Critical severity always blocks regardless)">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">On Input Violation <QuestionCircleOutlined /></Text>
-                              <Select
-                                value={grInputAction}
-                                onChange={setGrInputAction}
-                                style={{ width: 140 }}
-                                options={[
-                                  { label: 'Block', value: 'block' },
-                                  { label: 'Sanitize', value: 'sanitize' },
-                                ]}
-                              />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Action when output violations are found">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">On Output Violation <QuestionCircleOutlined /></Text>
-                              <Select
-                                value={grOutputAction}
-                                onChange={setGrOutputAction}
-                                style={{ width: 140 }}
-                                options={[
-                                  { label: 'Block', value: 'block' },
-                                  { label: 'Redact', value: 'redact' },
-                                  { label: 'Regenerate', value: 'regenerate' },
-                                ]}
-                              />
-                            </Space>
-                          </Tooltip>
-                          <Tooltip title="Replacement token for redacted spans">
-                            <Space direction="vertical" size={2}>
-                              <Text type="secondary">Redaction Token <QuestionCircleOutlined /></Text>
-                              <Input
-                                value={grRedactionToken}
-                                onChange={(e) => setGrRedactionToken(e.target.value)}
-                                style={{ width: 140 }}
-                              />
-                            </Space>
-                          </Tooltip>
-                        </Space>
-
-                        <Tooltip title="One phrase per line. Case-insensitive substring match.">
-                          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                            <Text type="secondary">Custom Blocklist (one per line) <QuestionCircleOutlined /></Text>
-                            <Input.TextArea
-                              rows={3}
-                              value={grBlocklistPhrases}
-                              onChange={(e) => setGrBlocklistPhrases(e.target.value)}
-                              placeholder="forbidden phrase one&#10;forbidden phrase two"
-                            />
-                          </Space>
-                        </Tooltip>
-                      </>
-                    )}
                   </Space>
                 ),
               },
