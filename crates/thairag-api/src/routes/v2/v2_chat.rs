@@ -432,6 +432,14 @@ async fn handle_v2_non_stream(
             error_message: None,
             response_length,
             feedback_score: None,
+            input_guardrails_pass: meta.input_guardrails_pass,
+            output_guardrails_pass: meta.output_guardrails_pass,
+            guardrail_violation_codes: meta
+                .guardrail_violations
+                .iter()
+                .map(|v| v.code.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
         };
         let store = state.km_store.clone();
         tokio::spawn(async move {

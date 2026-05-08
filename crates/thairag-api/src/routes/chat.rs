@@ -252,6 +252,47 @@ pub(crate) fn persist_usage(state: &AppState, prompt: u32, completion: u32) {
     }
 }
 
+/// Build a markdown "Sources" footer from pipeline metadata for end-user
+/// transparency (e.g. Open WebUI). Returns None when there's nothing to cite
+/// or the feature is disabled.
+pub(crate) fn build_source_footer(
+    meta: &PipelineMetadata,
+    enabled: bool,
+    max: usize,
+    response_id: &str,
+) -> Option<String> {
+    if !enabled || max == 0 || meta.retrieved_chunks.is_empty() {
+        return None;
+    }
+    let mut sources: Vec<&thairag_core::types::RetrievedChunkMeta> = meta
+        .retrieved_chunks
+        .iter()
+        .filter(|c| c.contributed)
+        .collect();
+    if sources.is_empty() {
+        return None;
+    }
+    sources.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    sources.truncate(max);
+
+    let mut out = String::from("\n\n---\n**Sources:**\n");
+    for (i, c) in sources.iter().enumerate() {
+        let title = c.doc_title.as_deref().unwrap_or(&c.doc_id);
+        out.push_str(&format!(
+            "{}. *{}* — relevance {:.2}\n",
+            i + 1,
+            title,
+            c.score
+        ));
+    }
+    out.push_str(&format!("\n_Response ID: `{response_id}`_"));
+    Some(out)
+}
+
 /// Load conversation memory entries for a user from the KV store.
 pub(crate) fn load_memories(state: &AppState, user_id: Option<UserId>) -> Vec<MemoryEntry> {
     let Some(uid) = user_id else { return vec![] };
@@ -565,7 +606,7 @@ async fn handle_non_stream(
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
-    let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
+    let mut llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         pipeline
             .process(
                 &augmented_messages,
@@ -598,6 +639,21 @@ async fn handle_non_stream(
         llm_resp.usage.completion_tokens,
     );
 
+    let response_id = format!("chatcmpl-{}", Uuid::new_v4());
+
+    // Append source footer for end-user transparency (e.g. Open WebUI).
+    // Done before session save so memory + history retain the citations.
+    // Snapshot the metadata so the lock guard never crosses an await.
+    let footer_meta = metadata_cell.lock().unwrap().clone();
+    if let Some(footer) = build_source_footer(
+        &footer_meta,
+        state.config.chat_pipeline.source_footer_enabled,
+        state.config.chat_pipeline.source_footer_max,
+        &response_id,
+    ) {
+        llm_resp.content.push_str(&footer);
+    }
+
     // Save to session
     if let Some(sid) = session_id
         && let Some(last_user_msg) = req.messages.last().cloned()
@@ -617,7 +673,6 @@ async fn handle_non_stream(
         }
     }
 
-    let response_id = format!("chatcmpl-{}", Uuid::new_v4());
     let response_length = llm_resp.content.len() as u32;
 
     // ── Inference Logging + Analytics ─────────────────────────────
@@ -669,6 +724,14 @@ async fn handle_non_stream(
             error_message: None,
             response_length,
             feedback_score: None,
+            input_guardrails_pass: meta.input_guardrails_pass,
+            output_guardrails_pass: meta.output_guardrails_pass,
+            guardrail_violation_codes: meta
+                .guardrail_violations
+                .iter()
+                .map(|v| v.code.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
         };
 
         // ── Search Analytics ──
@@ -1001,6 +1064,36 @@ async fn handle_stream(
             }
         }
 
+        // Append source footer for end-user transparency (e.g. Open WebUI).
+        // Emitted as a final content chunk so the client renders it inline.
+        // Snapshot the metadata before any further await so the MutexGuard
+        // never crosses an await point (it isn't Send).
+        let footer_meta = metadata_cell.lock().unwrap().clone();
+        if let Some(footer) = build_source_footer(
+            &footer_meta,
+            state.config.chat_pipeline.source_footer_enabled,
+            state.config.chat_pipeline.source_footer_max,
+            &id,
+        ) {
+            accumulated_content.push_str(&footer);
+            let footer_chunk = ChatCompletionChunk {
+                id: id_clone.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: model_clone.clone(),
+                choices: vec![ChatChunkChoice {
+                    index: 0,
+                    delta: ChatChunkDelta {
+                        role: None,
+                        content: Some(footer),
+                    },
+                    finish_reason: None,
+                }],
+                usage: None,
+            };
+            yield Ok(Event::default().data(serde_json::to_string(&footer_chunk).unwrap()));
+        }
+
         // Capture response length before content is moved
         let response_length = accumulated_content.len() as u32;
 
@@ -1104,6 +1197,14 @@ async fn handle_stream(
                 error_message: None,
                 response_length,
                 feedback_score: None,
+                input_guardrails_pass: meta.input_guardrails_pass,
+                output_guardrails_pass: meta.output_guardrails_pass,
+                guardrail_violation_codes: meta
+                    .guardrail_violations
+                    .iter()
+                    .map(|v| v.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
             };
 
             // ── Search Analytics ──
