@@ -9,7 +9,7 @@ use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{
     ChatMessage, DocId, LlmResponse, LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata,
-    PipelineProgress, ProgressSender, QueryIntent, SearchQuery, StageStatus,
+    PipelineProgress, ProgressSender, QueryIntent, SearchQuery, StageStatus, VisionMessage,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -22,6 +22,7 @@ use crate::contextual_compression::ContextualCompression;
 use crate::conversation_memory::{ConversationMemory, MemoryEntry};
 use crate::corrective_rag::{ContextAction, CorrectiveRag};
 use crate::graph_rag::{GraphRag, KnowledgeGraph};
+use crate::guardrails::{GuardAction, InputGuardrails, OutputGuardrails, violations_to_meta};
 use crate::language_adapter::LanguageAdapter;
 use crate::live_retrieval::LiveRetrieval;
 use crate::map_reduce::MapReduceRag;
@@ -74,6 +75,23 @@ impl LlmBudget {
     }
 }
 
+/// Returns true if any message in the slice contains image attachments.
+fn has_vision_content(messages: &[ChatMessage]) -> bool {
+    messages.iter().any(|m| !m.images.is_empty())
+}
+
+/// Converts ChatMessages to VisionMessages for the vision LLM API.
+fn to_vision_messages(messages: &[ChatMessage]) -> Vec<VisionMessage> {
+    messages
+        .iter()
+        .map(|m| VisionMessage {
+            role: m.role.clone(),
+            text: m.content.clone(),
+            images: m.images.clone(),
+        })
+        .collect()
+}
+
 /// The full multi-agent chat pipeline.
 pub struct ChatPipeline {
     // Agents (None = disabled, use fallback)
@@ -103,6 +121,10 @@ pub struct ChatPipeline {
     live_retrieval: Option<LiveRetrieval>,
     /// Provider of MCP connector configs for a given access scope.
     connector_provider: Option<ConnectorProvider>,
+    /// Input-side guardrails (PII / secrets / injection / blocklist on the user query).
+    input_guardrails: Option<Arc<InputGuardrails>>,
+    /// Output-side guardrails (PII / secrets / blocklist on the model response).
+    output_guardrails: Option<Arc<OutputGuardrails>>,
     /// In-memory knowledge graph built from document entity extraction.
     knowledge_graph: Arc<std::sync::RwLock<KnowledgeGraph>>,
     // Infrastructure
@@ -144,6 +166,8 @@ impl ChatPipeline {
         active_learning: Option<Arc<ActiveLearning>>,
         live_retrieval: Option<LiveRetrieval>,
         connector_provider: Option<ConnectorProvider>,
+        input_guardrails: Option<Arc<InputGuardrails>>,
+        output_guardrails: Option<Arc<OutputGuardrails>>,
         config: ChatPipelineConfig,
         prompts: Arc<PromptRegistry>,
         doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
@@ -172,6 +196,8 @@ impl ChatPipeline {
             active_learning,
             live_retrieval,
             connector_provider,
+            input_guardrails,
+            output_guardrails,
             knowledge_graph: Arc::new(std::sync::RwLock::new(KnowledgeGraph::default())),
             main_llm,
             search_engine,
@@ -253,6 +279,115 @@ impl ChatPipeline {
         }
     }
 
+    /// Run input guardrails on the user query.
+    ///
+    /// Returns:
+    /// - `None` to proceed with the (possibly sanitized) query in `messages`.
+    /// - `Some(refusal)` if the request was blocked — caller must short-circuit.
+    ///
+    /// Mutates `messages` in place if the verdict is Sanitize.
+    fn apply_input_guardrails(
+        &self,
+        messages: &mut [ChatMessage],
+        progress: &Option<ProgressSender>,
+        metadata: &Option<MetadataCell>,
+    ) -> Option<LlmResponse> {
+        let guard = self.input_guardrails.as_ref()?;
+        let query = messages
+            .last()
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+
+        self.emit_progress(progress, "input_guardrails", StageStatus::Started, None);
+        let t = Instant::now();
+        let verdict = guard.check(&query);
+        let dur = t.elapsed().as_millis() as u64;
+        self.emit_progress(progress, "input_guardrails", StageStatus::Done, Some(dur));
+
+        let codes: Vec<&str> = verdict.violations.iter().map(|v| v.code.as_str()).collect();
+        let passed = verdict.passed();
+        let meta_violations = violations_to_meta(&verdict.violations);
+        Self::update_metadata(metadata, |m| {
+            m.input_guardrails_pass = Some(passed);
+            m.guardrail_violations.extend(meta_violations);
+        });
+
+        match verdict.action {
+            GuardAction::Pass => None,
+            GuardAction::Sanitize(new_query) => {
+                debug!(?codes, "Input guardrails: sanitized");
+                if let Some(last) = messages.last_mut() {
+                    last.content = new_query;
+                }
+                None
+            }
+            GuardAction::Block { reason } => {
+                warn!(?codes, "Input guardrails: BLOCK");
+                Some(LlmResponse {
+                    content: reason,
+                    usage: LlmUsage::default(),
+                })
+            }
+            // Regenerate is an output-side action; treat as pass on input.
+            GuardAction::Regenerate { .. } => None,
+        }
+    }
+
+    /// Run output guardrails on a final response. Returns the (possibly modified)
+    /// response. Detector errors are fail-open per `GuardrailsConfig::fail_open`.
+    fn apply_output_guardrails(
+        &self,
+        response: LlmResponse,
+        progress: &Option<ProgressSender>,
+        metadata: &Option<MetadataCell>,
+    ) -> LlmResponse {
+        let Some(guard) = self.output_guardrails.as_ref() else {
+            return response;
+        };
+
+        self.emit_progress(progress, "output_guardrails", StageStatus::Started, None);
+        let t = Instant::now();
+        let verdict = guard.check(&response.content);
+        let dur = t.elapsed().as_millis() as u64;
+        self.emit_progress(progress, "output_guardrails", StageStatus::Done, Some(dur));
+
+        let codes: Vec<&str> = verdict.violations.iter().map(|v| v.code.as_str()).collect();
+        let passed = verdict.passed();
+        let meta_violations = violations_to_meta(&verdict.violations);
+        Self::update_metadata(metadata, |m| {
+            m.output_guardrails_pass = Some(passed);
+            m.guardrail_violations.extend(meta_violations);
+        });
+
+        match verdict.action {
+            GuardAction::Pass => response,
+            GuardAction::Sanitize(new_content) => {
+                debug!(?codes, "Output guardrails: redacted");
+                LlmResponse {
+                    content: new_content,
+                    usage: response.usage,
+                }
+            }
+            GuardAction::Block { reason } => {
+                warn!(?codes, "Output guardrails: BLOCK");
+                LlmResponse {
+                    content: reason,
+                    usage: response.usage,
+                }
+            }
+            // Regenerate would require re-invoking the generator — out of scope for
+            // PR1; treat as redact when the policy says regenerate but we have no
+            // retry pathway here.
+            GuardAction::Regenerate { .. } => {
+                debug!(
+                    ?codes,
+                    "Output guardrails: regenerate requested but unavailable, redacting"
+                );
+                response
+            }
+        }
+    }
+
     /// Non-streaming pipeline: orchestrator decides which agents to run.
     pub async fn process(
         &self,
@@ -267,9 +402,15 @@ impl ChatPipeline {
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
 
         // Inject memory context if available
-        let full_messages = self.inject_memory(messages, memories);
-        let messages = &full_messages;
+        let mut full_messages = self.inject_memory(messages, memories);
 
+        // ── Input Guardrails (before any LLM work) ──
+        if let Some(refusal) = self.apply_input_guardrails(&mut full_messages, &progress, &metadata)
+        {
+            return Ok(refusal);
+        }
+
+        let messages = &full_messages;
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
         // ── Agent 1: Query Analyzer + Self-RAG gate (concurrent) ──
@@ -335,7 +476,12 @@ impl ChatPipeline {
             self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
             let t2 = Instant::now();
             budget.try_spend(); // count the generation call
-            let response = self.main_llm.generate(messages, None).await?;
+            let response = if has_vision_content(messages) {
+                let vision_msgs = to_vision_messages(messages);
+                self.main_llm.generate_vision(&vision_msgs, None).await?
+            } else {
+                self.main_llm.generate(messages, None).await?
+            };
             let gen_ms = t2.elapsed().as_millis() as u64;
             self.emit_progress(
                 &progress,
@@ -360,7 +506,7 @@ impl ChatPipeline {
                 remaining_budget = budget.remaining(),
                 "Pipeline: complete"
             );
-            return result;
+            return result.map(|r| self.apply_output_guardrails(r, &progress, &metadata));
         }
 
         // ── Orchestrator: decide route ──
@@ -417,7 +563,12 @@ impl ChatPipeline {
                 _ => {
                     self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
                     let t = Instant::now();
-                    let resp = self.main_llm.generate(messages, None).await?;
+                    let resp = if has_vision_content(messages) {
+                        let vision_msgs = to_vision_messages(messages);
+                        self.main_llm.generate_vision(&vision_msgs, None).await?
+                    } else {
+                        self.main_llm.generate(messages, None).await?
+                    };
                     let gen_ms = t.elapsed().as_millis() as u64;
                     self.emit_progress(
                         &progress,
@@ -564,7 +715,7 @@ impl ChatPipeline {
             remaining_budget = budget.remaining(),
             "Pipeline: complete"
         );
-        result
+        result.map(|r| self.apply_output_guardrails(r, &progress, &metadata))
     }
 
     /// Execute the full pipeline (agents 2-6).
@@ -1205,7 +1356,14 @@ impl ChatPipeline {
         let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
 
-        let full_messages = self.inject_memory(messages, memories);
+        let mut full_messages = self.inject_memory(messages, memories);
+
+        // ── Input Guardrails (before any LLM work) ──
+        if let Some(refusal) = self.apply_input_guardrails(&mut full_messages, &progress, &metadata)
+        {
+            return Ok(Self::refusal_stream(refusal.content));
+        }
+
         let messages = &full_messages;
 
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
@@ -1278,7 +1436,12 @@ impl ChatPipeline {
                 remaining_budget = budget.remaining(),
                 "Pipeline: complete"
             );
-            return self.main_llm.generate_stream(messages, None).await;
+            let stream = self.main_llm.generate_stream(messages, None).await?;
+            return Ok(self.wrap_stream_with_output_guardrails(
+                stream,
+                progress.clone(),
+                metadata.clone(),
+            ));
         }
 
         // ── Orchestrator: decide route ──
@@ -1437,7 +1600,12 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
+                let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
+                Ok(self.wrap_stream_with_output_guardrails(
+                    stream,
+                    progress.clone(),
+                    metadata.clone(),
+                ))
             }
             PipelineRoute::FullPipeline | PipelineRoute::ComplexPipeline => {
                 self.emit_progress(&progress, "query_rewriter", StageStatus::Started, None);
@@ -1545,7 +1713,12 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                Ok(self.wrap_stream_with_quality_guard(stream, user_query, context))
+                let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
+                Ok(self.wrap_stream_with_output_guardrails(
+                    stream,
+                    progress.clone(),
+                    metadata.clone(),
+                ))
             }
         }
     }
@@ -1709,6 +1882,75 @@ impl ChatPipeline {
                         debug!(error = %e, "Pipeline(stream): post-stream quality guard error, skipping");
                     }
                 }
+            }
+        };
+
+        LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage,
+        }
+    }
+
+    /// Build a single-chunk refusal stream (used when input guardrails block).
+    fn refusal_stream(content: String) -> LlmStreamResponse {
+        let stream = async_stream::stream! {
+            yield Ok::<_, thairag_core::error::ThaiRagError>(content);
+        };
+        LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
+        }
+    }
+
+    /// Wrap an outgoing stream with post-stream output guardrails (deterministic only).
+    /// LLM-based output checks are not applied to streams in PR1 — they run only
+    /// on non-streaming responses to avoid latency / mid-stream rewriting.
+    fn wrap_stream_with_output_guardrails(
+        &self,
+        inner: LlmStreamResponse,
+        progress: Option<ProgressSender>,
+        metadata: Option<MetadataCell>,
+    ) -> LlmStreamResponse {
+        let guard_clone = match &self.output_guardrails {
+            Some(g) => Some(Arc::clone(g)),
+            None => return inner,
+        };
+
+        let usage = inner.usage.clone();
+        let stream = async_stream::stream! {
+            let mut inner_stream = inner.stream;
+            let mut collected = String::new();
+
+            while let Some(chunk) = inner_stream.next().await {
+                if let Ok(text) = &chunk { collected.push_str(text) }
+                yield chunk;
+            }
+
+            if let Some(ref guard) = guard_clone {
+                let verdict = guard.check(&collected);
+                let codes: Vec<&str> = verdict.violations.iter().map(|v| v.code.as_str()).collect();
+                let passed = verdict.passed();
+                let meta_violations = violations_to_meta(&verdict.violations);
+                Self::update_metadata(&metadata, |m| {
+                    m.output_guardrails_pass = Some(passed);
+                    m.guardrail_violations.extend(meta_violations);
+                });
+                if !passed {
+                    warn!(?codes, "Pipeline(stream): output guardrails flagged");
+                    yield Ok::<_, thairag_core::error::ThaiRagError>(
+                        "\n\n---\n⚠️ *Note: This response may have contained sensitive content \
+                         that was flagged by your organization's policy.*".to_string()
+                    );
+                }
+            }
+            // Mark the synthetic stage as complete in progress events.
+            if let Some(tx) = &progress {
+                let _ = tx.send(PipelineProgress {
+                    stage: "output_guardrails".to_string(),
+                    status: StageStatus::Done,
+                    duration_ms: None,
+                    model: None,
+                });
             }
         };
 

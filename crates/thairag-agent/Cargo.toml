@@ -19,6 +19,7 @@ futures-core = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+regex = { workspace = true }
 
 [dependencies.thairag-provider-llm]
 path = "../thairag-provider-llm"
