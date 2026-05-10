@@ -1,12 +1,13 @@
 name: Search Quality
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "crates/thairag-search/**"
-      - "crates/thairag-agent/**"
-      - "tests/search_quality/**"
+  # Nightly regression run (04:00 UTC ≈ 11:00 ICT).
+  # Runs against whatever tier is configured via repo env/secrets;
+  # not gated on PRs because meaningful evaluation needs a real LLM
+  # provider (Ollama with models, or Claude/OpenAI keys) and standard
+  # GitHub-hosted runners can't host that economically.
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       threshold:
@@ -23,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Seed .env from example
+        run: cp .env.example .env
 
       - name: Start ThaiRAG (free tier)
         run: docker compose up -d
