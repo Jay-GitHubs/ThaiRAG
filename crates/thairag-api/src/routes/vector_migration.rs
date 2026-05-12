@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::State;
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
@@ -271,6 +273,9 @@ pub async fn switch_provider(
         Some(state.km_store.clone()),
         Some(&state.vault),
         Some(state.embedding_cache.clone()),
+        Some(
+            Arc::clone(&state.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+        ),
     );
     state.reload_providers(bundle);
 

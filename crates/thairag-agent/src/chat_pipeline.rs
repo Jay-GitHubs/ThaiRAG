@@ -6,7 +6,7 @@ use thairag_config::schema::ChatPipelineConfig;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
-use thairag_core::traits::LlmProvider;
+use thairag_core::traits::{LlmProvider, SearchPluginEngine};
 use thairag_core::types::{
     ChatMessage, DocId, GuardrailViolationMeta, LlmResponse, LlmStreamResponse, LlmUsage,
     MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender, QueryIntent, SearchQuery,
@@ -121,6 +121,9 @@ pub struct ChatPipeline {
     prompts: Arc<PromptRegistry>,
     /// Optional resolver: DocId → document title (for richer LLM context).
     doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
+    /// Optional plugin engine; when set, every search call applies the
+    /// registered SearchPlugins' pre/post hooks.
+    search_plugin_engine: Option<Arc<dyn SearchPluginEngine>>,
 }
 
 impl ChatPipeline {
@@ -189,7 +192,16 @@ impl ChatPipeline {
             adaptive_threshold: Arc::new(AtomicU32::new(threshold_bits)),
             prompts,
             doc_title_resolver,
+            search_plugin_engine: None,
         }
+    }
+
+    /// Builder: install a plugin engine that wraps every chat-driven search
+    /// call with the configured `SearchPlugin` pre/post hooks. Omit to keep
+    /// search behavior unaffected by plugins.
+    pub fn with_search_plugin_engine(mut self, engine: Arc<dyn SearchPluginEngine>) -> Self {
+        self.search_plugin_engine = Some(engine);
+        self
     }
 
     /// Get the shared adaptive threshold handle (for external updates from feedback system).
@@ -2055,7 +2067,7 @@ impl ChatPipeline {
         let mut all_results = Vec::new();
 
         let primary_query = SearchQuery {
-            text: rewritten.primary.clone(),
+            text: self.pre_search_transform(&rewritten.primary),
             top_k: 5,
             workspace_ids: scope.workspace_ids.clone(),
             unrestricted: scope.is_unrestricted(),
@@ -2065,7 +2077,7 @@ impl ChatPipeline {
 
         for sq in &rewritten.sub_queries {
             let sub_query = SearchQuery {
-                text: sq.clone(),
+                text: self.pre_search_transform(sq),
                 top_k: 3,
                 workspace_ids: scope.workspace_ids.clone(),
                 unrestricted: scope.is_unrestricted(),
@@ -2077,7 +2089,7 @@ impl ChatPipeline {
 
         if let Some(ref hyde) = rewritten.hyde_query {
             let hyde_query = SearchQuery {
-                text: hyde.clone(),
+                text: self.pre_search_transform(hyde),
                 top_k: 3,
                 workspace_ids: scope.workspace_ids.clone(),
                 unrestricted: scope.is_unrestricted(),
@@ -2088,7 +2100,28 @@ impl ChatPipeline {
         }
 
         deduplicate_results(&mut all_results);
-        Ok(all_results)
+        Ok(self.post_search_transform(all_results))
+    }
+
+    /// Apply the configured `SearchPluginEngine` pre-hook to a query string.
+    /// No-op if no plugin engine is installed.
+    fn pre_search_transform(&self, query: &str) -> String {
+        match &self.search_plugin_engine {
+            Some(engine) => engine.apply_pre_search(query),
+            None => query.to_string(),
+        }
+    }
+
+    /// Apply the configured `SearchPluginEngine` post-hook to a result set.
+    /// No-op if no plugin engine is installed.
+    fn post_search_transform(
+        &self,
+        results: Vec<thairag_core::types::SearchResult>,
+    ) -> Vec<thairag_core::types::SearchResult> {
+        match &self.search_plugin_engine {
+            Some(engine) => engine.apply_post_search(results),
+            None => results,
+        }
     }
 
     async fn run_curator(

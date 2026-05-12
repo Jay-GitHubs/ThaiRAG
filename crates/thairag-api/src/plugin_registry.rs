@@ -202,6 +202,19 @@ impl Default for PluginRegistry {
     }
 }
 
+impl thairag_core::traits::SearchPluginEngine for PluginRegistry {
+    fn apply_pre_search(&self, query: &str) -> String {
+        crate::plugin_hooks::apply_pre_search(self, query)
+    }
+
+    fn apply_post_search(
+        &self,
+        results: Vec<thairag_core::types::SearchResult>,
+    ) -> Vec<thairag_core::types::SearchResult> {
+        crate::plugin_hooks::apply_post_search(self, results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +306,35 @@ mod tests {
         let reg = PluginRegistry::new();
         assert!(!reg.enable("nonexistent"));
         assert!(!reg.disable("nonexistent"));
+    }
+
+    #[test]
+    fn search_plugin_engine_runs_pre_and_post() {
+        // PluginRegistry implements `SearchPluginEngine` so the chat pipeline
+        // (in thairag-agent) can apply enabled SearchPlugins without taking
+        // a direct dependency on the api crate.
+        use thairag_core::traits::SearchPluginEngine;
+
+        let reg = PluginRegistry::new();
+        reg.register_search_plugin(Arc::new(TestSearchPlugin));
+
+        let transformed = reg.apply_pre_search("hello");
+        assert_eq!(transformed, "hello expanded");
+
+        // Post hook for TestSearchPlugin is identity; just confirm it runs.
+        let out = reg.apply_post_search(Vec::<SearchResult>::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn search_plugin_engine_is_noop_when_all_disabled() {
+        use thairag_core::traits::SearchPluginEngine;
+
+        let reg = PluginRegistry::new();
+        reg.register_search_plugin(Arc::new(TestSearchPlugin));
+        reg.disable("test-search");
+
+        // No enabled plugins → input should pass through untouched.
+        assert_eq!(reg.apply_pre_search("hello"), "hello");
     }
 }
