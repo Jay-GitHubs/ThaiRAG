@@ -31,6 +31,7 @@ import { TenantsPage } from './pages/TenantsPage';
 import { RolesPage } from './pages/RolesPage';
 import PromptMarketplacePage from './pages/PromptMarketplacePage';
 import FinetunePage from './pages/FinetunePage';
+import PluginsPage from './pages/PluginsPage';
 import { I18nProvider } from './i18n';
 import { TourProvider } from './tours';
 
@@ -75,6 +76,7 @@ export function App() {
           <Route path="/roles" element={<RoleRoute minRole="super_admin"><RolesPage /></RoleRoute>} />
           <Route path="/prompt-marketplace" element={<RoleRoute minRole="editor"><PromptMarketplacePage /></RoleRoute>} />
           <Route path="/finetune" element={<RoleRoute minRole="super_admin"><FinetunePage /></RoleRoute>} />
+          <Route path="/plugins" element={<RoleRoute minRole="super_admin"><PluginsPage /></RoleRoute>} />
           <Route path="/settings" element={<RoleRoute minRole="super_admin"><SettingsPage /></RoleRoute>} />
           <Route path="/system" element={<HealthPage />} />
         </Route>
