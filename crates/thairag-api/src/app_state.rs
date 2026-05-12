@@ -134,7 +134,9 @@ impl ProviderBundle {
         km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
         vault: Option<&Vault>,
     ) -> Self {
-        Self::build_full_with_cache(providers, search, doc, chat, prompts, km_store, vault, None)
+        Self::build_full_with_cache(
+            providers, search, doc, chat, prompts, km_store, vault, None, None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -147,6 +149,7 @@ impl ProviderBundle {
         km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
         vault: Option<&Vault>,
         embedding_cache: Option<Arc<dyn thairag_core::traits::EmbeddingCache>>,
+        plugin_engine: Option<Arc<dyn thairag_core::traits::SearchPluginEngine>>,
     ) -> Self {
         let ollama_ka = &chat.ollama_keep_alive;
         let ka_opt = if ollama_ka.is_empty() {
@@ -643,7 +646,7 @@ impl ProviderBundle {
                 None
             };
 
-            Some(Arc::new(ChatPipeline::new(
+            let pipeline = ChatPipeline::new(
                 Arc::clone(&llm),
                 Arc::clone(&search_engine),
                 qa,
@@ -673,7 +676,12 @@ impl ProviderBundle {
                 chat.clone(),
                 Arc::clone(&prompts),
                 doc_resolver,
-            )))
+            );
+            let pipeline = match &plugin_engine {
+                Some(engine) => pipeline.with_search_plugin_engine(Arc::clone(engine)),
+                None => pipeline,
+            };
+            Some(Arc::new(pipeline))
         } else {
             None
         };
@@ -959,6 +967,8 @@ impl AppState {
             Some(Arc::clone(&self.km_store)),
             Some(&*self.vault),
             Some(Arc::clone(&self.embedding_cache)),
+            Some(Arc::clone(&self.plugin_registry)
+                as Arc<dyn thairag_core::traits::SearchPluginEngine>),
         );
 
         if let Some(ref pipeline) = scoped_bundle.chat_pipeline {
@@ -991,6 +1001,8 @@ impl AppState {
             Some(Arc::clone(&self.km_store)),
             Some(&*self.vault),
             Some(Arc::clone(&self.embedding_cache)),
+            Some(Arc::clone(&self.plugin_registry)
+                as Arc<dyn thairag_core::traits::SearchPluginEngine>),
         )
     }
 
@@ -1229,6 +1241,28 @@ impl AppState {
             }
         };
 
+        // ── Plugin registry ──
+        // Built before the provider bundle so the chat pipeline can install
+        // the registry as its SearchPluginEngine at construction time.
+        let plugin_registry = Arc::new(crate::plugin_registry::PluginRegistry::new());
+        crate::builtin_plugins::register_builtin_plugins(&plugin_registry);
+
+        // Apply enabled plugins from KV store (if saved) or config defaults
+        if let Some(saved) = km_store.get_setting("plugins.enabled") {
+            let names: Vec<String> = saved.split(',').map(|s| s.trim().to_string()).collect();
+            plugin_registry.set_enabled_plugins(&names);
+            tracing::info!(
+                count = names.len(),
+                "Loaded plugin enabled state from KV store"
+            );
+        } else if !config.plugins.enabled_plugins.is_empty() {
+            plugin_registry.set_enabled_plugins(&config.plugins.enabled_plugins);
+            tracing::info!(
+                count = config.plugins.enabled_plugins.len(),
+                "Loaded plugin enabled state from config"
+            );
+        }
+
         // Re-build the provider bundle now that km_store is available, so DB-stored
         // per-agent LLM configs (from presets) are picked up on restart.
         let bundle = {
@@ -1252,6 +1286,8 @@ impl AppState {
                 Some(Arc::clone(&km_store)),
                 Some(&*vault),
                 Some(Arc::clone(&embedding_cache)),
+                Some(Arc::clone(&plugin_registry)
+                    as Arc<dyn thairag_core::traits::SearchPluginEngine>),
             )
         };
 
@@ -1266,26 +1302,6 @@ impl AppState {
         km_store.set_setting("_embedding_fingerprint", &emb_fp);
 
         let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
-
-        // ── Plugin registry ──
-        let plugin_registry = Arc::new(crate::plugin_registry::PluginRegistry::new());
-        crate::builtin_plugins::register_builtin_plugins(&plugin_registry);
-
-        // Apply enabled plugins from KV store (if saved) or config defaults
-        if let Some(saved) = km_store.get_setting("plugins.enabled") {
-            let names: Vec<String> = saved.split(',').map(|s| s.trim().to_string()).collect();
-            plugin_registry.set_enabled_plugins(&names);
-            tracing::info!(
-                count = names.len(),
-                "Loaded plugin enabled state from KV store"
-            );
-        } else if !config.plugins.enabled_plugins.is_empty() {
-            plugin_registry.set_enabled_plugins(&config.plugins.enabled_plugins);
-            tracing::info!(
-                count = config.plugins.enabled_plugins.len(),
-                "Loaded plugin enabled state from config"
-            );
-        }
 
         // Recover interrupted finetune jobs
         let training_runner = Arc::new(crate::training_runner::TrainingRunner::new());

@@ -322,6 +322,20 @@ pub trait ChunkPlugin: Send + Sync + 'static {
     fn transform_chunk(&self, chunk: &str) -> String;
 }
 
+/// Engine that applies enabled SearchPlugins to a query/result pair.
+///
+/// Defined in core so that retrieval-side components (chat pipeline, RAG
+/// agents) can run plugin hooks without taking a hard dependency on the
+/// concrete `PluginRegistry` that lives in the API crate.
+pub trait SearchPluginEngine: Send + Sync {
+    /// Transform a query through every enabled SearchPlugin's `pre_search`,
+    /// in registration order. Returns the original query if no plugins fire.
+    fn apply_pre_search(&self, query: &str) -> String;
+    /// Filter / re-rank results through every enabled SearchPlugin's
+    /// `post_search`, in registration order.
+    fn apply_post_search(&self, results: Vec<SearchResult>) -> Vec<SearchResult>;
+}
+
 // ── Job Queue ────────────────────────────────────────────────────────
 
 /// Trait for managing background job tracking.
