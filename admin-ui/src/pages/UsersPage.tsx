@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react';
-import { Button, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tour, Typography, message } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
+import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tour, Typography, message } from 'antd';
+import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { useUsers, useDeleteUser, useUpdateUserRole, useUpdateUserStatus } from '../hooks/useUsers';
+import { useUsers, useCreateUser, useDeleteUser, useUpdateUserRole, useUpdateUserStatus } from '../hooks/useUsers';
 import { useAuth } from '../auth/useAuth';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
@@ -26,11 +26,14 @@ const roleColors: Record<string, string> = {
 
 export function UsersPage() {
   const { data, isLoading } = useUsers();
+  const createMut = useCreateUser();
   const deleteMut = useDeleteUser();
   const roleMut = useUpdateUserRole();
   const statusMut = useUpdateUserStatus();
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
+  const [form] = Form.useForm<{ email: string; name: string; password: string; role: UserRole }>();
   const { t } = useI18n();
   const tour = useTour('users');
 
@@ -74,6 +77,27 @@ export function UsersPage() {
       message.success(enabled ? t('users.enabled') : t('users.disabled'));
     } catch {
       message.error(t('users.statusUpdateFailed'));
+    }
+  };
+
+  const handleAddSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      await createMut.mutateAsync({
+        email: values.email.trim(),
+        name: values.name.trim(),
+        password: values.password,
+        role: values.role,
+      });
+      message.success(t('users.addSuccess'));
+      setAddOpen(false);
+      form.resetFields();
+    } catch (err: unknown) {
+      // Form validation errors don't have a `response` field; only show the
+      // error toast for backend failures.
+      if (err && typeof err === 'object' && 'response' in err) {
+        message.error(t('users.addFailed'));
+      }
     }
   };
 
@@ -215,6 +239,15 @@ export function UsersPage() {
           style={{ width: '100%', maxWidth: 320 }}
           allowClear
         />
+        {isSuperAdmin && (
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setAddOpen(true)}
+          >
+            {t('users.add')}
+          </Button>
+        )}
         <Typography.Text type="secondary">
           {t('users.userCount', { count: filteredData.length })}
         </Typography.Text>
@@ -235,6 +268,64 @@ export function UsersPage() {
         onClose={tour.end}
         onFinish={tour.complete}
       />
+      <Modal
+        title={t('users.addTitle')}
+        open={addOpen}
+        onCancel={() => { setAddOpen(false); form.resetFields(); }}
+        onOk={handleAddSubmit}
+        confirmLoading={createMut.isPending}
+        okText={t('action.create')}
+        cancelText={t('action.cancel')}
+        destroyOnHidden
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ role: 'viewer' as UserRole }}
+        >
+          <Form.Item
+            name="email"
+            label={t('users.fieldEmail')}
+            rules={[
+              { required: true, message: t('users.fieldEmail') },
+              { type: 'email', message: t('users.fieldEmail') },
+            ]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="name"
+            label={t('users.fieldName')}
+            rules={[{ required: true, message: t('users.fieldName') }]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label={t('users.fieldPassword')}
+            extra={t('users.passwordHint')}
+            rules={[
+              { required: true, message: t('users.fieldPassword') },
+              { min: 8, message: t('users.passwordHint') },
+              {
+                pattern: /(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+                message: t('users.passwordHint'),
+              },
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="role"
+            label={t('users.fieldRole')}
+            rules={[{ required: true }]}
+          >
+            <Select
+              options={roleOptions}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </>
   );
 }

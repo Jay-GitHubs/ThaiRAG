@@ -159,7 +159,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 .delete(km::revoke_workspace_permission),
         )
         // Users
-        .route("/users", get(km::list_users))
+        .route("/users", get(km::list_users).post(km::create_user))
         .route("/users/{user_id}", delete(km::delete_user))
         .route("/users/{user_id}/role", put(km::update_user_role))
         .route("/users/{user_id}/status", put(km::update_user_status))
