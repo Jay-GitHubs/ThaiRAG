@@ -81,6 +81,7 @@ impl SpeculativeRag {
                 prompt_msgs.push(ChatMessage {
                     role: "system".into(),
                     content: format!("{system_prompt}\n\nContext:\n{context_text}"),
+                    images: vec![],
                 });
                 // Add conversation history (skip any existing system messages)
                 for m in &msgs {
@@ -160,11 +161,13 @@ Return JSON: {"rankings": [{"candidate": 1, "score": 0.0-1.0, "reason": "brief"}
                 DEFAULT_RANKER,
                 &[],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}\n\n{candidate_texts}"),
+            images: vec![],
         };
 
         match self.llm.generate(&[system, user], Some(256)).await {

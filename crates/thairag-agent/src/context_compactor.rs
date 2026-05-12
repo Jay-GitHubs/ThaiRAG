@@ -135,10 +135,12 @@ impl ContextCompactor {
                 DEFAULT_COMPACTION_PROMPT,
                 &[],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: conversation,
+            images: vec![],
         };
 
         match self
@@ -211,6 +213,7 @@ impl ContextCompactor {
             result.push(ChatMessage {
                 role: "system".into(),
                 content: format!("[Conversation context (earlier messages summarized)]\n{summary}"),
+                images: vec![],
             });
         }
         result.extend_from_slice(recent_messages);
@@ -271,10 +274,12 @@ pub async fn summarize_conversation(
     let system = ChatMessage {
         role: "system".into(),
         content: SUMMARIZE_PROMPT.to_string(),
+        images: vec![],
     };
     let user = ChatMessage {
         role: "user".into(),
         content: conversation,
+        images: vec![],
     };
 
     let resp = llm.generate(&[system, user], Some(256)).await?;
@@ -303,10 +308,12 @@ mod tests {
             ChatMessage {
                 role: "user".into(),
                 content: "hello".into(),
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "hi there".into(),
+                images: vec![],
             },
         ];
         assert!(!ContextCompactor::needs_compaction(
@@ -319,6 +326,7 @@ mod tests {
         let msgs = vec![ChatMessage {
             role: "user".into(),
             content: "x".repeat(100_000),
+            images: vec![],
         }];
         // Window 0 = auto-detect not available, skip compaction
         assert!(!ContextCompactor::needs_compaction(&msgs, 0, 0.8, 4096));
@@ -331,10 +339,12 @@ mod tests {
             msgs.push(ChatMessage {
                 role: "user".into(),
                 content: format!("question {} with some content to fill tokens", i),
+                images: vec![],
             });
             msgs.push(ChatMessage {
                 role: "assistant".into(),
                 content: format!("answer {} with a detailed explanation of the topic at hand that takes up many tokens in the context window", i),
+                images: vec![],
             });
         }
         // Small window to trigger compaction
@@ -346,11 +356,13 @@ mod tests {
         let msgs = vec![
             ChatMessage {
                 role: "user".into(),
-                content: "Hello world".into(), // ~3 tokens
+                content: "Hello world".into(), // ~3 tokens,
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
-                content: "Hi there".into(), // ~2 tokens
+                content: "Hi there".into(), // ~2 tokens,
+                images: vec![],
             },
         ];
         let est = ContextCompactor::estimate_messages_tokens(&msgs);
@@ -364,10 +376,12 @@ mod tests {
             ChatMessage {
                 role: "user".into(),
                 content: "latest question".into(),
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "latest answer".into(),
+                images: vec![],
             },
         ];
         let result = ContextCompactor::build_compacted_messages("We discussed Rust.", &recent);
@@ -382,6 +396,7 @@ mod tests {
         let recent = vec![ChatMessage {
             role: "user".into(),
             content: "hi".into(),
+            images: vec![],
         }];
         let result = ContextCompactor::build_compacted_messages("", &recent);
         assert_eq!(result.len(), 1); // no system message for empty summary
@@ -449,10 +464,12 @@ mod tests {
             ChatMessage {
                 role: "user".into(),
                 content: "What is Rust?".into(),
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "Rust is a systems programming language.".into(),
+                images: vec![],
             },
         ];
         let result = summarize_conversation(&MockLlm("User asked about Rust.".into()), &msgs).await;

@@ -196,11 +196,13 @@ async fn summarize_group(
             DEFAULT_RAPTOR,
             &[("abstraction", abstraction)],
         ),
+        images: vec![],
     };
 
     let user = ChatMessage {
         role: "user".into(),
         content: format!("Query: {query}\n\nSections to summarize:\n{combined}"),
+        images: vec![],
     };
 
     let resp = llm.generate(&[system, user], Some(max_tokens)).await?;

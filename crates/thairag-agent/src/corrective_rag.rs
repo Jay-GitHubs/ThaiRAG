@@ -125,6 +125,7 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
                 DEFAULT_CORRECTIVE_RAG_PROMPT,
                 &[],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
@@ -132,6 +133,7 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
             content: format!(
                 "Query: {query}\n\nRetrieved context (avg relevance: {avg_score:.2}):\n{context_preview}"
             ),
+            images: vec![],
         };
 
         match self
@@ -248,11 +250,13 @@ Return JSON: {"action": "correct"|"ambiguous"|"incorrect", "reason": "brief expl
         let system = ChatMessage {
             role: "system".into(),
             content: "Extract and synthesize the relevant information from web search results to answer the query. Return only the distilled factual content, no commentary.".into(),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}\n\nWeb results:\n{snippets}"),
+            images: vec![],
         };
 
         match self.llm.generate(&[system, user], Some(512)).await {

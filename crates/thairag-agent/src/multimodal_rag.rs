@@ -109,6 +109,7 @@ Focus on details relevant to the query. Be concise (1-3 sentences).";
                 DEFAULT_MULTIMODAL_RAG_PROMPT,
                 &[],
             ),
+            images: vec![],
         };
 
         let user_content = if let Some(ref alt) = image_ref.alt_text {
@@ -128,6 +129,7 @@ Focus on details relevant to the query. Be concise (1-3 sentences).";
         let user = ChatMessage {
             role: "user".into(),
             content: user_content,
+            images: vec![],
         };
 
         let resp = self

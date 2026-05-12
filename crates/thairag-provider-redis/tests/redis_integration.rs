@@ -42,10 +42,12 @@ async fn session_append_and_get_history() {
     let user_msg = ChatMessage {
         role: "user".into(),
         content: "hello".into(),
+        images: vec![],
     };
     let assist_msg = ChatMessage {
         role: "assistant".into(),
         content: "hi there".into(),
+        images: vec![],
     };
 
     store
@@ -71,10 +73,12 @@ async fn session_caps_at_max_history() {
                 ChatMessage {
                     role: "user".into(),
                     content: format!("msg {i}"),
+                    images: vec![],
                 },
                 ChatMessage {
                     role: "assistant".into(),
                     content: format!("reply {i}"),
+                    images: vec![],
                 },
                 None,
             )
@@ -97,10 +101,12 @@ async fn session_replace_messages() {
             ChatMessage {
                 role: "user".into(),
                 content: "old".into(),
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "old reply".into(),
+                images: vec![],
             },
             None,
         )
@@ -109,6 +115,7 @@ async fn session_replace_messages() {
     let new_messages = vec![ChatMessage {
         role: "system".into(),
         content: "replaced".into(),
+        images: vec![],
     }];
     store.replace_messages(&sid, new_messages).await;
 
@@ -129,10 +136,12 @@ async fn session_clear_user_sessions() {
     let msg = ChatMessage {
         role: "user".into(),
         content: "test".into(),
+        images: vec![],
     };
     let reply = ChatMessage {
         role: "assistant".into(),
         content: "ok".into(),
+        images: vec![],
     };
 
     store
@@ -163,10 +172,12 @@ async fn session_message_count() {
             ChatMessage {
                 role: "user".into(),
                 content: "a".into(),
+                images: vec![],
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "b".into(),
+                images: vec![],
             },
             None,
         )

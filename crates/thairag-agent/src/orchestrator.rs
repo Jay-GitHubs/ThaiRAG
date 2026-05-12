@@ -303,10 +303,12 @@ Preserve the original language (Thai or English).";
                 DEFAULT_REWRITER,
                 &[],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".to_string(),
             content: normalized.clone(),
+            images: vec![],
         };
 
         match self.llm.generate(&[system, user], Some(100)).await {

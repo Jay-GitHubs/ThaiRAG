@@ -133,6 +133,7 @@ impl LlmChunkEnricher {
         let messages = vec![ChatMessage {
             role: "user".into(),
             content: prompt,
+            images: vec![],
         }];
 
         let response = self.llm.generate(&messages, Some(self.max_tokens)).await?;

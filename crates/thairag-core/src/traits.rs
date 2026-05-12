@@ -51,6 +51,7 @@ pub trait LlmProvider: Send + Sync {
             .map(|m| ChatMessage {
                 role: m.role.clone(),
                 content: m.text.clone(),
+                images: vec![],
             })
             .collect();
         self.generate(&text_messages, max_tokens).await

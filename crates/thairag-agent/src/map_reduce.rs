@@ -98,11 +98,13 @@ Be factual and concise. Preserve key data points, names, dates, and numbers."#;
                         DEFAULT_MAP_PROMPT,
                         &[],
                     ),
+                    images: vec![],
                 };
 
                 let user = ChatMessage {
                     role: "user".into(),
                     content: format!("Query: {query}\n\nDocument chunk [{idx}]:\n{content}"),
+                    images: vec![],
                 };
 
                 match llm.generate(&[system, user], Some(max_tokens)).await {
@@ -172,6 +174,7 @@ Guidelines:
                 DEFAULT_REDUCE_PROMPT,
                 &[],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
@@ -180,6 +183,7 @@ Guidelines:
                 "Query: {query}\n\nExtracted information from {n} sources:\n\n{extractions}",
                 n = mapped.len()
             ),
+            images: vec![],
         };
 
         match self

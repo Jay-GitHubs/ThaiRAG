@@ -131,10 +131,12 @@ impl QualityGuard {
                     ),
                 ],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}\n\nContext:\n{context_text}\n\nResponse:\n{response}"),
+            images: vec![],
         };
 
         match self

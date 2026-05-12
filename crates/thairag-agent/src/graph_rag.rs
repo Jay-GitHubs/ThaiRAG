@@ -159,11 +159,13 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
                 DEFAULT_GRAPH_RAG_PROMPT,
                 &[("max", &self.max_entities.to_string())],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Text:\n{}", truncate(text, 2000)),
+            images: vec![],
         };
 
         match self
@@ -200,11 +202,13 @@ For Thai text, extract Thai names and transliterate if there's an English equiva
         let system = ChatMessage {
             role: "system".into(),
             content: r#"Extract named entities from the query. Return JSON: {"entities": ["entity1", "entity2"]}"#.into(),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}"),
+            images: vec![],
         };
 
         match self.llm.generate(&[system, user], Some(128)).await {

@@ -133,6 +133,7 @@ Step 3: Calculate: faithfulness = supported_claims / total_claims
 
 Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}"#
                 .into(),
+            images: vec![],
         };
 
         let user = ChatMessage {
@@ -142,6 +143,7 @@ Return JSON: {"claims_total": N, "claims_supported": N, "faithfulness": 0.0-1.0}
                 context = truncate(context, 1500),
                 response = truncate(response, 1000)
             ),
+            images: vec![],
         };
 
         match self
@@ -180,6 +182,7 @@ Consider:
 
 Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#
                 .into(),
+            images: vec![],
         };
 
         let user = ChatMessage {
@@ -188,6 +191,7 @@ Return JSON: {"relevancy": 0.0-1.0, "reason": "brief"}"#
                 "Query: {query}\n\nResponse:\n{response}",
                 response = truncate(response, 1000)
             ),
+            images: vec![],
         };
 
         match self
@@ -226,6 +230,7 @@ Consider:
 
 Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
                 .into(),
+            images: vec![],
         };
 
         let user = ChatMessage {
@@ -234,6 +239,7 @@ Return JSON: {"precision": 0.0-1.0, "reason": "brief"}"#
                 "Query: {query}\n\nRetrieved context:\n{context}",
                 context = truncate(context, 1500)
             ),
+            images: vec![],
         };
 
         match self

@@ -112,10 +112,12 @@ impl QueryAnalyzer {
             content: self
                 .prompts
                 .render_or_default("chat.query_analyzer", DEFAULT_TEMPLATE, &[]),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: query.to_string(),
+            images: vec![],
         };
 
         match self

@@ -118,10 +118,12 @@ impl QueryRewriter {
                     ("language_hint", language_hint),
                 ],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: query.to_string(),
+            images: vec![],
         };
 
         match self
@@ -172,6 +174,7 @@ impl QueryRewriter {
                 DEFAULT_FEEDBACK_TEMPLATE,
                 &[("feedback", feedback)],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
@@ -179,6 +182,7 @@ impl QueryRewriter {
                 "Original query: {query}\nLanguage: {:?}\nComplexity: {:?}",
                 analysis.language, analysis.complexity
             ),
+            images: vec![],
         };
 
         match self

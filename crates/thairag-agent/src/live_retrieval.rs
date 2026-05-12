@@ -153,11 +153,13 @@ Select at most {{max}} connectors."#;
                 default_prompt,
                 &[("max", &self.max_connectors.to_string())],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}\n\nConnectors:\n{connector_list}"),
+            images: vec![],
         };
 
         match self

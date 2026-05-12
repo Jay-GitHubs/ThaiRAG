@@ -109,6 +109,7 @@ impl PipelineOrchestrator {
                 DEFAULT_TEMPLATE,
                 &[],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
@@ -120,6 +121,7 @@ impl PipelineOrchestrator {
                 analysis.topics,
                 analysis.needs_context,
             ),
+            images: vec![],
         };
 
         let resp = llm.generate(&[system, user], Some(self.max_tokens)).await?;

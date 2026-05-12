@@ -404,10 +404,12 @@ async fn run_variant_query(
         ChatMessage {
             role: "system".to_string(),
             content: format!("{system_prompt}\n\nContext:\n{context}"),
+            images: vec![],
         },
         ChatMessage {
             role: "user".to_string(),
             content: query_text.to_string(),
+            images: vec![],
         },
     ];
 

@@ -88,6 +88,7 @@ impl RagEngine {
         let mut augmented_messages = vec![ChatMessage {
             role: "system".to_string(),
             content: system_prompt,
+            images: vec![],
         }];
         augmented_messages.extend_from_slice(messages);
 
@@ -132,6 +133,7 @@ impl RagEngine {
         let mut augmented_messages = vec![ChatMessage {
             role: "system".to_string(),
             content: system_prompt,
+            images: vec![],
         }];
         augmented_messages.extend_from_slice(messages);
 

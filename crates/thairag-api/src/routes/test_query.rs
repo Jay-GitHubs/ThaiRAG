@@ -237,11 +237,13 @@ pub async fn test_query(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
+            images: vec![],
         });
     }
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: req.query.clone(),
+        images: vec![],
     });
 
     let available_scopes = build_searchable_scopes(&state, &scope);
@@ -642,11 +644,13 @@ pub async fn test_query_stream(
                     "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                      Use these examples as a guide for style and quality, but answer based on the retrieved context."
                 ),
+                images: vec![],
             });
         }
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: query_text.clone(),
+            images: vec![],
         });
 
         let (progress_tx, mut progress_rx) =

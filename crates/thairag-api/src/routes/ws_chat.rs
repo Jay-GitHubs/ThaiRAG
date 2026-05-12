@@ -300,6 +300,7 @@ async fn handle_chat_message(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
+            images: vec![],
         }];
         msgs.extend(full_messages.clone());
         msgs
@@ -444,6 +445,7 @@ async fn handle_ws_stream(
         let assistant_msg = ChatMessage {
             role: "assistant".to_string(),
             content: accumulated,
+            images: vec![],
         };
         state
             .session_store
@@ -528,6 +530,7 @@ async fn handle_ws_non_stream(
                 let assistant_msg = ChatMessage {
                     role: "assistant".to_string(),
                     content: llm_resp.content,
+                    images: vec![],
                 };
                 state
                     .session_store

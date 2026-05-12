@@ -175,6 +175,7 @@ impl LlmDocumentConverter {
             let messages = vec![ChatMessage {
                 role: "user".into(),
                 content: prompt,
+                images: vec![],
             }];
 
             match self.llm.generate(&messages, Some(self.max_tokens)).await {
@@ -228,6 +229,7 @@ impl LlmDocumentConverter {
             let messages = vec![ChatMessage {
                 role: "user".into(),
                 content: prompt,
+                images: vec![],
             }];
 
             match self.llm.generate(&messages, Some(self.max_tokens)).await {
@@ -273,6 +275,7 @@ impl LlmDocumentConverter {
             let messages = vec![ChatMessage {
                 role: "user".into(),
                 content: prompt,
+                images: vec![],
             }];
 
             match self.llm.generate(&messages, Some(self.max_tokens)).await {
@@ -319,6 +322,7 @@ impl AiDocumentConverter for LlmDocumentConverter {
             let messages = vec![ChatMessage {
                 role: "user".into(),
                 content: prompt,
+                images: vec![],
             }];
 
             match self.llm.generate(&messages, Some(self.max_tokens)).await {
