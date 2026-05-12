@@ -8,8 +8,9 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{
-    ChatMessage, DocId, LlmResponse, LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata,
-    PipelineProgress, ProgressSender, QueryIntent, SearchQuery, StageStatus,
+    ChatMessage, DocId, GuardrailViolationMeta, LlmResponse, LlmStreamResponse, LlmUsage,
+    MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender, QueryIntent, SearchQuery,
+    StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -292,7 +293,7 @@ impl ChatPipeline {
         let meta_violations = violations_to_meta(&verdict.violations);
         Self::update_metadata(metadata, |m| {
             m.input_guardrails_pass = Some(passed);
-            m.guardrail_violations.extend(meta_violations);
+            merge_violation_meta(&mut m.guardrail_violations, meta_violations);
         });
 
         match verdict.action {
@@ -339,7 +340,7 @@ impl ChatPipeline {
         let meta_violations = violations_to_meta(&verdict.violations);
         Self::update_metadata(metadata, |m| {
             m.output_guardrails_pass = Some(passed);
-            m.guardrail_violations.extend(meta_violations);
+            merge_violation_meta(&mut m.guardrail_violations, meta_violations);
         });
 
         match verdict.action {
@@ -358,15 +359,19 @@ impl ChatPipeline {
                     usage: response.usage,
                 }
             }
-            // Regenerate would require re-invoking the generator — out of scope for
-            // PR1; treat as redact when the policy says regenerate but we have no
-            // retry pathway here.
+            // Regenerate requires re-invoking the generator. We don't have a
+            // retry pathway here, so fall back to redacting in place — never
+            // return the original unfiltered response.
             GuardAction::Regenerate { .. } => {
                 debug!(
                     ?codes,
-                    "Output guardrails: regenerate requested but unavailable, redacting"
+                    "Output guardrails: regenerate requested but unavailable, redacting in place"
                 );
-                response
+                let sanitized = guard.sanitize(&response.content, &verdict.violations);
+                LlmResponse {
+                    content: sanitized,
+                    usage: response.usage,
+                }
             }
         }
     }
@@ -1875,9 +1880,20 @@ impl ChatPipeline {
         }
     }
 
-    /// Wrap an outgoing stream with post-stream output guardrails (deterministic only).
-    /// LLM-based output checks are not applied to streams in PR1 — they run only
-    /// on non-streaming responses to avoid latency / mid-stream rewriting.
+    /// Audit an outgoing stream for output-policy violations **after** the
+    /// last chunk is forwarded. This is **not** a redactor — content is already
+    /// on the wire by the time detectors run. The function:
+    ///
+    /// 1. Forwards every inner chunk verbatim.
+    /// 2. After EOS, runs the deterministic detector set on the joined text.
+    /// 3. Records the verdict on `PipelineMetadata` for the audit log.
+    /// 4. Appends a single visible "this response may have contained sensitive
+    ///    content" note if any violation fired, so the user is at least warned
+    ///    even though the upstream tokens already escaped.
+    ///
+    /// Real prevention for streaming requires either chunk-level scanning (high
+    /// false-positive rate across split tokens) or LLM-side moderation. Both
+    /// are out of scope here.
     fn wrap_stream_with_output_guardrails(
         &self,
         inner: LlmStreamResponse,
@@ -1906,7 +1922,7 @@ impl ChatPipeline {
                 let meta_violations = violations_to_meta(&verdict.violations);
                 Self::update_metadata(&metadata, |m| {
                     m.output_guardrails_pass = Some(passed);
-                    m.guardrail_violations.extend(meta_violations);
+                    merge_violation_meta(&mut m.guardrail_violations, meta_violations);
                 });
                 if !passed {
                     warn!(?codes, "Pipeline(stream): output guardrails flagged");
@@ -2199,6 +2215,23 @@ impl ChatPipeline {
     /// Get the active learning handle (for external feedback recording).
     pub fn active_learning(&self) -> Option<&Arc<ActiveLearning>> {
         self.active_learning.as_ref()
+    }
+}
+
+/// Append `new` violations to `existing`, skipping any `(code, stage)` pair
+/// that's already present. Prevents the same violation from being recorded
+/// multiple times across pipeline retries (e.g. quality-guard re-runs).
+fn merge_violation_meta(
+    existing: &mut Vec<GuardrailViolationMeta>,
+    new: Vec<GuardrailViolationMeta>,
+) {
+    for v in new {
+        if !existing
+            .iter()
+            .any(|e| e.code == v.code && e.stage == v.stage)
+        {
+            existing.push(v);
+        }
     }
 }
 

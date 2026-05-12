@@ -89,8 +89,13 @@ pub struct Violation {
     pub code: ViolationCode,
     pub severity: Severity,
     pub stage: GuardStage,
-    /// The actual matched text — used for redaction. Never logged at info+.
-    pub matched: String,
+    /// The actual matched text. Kept for test inspection and future use by
+    /// detector-specific redactors that need the raw match (e.g. partial
+    /// masking like `****1234`). `pub(crate)` and `#[allow(dead_code)]` because
+    /// no runtime code reads it today — redaction uses `range` only — but we
+    /// don't want callers outside this crate touching matched PII.
+    #[allow(dead_code)]
+    pub(crate) matched: String,
     /// Byte range of the match within the scanned text.
     pub range: (usize, usize),
 }

@@ -1054,6 +1054,10 @@ pub struct GuardrailsConfig {
     /// Maximum query length in characters (rejected if exceeded).
     #[serde(default = "default_max_query_chars")]
     pub max_query_chars: usize,
+    /// Maximum response length in characters that output detectors will scan.
+    /// Content beyond this is truncated for scanning purposes only.
+    #[serde(default = "default_max_response_chars")]
+    pub max_response_chars: usize,
     /// Detect Thai national ID (13 digits + checksum).
     #[serde(default)]
     pub detect_thai_id: bool,
@@ -1093,6 +1097,7 @@ impl Default for GuardrailsConfig {
     fn default() -> Self {
         Self {
             max_query_chars: default_max_query_chars(),
+            max_response_chars: default_max_response_chars(),
             detect_thai_id: false,
             detect_thai_phone: false,
             detect_email: false,
@@ -1110,6 +1115,9 @@ impl Default for GuardrailsConfig {
 
 fn default_max_query_chars() -> usize {
     8000
+}
+fn default_max_response_chars() -> usize {
+    64_000
 }
 fn default_input_action() -> String {
     "block".to_string()
