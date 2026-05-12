@@ -76,10 +76,12 @@ impl ConversationMemory {
                 DEFAULT_SUMMARIZER_PROMPT,
                 &[],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: conversation,
+            images: vec![],
         };
 
         match self
@@ -145,6 +147,7 @@ impl ConversationMemory {
                 DEFAULT_MEMORY_CONTEXT_PROMPT,
                 &[("context", &context)],
             ),
+            images: vec![],
         })
     }
 }

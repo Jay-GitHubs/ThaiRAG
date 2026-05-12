@@ -3,7 +3,7 @@ use std::sync::Arc;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse};
+use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, VisionMessage};
 
 use crate::context_curator::CuratedContext;
 use crate::query_analyzer::{QueryAnalysis, QueryLanguage};
@@ -43,7 +43,19 @@ impl ResponseGenerator {
         max_tokens: Option<u32>,
     ) -> Result<LlmResponse> {
         let augmented = self.build_augmented_messages(analysis, context, messages);
-        self.llm.generate(&augmented, max_tokens).await
+        if augmented.iter().any(|m| !m.images.is_empty()) {
+            let vision_msgs: Vec<VisionMessage> = augmented
+                .iter()
+                .map(|m| VisionMessage {
+                    role: m.role.clone(),
+                    text: m.content.clone(),
+                    images: m.images.clone(),
+                })
+                .collect();
+            self.llm.generate_vision(&vision_msgs, max_tokens).await
+        } else {
+            self.llm.generate(&augmented, max_tokens).await
+        }
     }
 
     pub async fn generate_stream(
@@ -53,6 +65,9 @@ impl ResponseGenerator {
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
     ) -> Result<LlmStreamResponse> {
+        // Note: generate_vision has no streaming variant, so vision requests
+        // fall through to the normal stream path where the LLM provider's
+        // default generate_vision will handle text-only fallback.
         let augmented = self.build_augmented_messages(analysis, context, messages);
         self.llm.generate_stream(&augmented, max_tokens).await
     }
@@ -73,11 +88,24 @@ impl ResponseGenerator {
             content: format!(
                 "Your previous response had quality issues. Please improve:\n{feedback}"
             ),
+            images: vec![],
         };
         // Insert before the last message
         let insert_pos = augmented.len().saturating_sub(1);
         augmented.insert(insert_pos, feedback_msg);
-        self.llm.generate(&augmented, max_tokens).await
+        if augmented.iter().any(|m| !m.images.is_empty()) {
+            let vision_msgs: Vec<VisionMessage> = augmented
+                .iter()
+                .map(|m| VisionMessage {
+                    role: m.role.clone(),
+                    text: m.content.clone(),
+                    images: m.images.clone(),
+                })
+                .collect();
+            self.llm.generate_vision(&vision_msgs, max_tokens).await
+        } else {
+            self.llm.generate(&augmented, max_tokens).await
+        }
     }
 
     fn build_augmented_messages(
@@ -175,6 +203,7 @@ impl ResponseGenerator {
         let mut augmented = vec![ChatMessage {
             role: "system".into(),
             content: system_prompt,
+            images: vec![],
         }];
         augmented.extend_from_slice(messages);
         augmented

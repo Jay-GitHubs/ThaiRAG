@@ -131,6 +131,7 @@ async fn compress_chunk(
             DEFAULT_COMPRESSION_PROMPT,
             &[("target_pct", &target_pct.to_string())],
         ),
+        images: vec![],
     };
 
     let user = ChatMessage {
@@ -139,6 +140,7 @@ async fn compress_chunk(
             "Query: {query}\n\nPassage to compress:\n{content}",
             content = truncate(content, 3000)
         ),
+        images: vec![],
     };
 
     let resp = llm.generate(&[system, user], Some(max_tokens)).await?;

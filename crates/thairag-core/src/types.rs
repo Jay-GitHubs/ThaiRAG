@@ -238,10 +238,12 @@ pub struct GuardrailViolationMeta {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageContent>,
 }
 
 /// An image attachment for vision-capable LLMs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageContent {
     /// Base64-encoded image data.
     pub base64_data: String,
