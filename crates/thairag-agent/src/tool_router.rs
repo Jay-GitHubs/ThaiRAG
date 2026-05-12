@@ -157,10 +157,12 @@ Output ONLY valid JSON array.";
                 DEFAULT_TOOL_ROUTER,
                 &[("scopes_desc", &scopes_desc)],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: query.to_string(),
+            images: vec![],
         };
 
         match self

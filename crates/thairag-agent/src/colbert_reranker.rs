@@ -130,11 +130,13 @@ async fn score_passage(
     let system = ChatMessage {
         role: "system".into(),
         content: prompts.render_or_default("chat.colbert_reranker", DEFAULT_COLBERT_PROMPT, &[]),
+        images: vec![],
     };
 
     let user = ChatMessage {
         role: "user".into(),
         content: format!("Query: {query}\n\nPassage:\n{}", truncate(passage, 1500)),
+        images: vec![],
     };
 
     let resp = llm.generate(&[system, user], Some(max_tokens)).await?;

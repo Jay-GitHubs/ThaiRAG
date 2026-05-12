@@ -77,10 +77,12 @@ pub async fn extract_entities_from_text(
         ChatMessage {
             role: "system".into(),
             content: EXTRACTION_PROMPT.to_string(),
+            images: vec![],
         },
         ChatMessage {
             role: "user".into(),
             content: format!("Extract entities and relationships from this text:\n\n{truncated}"),
+            images: vec![],
         },
     ];
 
@@ -138,6 +140,7 @@ pub async fn extract_relations_from_text(
         ChatMessage {
             role: "system".into(),
             content: EXTRACTION_PROMPT.to_string(),
+            images: vec![],
         },
         ChatMessage {
             role: "user".into(),
@@ -145,6 +148,7 @@ pub async fn extract_relations_from_text(
                 "Known entities:\n{}\n\nExtract relationships between these entities from this text:\n\n{truncated}",
                 entity_list.join("\n")
             ),
+            images: vec![],
         },
     ];
 

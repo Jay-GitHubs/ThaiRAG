@@ -47,10 +47,12 @@ impl LanguageAdapter {
                 - Maintain the same structure and meaning\n\
                 - Output ONLY the translated response, nothing else"
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: response.to_string(),
+            images: vec![],
         };
 
         match self

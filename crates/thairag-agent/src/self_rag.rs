@@ -94,11 +94,13 @@ impl SelfRag {
                 DEFAULT_TEMPLATE,
                 &[("history_summary", &history_summary)],
             ),
+            images: vec![],
         };
 
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}"),
+            images: vec![],
         };
 
         match self

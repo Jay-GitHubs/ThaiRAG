@@ -113,10 +113,12 @@ impl ContextCurator {
                 DEFAULT_TEMPLATE,
                 &[("max_context_tokens", &max_ctx)],
             ),
+            images: vec![],
         };
         let user = ChatMessage {
             role: "user".into(),
             content: format!("Query: {query}\n\nChunks:\n{chunk_list}"),
+            images: vec![],
         };
 
         let selected_indices = match self

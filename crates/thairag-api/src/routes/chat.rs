@@ -595,6 +595,7 @@ async fn handle_non_stream(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
+            images: vec![],
         }];
         msgs.extend(full_messages.clone());
         msgs
@@ -661,6 +662,7 @@ async fn handle_non_stream(
         let assistant_msg = ChatMessage {
             role: "assistant".to_string(),
             content: llm_resp.content.clone(),
+            images: vec![],
         };
         state
             .session_store
@@ -796,6 +798,7 @@ async fn handle_non_stream(
             message: ChatMessage {
                 role: "assistant".to_string(),
                 content: llm_resp.content,
+                images: vec![],
             },
             finish_reason: "stop".to_string(),
         }],
@@ -898,6 +901,7 @@ async fn handle_stream(
                 "Here are examples of high-quality answers for reference:\n\n{examples_text}\n\n\
                  Use these examples as a guide for style and quality, but answer based on the retrieved context."
             ),
+            images: vec![],
         }];
         msgs.extend(full_messages.clone());
         msgs
@@ -1104,6 +1108,7 @@ async fn handle_stream(
             let assistant_msg = ChatMessage {
                 role: "assistant".to_string(),
                 content: accumulated_content.clone(),
+                images: vec![],
             };
             state.session_store.append(sid, user_msg.clone(), assistant_msg, user_id).await;
 

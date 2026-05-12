@@ -123,6 +123,7 @@ impl PersonalMemoryManager {
         Some(ChatMessage {
             role: "system".into(),
             content: context,
+            images: vec![],
         })
     }
 
