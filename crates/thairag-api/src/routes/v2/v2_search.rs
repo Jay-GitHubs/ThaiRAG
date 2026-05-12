@@ -18,6 +18,7 @@ use thairag_core::types::{SearchQuery, UserId, WorkspaceId};
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
+use crate::plugin_hooks;
 use crate::routes::feedback;
 
 // ── Request / Response Types ──────────────────────────────────────────
@@ -156,8 +157,11 @@ pub async fn v2_search(
     let p = state.providers();
     let retrieval_params = feedback::load_retrieval_params(&state);
 
+    // Apply pre-search plugins to transform the query
+    let transformed_query = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
+
     let search_query = SearchQuery {
-        text: req.query.clone(),
+        text: transformed_query,
         top_k: req.top_k.min(retrieval_params.top_k.max(req.top_k)),
         workspace_ids: search_ws_ids,
         unrestricted,
@@ -168,6 +172,9 @@ pub async fn v2_search(
         .search(&search_query)
         .await
         .map_err(ApiError::from)?;
+
+    // Apply post-search plugins to filter/re-rank results
+    search_results = plugin_hooks::apply_post_search(&state.plugin_registry, search_results);
 
     // Apply document boost/penalty from feedback
     let boost_map = feedback::get_document_boost_map(&state);
