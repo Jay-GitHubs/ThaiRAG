@@ -868,6 +868,103 @@ pub async fn list_users(
     Json(ListResponse { data, total })
 }
 
+// ── Create user (super-admin only) ────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub name: String,
+    pub password: String,
+    /// One of: "viewer", "editor", "admin", "super_admin". Defaults to "viewer".
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+pub async fn create_user(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(body): AppJson<CreateUserRequest>,
+) -> Result<(StatusCode, Json<User>), ApiError> {
+    use argon2::Argon2;
+    use argon2::PasswordHasher;
+    use argon2::password_hash::SaltString;
+    use argon2::password_hash::rand_core::OsRng;
+
+    // Only super_admin may create users via this admin endpoint.
+    let caller_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| ApiError(ThaiRagError::Validation("Invalid user ID".into())))?;
+    let caller = state.km_store.get_user(UserId(caller_id))?;
+    if !caller.is_super_admin && caller.role != "super_admin" {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "Only super admins can create users".into(),
+        )));
+    }
+
+    if body.email.trim().is_empty() || body.name.trim().is_empty() || body.password.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "All fields (email, name, password) are required and must be non-empty".into(),
+        )));
+    }
+
+    let min_len = state.config.auth.password_min_length;
+    if body.password.len() < min_len {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Password must be at least {min_len} characters"
+        ))));
+    }
+    let has_upper = body.password.chars().any(|c| c.is_uppercase());
+    let has_lower = body.password.chars().any(|c| c.is_lowercase());
+    let has_digit = body.password.chars().any(|c| c.is_ascii_digit());
+    if !has_upper || !has_lower || !has_digit {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
+        )));
+    }
+
+    let role = body.role.clone().unwrap_or_else(|| "viewer".to_string());
+    let valid_roles = ["viewer", "editor", "admin", "super_admin"];
+    if !valid_roles.contains(&role.as_str()) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Invalid role '{}'. Must be one of: {}",
+            role,
+            valid_roles.join(", ")
+        ))));
+    }
+    let is_super = role == "super_admin";
+
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(body.password.as_bytes(), &salt)
+        .map_err(|e| {
+            ApiError(ThaiRagError::Internal(format!(
+                "Password hashing failed: {e}"
+            )))
+        })?
+        .to_string();
+
+    let user = state.km_store.upsert_user_by_email(
+        body.email.clone(),
+        body.name.clone(),
+        password_hash,
+        is_super,
+        role.clone(),
+    )?;
+
+    audit_log(
+        &state.km_store,
+        &claims.sub,
+        AuditAction::SettingsChanged,
+        &format!("User {} created with role {}", user.email, role),
+        true,
+        None,
+    );
+    tracing::info!(user_id = %user.id, email = %user.email, %role, "User created by super_admin");
+
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
 // ── Update user role ──────────────────────────────────────────────
 
 #[derive(Deserialize)]
