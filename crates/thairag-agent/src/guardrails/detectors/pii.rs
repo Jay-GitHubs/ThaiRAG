@@ -86,8 +86,14 @@ pub fn detect_thai_id(text: &str, stage: GuardStage) -> Vec<Violation> {
 }
 
 pub fn detect_thai_phone(text: &str, stage: GuardStage) -> Vec<Violation> {
+    let bytes = text.as_bytes();
     thai_phone_re()
         .find_iter(text)
+        // Reject matches whose immediately-preceding byte is an ASCII digit.
+        // The `+66` branch of the regex has no left-side word boundary (because
+        // `+` is non-word), so without this filter it can match inside a longer
+        // numeric blob like "XX+66 81 234 5678".
+        .filter(|m| m.start() == 0 || !bytes[m.start() - 1].is_ascii_digit())
         .map(|m| Violation {
             code: ViolationCode::PiiThaiPhone,
             severity: ViolationCode::PiiThaiPhone.default_severity(),
@@ -167,6 +173,18 @@ mod tests {
             let v = detect_thai_phone(sample, GuardStage::Input);
             assert!(!v.is_empty(), "expected match in: {sample}");
         }
+    }
+
+    #[test]
+    fn rejects_plus66_embedded_in_digits() {
+        // No real phone number ever appears as a suffix of a longer digit
+        // string. Without the digit-prefix filter the `+66` regex branch would
+        // match here because `+` is non-word and provides no `\b` anchor.
+        let v = detect_thai_phone("order123+66812345678 ref", GuardStage::Input);
+        assert!(
+            v.is_empty(),
+            "expected no match when +66 is preceded by a digit"
+        );
     }
 
     #[test]
