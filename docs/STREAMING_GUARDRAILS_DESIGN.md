@@ -1,9 +1,9 @@
 # Streaming output guardrails: real prevention design
 
-**Status:** Draft — not yet approved. Reviewers, please weigh in on the four open questions before any implementation PR lands.
+**Status:** Accepted — all four open questions resolved 2026-05-14. PR-1 of the phasing is now scoped and unblocked.
 
 **Owner:** TBD
-**Last updated:** 2026-05-13
+**Last updated:** 2026-05-14
 
 ---
 
@@ -86,14 +86,11 @@ Default proposal: `streaming_window_chars = 256`.
 - Memory: O(window) per active stream. Negligible.
 - CPU: every deterministic detector regex runs once per chunk on a `window + chunk_len` string. For 256 chars × 11 regexes (5 PII + 4 secrets + 1 blocklist + 1 injection-not-run-on-output), well under 1ms per chunk on commodity hardware.
 
-## 7. SSE protocol question (open)
+## 7. SSE protocol — decided: Option α (inline)
 
-When a redaction fires mid-stream, what does the client see?
+When a redaction fires mid-stream, the matched characters are replaced with `policy.redaction_token` (default `[REDACTED]`) inline in the SSE text stream. No new event types are added. Every existing client — Open WebUI, the admin UI, custom integrations — renders the marker as part of the response text with zero integration work.
 
-- **Option α** — inline: the buffered chars are replaced with `[REDACTED]` (or `policy.redaction_token`) and streamed inline. Client sees the marker as part of the response text. Simple; no client changes needed; works with any SSE-aware UI including Open WebUI.
-- **Option β** — out-of-band event: emit a separate SSE event like `event: redacted\ndata: {"code": "PII_THAI_ID"}\n` and silently drop the matched chars from the text stream. Client decides how to render. Admin UI can show a chip; bare clients show nothing.
-
-Option α is mechanically simpler and degrades gracefully on every client. Option β is nicer UX where supported but needs admin-ui changes. **Recommend α for the first iteration**, leave β as a future enhancement.
+Option β (separate `event: redacted` channel with the matched chars silently dropped) was considered. It produces cleaner-looking output and lets the admin UI render a chip, but every client would need to be updated or the redaction becomes invisible. Logged as a future enhancement; not in scope for PR-1.
 
 ## 8. Phasing
 
@@ -103,20 +100,21 @@ Option α is mechanically simpler and degrades gracefully on every client. Optio
 - Swap `wrap_stream_with_output_guardrails` to use it. Keep the post-EOS audit pathway as a final-flush step.
 - Tests: window-flush ordering; single-pattern redaction mid-stream; pattern split across chunk boundary; pattern at EOS; multi-pattern overlap (relies on the `redact()` overlap-merge fix from PR #43); fail-open vs fail-closed.
 
-### PR-2 — UX polish (depends on the open question α vs β)
-- If α: nothing further needed beyond reusing `policy.redaction_token`.
-- If β: SSE event wiring + admin-ui chip + Open WebUI integration test.
+### PR-2 — UX polish (optional, deferred)
+- α was chosen for PR-1, so nothing further is required to ship working prevention. This phase only re-opens if we later want the β (chip-style) UX in the admin UI.
 
 ### PR-3 — Observability
 - Prometheus counter `guardrail_streaming_redactions_total{code, stage="output"}` (cardinality already constrained by the closed `ViolationCode` enum).
 - Sampled `tracing::warn` of which detector fired (codes only — never matched text, per existing PDPA-safe convention).
 
-## 9. Open questions
+## 9. Resolved questions
 
-1. **Default window size.** 256 chars (~2 s TTFB at 150 chars/s) or stricter / looser?
-2. **SSE protocol for the marker.** Inline `[REDACTED]` (α) vs separate `event: redacted` channel (β)?
-3. **Failure semantics.** If a detector panics mid-stream, default to fail-open (current behavior on the non-streaming path) or fail-closed (cancel + refusal)?
-4. **Scope of the first PR.** Just the deterministic detectors (current set), or also wire a hook for a future LLM-moderator call so Option D can layer on later without re-touching this code?
+All four answered 2026-05-14:
+
+1. **Default window size → 256 chars.** ~1.7 s TTFB at 150 chars/s. Covers every bounded pattern in the current detector set. Stored as `GuardrailsConfig::streaming_window_chars`, operator-overridable.
+2. **SSE marker protocol → Option α (inline).** When a redaction fires, the matched span is replaced with `policy.redaction_token` (default `[REDACTED]`) right in the SSE text stream. Works with every existing client unchanged.
+3. **Failure semantics → honor `GuardrailsConfig::fail_open`.** Reuses the existing config knob so streaming and non-streaming paths share one switch. Default `true` matches today's behavior.
+4. **PR-1 scope → deterministic detectors only, no future-moderator trait.** Keeps PR-1 small. Future LLM-moderator can re-touch the wrapper without churn.
 
 ## 10. Out of scope for this design
 

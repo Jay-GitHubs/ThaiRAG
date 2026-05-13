@@ -23,7 +23,10 @@ use crate::contextual_compression::ContextualCompression;
 use crate::conversation_memory::{ConversationMemory, MemoryEntry};
 use crate::corrective_rag::{ContextAction, CorrectiveRag};
 use crate::graph_rag::{GraphRag, KnowledgeGraph};
-use crate::guardrails::{GuardAction, InputGuardrails, OutputGuardrails, violations_to_meta};
+use crate::guardrails::{
+    GuardAction, InputGuardrails, OutputGuardrails, ViolationsObserver, violations_to_meta,
+    wrap_stream_with_holdback,
+};
 use crate::language_adapter::LanguageAdapter;
 use crate::live_retrieval::LiveRetrieval;
 use crate::map_reduce::MapReduceRag;
@@ -1892,60 +1895,53 @@ impl ChatPipeline {
         }
     }
 
-    /// Audit an outgoing stream for output-policy violations **after** the
-    /// last chunk is forwarded. This is **not** a redactor — content is already
-    /// on the wire by the time detectors run. The function:
+    /// Wrap an outgoing stream with **real-prevention** output guardrails using
+    /// a sliding-window hold-back (see `docs/STREAMING_GUARDRAILS_DESIGN.md`).
     ///
-    /// 1. Forwards every inner chunk verbatim.
-    /// 2. After EOS, runs the deterministic detector set on the joined text.
-    /// 3. Records the verdict on `PipelineMetadata` for the audit log.
-    /// 4. Appends a single visible "this response may have contained sensitive
-    ///    content" note if any violation fired, so the user is at least warned
-    ///    even though the upstream tokens already escaped.
+    /// Each inner chunk is held in a buffer of `policy.streaming_window_chars`;
+    /// the deterministic detector set runs on every chunk arrival, and matches
+    /// are redacted in place (inline `[REDACTED]`) **before** the affected
+    /// chars are flushed to the client. Characters age out of the buffer once
+    /// they're outside the window — by which point any bounded pattern that
+    /// contained them has already been detected and redacted.
     ///
-    /// Real prevention for streaming requires either chunk-level scanning (high
-    /// false-positive rate across split tokens) or LLM-side moderation. Both
-    /// are out of scope here.
+    /// Replaces the previous post-stream audit; the audit-style behavior is
+    /// no longer needed because content is now scrubbed before transmission.
     fn wrap_stream_with_output_guardrails(
         &self,
         inner: LlmStreamResponse,
         progress: Option<ProgressSender>,
         metadata: Option<MetadataCell>,
     ) -> LlmStreamResponse {
-        let guard_clone = match &self.output_guardrails {
-            Some(g) => Some(Arc::clone(g)),
+        let guard = match &self.output_guardrails {
+            Some(g) => Arc::clone(g),
             None => return inner,
         };
 
-        let usage = inner.usage.clone();
+        // Observer routes streaming-fire events into the pipeline's metadata
+        // cell so audit log / Prometheus pickup the violations.
+        let metadata_for_observer = metadata.clone();
+        let observer: ViolationsObserver = Arc::new(move |new_meta| {
+            Self::update_metadata(&metadata_for_observer, |m| {
+                m.output_guardrails_pass = Some(false);
+                merge_violation_meta(&mut m.guardrail_violations, new_meta);
+            });
+        });
+
+        let wrapped = wrap_stream_with_holdback(inner, guard, observer);
+
+        // Wrap once more just to emit a single Done progress event after the
+        // inner stream completes — the hold-back wrapper itself doesn't know
+        // about progress events.
+        let usage = wrapped.usage.clone();
+        let inner_stream = wrapped.stream;
+        let progress_clone = progress;
         let stream = async_stream::stream! {
-            let mut inner_stream = inner.stream;
-            let mut collected = String::new();
-
-            while let Some(chunk) = inner_stream.next().await {
-                if let Ok(text) = &chunk { collected.push_str(text) }
-                yield chunk;
+            let mut inner_stream = inner_stream;
+            while let Some(item) = inner_stream.next().await {
+                yield item;
             }
-
-            if let Some(ref guard) = guard_clone {
-                let verdict = guard.check(&collected);
-                let codes: Vec<&str> = verdict.violations.iter().map(|v| v.code.as_str()).collect();
-                let passed = verdict.passed();
-                let meta_violations = violations_to_meta(&verdict.violations);
-                Self::update_metadata(&metadata, |m| {
-                    m.output_guardrails_pass = Some(passed);
-                    merge_violation_meta(&mut m.guardrail_violations, meta_violations);
-                });
-                if !passed {
-                    warn!(?codes, "Pipeline(stream): output guardrails flagged");
-                    yield Ok::<_, thairag_core::error::ThaiRagError>(
-                        "\n\n---\n⚠️ *Note: This response may have contained sensitive content \
-                         that was flagged by your organization's policy.*".to_string()
-                    );
-                }
-            }
-            // Mark the synthetic stage as complete in progress events.
-            if let Some(tx) = &progress {
+            if let Some(tx) = &progress_clone {
                 let _ = tx.send(PipelineProgress {
                     stage: "output_guardrails".to_string(),
                     status: StageStatus::Done,
