@@ -116,6 +116,7 @@ pub struct ProviderBundleBuilder<'a> {
     vault: Option<&'a Vault>,
     embedding_cache: Option<Arc<dyn thairag_core::traits::EmbeddingCache>>,
     plugin_engine: Option<Arc<dyn thairag_core::traits::SearchPluginEngine>>,
+    guardrail_metrics: Option<Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>>,
 }
 
 impl<'a> ProviderBundleBuilder<'a> {
@@ -136,6 +137,7 @@ impl<'a> ProviderBundleBuilder<'a> {
             vault: None,
             embedding_cache: None,
             plugin_engine: None,
+            guardrail_metrics: None,
         }
     }
 
@@ -165,6 +167,14 @@ impl<'a> ProviderBundleBuilder<'a> {
         self
     }
 
+    pub fn with_guardrail_metrics(
+        mut self,
+        recorder: Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>,
+    ) -> Self {
+        self.guardrail_metrics = Some(recorder);
+        self
+    }
+
     pub fn build(self) -> ProviderBundle {
         ProviderBundle::build_internal(
             self.providers,
@@ -176,6 +186,7 @@ impl<'a> ProviderBundleBuilder<'a> {
             self.vault,
             self.embedding_cache,
             self.plugin_engine,
+            self.guardrail_metrics,
         )
     }
 }
@@ -192,6 +203,7 @@ impl ProviderBundle {
         vault: Option<&Vault>,
         embedding_cache: Option<Arc<dyn thairag_core::traits::EmbeddingCache>>,
         plugin_engine: Option<Arc<dyn thairag_core::traits::SearchPluginEngine>>,
+        guardrail_metrics: Option<Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>>,
     ) -> Self {
         let ollama_ka = &chat.ollama_keep_alive;
         let ka_opt = if ollama_ka.is_empty() {
@@ -723,6 +735,10 @@ impl ProviderBundle {
                 Some(engine) => pipeline.with_search_plugin_engine(Arc::clone(engine)),
                 None => pipeline,
             };
+            let pipeline = match &guardrail_metrics {
+                Some(rec) => pipeline.with_guardrail_metrics(Arc::clone(rec)),
+                None => pipeline,
+            };
             Some(Arc::new(pipeline))
         } else {
             None
@@ -1000,20 +1016,22 @@ impl AppState {
         }
 
         // Build a new pipeline with the scoped config but shared infrastructure
-        let scoped_bundle = ProviderBundleBuilder::new(
-            &global_bundle.providers_config,
-            &self.config.search,
-            &self.config.document,
-            &scoped_config,
-            Arc::clone(&self.prompt_registry),
-        )
-        .with_km_store(Arc::clone(&self.km_store))
-        .with_vault(&self.vault)
-        .with_embedding_cache(Arc::clone(&self.embedding_cache))
-        .with_plugin_engine(
-            Arc::clone(&self.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
-        )
-        .build();
+        let scoped_bundle =
+            ProviderBundleBuilder::new(
+                &global_bundle.providers_config,
+                &self.config.search,
+                &self.config.document,
+                &scoped_config,
+                Arc::clone(&self.prompt_registry),
+            )
+            .with_km_store(Arc::clone(&self.km_store))
+            .with_vault(&self.vault)
+            .with_embedding_cache(Arc::clone(&self.embedding_cache))
+            .with_plugin_engine(Arc::clone(&self.plugin_registry)
+                as Arc<dyn thairag_core::traits::SearchPluginEngine>)
+            .with_guardrail_metrics(Arc::clone(&self.metrics)
+                as Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>)
+            .build();
 
         if let Some(ref pipeline) = scoped_bundle.chat_pipeline {
             self.scoped_pipeline_cache
@@ -1048,6 +1066,9 @@ impl AppState {
         .with_embedding_cache(Arc::clone(&self.embedding_cache))
         .with_plugin_engine(
             Arc::clone(&self.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+        )
+        .with_guardrail_metrics(
+            Arc::clone(&self.metrics) as Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>
         )
         .build()
     }
@@ -1335,6 +1356,9 @@ impl AppState {
             .with_embedding_cache(Arc::clone(&embedding_cache))
             .with_plugin_engine(
                 Arc::clone(&plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+            )
+            .with_guardrail_metrics(
+                Arc::clone(&metrics) as Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>
             )
             .build()
         };

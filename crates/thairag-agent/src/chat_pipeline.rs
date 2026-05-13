@@ -6,7 +6,7 @@ use thairag_config::schema::ChatPipelineConfig;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
-use thairag_core::traits::{LlmProvider, SearchPluginEngine};
+use thairag_core::traits::{GuardrailMetricsRecorder, LlmProvider, SearchPluginEngine};
 use thairag_core::types::{
     ChatMessage, DocId, GuardrailViolationMeta, LlmResponse, LlmStreamResponse, LlmUsage,
     MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender, QueryIntent, SearchQuery,
@@ -127,6 +127,9 @@ pub struct ChatPipeline {
     /// Optional plugin engine; when set, every search call applies the
     /// registered SearchPlugins' pre/post hooks.
     search_plugin_engine: Option<Arc<dyn SearchPluginEngine>>,
+    /// Optional metrics recorder; when set, streaming-output redactions
+    /// increment the `guardrail_streaming_redactions_total` counter.
+    guardrail_metrics: Option<Arc<dyn GuardrailMetricsRecorder>>,
 }
 
 impl ChatPipeline {
@@ -196,6 +199,7 @@ impl ChatPipeline {
             prompts,
             doc_title_resolver,
             search_plugin_engine: None,
+            guardrail_metrics: None,
         }
     }
 
@@ -204,6 +208,14 @@ impl ChatPipeline {
     /// search behavior unaffected by plugins.
     pub fn with_search_plugin_engine(mut self, engine: Arc<dyn SearchPluginEngine>) -> Self {
         self.search_plugin_engine = Some(engine);
+        self
+    }
+
+    /// Builder: install a metrics recorder so streaming-output redactions
+    /// increment the `guardrail_streaming_redactions_total{code, stage}`
+    /// Prometheus counter. Omit to skip metrics (audit-log path is unchanged).
+    pub fn with_guardrail_metrics(mut self, recorder: Arc<dyn GuardrailMetricsRecorder>) -> Self {
+        self.guardrail_metrics = Some(recorder);
         self
     }
 
@@ -1918,10 +1930,21 @@ impl ChatPipeline {
             None => return inner,
         };
 
-        // Observer routes streaming-fire events into the pipeline's metadata
-        // cell so audit log / Prometheus pickup the violations.
+        // Observer routes streaming-fire events into:
+        //   1. the pipeline's MetadataCell (audit log surfacing),
+        //   2. the optional GuardrailMetricsRecorder (Prometheus + warn-level
+        //      tracing for which deterministic detector fired).
         let metadata_for_observer = metadata.clone();
+        let metrics_for_observer = self.guardrail_metrics.clone();
         let observer: ViolationsObserver = Arc::new(move |new_meta| {
+            if let Some(recorder) = &metrics_for_observer {
+                for v in &new_meta {
+                    recorder.record_streaming_redaction(&v.code, &v.stage);
+                }
+            }
+            let codes: Vec<&str> = new_meta.iter().map(|m| m.code.as_str()).collect();
+            warn!(?codes, "Streaming guardrails: redacted in window");
+
             Self::update_metadata(&metadata_for_observer, |m| {
                 m.output_guardrails_pass = Some(false);
                 merge_violation_meta(&mut m.guardrail_violations, new_meta);
