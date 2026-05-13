@@ -10,8 +10,12 @@ config/local.toml
 .claude/
 
 # Node
-admin-ui/node_modules/
+**/node_modules/
 admin-ui/dist/
+
+# Python
+**/__pycache__/
+*.pyc
 
 # Playwright
 admin-ui/e2e/.auth/user.json
