@@ -336,6 +336,21 @@ pub trait SearchPluginEngine: Send + Sync {
     fn apply_post_search(&self, results: Vec<SearchResult>) -> Vec<SearchResult>;
 }
 
+/// Records observability signals when the streaming output guardrail
+/// redacts content. Defined in core so the chat pipeline (in `thairag-agent`)
+/// can record metrics without taking a hard dependency on the API crate's
+/// concrete Prometheus registry.
+///
+/// `code` is the string form of a `ViolationCode` (e.g. `"PII_THAI_ID"`).
+/// `stage` is the string form of a `GuardStage` (always `"output"` for
+/// streaming today, parameterized for symmetry).
+///
+/// Implementations must be cheap and non-blocking — called on the streaming
+/// hot path, once per detected violation per chunk.
+pub trait GuardrailMetricsRecorder: Send + Sync {
+    fn record_streaming_redaction(&self, code: &str, stage: &str);
+}
+
 // ── Job Queue ────────────────────────────────────────────────────────
 
 /// Trait for managing background job tracking.

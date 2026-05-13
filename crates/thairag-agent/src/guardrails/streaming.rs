@@ -299,6 +299,33 @@ mod tests {
     }
 
     #[test]
+    fn observer_receives_violation_meta_for_each_match() {
+        // The pipeline-layer wraps this observer to record Prometheus
+        // counters; the streaming module only contracts to call it with
+        // the wire-safe `GuardrailViolationMeta` records per fire.
+        let cfg = config(64, |c| {
+            c.detect_email = true;
+            c.output_on_violation = "redact".into();
+        });
+        let (_chunks, recorded) = wrap_chunks(
+            vec![
+                "a@example.com",
+                " b@example.com",
+                " tail tail tail tail tail tail tail tail",
+            ],
+            cfg,
+        );
+        // Each chunk-arrival that introduces a match runs detect+sanitize once,
+        // so the observer is called at least once. The exact count depends on
+        // chunking — but every recorded meta must carry the right code/stage.
+        assert!(!recorded.is_empty(), "observer was never called");
+        for v in &recorded {
+            assert_eq!(v.code, "PII_EMAIL");
+            assert_eq!(v.stage, "output");
+        }
+    }
+
+    #[test]
     fn forwards_inner_stream_error() {
         // Inner stream error mid-flight: the wrapper must drain the safe
         // residual and then surface the error.
