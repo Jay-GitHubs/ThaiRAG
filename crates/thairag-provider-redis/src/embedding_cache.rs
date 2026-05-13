@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip() {
-        let original = vec![1.0f32, -2.5, 3.14, 0.0, f32::MAX];
+        let original = vec![1.0f32, -2.5, std::f32::consts::PI, 0.0, f32::MAX];
         let encoded = RedisEmbeddingCache::encode_embedding(&original);
         let decoded = RedisEmbeddingCache::decode_embedding(&encoded).unwrap();
         assert_eq!(original, decoded);

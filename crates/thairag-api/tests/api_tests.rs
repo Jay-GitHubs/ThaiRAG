@@ -709,7 +709,7 @@ async fn anonymous_access() {
 
     // Get org without auth
     let req = Request::builder()
-        .uri(&format!("/api/km/orgs/{org_id}"))
+        .uri(format!("/api/km/orgs/{org_id}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -718,7 +718,7 @@ async fn anonymous_access() {
     // Delete org without auth
     let req = Request::builder()
         .method("DELETE")
-        .uri(&format!("/api/km/orgs/{org_id}"))
+        .uri(format!("/api/km/orgs/{org_id}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
