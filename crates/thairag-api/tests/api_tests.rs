@@ -2744,3 +2744,135 @@ async fn connector_non_admin_rejected() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// ── POST /api/km/users (super-admin Create User) ────────────────────
+
+#[tokio::test]
+async fn create_user_super_admin_creates_viewer() {
+    let app = build_app(true);
+    let admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "alice@test.com",
+            "name": "Alice",
+            "password": "Strong1Pw",
+            "role": "viewer",
+        }),
+        &admin,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["email"], "alice@test.com");
+    assert_eq!(body["role"], "viewer");
+}
+
+#[tokio::test]
+async fn create_user_non_super_admin_forbidden() {
+    let app = build_app(true);
+    // First registered user is bootstrapped to super_admin.
+    let _admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+    // Second user is a regular viewer.
+    let viewer = register_and_get_token(&app, "viewer@test.com", "Viewer", "Pass1234").await;
+
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "victim@test.com",
+            "name": "Victim",
+            "password": "Strong1Pw",
+            "role": "admin",
+        }),
+        &viewer,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_user_rejects_weak_password() {
+    let app = build_app(true);
+    let admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    // Missing uppercase letter → policy violation.
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "weak@test.com",
+            "name": "Weak",
+            "password": "alllowercase1",
+            "role": "viewer",
+        }),
+        &admin,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_user_rejects_invalid_role() {
+    let app = build_app(true);
+    let admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "bad@test.com",
+            "name": "Bad",
+            "password": "Strong1Pw",
+            "role": "root",
+        }),
+        &admin,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_user_rejects_missing_fields() {
+    let app = build_app(true);
+    let admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    // Empty email/name/password rejected before hashing.
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "",
+            "name": "Nobody",
+            "password": "Strong1Pw",
+            "role": "viewer",
+        }),
+        &admin,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_user_defaults_role_to_viewer() {
+    let app = build_app(true);
+    let admin = register_and_get_token(&app, "admin@test.com", "Admin", "Pass1234").await;
+
+    // Omitted `role` field → defaults to "viewer" per handler comment.
+    let req = json_request_auth(
+        "POST",
+        "/api/km/users",
+        serde_json::json!({
+            "email": "default@test.com",
+            "name": "Default",
+            "password": "Strong1Pw",
+        }),
+        &admin,
+    );
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["role"], "viewer");
+}
