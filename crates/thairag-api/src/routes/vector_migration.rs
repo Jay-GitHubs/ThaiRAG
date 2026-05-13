@@ -277,6 +277,9 @@ pub async fn switch_provider(
     .with_plugin_engine(
         Arc::clone(&state.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
     )
+    .with_guardrail_metrics(
+        Arc::clone(&state.metrics) as Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>
+    )
     .build();
     state.reload_providers(bundle);
 

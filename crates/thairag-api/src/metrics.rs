@@ -21,6 +21,10 @@ pub struct MetricsState {
     pub mcp_sync_runs_total: IntCounterVec,
     pub mcp_sync_items_total: IntCounterVec,
     pub mcp_sync_duration_seconds: HistogramVec,
+    /// Number of streaming-output redactions, keyed by violation code and
+    /// guard stage. Cardinality bounded by the closed `ViolationCode` enum
+    /// (~11 codes) × stages (2) → safe Prometheus label space.
+    pub guardrail_streaming_redactions_total: IntCounterVec,
 }
 
 impl Default for MetricsState {
@@ -79,6 +83,15 @@ impl MetricsState {
         )
         .unwrap();
 
+        let guardrail_streaming_redactions_total = IntCounterVec::new(
+            Opts::new(
+                "guardrail_streaming_redactions_total",
+                "Number of streaming-output redactions fired by the deterministic guardrail",
+            ),
+            &["code", "stage"],
+        )
+        .unwrap();
+
         registry
             .register(Box::new(http_requests_total.clone()))
             .unwrap();
@@ -100,6 +113,9 @@ impl MetricsState {
         registry
             .register(Box::new(mcp_sync_duration_seconds.clone()))
             .unwrap();
+        registry
+            .register(Box::new(guardrail_streaming_redactions_total.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -110,6 +126,7 @@ impl MetricsState {
             mcp_sync_runs_total,
             mcp_sync_items_total,
             mcp_sync_duration_seconds,
+            guardrail_streaming_redactions_total,
         }
     }
 
@@ -132,6 +149,13 @@ impl MetricsState {
 
     pub fn set_active_sessions(&self, count: usize) {
         self.active_sessions_total.set(count as i64);
+    }
+
+    /// Increment the streaming-redaction counter for a single fired code.
+    pub fn record_streaming_redaction(&self, code: &str, stage: &str) {
+        self.guardrail_streaming_redactions_total
+            .with_label_values(&[code, stage])
+            .inc();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -171,6 +195,12 @@ impl MetricsState {
                 .with_label_values(&[connector_name, "failed"])
                 .inc_by(failed);
         }
+    }
+}
+
+impl thairag_core::traits::GuardrailMetricsRecorder for MetricsState {
+    fn record_streaming_redaction(&self, code: &str, stage: &str) {
+        MetricsState::record_streaming_redaction(self, code, stage);
     }
 }
 
@@ -353,5 +383,39 @@ mod tests {
 
         let output = state.encode();
         assert!(output.contains("active_sessions_total 42"));
+    }
+
+    #[test]
+    fn record_streaming_redaction_increments() {
+        let state = MetricsState::new();
+        state.record_streaming_redaction("PII_THAI_ID", "output");
+        state.record_streaming_redaction("PII_THAI_ID", "output");
+        state.record_streaming_redaction("PII_EMAIL", "output");
+
+        let output = state.encode();
+        assert!(output.contains("guardrail_streaming_redactions_total"));
+        assert!(output.contains(
+            "guardrail_streaming_redactions_total{code=\"PII_THAI_ID\",stage=\"output\"} 2"
+        ));
+        assert!(output.contains(
+            "guardrail_streaming_redactions_total{code=\"PII_EMAIL\",stage=\"output\"} 1"
+        ));
+    }
+
+    #[test]
+    fn metrics_state_implements_recorder_trait() {
+        // The pipeline only sees the trait — confirm dispatch works through
+        // the Arc<dyn ...> coercion that AppState relies on.
+        use std::sync::Arc;
+        use thairag_core::traits::GuardrailMetricsRecorder;
+
+        let state = Arc::new(MetricsState::new());
+        let as_trait: Arc<dyn GuardrailMetricsRecorder> = state.clone();
+        as_trait.record_streaming_redaction("SECRET_AWS_KEY", "output");
+
+        let output = state.encode();
+        assert!(output.contains(
+            "guardrail_streaming_redactions_total{code=\"SECRET_AWS_KEY\",stage=\"output\"} 1"
+        ));
     }
 }
