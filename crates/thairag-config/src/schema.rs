@@ -1091,6 +1091,14 @@ pub struct GuardrailsConfig {
     /// Fail-open on detector errors (true = pass through; false = treat as violation).
     #[serde(default = "default_true_val")]
     pub fail_open: bool,
+    /// Sliding-window size (in characters) used by the streaming output
+    /// guardrail. Characters stay buffered until they fall outside this window,
+    /// at which point they're flushed to the client. Bigger window = catches
+    /// longer secrets but adds TTFB latency (~window ÷ 150 chars/s).
+    /// Bounded detector patterns top out around 80 chars; 256 covers them with
+    /// margin while keeping TTFB under ~2 s at typical LLM speeds.
+    #[serde(default = "default_streaming_window_chars")]
+    pub streaming_window_chars: usize,
 }
 
 impl Default for GuardrailsConfig {
@@ -1109,6 +1117,7 @@ impl Default for GuardrailsConfig {
             output_on_violation: default_output_action(),
             redaction_token: default_redaction_token(),
             fail_open: true,
+            streaming_window_chars: default_streaming_window_chars(),
         }
     }
 }
@@ -1127,6 +1136,9 @@ fn default_output_action() -> String {
 }
 fn default_redaction_token() -> String {
     "[REDACTED]".to_string()
+}
+fn default_streaming_window_chars() -> usize {
+    256
 }
 
 fn default_true_val() -> bool {

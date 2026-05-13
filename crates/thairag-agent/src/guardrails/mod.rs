@@ -1,10 +1,12 @@
 pub mod detectors;
 pub mod input;
 pub mod output;
+pub mod streaming;
 pub mod types;
 
 pub use input::InputGuardrails;
 pub use output::OutputGuardrails;
+pub use streaming::{ViolationsObserver, wrap_stream_with_holdback};
 pub use types::{GuardAction, GuardStage, GuardVerdict, Severity, Violation, ViolationCode};
 
 use thairag_core::types::GuardrailViolationMeta;
