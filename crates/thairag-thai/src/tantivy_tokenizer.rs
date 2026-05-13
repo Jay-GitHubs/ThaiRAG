@@ -217,7 +217,7 @@ mod tests {
             let t = stream.token();
             let slice = &text[t.offset_from..t.offset_to];
             // Thai tokens: exact match; non-Thai tokens: lowercased.
-            let expected = if slice.chars().any(|c| is_thai(c)) {
+            let expected = if slice.chars().any(is_thai) {
                 slice.trim().to_string()
             } else {
                 slice.trim().to_lowercase()
