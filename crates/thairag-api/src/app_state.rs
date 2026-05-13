@@ -99,48 +99,90 @@ pub struct ProviderBundle {
     pub personal_memory_manager: Option<Arc<PersonalMemoryManager>>,
 }
 
-impl ProviderBundle {
-    pub fn build(
-        providers: &ProvidersConfig,
-        search: &SearchConfig,
-        doc: &DocumentConfig,
-        chat: &ChatPipelineConfig,
+/// Fluent builder for [`ProviderBundle`].
+///
+/// Required inputs are passed to [`ProviderBundleBuilder::new`]; everything
+/// optional (km store, vault, embedding cache, plugin engine) is set via
+/// `with_*` methods. Call `.build()` to construct the bundle. Replaces the
+/// previous 9-argument `build_full_with_cache(...)` call sites that grew
+/// unwieldy as new optional plumbing was added.
+pub struct ProviderBundleBuilder<'a> {
+    providers: &'a ProvidersConfig,
+    search: &'a SearchConfig,
+    doc: &'a DocumentConfig,
+    chat: &'a ChatPipelineConfig,
+    prompts: Arc<thairag_core::PromptRegistry>,
+    km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
+    vault: Option<&'a Vault>,
+    embedding_cache: Option<Arc<dyn thairag_core::traits::EmbeddingCache>>,
+    plugin_engine: Option<Arc<dyn thairag_core::traits::SearchPluginEngine>>,
+}
+
+impl<'a> ProviderBundleBuilder<'a> {
+    pub fn new(
+        providers: &'a ProvidersConfig,
+        search: &'a SearchConfig,
+        doc: &'a DocumentConfig,
+        chat: &'a ChatPipelineConfig,
+        prompts: Arc<thairag_core::PromptRegistry>,
     ) -> Self {
-        Self::build_with_prompts(
+        Self {
             providers,
             search,
             doc,
             chat,
-            Arc::new(thairag_core::PromptRegistry::new()),
+            prompts,
+            km_store: None,
+            vault: None,
+            embedding_cache: None,
+            plugin_engine: None,
+        }
+    }
+
+    pub fn with_km_store(mut self, km_store: Arc<dyn crate::store::KmStoreTrait>) -> Self {
+        self.km_store = Some(km_store);
+        self
+    }
+
+    pub fn with_vault(mut self, vault: &'a Vault) -> Self {
+        self.vault = Some(vault);
+        self
+    }
+
+    pub fn with_embedding_cache(
+        mut self,
+        cache: Arc<dyn thairag_core::traits::EmbeddingCache>,
+    ) -> Self {
+        self.embedding_cache = Some(cache);
+        self
+    }
+
+    pub fn with_plugin_engine(
+        mut self,
+        engine: Arc<dyn thairag_core::traits::SearchPluginEngine>,
+    ) -> Self {
+        self.plugin_engine = Some(engine);
+        self
+    }
+
+    pub fn build(self) -> ProviderBundle {
+        ProviderBundle::build_internal(
+            self.providers,
+            self.search,
+            self.doc,
+            self.chat,
+            self.prompts,
+            self.km_store,
+            self.vault,
+            self.embedding_cache,
+            self.plugin_engine,
         )
     }
+}
 
-    pub fn build_with_prompts(
-        providers: &ProvidersConfig,
-        search: &SearchConfig,
-        doc: &DocumentConfig,
-        chat: &ChatPipelineConfig,
-        prompts: Arc<thairag_core::PromptRegistry>,
-    ) -> Self {
-        Self::build_full(providers, search, doc, chat, prompts, None, None)
-    }
-
-    pub fn build_full(
-        providers: &ProvidersConfig,
-        search: &SearchConfig,
-        doc: &DocumentConfig,
-        chat: &ChatPipelineConfig,
-        prompts: Arc<thairag_core::PromptRegistry>,
-        km_store: Option<Arc<dyn crate::store::KmStoreTrait>>,
-        vault: Option<&Vault>,
-    ) -> Self {
-        Self::build_full_with_cache(
-            providers, search, doc, chat, prompts, km_store, vault, None, None,
-        )
-    }
-
+impl ProviderBundle {
     #[allow(clippy::too_many_arguments)]
-    pub fn build_full_with_cache(
+    fn build_internal(
         providers: &ProvidersConfig,
         search: &SearchConfig,
         doc: &DocumentConfig,
@@ -958,18 +1000,20 @@ impl AppState {
         }
 
         // Build a new pipeline with the scoped config but shared infrastructure
-        let scoped_bundle = ProviderBundle::build_full_with_cache(
+        let scoped_bundle = ProviderBundleBuilder::new(
             &global_bundle.providers_config,
             &self.config.search,
             &self.config.document,
             &scoped_config,
             Arc::clone(&self.prompt_registry),
-            Some(Arc::clone(&self.km_store)),
-            Some(&*self.vault),
-            Some(Arc::clone(&self.embedding_cache)),
-            Some(Arc::clone(&self.plugin_registry)
-                as Arc<dyn thairag_core::traits::SearchPluginEngine>),
-        );
+        )
+        .with_km_store(Arc::clone(&self.km_store))
+        .with_vault(&self.vault)
+        .with_embedding_cache(Arc::clone(&self.embedding_cache))
+        .with_plugin_engine(
+            Arc::clone(&self.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+        )
+        .build();
 
         if let Some(ref pipeline) = scoped_bundle.chat_pipeline {
             self.scoped_pipeline_cache
@@ -992,18 +1036,20 @@ impl AppState {
         doc: &DocumentConfig,
         chat: &ChatPipelineConfig,
     ) -> ProviderBundle {
-        ProviderBundle::build_full_with_cache(
+        ProviderBundleBuilder::new(
             providers,
             search,
             doc,
             chat,
             Arc::clone(&self.prompt_registry),
-            Some(Arc::clone(&self.km_store)),
-            Some(&*self.vault),
-            Some(Arc::clone(&self.embedding_cache)),
-            Some(Arc::clone(&self.plugin_registry)
-                as Arc<dyn thairag_core::traits::SearchPluginEngine>),
         )
+        .with_km_store(Arc::clone(&self.km_store))
+        .with_vault(&self.vault)
+        .with_embedding_cache(Arc::clone(&self.embedding_cache))
+        .with_plugin_engine(
+            Arc::clone(&self.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+        )
+        .build()
     }
 
     /// Construct from pre-built parts (used in tests).
@@ -1277,18 +1323,20 @@ impl AppState {
             } else {
                 config.providers.clone()
             };
-            ProviderBundle::build_full_with_cache(
+            ProviderBundleBuilder::new(
                 &pc,
                 &config.search,
                 &config.document,
                 &eff_chat,
                 Arc::clone(&prompt_registry),
-                Some(Arc::clone(&km_store)),
-                Some(&*vault),
-                Some(Arc::clone(&embedding_cache)),
-                Some(Arc::clone(&plugin_registry)
-                    as Arc<dyn thairag_core::traits::SearchPluginEngine>),
             )
+            .with_km_store(Arc::clone(&km_store))
+            .with_vault(&vault)
+            .with_embedding_cache(Arc::clone(&embedding_cache))
+            .with_plugin_engine(
+                Arc::clone(&plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+            )
+            .build()
         };
 
         // Store the embedding fingerprint on startup so snapshot restore

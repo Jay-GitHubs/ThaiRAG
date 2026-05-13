@@ -264,19 +264,20 @@ pub async fn switch_provider(
     );
 
     // Rebuild providers with the new vector store config
-    let bundle = crate::app_state::ProviderBundle::build_full_with_cache(
+    let bundle = crate::app_state::ProviderBundleBuilder::new(
         &providers_config,
         &state.config.search,
         &state.config.document,
         &state.providers().chat_pipeline_config,
         state.prompt_registry.clone(),
-        Some(state.km_store.clone()),
-        Some(&state.vault),
-        Some(state.embedding_cache.clone()),
-        Some(
-            Arc::clone(&state.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
-        ),
-    );
+    )
+    .with_km_store(state.km_store.clone())
+    .with_vault(&state.vault)
+    .with_embedding_cache(state.embedding_cache.clone())
+    .with_plugin_engine(
+        Arc::clone(&state.plugin_registry) as Arc<dyn thairag_core::traits::SearchPluginEngine>
+    )
+    .build();
     state.reload_providers(bundle);
 
     // Reset migration status
