@@ -17,22 +17,24 @@ The ThaiRAG Admin UI is a React + Ant Design application for managing the entire
 11. [Connectors](#connectors)
 12. [Analytics](#analytics)
 13. [Inference Logs](#inference-logs)
-14. [Evaluation](#evaluation)
-15. [A/B Tests](#ab-tests)
-16. [Knowledge Graph](#knowledge-graph)
-17. [Backup & Restore](#backup--restore)
-18. [Vector Migration](#vector-migration)
-19. [Rate Limits](#rate-limits)
-20. [Health](#health)
-21. [Config Snapshots](#config-snapshots)
-22. [Collapsible Settings](#collapsible-settings)
-23. [Search Analytics](#search-analytics)
-24. [Lineage](#lineage)
-25. [Audit Log](#audit-log)
-26. [Tenants](#tenants)
-27. [Roles](#roles)
-28. [Prompt Marketplace](#prompt-marketplace)
-29. [Fine-tuning](#fine-tuning)
+14. [Guardrails](#guardrails)
+15. [Plugins](#plugins)
+16. [Evaluation](#evaluation)
+17. [A/B Tests](#ab-tests)
+18. [Knowledge Graph](#knowledge-graph)
+19. [Backup & Restore](#backup--restore)
+20. [Vector Migration](#vector-migration)
+21. [Rate Limits](#rate-limits)
+22. [Health](#health)
+23. [Config Snapshots](#config-snapshots)
+24. [Collapsible Settings](#collapsible-settings)
+25. [Search Analytics](#search-analytics)
+26. [Lineage](#lineage)
+27. [Audit Log](#audit-log)
+28. [Tenants](#tenants)
+29. [Roles](#roles)
+30. [Prompt Marketplace](#prompt-marketplace)
+31. [Fine-tuning](#fine-tuning)
 
 ## Access Control
 
@@ -43,7 +45,7 @@ Pages are role-gated:
 | `viewer` | Dashboard, Health |
 | `editor` | + KM Hierarchy, Documents, Test Chat, Connectors |
 | `admin` | + Users, Permissions, Usage & Costs, Feedback & Tuning, Analytics, Inference Logs |
-| `super_admin` | + Settings, Evaluation, A/B Tests, Knowledge Graph, Backup & Restore, Vector Migration, Rate Limits |
+| `super_admin` | + Settings, Guardrails, Plugins, Evaluation, A/B Tests, Knowledge Graph, Backup & Restore, Vector Migration, Rate Limits |
 
 The sidebar menu automatically shows only pages the logged-in user can access.
 
@@ -206,6 +208,18 @@ Columns:
 - Click the delete button and confirm via the popover
 - Super admin users cannot be deleted (button is disabled)
 - Deleting a user revokes all their workspace permissions
+
+### Add User
+
+**Visible only to super admins.** The **Add User** button at the top of the page opens a modal for creating a local user without going through the public registration form.
+
+Form fields:
+- **Email** — required, validated against an email regex client-side.
+- **Name** — required.
+- **Password** — required. Client-side validation mirrors the backend policy: minimum 8 characters with at least one uppercase letter, one lowercase letter, and one digit.
+- **Role** — one of `viewer`, `editor`, `admin`, `super_admin`. Defaults to `viewer`.
+
+On success the users list refetches and the new row appears. The backend writes an audit-log entry (`SettingsChanged`) with the new user's email and assigned role. Non-super-admins never see the button and the underlying `POST /api/km/users` endpoint returns 403 if called directly.
 
 ---
 
@@ -453,6 +467,34 @@ View, export, and manage LLM inference logs. Each log entry captures the full pr
 - **Token and latency analytics** — Trend charts for token usage and p50/p95 latency
 - **Export** — Download filtered log entries as CSV or JSONL
 - **Purge** — Delete logs older than a configurable retention period
+
+---
+
+## Guardrails
+
+**Path:** `/guardrails` | **Min role:** `super_admin`
+
+Monitor and validate the input/output content guardrails. Detectors and policy are configured under **Settings → Chat Pipeline**; this page is the operations dashboard for what they're catching.
+
+- **Stats card** — Counts of inference requests with input/output guardrails run, pass-rate by stage, breakdown by violation code (Thai ID / Thai phone / email / credit card / AWS key / JWT / GitHub PAT / generic API key / prompt-injection / blocklist).
+- **Violations log** — Recent inference rows where any guardrail fired, with code, severity, and stage. Per the PDPA-safe convention, only codes are shown — the matched substring is never persisted.
+- **Preview tool** — Paste a sample query and/or sample model response, click "Run guardrails", and see exactly which detectors fire and what verdict (Pass / Sanitize / Block / Regenerate) the engine would return. Useful for validating policy changes before rolling them out.
+
+The streaming output guardrail runs in-pipeline and redacts matches inline before transmission (see `docs/STREAMING_GUARDRAILS_DESIGN.md`). Per-violation counters are exported on `/metrics` as `guardrail_streaming_redactions_total{code, stage}`.
+
+---
+
+## Plugins
+
+**Path:** `/plugins` | **Min role:** `super_admin`
+
+Toggle registered plugins on and off without restarting the server. Built-in plugins ship with the platform (`metadata-strip`, `query-expansion`, `summary-chunk`); custom plugins register at startup against the trait set in `thairag-core::traits` (`DocumentPlugin`, `SearchPlugin`, `ChunkPlugin`).
+
+- **Plugin table** — Name, description, type (`document` / `search` / `chunk`), enabled toggle.
+- **Toggle a plugin** — Flip the **Enabled** switch. The change persists to the KV store under `plugins.enabled` and survives restarts. SearchPlugins additionally fire on the main chat-pipeline retrieval path via the `SearchPluginEngine` trait, so toggles here affect every chat query immediately.
+- **Refresh** — Re-fetches the registry. Useful after a deploy that adds a new built-in.
+
+Plugin actions are super-admin gated end-to-end (UI hides the toggle for non-super-admins; the backend returns 404/403 on unauthorized calls).
 
 ---
 
