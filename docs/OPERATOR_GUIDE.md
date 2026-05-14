@@ -289,7 +289,195 @@ If you find live retrieval firing too often (and you've intentionally bulk-inges
 | Live retrieval works but the LLM ignores the content | `max_content_chars` too low; fan-out spread the content too thinly | Raise the budget or lower `max_connectors` |
 | Live retrieval fires too often | Embedding mismatch; KB content not actually retrievable | §3.1 / §3.2; re-embed if the model is wrong for your language |
 
-### 4.5 Privacy posture
+### 4.5 Sequence diagrams: what happens when a user prompts
+
+This is the most-asked question: *"If I haven't synced/embedded my OneDrive or Google Drive into ThaiRAG, what actually happens when a user asks a question that needs those files?"*
+
+Three diagrams, increasingly zoomed in.
+
+#### 4.5.1 End-to-end: KB-empty → live retrieval → response
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant API as ThaiRAG API
+    participant AUTH as auth_layer<br/>(JWT + AccessScope)
+    participant G as InputGuardrails
+    participant CP as ChatPipeline
+    participant SE as HybridSearchEngine<br/>(VectorDB + Tantivy)
+    participant LR as LiveRetrieval agent
+    participant MCP as MCP Connectors<br/>(OneDrive / Google Drive / Slack / ...)
+    participant LLM as LLM provider
+    participant SG as StreamingGuardrails<br/>(sliding-window hold-back)
+
+    U->>+API: POST /v1/chat/completions<br/>{messages, stream: true}
+    API->>AUTH: validate JWT
+    AUTH-->>API: AccessScope (orgs/depts/workspaces)
+    API->>+CP: process(messages, scope, ...)
+
+    CP->>G: check(user query)
+    G-->>CP: Pass (or Block → refusal stream)
+
+    CP->>SE: hybrid search(rewritten query, scope)
+    Note over SE: vector + BM25 + RRF + rerank
+    SE-->>CP: results (likely empty —<br/>nothing was uploaded)
+
+    CP->>CP: avg(relevance) < 0.15<br/>AND live_retrieval_enabled<br/>AND budget remaining?
+
+    alt KB coverage insufficient
+        CP->>+LR: fetch_live_context(query, connectors_for_scope)
+        Note over LR: see diagram 4.5.2
+
+        LR->>MCP: parallel fetch (with timeouts)
+        MCP-->>LR: resource contents
+        LR-->>-CP: CuratedContext (transient)
+    else KB coverage OK
+        CP->>CP: use KB CuratedContext
+    end
+
+    CP->>+LLM: generate_stream(system + context + user)
+    LLM-->>-CP: chunk stream
+
+    CP->>+SG: wrap_stream_with_holdback
+    Note over SG: 256-char window;<br/>detect + redact before flush
+
+    SG-->>API: chunks (with [REDACTED] inline if matched)
+    API-->>-U: SSE: data: {delta: "..."}<br/>data: [DONE]
+
+    Note over CP,MCP: Live-retrieved content is discarded.<br/>Nothing is persisted, nothing is embedded.
+```
+
+Read it top-to-bottom: the request goes through auth → input guardrails → hybrid search over your local KB. Because nothing was uploaded, the KB returns either zero results or very low scores. The `avg(score) < 0.15` gate triggers, the `LiveRetrieval` agent takes over, MCP connectors are queried in parallel, the response generator gets a fresh `CuratedContext` built from the live content, and the streaming guardrails redact any PII inline as the response leaves the server. **The OneDrive / Google Drive content is never written to the vector DB.**
+
+#### 4.5.2 Inside LiveRetrieval: the fan-out
+
+What happens between steps 14–16 above:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CP as ChatPipeline
+    participant LR as LiveRetrieval agent
+    participant SEL as connector selector<br/>(LLM call, conditional)
+    participant C1 as Connector A<br/>(e.g. OneDrive)
+    participant C2 as Connector B<br/>(e.g. Google Drive)
+    participant C3 as Connector C<br/>(e.g. Slack)
+
+    CP->>+LR: fetch_live_context(query, [A, B, C, ...])
+
+    LR->>LR: filter to status == Active
+
+    alt #active ≤ max_connectors
+        Note over LR: take all active
+    else #active > max_connectors
+        LR->>+SEL: pick most relevant N
+        SEL-->>-LR: [A, C]  (LLM JSON {"selected": [1, 3]})
+    end
+
+    LR->>LR: chars_per_connector =<br/>max_content_chars / N
+
+    par parallel tokio::spawn
+        LR->>C1: fetch_from_connector(...)
+    and
+        LR->>C2: fetch_from_connector(...)
+    and
+        LR->>C3: fetch_from_connector(...)
+    end
+
+    Note over LR: tokio::time::timeout_at(deadline)<br/>races every task
+
+    C1-->>LR: [FetchedContent] or [] on failure
+    C2-->>LR: [FetchedContent] or [] on failure
+    C3-->>LR: [FetchedContent] or [] on failure
+
+    LR->>LR: flatten → CuratedChunk[]<br/>(relevance_score = 0.5,<br/>let LLM judge)
+
+    LR-->>-CP: CuratedContext { chunks, total_tokens_est }
+```
+
+Three guarantees from this layer:
+- **Parallel** — connectors are queried with `tokio::spawn`, so total latency is `max(connector_latency)` plus tiny overhead, not `sum(...)`.
+- **Bounded** — every connector has a connect timeout and a read timeout, and the *whole fan-out* has an overall deadline. A hung connector cannot stall the chat response.
+- **Lossy under pressure** — if one connector fails, the others still contribute. If they all fail, the original (weak) KB context is preserved and the LLM does its best with that.
+
+#### 4.5.3 Inside one connector: connect → list → read → disconnect
+
+What happens inside any of the `C1` / `C2` / `C3` spawns above:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LR as LiveRetrieval task
+    participant CLIENT as RmcpClient<br/>(thairag-mcp)
+    participant MCP as MCP server<br/>(local stdio process or remote SSE)
+    participant DRIVE as Source data<br/>(OneDrive / Google Drive API)
+
+    LR->>+CLIENT: new(config, connect_timeout, read_timeout)
+    LR->>CLIENT: connect()
+    CLIENT->>MCP: spawn stdio process or open SSE
+    MCP-->>CLIENT: server handshake (capabilities)
+    CLIENT-->>LR: ok
+
+    LR->>CLIENT: list_resources()
+    CLIENT->>MCP: resources/list
+    MCP->>DRIVE: list files (folder enum / search)
+    DRIVE-->>MCP: file metadata
+    MCP-->>CLIENT: [Resource { uri, name, ... }]
+
+    LR->>LR: apply resource_filters<br/>(uri.contains(pattern) OR name.contains(pattern))
+
+    loop for each filtered resource, until char budget exhausted
+        LR->>CLIENT: read_resource(uri)
+        CLIENT->>MCP: resources/read
+        MCP->>DRIVE: download file content
+        DRIVE-->>MCP: bytes
+        MCP-->>CLIENT: ResourceContent { data }
+        CLIENT-->>LR: bytes
+
+        LR->>LR: strip_html_tags + safe_truncate<br/>to remaining budget
+
+        LR->>LR: push FetchedContent {<br/>  title: "[ConnectorName] resource.name",<br/>  content<br/>}
+    end
+
+    LR->>CLIENT: disconnect()
+    CLIENT->>-MCP: close stdio / SSE
+```
+
+A few things to notice:
+
+- **The MCP server (`MCP`) does the auth handshake with the source (`DRIVE`)**, not ThaiRAG. The OneDrive / Google Drive OAuth flow happens at the MCP server level. ThaiRAG only talks the MCP protocol; it never sees the OAuth refresh tokens. This is the right separation — ThaiRAG isn't a credentials broker.
+- **`resource_filters`** is your safety valve. Without it, an MCP server pointing at someone's full Google Drive will happily enumerate everything. Set patterns like `["/Reports/", "FY2025"]` to scope what's reachable.
+- **Char budget is per-resource-loop, not per-MCP-call.** Once you've read enough bytes to fill the connector's share of `max_content_chars`, the loop bails — even if there are more resources. So a deep folder won't blow the LLM context window.
+- **Disconnect is best-effort.** The `let _ = client.disconnect()` swallows errors because by that point the data is in hand; a graceful close is nice-to-have.
+
+#### 4.5.4 Side-by-side: the two paths a chat request can take
+
+```mermaid
+flowchart TD
+    A[User prompt arrives] --> B[Hybrid search over KB]
+    B --> C{Results?}
+    C -- avg score &ge; 0.15 --> D[Use KB context]
+    C -- empty or &lt; 0.15 --> E{live_retrieval_enabled<br/>&amp; budget &amp; connectors?}
+    E -- yes --> F[LiveRetrieval fan-out]
+    F --> G[Build CuratedContext<br/>from live results]
+    E -- no --> H[Use the weak KB context anyway]
+    D --> I[Response generator]
+    G --> I
+    H --> I
+    I --> J[Streaming output guardrails]
+    J --> K[SSE chunks to client]
+
+    style D fill:#e8f5e9
+    style G fill:#fff3e0
+    style H fill:#ffebee
+```
+
+Green = the "happy path" most production traffic takes once you've ingested a real corpus. Orange = the live-retrieval fallback. Red = the worst case, where neither KB nor connectors gave anything useful and the LLM has to answer from its parametric memory alone.
+
+A reasonable goal for a healthy tenant is **green > 90%, orange < 10%, red ≈ 0%**. If you see orange dominate, your KB is probably empty or the embedding model is wrong for your language (§3.1). If you see red at all, it usually means `live_retrieval_enabled` is off in a tenant where there's no uploaded content yet.
+
+### 4.6 Privacy posture
 
 Live retrieval is the more privacy-preserving path: the connector content is never embedded, never stored in the vector DB, never logged in the inference log unless guardrails fire on the response. For environments with strict data-residency requirements (the content can be read but not retained), live-retrieval-only is a defensible posture — combined with input/output guardrails so the response is also scrubbed.
 
