@@ -21,7 +21,8 @@ curl http://localhost:8080/health        # API
 open http://localhost:8081               # Admin UI
 ```
 
-Images are pulled from GitHub Container Registry by default:
+Images are pulled from GitHub Container Registry by default. Published as **multi-arch manifests** covering both `linux/amd64` and `linux/arm64` — Docker selects the right variant automatically, so the same tag pulls on x86 Linux servers and Apple Silicon dev machines.
+
 | Image | GHCR | Docker Hub |
 |-------|------|------------|
 | ThaiRAG API | `ghcr.io/jay-githubs/thairag` | `jdevspecialist/thairag` |
@@ -425,7 +426,35 @@ cd admin-ui && npx playwright test
 
 | Key | Env Override | Default | Description |
 |-----|-------------|---------|-------------|
-| `plugins.enabled_plugins` | `THAIRAG__PLUGINS__ENABLED_PLUGINS` | `[]` | List of enabled plugin names |
+| `plugins.enabled_plugins` | `THAIRAG__PLUGINS__ENABLED_PLUGINS` | `[]` | Default enabled plugin names at startup. Operators can override per-deployment by toggling on `/plugins` (super-admin UI); changes persist to the KV store under `plugins.enabled` and survive restart |
+
+Built-in plugins shipped with every deployment:
+- `metadata-strip` — DocumentPlugin; strips HTML/XML `<script>`, `<style>`, `<meta>`, `<link>` tags from document content before chunking.
+- `query-expansion` — SearchPlugin; expands user queries with a synonym table (English-only). Fires on both `/v2/search`, `/api/km/.../test-query`, and the main `/v1`/`/v2` chat retrieval path.
+- `summary-chunk` — ChunkPlugin; prepends a one-line `[Summary: ...]` header to each chunk.
+
+### Guardrails
+
+Deterministic content safety for chat input and output. All detectors default to off — operators opt in per detector. Streaming output is filtered with a sliding-window hold-back so matches are redacted **before** transmission; see `docs/STREAMING_GUARDRAILS_DESIGN.md`.
+
+| Key | Env Override | Default | Description |
+|-----|-------------|---------|-------------|
+| `guardrails.max_query_chars` | `THAIRAG__GUARDRAILS__MAX_QUERY_CHARS` | `8000` | Reject inbound queries longer than this. Always-on once any guardrail is configured. |
+| `guardrails.max_response_chars` | `THAIRAG__GUARDRAILS__MAX_RESPONSE_CHARS` | `64000` | Cap on the response length that output detectors scan. Redaction still applies to the full response; only the detector input is bounded. |
+| `guardrails.detect_thai_id` | `THAIRAG__GUARDRAILS__DETECT_THAI_ID` | `false` | Thai national ID with mod-11 checksum. Critical severity — always blocks on input. |
+| `guardrails.detect_thai_phone` | `THAIRAG__GUARDRAILS__DETECT_THAI_PHONE` | `false` | Thai phone numbers (`+66` and `0X-XXX-XXXX` formats). |
+| `guardrails.detect_email` | `THAIRAG__GUARDRAILS__DETECT_EMAIL` | `false` | Email addresses. |
+| `guardrails.detect_credit_card` | `THAIRAG__GUARDRAILS__DETECT_CREDIT_CARD` | `false` | Credit-card numbers (Luhn-validated to suppress false positives). Critical severity. |
+| `guardrails.detect_secrets` | `THAIRAG__GUARDRAILS__DETECT_SECRETS` | `false` | API secrets — AWS keys (`AKIA…`/`ASIA…`), JWTs, GitHub PATs (`gh[psoru]_…`), and generic `key=` / `Bearer …` tokens with ≥ 24-char suffix. |
+| `guardrails.detect_prompt_injection` | `THAIRAG__GUARDRAILS__DETECT_PROMPT_INJECTION` | `false` | Multilingual jailbreak / instruction-override pattern set (English + Thai). |
+| `guardrails.blocklist_phrases` | `THAIRAG__GUARDRAILS__BLOCKLIST_PHRASES` | `[]` | Case-insensitive substring matches. Compiled as one combined `(?i)` regex so byte offsets stay correct on non-ASCII text. |
+| `guardrails.input_on_violation` | `THAIRAG__GUARDRAILS__INPUT_ON_VIOLATION` | `"block"` | `"block"` or `"sanitize"`. Critical violations always block regardless of this setting. |
+| `guardrails.output_on_violation` | `THAIRAG__GUARDRAILS__OUTPUT_ON_VIOLATION` | `"redact"` | `"block"`, `"redact"`, or `"regenerate"`. In streaming mode `block` / `regenerate` are downgraded to redact because content has already started flowing. |
+| `guardrails.redaction_token` | `THAIRAG__GUARDRAILS__REDACTION_TOKEN` | `"[REDACTED]"` | Replacement token inserted in place of matched spans. |
+| `guardrails.fail_open` | `THAIRAG__GUARDRAILS__FAIL_OPEN` | `true` | If a detector errors, pass through (`true`) or treat as a violation (`false`). Honored by both the non-streaming and streaming paths. |
+| `guardrails.streaming_window_chars` | `THAIRAG__GUARDRAILS__STREAMING_WINDOW_CHARS` | `256` | Sliding-window size for streaming output. Bigger = catches longer secrets (e.g. JWT prefixes) at the cost of TTFB. The default covers every bounded pattern in the current detector set; raise it for stricter JWT prevention. |
+
+Operators can also tune detectors live from `/guardrails` (super-admin UI) without editing config — those changes go through the same `GuardrailsConfig` and persist via the settings KV.
 
 ### Multi-tenancy
 
