@@ -52,7 +52,7 @@ ThaiRAG is a Rust workspace with 16 crates organized in strict layers. Each laye
 Foundation crate with zero external service dependencies.
 - **ID newtypes**: `OrgId`, `DeptId`, `WorkspaceId`, `DocumentId`, `ChunkId`, `UserId`, `IdpId`, `MemoryId`, `JobId`, `WebhookId`, `ApiKeyId`, `AbTestId`, `EvalSetId`, `EntityId`, `BackupId` — all UUID-based with the `define_id!` macro
 - **Domain models**: `Organization`, `Department`, `Workspace`, `Document`, `TextChunk`, `User`, `IdentityProvider`, `Job`, `WebhookEvent`, `ApiKey`, `Entity`, `Relation`, `BackupManifest`, `ExtractedTable`, `ImageMetadata`
-- **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker`, `SessionStoreTrait`, `EmbeddingCache`, `JobQueue`, `DocumentPlugin`, `SearchPlugin`, `ChunkPlugin`, `VectorStoreExport` — all async trait-based
+- **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker`, `SessionStoreTrait`, `EmbeddingCache`, `JobQueue`, `DocumentPlugin`, `SearchPlugin`, `ChunkPlugin`, `VectorStoreExport`, `SearchPluginEngine` (lets retrieval-side code apply enabled SearchPlugins without depending on the API crate's concrete registry), `GuardrailMetricsRecorder` (lets the streaming output guardrail record Prometheus counters without depending on the API crate's `MetricsState`) — all async trait-based
 - **Error types**: `ThaiRagError` enum covering validation, auth, not-found, provider errors
 - **Permission model**: `AccessScope` with workspace-level scoping
 
@@ -128,6 +128,12 @@ RAG orchestrator with multi-agent pipeline:
 - **Personal memory** — Per-user memory extraction and retrieval. Extracts typed memories (preference, fact, decision, conversation, correction) from compacted conversations. Stores in vector DB with relevance decay over time
 - **Live source retrieval** — When the knowledge base returns no relevant results (empty context or avg relevance < 0.15), the pipeline automatically fetches content from active MCP connectors in real time. Uses `LiveRetrieval` agent to connect to configured connectors (OneDrive, web fetch, Slack, etc.) in parallel, read resources, and build a `CuratedContext` for the response generator. If more connectors than `max_connectors` are available, an LLM selects the most relevant ones
 - **Advanced RAG strategies** — Self-RAG (iterative self-critique and retrieval), Corrective RAG (CRAG, query correction on low confidence), Speculative RAG (draft-then-verify), Map-Reduce RAG (parallel chunk summarization), RAPTOR hierarchical summaries, ColBERT late-interaction reranking, Graph RAG (entity/relation extraction and graph traversal), contextual compression, multimodal RAG (image + table extraction), active learning (uncertainty sampling for feedback prioritization), conversation memory (cross-session user preference tracking), retrieval refinement (iterative query expansion), agentic tool use (LLM-driven function calling), adaptive quality thresholds (per-workspace auto-tuning), auto-summarization of long documents
+- **Guardrails module** (`guardrails/`) — Deterministic content safety with four submodules:
+  - `detectors/` — Pure functions over text returning `Vec<Violation>`. Closed `ViolationCode` enum (Thai-ID with mod-11 checksum, Thai phone, email, credit card with Luhn, AWS key / JWT / GitHub PAT / generic-API-key secrets, prompt-injection / jailbreak regex set in English + Thai, operator blocklist via combined `(?i)` regex).
+  - `input.rs` — `InputGuardrails::check(query)` runs detectors and produces `Pass` / `Sanitize` / `Block` actions per `policy.input_on_violation`. Critical-severity violations (Thai ID, credit card, AWS key) always block. Refusal reason is generic (codes are logged, never returned to caller).
+  - `output.rs` — `OutputGuardrails::check(response)` for non-streaming responses with `redact` / `block` / `regenerate` policies, bounded by `policy.max_response_chars` to cap CPU on long outputs. `OutputGuardrails::sanitize(text, violations)` is the inline-redaction primitive shared with the streaming path.
+  - `streaming.rs` — `wrap_stream_with_holdback` implements real-prevention sliding-window output filtering. Each inner chunk appends to a buffer of `policy.streaming_window_chars` (default 256); detectors run on the whole buffer per chunk; matches are redacted in place (inline `[REDACTED]`) before the chars age out of the window and flush to the client. Design rationale and trade-offs are in `docs/STREAMING_GUARDRAILS_DESIGN.md`.
+- **Pipeline-level plugin hooks** — `ChatPipeline::run_search` applies `SearchPluginEngine::apply_pre_search` to every query (primary, rewriter sub-queries, HyDE) and `apply_post_search` to the deduplicated result set. The engine is supplied via `ChatPipeline::with_search_plugin_engine(...)`; the API crate's `PluginRegistry` is the concrete impl.
 
 ### thairag-mcp
 MCP (Model Context Protocol) integration for connecting to external data sources:
@@ -140,13 +146,14 @@ MCP (Model Context Protocol) integration for connecting to external data sources
 
 ### thairag-api
 Axum HTTP server with:
-- **Routes**: Auth, Chat (V1 OpenAI-compatible + V2 with metadata + WebSocket at `/ws/chat`), KM hierarchy CRUD, Documents (versioning, batch, ACL), Settings, Health, Feedback, Webhooks, Backup/Restore, Vector Migration, Rate Limit Stats, Jobs, Evaluation, A/B Tests, Plugins, Knowledge Graph, API Keys, Vault
+- **Routes**: Auth, Chat (V1 OpenAI-compatible + V2 with metadata + WebSocket at `/ws/chat`), KM hierarchy CRUD (including super-admin `POST /api/km/users` for local user creation), Documents (versioning, batch, ACL), Settings, Health, Feedback, Webhooks, Backup/Restore, Vector Migration, Rate Limit Stats, Jobs, Evaluation, A/B Tests, **Plugins** (`GET /api/km/plugins`, `POST /plugins/{name}/{enable,disable}`), **Guardrails** (`GET /api/km/guardrails/{stats,violations}`, `POST /api/km/guardrails/preview`), Knowledge Graph, API Keys, Vault
 - **Stores**: SQLite (default), PostgreSQL, In-Memory — implementing `KmStoreTrait`. Session and cache stores optionally backed by Redis via `thairag-provider-redis`
 - **Middleware stack**: Request ID → Tracing → Security Headers → CORS → Metrics → Rate Limiting → Auth → CSRF
 - **Session management**: DashMap-based (default) or Redis-backed (for multi-instance deployments), with 50-message cap and 1-hour auto-cleanup. Supports context compaction (replacing old messages with summaries)
-- **Plugin registry**: Loads `DocumentPlugin`, `SearchPlugin`, and `ChunkPlugin` implementations from config at startup, enabling extension without modifying core crates
+- **Plugin registry**: Loads `DocumentPlugin`, `SearchPlugin`, and `ChunkPlugin` implementations at startup, persists enable-state to the KV store (`plugins.enabled` setting), and implements the `SearchPluginEngine` trait so the chat pipeline's retrieval calls fire SearchPlugin pre/post hooks too. Built-ins: `metadata-strip` (DocumentPlugin), `query-expansion` (SearchPlugin), `summary-chunk` (ChunkPlugin)
 - **Embedding cache**: Optional in-process or Redis-backed cache keyed by content hash, reducing redundant embedding API calls
-- **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions
+- **`ProviderBundleBuilder`**: Fluent builder for the `ProviderBundle` (the hot-swappable provider state), replacing the previous ten-argument constructor. Required inputs go to `new()`; optional pieces (`km_store`, `vault`, `embedding_cache`, `plugin_engine`, `guardrail_metrics`) are set via `with_*` methods. Used by the main constructor, scoped-pipeline rebuilds, dynamic provider reloads, and the vector-migration switch path.
+- **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions, MCP sync stats, and `guardrail_streaming_redactions_total{code, stage}` for the streaming output guardrail. `MetricsState` implements `thairag_core::traits::GuardrailMetricsRecorder` so the agent crate can record without depending on `thairag-api`.
 
 ### thairag-cli
 Command-line interface for managing the ThaiRAG platform remotely:
@@ -368,6 +375,8 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - `http_request_duration_seconds{method, path}` — Latency histogram
 - `llm_tokens_total{type}` — Token usage (prompt/completion)
 - `active_sessions_total` — Current active chat sessions
+- `mcp_sync_runs_total{connector, status}` / `mcp_sync_items_total{connector, action}` / `mcp_sync_duration_seconds{connector}` — Connector sync stats
+- `guardrail_streaming_redactions_total{code, stage}` — Streaming output guardrail redactions. `code` is a value from the closed `ViolationCode` enum (Thai-ID / email / Luhn-validated credit-card / AWS-key / JWT / GitHub-PAT / generic-API-key / blocklist / etc.); `stage` is `output`. Cardinality is bounded by the enum so this counter is safe to scrape at any rate.
 
 Prometheus scrapes ThaiRAG directly at `/metrics`. In scaled deployments (multiple replicas behind a load balancer), use Docker DNS service discovery — Prometheus can be configured with `dns_sd_configs` targeting the service name to discover all replicas automatically.
 
