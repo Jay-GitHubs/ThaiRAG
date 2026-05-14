@@ -35,7 +35,7 @@ Health check endpoint.
 
 Prometheus-format metrics.
 
-Exposed metrics include `http_requests_total`, `http_request_duration_seconds`, `llm_tokens_total`, `active_sessions_total`, `mcp_sync_runs_total`, `mcp_sync_items_total`, `mcp_sync_duration_seconds`.
+Exposed metrics include `http_requests_total`, `http_request_duration_seconds`, `llm_tokens_total`, `active_sessions_total`, `mcp_sync_runs_total`, `mcp_sync_items_total`, `mcp_sync_duration_seconds`, and `guardrail_streaming_redactions_total{code, stage}` (incremented when the streaming output guardrail redacts a match; `code` is one of the closed `ViolationCode` enum values, `stage` is `output`).
 
 ---
 
@@ -160,6 +160,27 @@ Chat completion (streaming and non-streaming). **Auth required.**
   "session_id": "optional-uuid"
 }
 ```
+
+**Vision-capable request** — attach images to a message for vision-capable LLM providers. Each `images` entry is a base64-encoded payload plus its MIME type. The field is omitted from the wire format when empty, so text-only clients are unaffected.
+
+```json
+{
+  "model": "ThaiRAG-1.0",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What does this diagram show?",
+      "images": [
+        { "base64_data": "iVBORw0KGgo...", "media_type": "image/png" }
+      ]
+    }
+  ]
+}
+```
+
+If the configured LLM provider doesn't implement `generate_vision`, the server falls back to text-only and the images are dropped.
+
+**Output guardrails on streaming responses.** When the deterministic guardrails are enabled (see [`Guardrails`](#guardrails-super-admin)), streamed chunks pass through a sliding-window hold-back filter before reaching the client. Any matched PII/secret/blocklist span is replaced inline with the configured redaction token (default `[REDACTED]`). No new SSE event types are introduced — the marker is part of the regular `data:` text. Per-violation counters land on `guardrail_streaming_redactions_total`.
 
 **Non-Streaming Response:**
 ```json
@@ -306,8 +327,112 @@ Permissions can be managed at organization, department, or workspace level.
 #### `GET /api/km/users`
 List all users.
 
+#### `POST /api/km/users`
+**Super-admin only.** Create a local user. The caller must have `role == "super_admin"` (or the legacy `is_super_admin` flag). Passwords are Argon2-hashed before storage and must satisfy the configured policy (default: ≥ 8 chars, at least one uppercase, one lowercase, one digit). Successful creation writes an `AuditAction::SettingsChanged` audit-log entry.
+
+```json
+{
+  "email": "alice@example.com",
+  "name": "Alice",
+  "password": "Strong1Pw",
+  "role": "viewer"
+}
+```
+
+`role` is optional and defaults to `"viewer"`. It must be one of `"viewer"`, `"editor"`, `"admin"`, `"super_admin"`.
+
+| HTTP | Reason |
+|---|---|
+| 201 | User created. Response body is the new `User`. |
+| 400 | Validation error (empty field, password policy, invalid role). |
+| 403 | Caller is not a super admin. |
+
+#### `PUT /api/km/users/{user_id}/role`
+Change a user's role. Super-admin gated.
+
+#### `PUT /api/km/users/{user_id}/status`
+Enable/disable a user. Super-admin gated.
+
 #### `DELETE /api/km/users/{user_id}`
 Delete a user. Returns 403 if the user is a super admin.
+
+---
+
+## Plugins (Super Admin)
+
+Plugins customize document processing, search behavior, and chunk transformation at runtime. The registry, hooks, and built-in plugins live in `crates/thairag-api`; SearchPlugins additionally fire on the main chat-pipeline retrieval path via the `SearchPluginEngine` trait in `thairag-core`.
+
+All endpoints are super-admin gated. Enabled state is persisted to the KV store under the `plugins.enabled` setting key.
+
+#### `GET /api/km/plugins`
+List every registered plugin with its current enabled state.
+
+**Response:**
+```json
+{
+  "plugins": [
+    {
+      "name": "metadata-strip",
+      "description": "Strips HTML/XML metadata, style, and script tags from document content",
+      "plugin_type": "document",
+      "enabled": true
+    },
+    {
+      "name": "query-expansion",
+      "description": "Expands search queries with common synonyms and related terms",
+      "plugin_type": "search",
+      "enabled": true
+    },
+    {
+      "name": "summary-chunk",
+      "description": "Prepends a one-line summary header to each chunk",
+      "plugin_type": "chunk",
+      "enabled": false
+    }
+  ]
+}
+```
+
+`plugin_type` is one of `"document"`, `"search"`, `"chunk"`.
+
+#### `POST /api/km/plugins/{name}/enable`
+Enable a plugin by name. Returns 404 if no plugin with that name is registered.
+
+```json
+{ "name": "query-expansion", "enabled": true, "message": "Plugin 'query-expansion' enabled" }
+```
+
+#### `POST /api/km/plugins/{name}/disable`
+Disable a plugin by name. Returns 404 on unknown name.
+
+```json
+{ "name": "query-expansion", "enabled": false, "message": "Plugin 'query-expansion' disabled" }
+```
+
+---
+
+## Guardrails (Super Admin)
+
+Input and output content guardrails: PII detection (Thai national ID with mod-11 checksum, Thai phone, email, credit card with Luhn), secrets (AWS key, JWT, GitHub PAT, generic API key), prompt-injection patterns, and operator-defined blocklist phrases. Output streams are filtered with a sliding-window hold-back so matches are redacted **before** transmission — see `docs/STREAMING_GUARDRAILS_DESIGN.md`.
+
+#### `GET /api/km/guardrails/stats`
+Aggregate counts over the inference-log table: how many requests had input/output guardrails run, how many passed, how many failed, and a breakdown by violation code.
+
+#### `GET /api/km/guardrails/violations`
+List recent inference rows where a violation fired, with pagination. Returns wire-safe metadata only — codes + severity + stage, never the matched substrings (PDPA-safe).
+
+#### `POST /api/km/guardrails/preview`
+Run the configured guardrails over a sample input/output pair so operators can validate detector settings without burning a real chat request.
+
+**Request:**
+```json
+{
+  "query": "My ID is 1101700230708",
+  "response": "Here is the key: AKIAIOSFODNN7EXAMPLE"
+}
+```
+
+Returns the verdict (Pass / Sanitize / Block / Regenerate) for each stage plus the violations that fired.
 
 ---
 
