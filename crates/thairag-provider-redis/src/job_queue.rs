@@ -148,7 +148,7 @@ impl JobQueue for RedisJobQueue {
         }
 
         // Sort most recent first
-        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.created_at));
         jobs
     }
 
