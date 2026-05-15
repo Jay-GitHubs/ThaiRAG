@@ -10,7 +10,7 @@ use thairag_core::traits::{GuardrailMetricsRecorder, LlmProvider, SearchPluginEn
 use thairag_core::types::{
     ChatMessage, DocId, GuardrailViolationMeta, LlmResponse, LlmStreamResponse, LlmUsage,
     MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender, QueryIntent, SearchQuery,
-    StageStatus,
+    SessionAttachment, StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -401,6 +401,113 @@ impl ChatPipeline {
                 }
             }
         }
+    }
+
+    /// Build the system messages that inject attachment text into the LLM
+    /// context. Returns an empty vec when there are no attachments.
+    fn build_attachment_messages(attachments: &[SessionAttachment]) -> Vec<ChatMessage> {
+        if attachments.is_empty() {
+            return Vec::new();
+        }
+        let mut msgs = Vec::with_capacity(attachments.len() + 1);
+        msgs.push(ChatMessage {
+            role: "system".into(),
+            content: format!(
+                "You have been given {} document(s) below. Use them as the \
+                 primary source to answer the user's questions.",
+                attachments.len()
+            ),
+            images: vec![],
+        });
+        for a in attachments {
+            msgs.push(ChatMessage {
+                role: "system".into(),
+                content: format!("[Document: {}]\n{}\n", a.name, a.text),
+                images: vec![],
+            });
+        }
+        msgs
+    }
+
+    /// Attachment pipeline (non-streaming): inject the attachment documents as
+    /// system context and answer directly from them. Embedded-KB search, live
+    /// retrieval, and the query analyzer/orchestrator are all skipped — the
+    /// documents the user supplied are the authoritative context.
+    pub async fn process_with_attachments(
+        &self,
+        messages: &[ChatMessage],
+        attachments: &[SessionAttachment],
+        memories: &[MemoryEntry],
+        progress: Option<ProgressSender>,
+        metadata: Option<MetadataCell>,
+    ) -> Result<LlmResponse> {
+        let pipeline_start = Instant::now();
+
+        let mut full_messages = self.inject_memory(messages, memories);
+
+        // Input guardrails on the user prompt. Attachment text is checked
+        // separately at the route layer before it reaches the session.
+        if let Some(refusal) = self.apply_input_guardrails(&mut full_messages, &progress, &metadata)
+        {
+            return Ok(refusal);
+        }
+
+        // Prepend attachment documents as system context.
+        let mut augmented = Self::build_attachment_messages(attachments);
+        augmented.extend(full_messages);
+
+        self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+        let t = Instant::now();
+        let response = self.main_llm.generate(&augmented, None).await?;
+        let gen_ms = t.elapsed().as_millis() as u64;
+        self.emit_progress(
+            &progress,
+            "response_generator",
+            StageStatus::Done,
+            Some(gen_ms),
+        );
+        Self::update_metadata(&metadata, |m| {
+            m.pipeline_route = Some("attachments".into());
+            m.generation_ms = Some(gen_ms);
+        });
+        info!(
+            total_ms = pipeline_start.elapsed().as_millis() as u64,
+            attachments = attachments.len(),
+            "Pipeline(attachments): complete"
+        );
+        Ok(self.apply_output_guardrails(response, &progress, &metadata))
+    }
+
+    /// Attachment pipeline (streaming). Mirrors `process_with_attachments`,
+    /// wrapping the token stream with the sliding-window output guardrails.
+    pub async fn process_stream_with_attachments(
+        &self,
+        messages: &[ChatMessage],
+        attachments: &[SessionAttachment],
+        memories: &[MemoryEntry],
+        progress: Option<ProgressSender>,
+        metadata: Option<MetadataCell>,
+    ) -> Result<LlmStreamResponse> {
+        let mut full_messages = self.inject_memory(messages, memories);
+
+        if let Some(refusal) = self.apply_input_guardrails(&mut full_messages, &progress, &metadata)
+        {
+            return Ok(Self::refusal_stream(refusal.content));
+        }
+
+        let mut augmented = Self::build_attachment_messages(attachments);
+        augmented.extend(full_messages);
+
+        self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
+        Self::update_metadata(&metadata, |m| {
+            m.pipeline_route = Some("attachments".into());
+        });
+        info!(
+            attachments = attachments.len(),
+            "Pipeline(attachments, stream): generating"
+        );
+        let stream = self.main_llm.generate_stream(&augmented, None).await?;
+        Ok(self.wrap_stream_with_output_guardrails(stream, progress.clone(), metadata.clone()))
     }
 
     /// Non-streaming pipeline: orchestrator decides which agents to run.

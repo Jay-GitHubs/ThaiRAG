@@ -25,6 +25,12 @@ pub struct MetricsState {
     /// guard stage. Cardinality bounded by the closed `ViolationCode` enum
     /// (~11 codes) × stages (2) → safe Prometheus label space.
     pub guardrail_streaming_redactions_total: IntCounterVec,
+    /// Per-request document attachments processed, keyed by MIME type and
+    /// outcome ("success" | "error"). Label space bounded by the document
+    /// pipeline's fixed supported-MIME list.
+    pub attachments_total: IntCounterVec,
+    /// Attachment text-extraction duration in seconds, keyed by MIME type.
+    pub attachment_extraction_duration_seconds: HistogramVec,
 }
 
 impl Default for MetricsState {
@@ -92,6 +98,27 @@ impl MetricsState {
         )
         .unwrap();
 
+        let attachments_total = IntCounterVec::new(
+            Opts::new(
+                "attachments_total",
+                "Total per-request document attachments processed",
+            ),
+            &["mime", "status"],
+        )
+        .unwrap();
+
+        let attachment_extraction_duration_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "attachment_extraction_duration_seconds",
+                "Attachment text-extraction duration in seconds",
+            )
+            .buckets(vec![
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
+            ]),
+            &["mime"],
+        )
+        .unwrap();
+
         registry
             .register(Box::new(http_requests_total.clone()))
             .unwrap();
@@ -116,6 +143,12 @@ impl MetricsState {
         registry
             .register(Box::new(guardrail_streaming_redactions_total.clone()))
             .unwrap();
+        registry
+            .register(Box::new(attachments_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(attachment_extraction_duration_seconds.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -127,6 +160,8 @@ impl MetricsState {
             mcp_sync_items_total,
             mcp_sync_duration_seconds,
             guardrail_streaming_redactions_total,
+            attachments_total,
+            attachment_extraction_duration_seconds,
         }
     }
 
@@ -156,6 +191,16 @@ impl MetricsState {
         self.guardrail_streaming_redactions_total
             .with_label_values(&[code, stage])
             .inc();
+    }
+
+    /// Record one processed attachment: outcome counter plus extraction time.
+    pub fn record_attachment(&self, mime: &str, status: &str, extraction_secs: f64) {
+        self.attachments_total
+            .with_label_values(&[mime, status])
+            .inc();
+        self.attachment_extraction_duration_seconds
+            .with_label_values(&[mime])
+            .observe(extraction_secs);
     }
 
     #[allow(clippy::too_many_arguments)]

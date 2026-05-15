@@ -73,6 +73,13 @@ backend = "memory"          # "memory" or "redis"
 max_history = 50
 stale_timeout_secs = 3600
 
+[attachments]
+max_per_request = 5
+max_bytes_per_attachment = 5242880    # 5 MB
+max_total_bytes = 15728640            # 15 MB
+max_text_chars = 200000
+max_session_attachments = 10
+
 [embedding_cache]
 backend = "memory"          # "memory", "redis", or "none"
 max_entries = 10000

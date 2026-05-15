@@ -6,8 +6,8 @@ use crate::error::Result;
 use crate::types::{
     ChatMessage, ConvertedDocument, DocumentAnalysis, DocumentChunk, EnrichedChunk, ExportedVector,
     Job, JobId, JobStatus, LlmResponse, LlmStreamResponse, McpResource, McpResourceContent,
-    McpToolInfo, MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult, SessionId,
-    UserId, VisionMessage, WorkspaceId,
+    McpToolInfo, MemoryId, PersonalMemory, QualityReport, SearchQuery, SearchResult,
+    SessionAttachment, SessionId, UserId, VisionMessage, WorkspaceId,
 };
 
 #[async_trait]
@@ -256,6 +256,24 @@ pub trait SessionStoreTrait: Send + Sync {
     /// Set the conversation summary and the message count at which it was generated.
     async fn set_summary(&self, session_id: &SessionId, summary: String, message_count: usize) {
         let _ = (session_id, summary, message_count);
+    }
+
+    /// Replace the session's per-request document attachments. Called when an
+    /// attachment-bearing chat request arrives; the new set replaces any prior
+    /// attachments so follow-up turns reference the most recent upload.
+    async fn attach(&self, session_id: &SessionId, attachments: Vec<SessionAttachment>) {
+        let _ = (session_id, attachments);
+    }
+
+    /// Get the document attachments currently associated with a session.
+    async fn get_attachments(&self, session_id: &SessionId) -> Vec<SessionAttachment> {
+        let _ = session_id;
+        Vec::new()
+    }
+
+    /// Remove all document attachments from a session.
+    async fn clear_attachments(&self, session_id: &SessionId) {
+        let _ = session_id;
     }
 }
 
