@@ -1,2 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned. Auto-rolling `stable` caused CI failures when new clippy lints
+# landed in 1.95 (see #58). Bump deliberately by editing this line and
+# fixing whatever new lints fire in the same PR. Minor-version pin still
+# picks up patch security updates within 1.95.x.
+channel = "1.95"
