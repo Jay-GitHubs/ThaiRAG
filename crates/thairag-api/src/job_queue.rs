@@ -50,7 +50,7 @@ impl JobQueue for InMemoryJobQueue {
             .filter(|r| r.workspace_id == *workspace_id)
             .map(|r| r.clone())
             .collect();
-        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.created_at));
         jobs
     }
 

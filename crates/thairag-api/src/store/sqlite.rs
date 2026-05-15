@@ -3731,10 +3731,10 @@ impl KmStoreTrait for SqliteKmStore {
         }
 
         let mut actions_by_type: Vec<(String, u64)> = by_type.into_iter().collect();
-        actions_by_type.sort_by(|a, b| b.1.cmp(&a.1));
+        actions_by_type.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         let mut actions_by_user: Vec<(String, u64)> = by_user.into_iter().collect();
-        actions_by_user.sort_by(|a, b| b.1.cmp(&a.1));
+        actions_by_user.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         let mut events_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
         events_per_day.sort_by(|a, b| a.0.cmp(&b.0));

@@ -86,7 +86,7 @@ pub async fn get_blocked_events(
     events.extend(state.user_rate_limiter.blocked_log().recent());
 
     // Sort by timestamp descending (most recent first)
-    events.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    events.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
 
     // Cap at 100 events total
     events.truncate(100);
