@@ -156,7 +156,7 @@ impl RateLimiter {
                 }
             })
             .collect();
-        stats.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+        stats.sort_by_key(|s| std::cmp::Reverse(s.request_count));
         stats.truncate(top_n);
         stats
     }
@@ -268,7 +268,7 @@ impl UserRateLimiter {
                 }
             })
             .collect();
-        stats.sort_by(|a, b| b.request_count.cmp(&a.request_count));
+        stats.sort_by_key(|s| std::cmp::Reverse(s.request_count));
         stats.truncate(top_n);
         stats
     }
