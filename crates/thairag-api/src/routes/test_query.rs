@@ -11,7 +11,10 @@ use uuid::Uuid;
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
-use thairag_core::types::{ChatMessage, MetadataCell, PipelineMetadata, SearchQuery, WorkspaceId};
+use thairag_core::types::{
+    Attachment, ChatMessage, MetadataCell, PipelineMetadata, SearchQuery, SessionAttachment,
+    WorkspaceId,
+};
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
@@ -23,6 +26,10 @@ use crate::store::{InferenceLogEntry, LineageRecord, SearchAnalyticsEvent};
 #[derive(Deserialize)]
 pub struct TestQueryRequest {
     pub query: String,
+    /// Optional per-request document attachments. When present, search is
+    /// skipped and the answer is generated from the attachment documents.
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
 }
 
 #[derive(Serialize)]
@@ -145,74 +152,88 @@ pub async fn test_query(
     // Build scope for just this workspace
     let scope = AccessScope::new(vec![ws_id]);
 
-    // Step 1: Search for relevant chunks (timed)
-    let p = state.providers();
-    let retrieval_params = feedback::load_retrieval_params(&state);
-    let search_start = Instant::now();
-
-    // Apply pre-search plugins to transform the query
-    let transformed_query = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
-
-    let search_query = SearchQuery {
-        text: transformed_query,
-        top_k: retrieval_params.top_k,
-        workspace_ids: vec![ws_id],
-        unrestricted: false,
-    };
-    let mut search_results = p
-        .search_engine
-        .search(&search_query)
-        .await
-        .map_err(ApiError::from)?;
-    let search_ms = search_start.elapsed().as_millis() as u64;
-
-    // Apply post-search plugins to filter/re-rank results
-    search_results = plugin_hooks::apply_post_search(&state.plugin_registry, search_results);
-
-    // Apply document boost/penalty from feedback
-    let boost_map = feedback::get_document_boost_map(&state);
-    if !boost_map.is_empty() {
-        for result in &mut search_results {
-            let doc_id_str = result.chunk.doc_id.to_string();
-            if let Some(&boost) = boost_map.get(&doc_id_str) {
-                result.score *= boost;
-            }
+    // Process any per-request attachments. When present, search is skipped
+    // and the attachment documents become the answer context.
+    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            crate::routes::chat::process_request_attachments(&state, raw)?
         }
-        // Re-sort by boosted scores
-        search_results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
+        _ => Vec::new(),
+    };
 
-    // Apply min score threshold from retrieval params
-    if retrieval_params.min_score_threshold > 0.0 {
-        search_results.retain(|r| r.score >= retrieval_params.min_score_threshold);
-    }
+    // Step 1: Search for relevant chunks (timed) — skipped when the request
+    // carries attachments.
+    let p = state.providers();
+    let mut chunks: Vec<RetrievedChunk> = Vec::new();
+    let mut search_ms: u64 = 0;
+    if attachments.is_empty() {
+        let retrieval_params = feedback::load_retrieval_params(&state);
+        let search_start = Instant::now();
 
-    // Build retrieved chunks response (with doc titles)
-    let chunks: Vec<RetrievedChunk> = search_results
-        .iter()
-        .map(|r| {
-            let doc_title = state
-                .km_store
-                .get_document(r.chunk.doc_id)
-                .ok()
-                .map(|d| d.title);
-            let meta = r.chunk.metadata.as_ref();
-            RetrievedChunk {
-                chunk_id: r.chunk.chunk_id.to_string(),
-                doc_id: r.chunk.doc_id.to_string(),
-                content: r.chunk.content.clone(),
-                score: r.score,
-                chunk_index: r.chunk.chunk_index,
-                page_numbers: meta.and_then(|m| m.page_numbers.clone()),
-                section_title: meta.and_then(|m| m.section_title.clone()),
-                doc_title,
+        // Apply pre-search plugins to transform the query
+        let transformed_query = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
+
+        let search_query = SearchQuery {
+            text: transformed_query,
+            top_k: retrieval_params.top_k,
+            workspace_ids: vec![ws_id],
+            unrestricted: false,
+        };
+        let mut search_results = p
+            .search_engine
+            .search(&search_query)
+            .await
+            .map_err(ApiError::from)?;
+        search_ms = search_start.elapsed().as_millis() as u64;
+
+        // Apply post-search plugins to filter/re-rank results
+        search_results = plugin_hooks::apply_post_search(&state.plugin_registry, search_results);
+
+        // Apply document boost/penalty from feedback
+        let boost_map = feedback::get_document_boost_map(&state);
+        if !boost_map.is_empty() {
+            for result in &mut search_results {
+                let doc_id_str = result.chunk.doc_id.to_string();
+                if let Some(&boost) = boost_map.get(&doc_id_str) {
+                    result.score *= boost;
+                }
             }
-        })
-        .collect();
+            // Re-sort by boosted scores
+            search_results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        // Apply min score threshold from retrieval params
+        if retrieval_params.min_score_threshold > 0.0 {
+            search_results.retain(|r| r.score >= retrieval_params.min_score_threshold);
+        }
+
+        // Build retrieved chunks response (with doc titles)
+        chunks = search_results
+            .iter()
+            .map(|r| {
+                let doc_title = state
+                    .km_store
+                    .get_document(r.chunk.doc_id)
+                    .ok()
+                    .map(|d| d.title);
+                let meta = r.chunk.metadata.as_ref();
+                RetrievedChunk {
+                    chunk_id: r.chunk.chunk_id.to_string(),
+                    doc_id: r.chunk.doc_id.to_string(),
+                    content: r.chunk.content.clone(),
+                    score: r.score,
+                    chunk_index: r.chunk.chunk_index,
+                    page_numbers: meta.and_then(|m| m.page_numbers.clone()),
+                    section_title: meta.and_then(|m| m.section_title.clone()),
+                    doc_title,
+                }
+            })
+            .collect();
+    }
 
     let chunks_retrieved = chunks.len();
 
@@ -253,17 +274,30 @@ pub async fn test_query(
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
     let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
-        pipeline
-            .process(
-                &messages,
-                &scope,
-                &[],
-                &available_scopes,
-                Some(progress_tx),
-                Some(metadata_cell.clone()),
-            )
-            .await
-            .map_err(ApiError::from)?
+        if attachments.is_empty() {
+            pipeline
+                .process(
+                    &messages,
+                    &scope,
+                    &[],
+                    &available_scopes,
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        } else {
+            pipeline
+                .process_with_attachments(
+                    &messages,
+                    &attachments,
+                    &[],
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        }
     } else {
         drop(progress_tx);
         p.orchestrator
@@ -518,113 +552,127 @@ pub async fn test_query_stream(
     // Apply pre-search plugins to transform the query
     let query_text = plugin_hooks::apply_pre_search(&state.plugin_registry, &req.query);
 
+    // Process per-request attachments up front so a validation/guardrail
+    // failure surfaces as a normal HTTP error rather than mid-stream.
+    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            crate::routes::chat::process_request_attachments(&state, raw)?
+        }
+        _ => Vec::new(),
+    };
+
     // Capture what we need for the background task
     let state_clone = state.clone();
     let scope_clone = scope.clone();
 
     let sse_stream = async_stream::stream! {
-        // Step 1: Search (timed, emit progress)
-        yield Ok::<_, std::convert::Infallible>(
-            Event::default().event("progress").data(
-                serde_json::to_string(&thairag_core::types::PipelineProgress {
-                    stage: "search".into(),
-                    status: thairag_core::types::StageStatus::Started,
-                    duration_ms: None,
-                    model: Some(p.providers_config.embedding.model.clone()),
-                }).unwrap()
-            )
-        );
+        // Step 1: Search (timed, emit progress) — skipped entirely when the
+        // request carries attachments.
+        let mut chunks: Vec<RetrievedChunk> = Vec::new();
+        let mut search_ms: u64 = 0;
+        if attachments.is_empty() {
+            yield Ok::<_, std::convert::Infallible>(
+                Event::default().event("progress").data(
+                    serde_json::to_string(&thairag_core::types::PipelineProgress {
+                        stage: "search".into(),
+                        status: thairag_core::types::StageStatus::Started,
+                        duration_ms: None,
+                        model: Some(p.providers_config.embedding.model.clone()),
+                    }).unwrap()
+                )
+            );
 
-        let search_start = Instant::now();
-        let search_query = SearchQuery {
-            text: query_text.clone(),
-            top_k: retrieval_params.top_k,
-            workspace_ids: vec![ws_id],
-            unrestricted: false,
-        };
-        let search_result = p.search_engine.search(&search_query).await;
-        let search_ms = search_start.elapsed().as_millis() as u64;
-
-        yield Ok(
-            Event::default().event("progress").data(
-                serde_json::to_string(&thairag_core::types::PipelineProgress {
-                    stage: "search".into(),
-                    status: thairag_core::types::StageStatus::Done,
-                    duration_ms: Some(search_ms),
-                    model: None,
-                }).unwrap()
-            )
-        );
-
-        let mut search_results = match search_result {
-            Ok(r) => r,
-            Err(e) => {
-                let err = serde_json::json!({"error": e.to_string()});
-                yield Ok(Event::default().event("error").data(err.to_string()));
-                yield Ok(Event::default().data("[DONE]"));
-                return;
-            }
-        };
-
-        // Apply post-search plugins to filter/re-rank results
-        search_results = plugin_hooks::apply_post_search(&state_clone.plugin_registry, search_results);
-
-        // Apply document boost/penalty
-        let boost_map = feedback::get_document_boost_map(&state_clone);
-        if !boost_map.is_empty() {
-            for result in &mut search_results {
-                let doc_id_str = result.chunk.doc_id.to_string();
-                if let Some(&boost) = boost_map.get(&doc_id_str) {
-                    result.score *= boost;
-                }
-            }
-            search_results.sort_by(|a, b| {
-                b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        if retrieval_params.min_score_threshold > 0.0 {
-            search_results.retain(|r| r.score >= retrieval_params.min_score_threshold);
-        }
-
-        let chunks: Vec<RetrievedChunk> = search_results
-            .iter()
-            .map(|r| {
-                let doc_title = state_clone.km_store.get_document(r.chunk.doc_id).ok().map(|d| d.title);
-                let meta = r.chunk.metadata.as_ref();
-                RetrievedChunk {
-                    chunk_id: r.chunk.chunk_id.to_string(),
-                    doc_id: r.chunk.doc_id.to_string(),
-                    content: r.chunk.content.clone(),
-                    score: r.score,
-                    chunk_index: r.chunk.chunk_index,
-                    page_numbers: meta.and_then(|m| m.page_numbers.clone()),
-                    section_title: meta.and_then(|m| m.section_title.clone()),
-                    doc_title,
-                }
-            })
-            .collect();
-        let chunks_retrieved = chunks.len();
-
-        // ── Search Analytics (streaming) ──
-        {
-            let result_count = chunks_retrieved as u32;
-            let user_id_str = claims.sub.parse::<Uuid>().ok().map(|u| u.to_string());
-            let event = SearchAnalyticsEvent {
-                id: Uuid::new_v4().to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                query_text: query_text.chars().take(2000).collect(),
-                user_id: user_id_str,
-                workspace_id: Some(workspace_id.to_string()),
-                result_count,
-                latency_ms: search_ms,
-                zero_results: result_count == 0,
+            let search_start = Instant::now();
+            let search_query = SearchQuery {
+                text: query_text.clone(),
+                top_k: retrieval_params.top_k,
+                workspace_ids: vec![ws_id],
+                unrestricted: false,
             };
-            let store = state_clone.km_store.clone();
-            tokio::spawn(async move {
-                store.insert_search_event(&event);
-            });
+            let search_result = p.search_engine.search(&search_query).await;
+            search_ms = search_start.elapsed().as_millis() as u64;
+
+            yield Ok(
+                Event::default().event("progress").data(
+                    serde_json::to_string(&thairag_core::types::PipelineProgress {
+                        stage: "search".into(),
+                        status: thairag_core::types::StageStatus::Done,
+                        duration_ms: Some(search_ms),
+                        model: None,
+                    }).unwrap()
+                )
+            );
+
+            let mut search_results = match search_result {
+                Ok(r) => r,
+                Err(e) => {
+                    let err = serde_json::json!({"error": e.to_string()});
+                    yield Ok(Event::default().event("error").data(err.to_string()));
+                    yield Ok(Event::default().data("[DONE]"));
+                    return;
+                }
+            };
+
+            // Apply post-search plugins to filter/re-rank results
+            search_results = plugin_hooks::apply_post_search(&state_clone.plugin_registry, search_results);
+
+            // Apply document boost/penalty
+            let boost_map = feedback::get_document_boost_map(&state_clone);
+            if !boost_map.is_empty() {
+                for result in &mut search_results {
+                    let doc_id_str = result.chunk.doc_id.to_string();
+                    if let Some(&boost) = boost_map.get(&doc_id_str) {
+                        result.score *= boost;
+                    }
+                }
+                search_results.sort_by(|a, b| {
+                    b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+
+            if retrieval_params.min_score_threshold > 0.0 {
+                search_results.retain(|r| r.score >= retrieval_params.min_score_threshold);
+            }
+
+            chunks = search_results
+                .iter()
+                .map(|r| {
+                    let doc_title = state_clone.km_store.get_document(r.chunk.doc_id).ok().map(|d| d.title);
+                    let meta = r.chunk.metadata.as_ref();
+                    RetrievedChunk {
+                        chunk_id: r.chunk.chunk_id.to_string(),
+                        doc_id: r.chunk.doc_id.to_string(),
+                        content: r.chunk.content.clone(),
+                        score: r.score,
+                        chunk_index: r.chunk.chunk_index,
+                        page_numbers: meta.and_then(|m| m.page_numbers.clone()),
+                        section_title: meta.and_then(|m| m.section_title.clone()),
+                        doc_title,
+                    }
+                })
+                .collect();
+
+            // ── Search Analytics (streaming) ──
+            {
+                let result_count = chunks.len() as u32;
+                let user_id_str = claims.sub.parse::<Uuid>().ok().map(|u| u.to_string());
+                let event = SearchAnalyticsEvent {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    query_text: query_text.chars().take(2000).collect(),
+                    user_id: user_id_str,
+                    workspace_id: Some(workspace_id.to_string()),
+                    result_count,
+                    latency_ms: search_ms,
+                    zero_results: result_count == 0,
+                };
+                let store = state_clone.km_store.clone();
+                tokio::spawn(async move {
+                    store.insert_search_event(&event);
+                });
+            }
         }
+        let chunks_retrieved = chunks.len();
 
         // Step 2: Generate RAG answer — stream pipeline progress in real-time
         let golden_examples = feedback::load_golden_examples_for_workspace(
@@ -661,8 +709,15 @@ pub async fn test_query_stream(
             let messages = messages.clone();
             let scope = scope_clone.clone();
             let scopes = available_scopes.clone();
+            let attachments = attachments.clone();
             tokio::spawn(async move {
-                pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), None).await
+                if attachments.is_empty() {
+                    pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), None).await
+                } else {
+                    pipeline
+                        .process_with_attachments(&messages, &attachments, &[], Some(progress_tx), None)
+                        .await
+                }
             })
         } else {
             // Fallback: legacy orchestrator — emit basic progress events

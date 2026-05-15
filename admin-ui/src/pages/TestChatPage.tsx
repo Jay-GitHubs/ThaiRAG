@@ -20,6 +20,7 @@ import {
 import {
   SendOutlined,
   FileTextOutlined,
+  PaperClipOutlined,
   ClearOutlined,
   ClockCircleOutlined,
   SearchOutlined,
@@ -42,6 +43,13 @@ import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { testQueryStream } from '../api/testQuery';
+import {
+  fileToAttachment,
+  ACCEPTED_EXTENSIONS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  type Attachment,
+} from '../api/attachments';
 import { submitFeedback } from '../api/feedback';
 import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress } from '../api/types';
 import { useI18n } from '../i18n';
@@ -116,6 +124,8 @@ export function TestChatPage() {
   const [timeoutMs, setTimeoutMs] = useState(loadSavedTimeout);
   const [commentModal, setCommentModal] = useState<{ index: number; thumbsUp: boolean } | null>(null);
   const [commentText, setCommentText] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { token: themeToken } = theme.useToken();
   const { t } = useI18n();
@@ -192,6 +202,7 @@ export function TestChatPage() {
           setLiveStages(next);
         },
         abortController.signal,
+        attachments,
       );
       clearTimeout(bufferDetector);
 
@@ -297,7 +308,41 @@ export function TestChatPage() {
 
   const handleClear = () => {
     setMessages([]);
+    setAttachments([]);
     sessionStorage.removeItem(CHAT_STORAGE_KEY);
+  };
+
+  const handleFilesPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ''; // reset so the same file can be re-picked
+    if (files.length === 0) return;
+
+    const room = MAX_ATTACHMENTS - attachments.length;
+    if (room <= 0) {
+      message.warning(`Maximum ${MAX_ATTACHMENTS} attachments.`);
+      return;
+    }
+    const picked = files.slice(0, room);
+    if (files.length > room) {
+      message.warning(`Only ${room} more attachment(s) allowed — extra files ignored.`);
+    }
+
+    const tooBig = picked.filter((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig.length > 0) {
+      message.error(`${tooBig.map((f) => f.name).join(', ')} exceed the 5 MB limit.`);
+    }
+    const withinLimit = picked.filter((f) => f.size <= MAX_ATTACHMENT_BYTES);
+
+    try {
+      const encoded = await Promise.all(withinLimit.map(fileToAttachment));
+      setAttachments((prev) => [...prev, ...encoded]);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Failed to read file');
+    }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const scoreColor = (score: number) => {
@@ -815,6 +860,45 @@ export function TestChatPage() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Attachment chips — files attached for the next query */}
+          {attachments.length > 0 && (
+            <div
+              style={{
+                marginBottom: 8,
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 4,
+                alignItems: 'center',
+              }}
+            >
+              <Tooltip title="When documents are attached, the workspace search is skipped and answers come directly from the attached files.">
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  <PaperClipOutlined /> Attached (search skipped):
+                </Typography.Text>
+              </Tooltip>
+              {attachments.map((a, i) => (
+                <Tag
+                  key={i}
+                  icon={<FileTextOutlined />}
+                  closable
+                  onClose={() => removeAttachment(i)}
+                >
+                  {a.name}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          {/* Hidden file picker, triggered by the paperclip button */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_EXTENSIONS}
+            style={{ display: 'none' }}
+            onChange={handleFilesPicked}
+          />
+
           {/* Input area */}
           <Space.Compact style={{ width: '100%' }}>
             <Input.TextArea
@@ -832,6 +916,19 @@ export function TestChatPage() {
               disabled={loading}
               style={{ flex: 1 }}
             />
+            <Tooltip
+              title={
+                attachments.length >= MAX_ATTACHMENTS
+                  ? `Maximum ${MAX_ATTACHMENTS} attachments reached`
+                  : 'Attach documents (PDF, DOCX, XLSX, CSV, HTML, Markdown, TXT) — ask about them directly'
+              }
+            >
+              <Button
+                icon={<PaperClipOutlined />}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading || attachments.length >= MAX_ATTACHMENTS}
+              />
+            </Tooltip>
             <Tooltip title="Request timeout — increase if you have many documents or a complex pipeline">
               <Select
                 value={timeoutMs}
