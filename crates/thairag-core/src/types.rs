@@ -259,6 +259,35 @@ pub struct VisionMessage {
     pub images: Vec<ImageContent>,
 }
 
+/// A per-request document attachment ("drop a doc, ask about it").
+/// Wire format mirrors `ImageContent`: a base64 payload plus a MIME type.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Attachment {
+    /// Original filename — used to label the document in the LLM context.
+    pub name: String,
+    /// MIME type. Must be in the document pipeline's supported list.
+    pub mime_type: String,
+    /// Base64-encoded raw file bytes.
+    pub data: String,
+}
+
+/// An attachment after text extraction, persisted in the session so follow-up
+/// turns can reference it without the client re-sending the file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAttachment {
+    /// Original filename.
+    pub name: String,
+    /// MIME type of the original upload.
+    pub mime_type: String,
+    /// Extracted (and guardrail-processed) text content.
+    pub text: String,
+    /// Raw byte size of the original upload.
+    pub size_bytes: usize,
+    /// SHA-256 hex digest of the raw bytes — recorded in inference logs as
+    /// metadata so the extracted text itself is never persisted there.
+    pub content_hash: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
@@ -271,6 +300,11 @@ pub struct ChatCompletionRequest {
     pub stream: bool,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Optional per-request document attachments. When present, the chat
+    /// pipeline extracts their text, injects it into context, and skips
+    /// embedded-KB search and live retrieval for the request.
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use thairag_core::traits::SessionStoreTrait;
-use thairag_core::types::{ChatMessage, SessionId, UserId};
+use thairag_core::types::{ChatMessage, SessionAttachment, SessionId, UserId};
 
 const MAX_HISTORY: usize = 50;
 
@@ -17,6 +17,8 @@ struct Session {
     summary: Option<String>,
     /// Number of messages in the session when the summary was last generated.
     summary_message_count: usize,
+    /// Per-request document attachments active for this session.
+    attachments: Vec<SessionAttachment>,
 }
 
 #[derive(Clone)]
@@ -59,6 +61,7 @@ impl SessionStoreTrait for InMemorySessionStore {
             updated_at: now,
             summary: None,
             summary_message_count: 0,
+            attachments: Vec::new(),
         });
         let session = entry.value_mut();
         session.messages.push(user_msg);
@@ -112,6 +115,35 @@ impl SessionStoreTrait for InMemorySessionStore {
         if let Some(mut entry) = self.sessions.get_mut(id) {
             entry.summary = Some(summary);
             entry.summary_message_count = message_count;
+            entry.updated_at = Instant::now();
+        }
+    }
+
+    async fn attach(&self, id: &SessionId, attachments: Vec<SessionAttachment>) {
+        let now = Instant::now();
+        let mut entry = self.sessions.entry(*id).or_insert_with(|| Session {
+            messages: Vec::new(),
+            user_id: None,
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            summary_message_count: 0,
+            attachments: Vec::new(),
+        });
+        entry.attachments = attachments;
+        entry.updated_at = now;
+    }
+
+    async fn get_attachments(&self, id: &SessionId) -> Vec<SessionAttachment> {
+        self.sessions
+            .get(id)
+            .map(|s| s.attachments.clone())
+            .unwrap_or_default()
+    }
+
+    async fn clear_attachments(&self, id: &SessionId) {
+        if let Some(mut entry) = self.sessions.get_mut(id) {
+            entry.attachments.clear();
             entry.updated_at = Instant::now();
         }
     }
@@ -243,6 +275,80 @@ mod tests {
 
         store.cleanup_stale(Duration::from_secs(3600)).await;
         assert!(store.get_history(&sid).await.is_some());
+    }
+
+    fn attachment(name: &str, text: &str) -> SessionAttachment {
+        SessionAttachment {
+            name: name.to_string(),
+            mime_type: "text/plain".to_string(),
+            text: text.to_string(),
+            size_bytes: text.len(),
+            content_hash: "deadbeef".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn attach_and_get_attachments() {
+        let store = InMemorySessionStore::new();
+        let sid = SessionId(Uuid::new_v4());
+
+        // No attachments on an unknown session.
+        assert!(store.get_attachments(&sid).await.is_empty());
+
+        // attach() creates the session even before any message exists.
+        store
+            .attach(&sid, vec![attachment("report.pdf", "quarterly numbers")])
+            .await;
+        let got = store.get_attachments(&sid).await;
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "report.pdf");
+        assert_eq!(got[0].text, "quarterly numbers");
+    }
+
+    #[tokio::test]
+    async fn attach_replaces_prior_attachments() {
+        let store = InMemorySessionStore::new();
+        let sid = SessionId(Uuid::new_v4());
+
+        store.attach(&sid, vec![attachment("a.txt", "first")]).await;
+        store
+            .attach(
+                &sid,
+                vec![attachment("b.txt", "second"), attachment("c.txt", "third")],
+            )
+            .await;
+
+        let got = store.get_attachments(&sid).await;
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].name, "b.txt");
+        assert_eq!(got[1].name, "c.txt");
+    }
+
+    #[tokio::test]
+    async fn clear_attachments_empties_session() {
+        let store = InMemorySessionStore::new();
+        let sid = SessionId(Uuid::new_v4());
+
+        store.attach(&sid, vec![attachment("a.txt", "hello")]).await;
+        store.clear_attachments(&sid).await;
+        assert!(store.get_attachments(&sid).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attachments_survive_message_append() {
+        let store = InMemorySessionStore::new();
+        let sid = SessionId(Uuid::new_v4());
+
+        store
+            .attach(&sid, vec![attachment("a.txt", "doc text")])
+            .await;
+        store
+            .append(sid, msg("user", "hi"), msg("assistant", "hello"), None)
+            .await;
+
+        // History and attachments coexist on the same session.
+        assert_eq!(store.get_history(&sid).await.unwrap().len(), 2);
+        assert_eq!(store.get_attachments(&sid).await.len(), 1);
     }
 
     #[tokio::test]

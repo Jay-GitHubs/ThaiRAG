@@ -18,6 +18,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub session: SessionConfig,
     #[serde(default)]
+    pub attachments: AttachmentsConfig,
+    #[serde(default)]
     pub embedding_cache: EmbeddingCacheConfig,
     #[serde(default)]
     pub job_queue: JobQueueConfig,
@@ -1252,6 +1254,57 @@ fn default_session_ttl() -> u64 {
     3600
 }
 
+// ── Attachments Config ───────────────────────────────────────────────
+
+/// Limits for per-request document attachments ("drop a doc, ask about it").
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttachmentsConfig {
+    /// Max number of attachments accepted in a single chat request.
+    #[serde(default = "default_max_per_request")]
+    pub max_per_request: usize,
+    /// Max raw byte size of any single attachment.
+    #[serde(default = "default_max_bytes_per_attachment")]
+    pub max_bytes_per_attachment: usize,
+    /// Max combined raw byte size across all attachments in one request.
+    #[serde(default = "default_max_total_bytes")]
+    pub max_total_bytes: usize,
+    /// Max extracted text length (chars) per attachment after conversion.
+    /// Longer extractions are truncated.
+    #[serde(default = "default_max_text_chars")]
+    pub max_text_chars: usize,
+    /// Max attachments retained in a session; oldest are evicted past this.
+    #[serde(default = "default_max_session_attachments")]
+    pub max_session_attachments: usize,
+}
+
+impl Default for AttachmentsConfig {
+    fn default() -> Self {
+        Self {
+            max_per_request: default_max_per_request(),
+            max_bytes_per_attachment: default_max_bytes_per_attachment(),
+            max_total_bytes: default_max_total_bytes(),
+            max_text_chars: default_max_text_chars(),
+            max_session_attachments: default_max_session_attachments(),
+        }
+    }
+}
+
+fn default_max_per_request() -> usize {
+    5
+}
+fn default_max_bytes_per_attachment() -> usize {
+    5 * 1024 * 1024
+}
+fn default_max_total_bytes() -> usize {
+    15 * 1024 * 1024
+}
+fn default_max_text_chars() -> usize {
+    200_000
+}
+fn default_max_session_attachments() -> usize {
+    10
+}
+
 // ── Embedding Cache Config ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1587,6 +1640,7 @@ mod tests {
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
             session: SessionConfig::default(),
+            attachments: AttachmentsConfig::default(),
             embedding_cache: EmbeddingCacheConfig::default(),
             job_queue: JobQueueConfig::default(),
             redis: RedisConfig::default(),
