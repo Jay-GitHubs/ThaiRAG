@@ -1,11 +1,17 @@
 import client from './client';
 import { getToken } from './client';
 import type { TestQueryResponse, PipelineProgress } from './types';
+import type { Attachment } from './attachments';
 
-export async function testQuery(workspaceId: string, query: string, timeoutMs?: number) {
+export async function testQuery(
+  workspaceId: string,
+  query: string,
+  timeoutMs?: number,
+  attachments?: Attachment[],
+) {
   const res = await client.post<TestQueryResponse>(
     `/api/km/workspaces/${workspaceId}/test-query`,
-    { query },
+    { query, ...(attachments && attachments.length > 0 ? { attachments } : {}) },
     timeoutMs ? { timeout: timeoutMs } : undefined,
   );
   return res.data;
@@ -20,6 +26,7 @@ export function testQueryStream(
   query: string,
   onProgress: (evt: PipelineProgress) => void,
   signal?: AbortSignal,
+  attachments?: Attachment[],
 ): Promise<TestQueryResponse> {
   return new Promise((resolve, reject) => {
     const token = getToken();
@@ -30,7 +37,10 @@ export function testQueryStream(
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({
+        query,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      }),
       signal,
     })
       .then(async (res) => {
