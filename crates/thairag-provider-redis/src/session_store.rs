@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use redis::AsyncCommands;
 use thairag_core::traits::SessionStoreTrait;
-use thairag_core::types::{ChatMessage, SessionId, UserId};
+use thairag_core::types::{ChatMessage, SessionAttachment, SessionId, UserId};
 
 use crate::RedisConnection;
 
@@ -23,6 +23,9 @@ pub struct RedisSessionStore {
 struct SessionData {
     messages: Vec<ChatMessage>,
     user_id: Option<String>,
+    /// Per-request document attachments active for this session.
+    #[serde(default)]
+    attachments: Vec<SessionAttachment>,
 }
 
 impl RedisSessionStore {
@@ -74,10 +77,12 @@ impl SessionStoreTrait for RedisSessionStore {
             Ok(Some(data)) => serde_json::from_str::<SessionData>(&data).unwrap_or(SessionData {
                 messages: Vec::new(),
                 user_id: user_id.map(|u| u.0.to_string()),
+                attachments: Vec::new(),
             }),
             _ => SessionData {
                 messages: Vec::new(),
                 user_id: user_id.map(|u| u.0.to_string()),
+                attachments: Vec::new(),
             },
         };
 
@@ -108,17 +113,19 @@ impl SessionStoreTrait for RedisSessionStore {
         let key = self.session_key(session_id);
         let mut conn = self.conn.manager();
 
-        // Preserve user_id from existing session
-        let user_id = match conn.get::<_, Option<String>>(&key).await {
+        // Preserve user_id and attachments from existing session
+        let (user_id, attachments) = match conn.get::<_, Option<String>>(&key).await {
             Ok(Some(data)) => serde_json::from_str::<SessionData>(&data)
                 .ok()
-                .and_then(|s| s.user_id),
-            _ => None,
+                .map(|s| (s.user_id, s.attachments))
+                .unwrap_or((None, Vec::new())),
+            _ => (None, Vec::new()),
         };
 
         let session = SessionData {
             messages: new_messages,
             user_id,
+            attachments,
         };
 
         if let Ok(json) = serde_json::to_string(&session) {
@@ -172,5 +179,54 @@ impl SessionStoreTrait for RedisSessionStore {
 
     async fn cleanup_stale(&self, _max_age: Duration) {
         // No-op for Redis: TTL handles expiration automatically.
+    }
+
+    async fn attach(&self, session_id: &SessionId, attachments: Vec<SessionAttachment>) {
+        let key = self.session_key(session_id);
+        let mut conn = self.conn.manager();
+
+        // Load existing session (preserving messages + user_id) or start fresh.
+        let mut session = match conn.get::<_, Option<String>>(&key).await {
+            Ok(Some(data)) => serde_json::from_str::<SessionData>(&data).unwrap_or(SessionData {
+                messages: Vec::new(),
+                user_id: None,
+                attachments: Vec::new(),
+            }),
+            _ => SessionData {
+                messages: Vec::new(),
+                user_id: None,
+                attachments: Vec::new(),
+            },
+        };
+
+        session.attachments = attachments;
+
+        if let Ok(json) = serde_json::to_string(&session) {
+            let _: Result<(), _> = conn.set_ex::<_, _, ()>(&key, json, self.ttl_secs).await;
+        }
+    }
+
+    async fn get_attachments(&self, session_id: &SessionId) -> Vec<SessionAttachment> {
+        let key = self.session_key(session_id);
+        let mut conn = self.conn.manager();
+        match conn.get::<_, Option<String>>(&key).await {
+            Ok(Some(data)) => serde_json::from_str::<SessionData>(&data)
+                .map(|s| s.attachments)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    async fn clear_attachments(&self, session_id: &SessionId) {
+        let key = self.session_key(session_id);
+        let mut conn = self.conn.manager();
+        if let Ok(Some(data)) = conn.get::<_, Option<String>>(&key).await
+            && let Ok(mut session) = serde_json::from_str::<SessionData>(&data)
+        {
+            session.attachments.clear();
+            if let Ok(json) = serde_json::to_string(&session) {
+                let _: Result<(), _> = conn.set_ex::<_, _, ()>(&key, json, self.ttl_secs).await;
+            }
+        }
     }
 }

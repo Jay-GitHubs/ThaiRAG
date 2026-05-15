@@ -26,14 +26,14 @@ use thairag_core::permission::AccessScope;
 use thairag_core::types::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
     ChatMessage, ChatUsage, LlmStreamResponse, MetadataCell, PersonalMemory, PipelineMetadata,
-    SessionId, UserId,
+    SessionAttachment, SessionId, UserId,
 };
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
 use crate::routes::chat::{
     build_searchable_scopes, inject_personal_memory_context, load_memories, maybe_auto_summarize,
-    maybe_compact_context, persist_usage, retrieve_personal_memories,
+    maybe_compact_context, persist_usage, process_request_attachments, retrieve_personal_memories,
 };
 use crate::routes::feedback;
 use crate::store::InferenceLogEntry;
@@ -164,6 +164,24 @@ pub async fn v2_chat_completions(
         req.messages.clone()
     };
 
+    // ── Attachment handling (same as V1) ────────────────────────────
+    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            let processed = process_request_attachments(&state, raw)?;
+            if let Some(sid) = session_id {
+                state.session_store.attach(&sid, processed.clone()).await;
+            }
+            processed
+        }
+        _ => {
+            if let Some(sid) = session_id {
+                state.session_store.get_attachments(&sid).await
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
     // ── Scope resolution ────────────────────────────────────────────
     let user_id = resolve_user_id(&state, &claims, &headers);
 
@@ -204,6 +222,7 @@ pub async fn v2_chat_completions(
             user_id,
             personal_memories,
             settings_scope,
+            attachments,
         )
         .await
     } else {
@@ -218,6 +237,7 @@ pub async fn v2_chat_completions(
             user_id,
             personal_memories,
             settings_scope,
+            attachments,
         )
         .await
     }
@@ -290,6 +310,7 @@ async fn handle_v2_non_stream(
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
+    attachments: Vec<SessionAttachment>,
 ) -> Result<Response, ApiError> {
     let request_start = Instant::now();
 
@@ -325,17 +346,30 @@ async fn handle_v2_non_stream(
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
 
     let llm_resp = if let Some(ref pipeline) = scoped_pipeline {
-        pipeline
-            .process(
-                &augmented_messages,
-                &scope,
-                &memories,
-                &available_scopes,
-                Some(progress_tx),
-                Some(metadata_cell.clone()),
-            )
-            .await
-            .map_err(ApiError::from)?
+        if attachments.is_empty() {
+            pipeline
+                .process(
+                    &augmented_messages,
+                    &scope,
+                    &memories,
+                    &available_scopes,
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        } else {
+            pipeline
+                .process_with_attachments(
+                    &augmented_messages,
+                    &attachments,
+                    &memories,
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        }
     } else {
         drop(progress_tx);
         p.orchestrator
@@ -489,6 +523,7 @@ async fn handle_v2_stream(
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
+    attachments: Vec<SessionAttachment>,
 ) -> Result<Response, ApiError> {
     let request_start = Instant::now();
 
@@ -523,17 +558,30 @@ async fn handle_v2_stream(
     let completion_id_clone = completion_id.clone();
 
     let stream_result: LlmStreamResponse = if let Some(ref pipeline) = scoped_pipeline {
-        pipeline
-            .process_stream(
-                &augmented_messages,
-                &scope,
-                &memories,
-                &available_scopes,
-                None,
-                Some(metadata_cell.clone()),
-            )
-            .await
-            .map_err(ApiError::from)?
+        if attachments.is_empty() {
+            pipeline
+                .process_stream(
+                    &augmented_messages,
+                    &scope,
+                    &memories,
+                    &available_scopes,
+                    None,
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        } else {
+            pipeline
+                .process_stream_with_attachments(
+                    &augmented_messages,
+                    &attachments,
+                    &memories,
+                    None,
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        }
     } else {
         p.orchestrator
             .process_stream(&full_messages, &scope)

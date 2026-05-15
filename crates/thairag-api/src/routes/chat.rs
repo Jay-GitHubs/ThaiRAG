@@ -11,15 +11,17 @@ use uuid::Uuid;
 
 use thairag_agent::context_compactor::{self, ContextCompactor};
 use thairag_agent::conversation_memory::MemoryEntry;
+use thairag_agent::guardrails::{GuardAction, InputGuardrails};
 use thairag_agent::personal_memory::PersonalMemoryManager;
 use thairag_agent::tool_router::SearchableScope;
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
+use thairag_core::traits::DocumentProcessor;
 use thairag_core::types::{
-    ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse, MetadataCell,
-    PersonalMemory, PipelineMetadata, SessionId, UserId,
+    Attachment, ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse,
+    MetadataCell, PersonalMemory, PipelineMetadata, SessionAttachment, SessionId, UserId,
 };
 
 use crate::app_state::AppState;
@@ -115,6 +117,27 @@ pub async fn chat_completions(
         req.messages.clone()
     };
 
+    // ── Attachment handling ─────────────────────────────────────────
+    // New attachments on this request are decoded, converted, guardrail-
+    // checked, and (when a session exists) persisted so follow-up turns can
+    // reference them. Absent new attachments, pick up any persisted earlier.
+    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            let processed = process_request_attachments(&state, raw)?;
+            if let Some(sid) = session_id {
+                state.session_store.attach(&sid, processed.clone()).await;
+            }
+            processed
+        }
+        _ => {
+            if let Some(sid) = session_id {
+                state.session_store.get_attachments(&sid).await
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
     // ── Scope resolution ────────────────────────────────────────────
     // For API key auth: check X-OpenWebUI-User-Email header to resolve real user.
     // This allows Open WebUI (with ENABLE_FORWARD_USER_INFO_HEADERS=true) to
@@ -207,6 +230,7 @@ pub async fn chat_completions(
             user_id,
             personal_memories,
             settings_scope,
+            attachments,
         )
         .await
     } else {
@@ -221,9 +245,125 @@ pub async fn chat_completions(
             user_id,
             personal_memories,
             settings_scope,
+            attachments,
         )
         .await
     }
+}
+
+/// Decode, convert, size-check, and guardrail-check the per-request
+/// attachments. Returns the processed list, or the first validation/guardrail
+/// failure as an `ApiError` (surfaced to the client as a 400).
+///
+/// This is synchronous: base64 decode, document conversion, and the
+/// deterministic guardrail detectors are all CPU-bound.
+pub(crate) fn process_request_attachments(
+    state: &AppState,
+    raw: &[Attachment],
+) -> Result<Vec<SessionAttachment>, ApiError> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    let cfg = &state.config.attachments;
+
+    if raw.len() > cfg.max_per_request {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "too many attachments: {} (max {})",
+            raw.len(),
+            cfg.max_per_request
+        ))));
+    }
+
+    let guard = InputGuardrails::new(
+        crate::routes::settings::get_effective_chat_pipeline(state).guardrails,
+    );
+    let converter = thairag_document::converter::MarkdownConverter::new();
+
+    let mut total_bytes = 0usize;
+    let mut out = Vec::with_capacity(raw.len());
+
+    for (i, a) in raw.iter().enumerate() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(a.data.as_bytes())
+            .map_err(|_| {
+                ApiError(ThaiRagError::Validation(format!(
+                    "attachment[{i}] '{}': invalid base64 data",
+                    a.name
+                )))
+            })?;
+
+        if bytes.len() > cfg.max_bytes_per_attachment {
+            return Err(ApiError(ThaiRagError::Validation(format!(
+                "attachment[{i}] '{}' too large: {} bytes (max {})",
+                a.name,
+                bytes.len(),
+                cfg.max_bytes_per_attachment
+            ))));
+        }
+        total_bytes += bytes.len();
+        if total_bytes > cfg.max_total_bytes {
+            return Err(ApiError(ThaiRagError::Validation(format!(
+                "attachments total size exceeds {} bytes",
+                cfg.max_total_bytes
+            ))));
+        }
+
+        let t = Instant::now();
+        let extracted = converter.convert(&bytes, &a.mime_type);
+        let extraction_secs = t.elapsed().as_secs_f64();
+
+        let text = match extracted {
+            Ok(text) => text,
+            Err(e) => {
+                state
+                    .metrics
+                    .record_attachment(&a.mime_type, "error", extraction_secs);
+                return Err(ApiError(ThaiRagError::Validation(format!(
+                    "attachment[{i}] '{}': {e}",
+                    a.name
+                ))));
+            }
+        };
+
+        // Truncate over-long extractions to the configured char ceiling.
+        let mut text: String = text.chars().take(cfg.max_text_chars).collect();
+
+        // Input guardrails on the extracted text — a user must not be able to
+        // smuggle PII/secrets/blocked phrases in via a file upload.
+        let verdict = guard.check(&text);
+        match verdict.action {
+            GuardAction::Pass | GuardAction::Regenerate { .. } => {}
+            GuardAction::Sanitize(redacted) => text = redacted,
+            GuardAction::Block { reason } => {
+                state
+                    .metrics
+                    .record_attachment(&a.mime_type, "error", extraction_secs);
+                return Err(ApiError(ThaiRagError::Validation(format!(
+                    "attachment[{i}] '{}' rejected by guardrails: {reason}",
+                    a.name
+                ))));
+            }
+        }
+
+        let content_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            format!("{:x}", hasher.finalize())
+        };
+
+        state
+            .metrics
+            .record_attachment(&a.mime_type, "success", extraction_secs);
+        out.push(SessionAttachment {
+            name: a.name.clone(),
+            mime_type: a.mime_type.clone(),
+            text,
+            size_bytes: bytes.len(),
+            content_hash,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Inject personal memory context as a system message at the beginning of the conversation.
@@ -575,6 +715,7 @@ async fn handle_non_stream(
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
+    attachments: Vec<SessionAttachment>,
 ) -> Result<Response, ApiError> {
     // Inject personal memory context
     let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
@@ -608,17 +749,30 @@ async fn handle_non_stream(
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
     let mut llm_resp = if let Some(ref pipeline) = scoped_pipeline {
-        pipeline
-            .process(
-                &augmented_messages,
-                &scope,
-                &memories,
-                &available_scopes,
-                Some(progress_tx),
-                Some(metadata_cell.clone()),
-            )
-            .await
-            .map_err(ApiError::from)?
+        if attachments.is_empty() {
+            pipeline
+                .process(
+                    &augmented_messages,
+                    &scope,
+                    &memories,
+                    &available_scopes,
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        } else {
+            pipeline
+                .process_with_attachments(
+                    &augmented_messages,
+                    &attachments,
+                    &memories,
+                    Some(progress_tx),
+                    Some(metadata_cell.clone()),
+                )
+                .await
+                .map_err(ApiError::from)?
+        }
     } else {
         drop(progress_tx);
         p.orchestrator
@@ -877,6 +1031,7 @@ async fn handle_stream(
     user_id: Option<UserId>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
+    attachments: Vec<SessionAttachment>,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -931,16 +1086,28 @@ async fn handle_stream(
 
     let pipeline_handle = tokio::spawn(async move {
         if let Some(ref pipeline) = scoped_pipeline {
-            pipeline
-                .process_stream(
-                    &augmented_messages_clone,
-                    &scope_clone,
-                    &memories_clone,
-                    &available_scopes_clone,
-                    Some(progress_tx),
-                    Some(metadata_cell_clone),
-                )
-                .await
+            if attachments.is_empty() {
+                pipeline
+                    .process_stream(
+                        &augmented_messages_clone,
+                        &scope_clone,
+                        &memories_clone,
+                        &available_scopes_clone,
+                        Some(progress_tx),
+                        Some(metadata_cell_clone),
+                    )
+                    .await
+            } else {
+                pipeline
+                    .process_stream_with_attachments(
+                        &augmented_messages_clone,
+                        &attachments,
+                        &memories_clone,
+                        Some(progress_tx),
+                        Some(metadata_cell_clone),
+                    )
+                    .await
+            }
         } else {
             drop(progress_tx);
             p.orchestrator
