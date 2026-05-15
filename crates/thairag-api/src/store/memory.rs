@@ -411,7 +411,7 @@ impl KmStoreTrait for MemoryKmStore {
             .filter(|v| v.doc_id == doc_id)
             .cloned()
             .collect();
-        result.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+        result.sort_by_key(|v| std::cmp::Reverse(v.version_number));
         result
     }
 
@@ -1198,7 +1198,7 @@ impl KmStoreTrait for MemoryKmStore {
             .filter(|r| r.connector_id == connector_id)
             .cloned()
             .collect();
-        filtered.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        filtered.sort_by_key(|r| std::cmp::Reverse(r.started_at));
         filtered.truncate(limit);
         filtered
     }
@@ -2067,7 +2067,7 @@ impl KmStoreTrait for MemoryKmStore {
                 },
             )
             .collect();
-        queries.sort_by(|a, b| b.count.cmp(&a.count));
+        queries.sort_by_key(|q| std::cmp::Reverse(q.count));
         queries.truncate(limit);
         queries
     }
@@ -2214,10 +2214,10 @@ impl KmStoreTrait for MemoryKmStore {
         }
 
         let mut actions_by_type: Vec<(String, u64)> = by_type.into_iter().collect();
-        actions_by_type.sort_by(|a, b| b.1.cmp(&a.1));
+        actions_by_type.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         let mut actions_by_user: Vec<(String, u64)> = by_user.into_iter().collect();
-        actions_by_user.sort_by(|a, b| b.1.cmp(&a.1));
+        actions_by_user.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         let mut events_per_day: Vec<(String, u64)> = by_day.into_iter().collect();
         events_per_day.sort_by(|a, b| a.0.cmp(&b.0));

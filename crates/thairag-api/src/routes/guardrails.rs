@@ -134,7 +134,7 @@ fn aggregate_stats(entries: &[InferenceLogEntry]) -> GuardrailsStats {
         .into_iter()
         .map(|(code, count)| CodeCount { code, count })
         .collect();
-    counts.sort_by(|a, b| b.count.cmp(&a.count));
+    counts.sort_by_key(|c| std::cmp::Reverse(c.count));
     s.by_code = counts;
     s
 }
