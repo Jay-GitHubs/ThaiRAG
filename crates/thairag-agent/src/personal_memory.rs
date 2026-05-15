@@ -50,7 +50,7 @@ impl PersonalMemoryManager {
 
         let embeddings = self.embedding.embed(&texts).await?;
 
-        for (memory, embedding) in memories.iter().zip(embeddings.into_iter()) {
+        for (memory, embedding) in memories.iter().zip(embeddings) {
             if let Err(e) = self.store.store(memory, embedding).await {
                 warn!(
                     memory_id = %memory.id,

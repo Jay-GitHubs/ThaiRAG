@@ -115,7 +115,7 @@ impl ActiveLearning {
 
         // Trim to max size, keeping most recent
         if queries.len() > self.max_low_confidence {
-            queries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            queries.sort_by_key(|q| std::cmp::Reverse(q.timestamp));
             queries.truncate(self.max_low_confidence);
         }
     }
