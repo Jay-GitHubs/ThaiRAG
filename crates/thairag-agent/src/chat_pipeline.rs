@@ -290,6 +290,31 @@ impl ChatPipeline {
         }
     }
 
+    /// Parse the answer's `[N]` citation markers into structured per-claim
+    /// citations and record them in pipeline metadata. No-op when the
+    /// feature is disabled or the answer carries no resolvable markers.
+    fn maybe_record_citations(
+        &self,
+        answer: &str,
+        context: &CuratedContext,
+        metadata: &Option<MetadataCell>,
+    ) {
+        if !self.config.structured_citations_enabled {
+            return;
+        }
+        let citations = crate::citation_parser::parse_citations(answer, context);
+        if citations.is_empty() {
+            return;
+        }
+        debug!(
+            count = citations.len(),
+            "Pipeline: structured citations parsed"
+        );
+        Self::update_metadata(metadata, |m| {
+            m.citations = citations;
+        });
+    }
+
     /// Run input guardrails on the user query.
     ///
     /// Returns:
@@ -791,6 +816,7 @@ impl ChatPipeline {
                 Self::update_metadata(&metadata, |m| {
                     m.generation_ms = Some(gen_ms);
                 });
+                self.maybe_record_citations(&response.content, &context, &metadata);
                 self.maybe_adapt(response, &analysis).await
             }
             PipelineRoute::FullPipeline => {
@@ -1278,6 +1304,9 @@ impl ChatPipeline {
                 "Pipeline stage complete"
             );
         }
+
+        // ── Structured citations: parse [N] markers against the context ──
+        self.maybe_record_citations(&response.content, &context, metadata);
 
         // ── RAGAS evaluation (async, sampled — no budget impact) ──
         self.maybe_run_ragas(user_query, &context, &response.content)
@@ -2221,6 +2250,23 @@ impl ChatPipeline {
                 unrestricted: scope.is_unrestricted(),
             };
             if let Ok(mut r) = self.search_engine.search(&hyde_query).await {
+                all_results.append(&mut r);
+            }
+        }
+
+        // Step-back prompting: retrieve with a broader reformulation so
+        // background/principle chunks surface alongside the specific hits.
+        if self.config.query_rewriter_step_back
+            && let Some(ref step_back) = rewritten.step_back_query
+        {
+            let step_back_query = SearchQuery {
+                text: self.pre_search_transform(step_back),
+                top_k: 3,
+                workspace_ids: scope.workspace_ids.clone(),
+                unrestricted: scope.is_unrestricted(),
+            };
+            if let Ok(mut r) = self.search_engine.search(&step_back_query).await {
+                debug!(results = r.len(), "Step-back retrieval merged");
                 all_results.append(&mut r);
             }
         }

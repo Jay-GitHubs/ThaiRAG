@@ -57,6 +57,9 @@ pub struct V2Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
     pub processing_time_ms: u64,
+    /// Per-claim source attributions parsed from the answer's `[N]` markers.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<thairag_core::types::Citation>,
 }
 
 /// V2 chat completion response — superset of OpenAI format with metadata.
@@ -423,6 +426,7 @@ async fn handle_v2_non_stream(
         sources,
         intent: meta.intent.clone(),
         processing_time_ms,
+        citations: meta.citations.clone(),
     };
 
     // ── Inference Logging ──────────────────────────────────────────
@@ -655,6 +659,7 @@ async fn handle_v2_stream(
             sources,
             intent: meta.intent.clone(),
             processing_time_ms,
+            citations: meta.citations.clone(),
         };
 
         // Emit V2 metadata as a separate event before [DONE]
