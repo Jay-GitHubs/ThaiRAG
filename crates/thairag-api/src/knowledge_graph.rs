@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::ChatMessage;
+use thairag_core::types::{ChatMessage, DocId, WorkspaceId};
 use tracing::{info, warn};
+
+use crate::store::KmStoreTrait;
 
 /// Extracted entity: (name, type).
 pub type ExtractedEntity = (String, String);
@@ -178,6 +181,69 @@ pub async fn extract_relations_from_text(
     }
 }
 
+/// Extract entities and relations from a document's chunks and persist them
+/// to the knowledge graph. Shared by the manual `/extract` route and the
+/// on-ingest path.
+///
+/// Per-chunk extraction (rather than a single truncated whole-document call)
+/// keeps long documents from silently losing entities. Entity names are
+/// deduped case-insensitively across chunks, so a name appearing in several
+/// chunks yields one entity with one doc link. At most `max_chunks` chunks
+/// are processed to bound LLM cost.
+///
+/// Never panics; per-item failures are logged and skipped. Returns
+/// `(entities_created, relations_created)`.
+pub async fn extract_and_persist_graph(
+    store: &Arc<dyn KmStoreTrait>,
+    llm: &Arc<dyn LlmProvider>,
+    workspace_id: WorkspaceId,
+    doc_id: DocId,
+    chunk_texts: &[String],
+    max_chunks: usize,
+) -> (usize, usize) {
+    let cap = max_chunks.max(1);
+    // Case-insensitive name → EntityId, shared across all chunks of the doc.
+    let mut entity_ids: HashMap<String, thairag_core::types::EntityId> = HashMap::new();
+    let mut relations_created = 0usize;
+
+    for (i, chunk) in chunk_texts.iter().take(cap).enumerate() {
+        if chunk.trim().is_empty() {
+            continue;
+        }
+        let entities = extract_entities_from_text(llm, chunk).await;
+        for (name, entity_type) in &entities {
+            let key = name.to_lowercase();
+            if let Some(&id) = entity_ids.get(&key) {
+                // Already seen in an earlier chunk — just ensure the doc link.
+                let _ = store.add_entity_doc_link(id, doc_id);
+                continue;
+            }
+            match store.upsert_entity(name, entity_type, workspace_id, serde_json::json!({})) {
+                Ok(entity) => {
+                    let _ = store.add_entity_doc_link(entity.id, doc_id);
+                    entity_ids.insert(key, entity.id);
+                }
+                Err(e) => warn!(%doc_id, chunk = i, "KG: upsert_entity '{name}' failed: {e}"),
+            }
+        }
+
+        let relations = extract_relations_from_text(llm, chunk, &entities).await;
+        for (from_name, to_name, rel_type, confidence) in &relations {
+            if let (Some(&from_id), Some(&to_id)) = (
+                entity_ids.get(&from_name.to_lowercase()),
+                entity_ids.get(&to_name.to_lowercase()),
+            ) && store
+                .insert_relation(from_id, to_id, rel_type, *confidence, doc_id)
+                .is_ok()
+            {
+                relations_created += 1;
+            }
+        }
+    }
+
+    (entity_ids.len(), relations_created)
+}
+
 /// Fallback regex-based entity extraction: extract capitalized proper nouns.
 pub fn fallback_extract_entities(text: &str) -> Vec<ExtractedEntity> {
     let mut entities = std::collections::HashSet::new();
@@ -253,6 +319,127 @@ fn normalize_entity_type(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use thairag_core::error::Result as CoreResult;
+    use thairag_core::types::{LlmResponse, LlmUsage, VisionMessage};
+
+    use crate::store::memory::MemoryKmStore;
+
+    /// Mock LLM returning a fixed extraction JSON; counts `generate` calls.
+    struct MockLlm {
+        json: String,
+        calls: AtomicUsize,
+        fail: bool,
+    }
+
+    impl MockLlm {
+        fn new(json: &str) -> Self {
+            Self {
+                json: json.to_string(),
+                calls: AtomicUsize::new(0),
+                fail: false,
+            }
+        }
+        fn failing() -> Self {
+            Self {
+                json: String::new(),
+                calls: AtomicUsize::new(0),
+                fail: true,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockLlm {
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> CoreResult<LlmResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                return Err(thairag_core::error::ThaiRagError::LlmProvider(
+                    "mock failure".into(),
+                ));
+            }
+            Ok(LlmResponse {
+                content: self.json.clone(),
+                usage: LlmUsage::default(),
+            })
+        }
+
+        fn model_name(&self) -> &str {
+            "mock"
+        }
+
+        async fn generate_vision(
+            &self,
+            _messages: &[VisionMessage],
+            _max_tokens: Option<u32>,
+        ) -> CoreResult<LlmResponse> {
+            Ok(LlmResponse {
+                content: self.json.clone(),
+                usage: LlmUsage::default(),
+            })
+        }
+    }
+
+    const TWO_ENTITY_JSON: &str = r#"{"entities":[{"name":"Acme","type":"Organization"},
+        {"name":"Bob","type":"Person"}],
+        "relations":[{"from":"Bob","to":"Acme","relation_type":"works_at","confidence":0.9}]}"#;
+
+    #[tokio::test]
+    async fn extract_and_persist_graph_dedups_entities_across_chunks() {
+        let store: Arc<dyn KmStoreTrait> = Arc::new(MemoryKmStore::new());
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm::new(TWO_ENTITY_JSON));
+        let chunks = vec![
+            "chunk one text".to_string(),
+            "chunk two text".to_string(),
+            "chunk three text".to_string(),
+        ];
+        let (entities, relations) =
+            extract_and_persist_graph(&store, &llm, WorkspaceId::new(), DocId::new(), &chunks, 10)
+                .await;
+        // Same two entities across three chunks → deduped to two.
+        assert_eq!(entities, 2);
+        // One relation per processed chunk.
+        assert_eq!(relations, 3);
+    }
+
+    #[tokio::test]
+    async fn extract_and_persist_graph_respects_max_chunks() {
+        let store: Arc<dyn KmStoreTrait> = Arc::new(MemoryKmStore::new());
+        let mock = Arc::new(MockLlm::new(TWO_ENTITY_JSON));
+        let llm: Arc<dyn LlmProvider> = mock.clone();
+        let chunks: Vec<String> = (0..50).map(|i| format!("chunk {i}")).collect();
+        extract_and_persist_graph(&store, &llm, WorkspaceId::new(), DocId::new(), &chunks, 3).await;
+        // 3 chunks × 2 LLM calls (entities + relations) each.
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn extract_and_persist_graph_survives_llm_error() {
+        let store: Arc<dyn KmStoreTrait> = Arc::new(MemoryKmStore::new());
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm::failing());
+        // Text with no proper nouns → fallback also extracts nothing.
+        let chunks = vec!["lowercase words only here".to_string()];
+        let (entities, relations) =
+            extract_and_persist_graph(&store, &llm, WorkspaceId::new(), DocId::new(), &chunks, 10)
+                .await;
+        assert_eq!(entities, 0);
+        assert_eq!(relations, 0);
+    }
+
+    #[tokio::test]
+    async fn extract_and_persist_graph_empty_chunks_noop() {
+        let store: Arc<dyn KmStoreTrait> = Arc::new(MemoryKmStore::new());
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm::new(TWO_ENTITY_JSON));
+        let (entities, relations) =
+            extract_and_persist_graph(&store, &llm, WorkspaceId::new(), DocId::new(), &[], 10)
+                .await;
+        assert_eq!((entities, relations), (0, 0));
+    }
 
     #[test]
     fn test_fallback_extraction() {

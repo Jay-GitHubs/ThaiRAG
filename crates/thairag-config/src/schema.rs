@@ -1480,7 +1480,7 @@ fn default_otel_service_name() -> String {
 
 // ── Knowledge Graph Config ───────────────────────────────────────────
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct KnowledgeGraphConfig {
     /// Master switch to enable knowledge graph extraction.
     #[serde(default)]
@@ -1488,6 +1488,23 @@ pub struct KnowledgeGraphConfig {
     /// Whether to automatically extract entities on document ingestion.
     #[serde(default)]
     pub extract_on_ingest: bool,
+    /// Max chunks per document to run entity extraction on (cost bound).
+    #[serde(default = "default_kg_max_chunks")]
+    pub max_chunks_per_doc: usize,
+}
+
+fn default_kg_max_chunks() -> usize {
+    20
+}
+
+impl Default for KnowledgeGraphConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            extract_on_ingest: false,
+            max_chunks_per_doc: default_kg_max_chunks(),
+        }
+    }
 }
 
 // ── Plugins Config ───────────────────────────────────────────────────
@@ -1793,5 +1810,10 @@ mod tests {
         cfg.document.sentence_window_size = 99;
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("sentence_window_size"), "got: {err}");
+    }
+
+    #[test]
+    fn knowledge_graph_config_defaults_max_chunks() {
+        assert_eq!(KnowledgeGraphConfig::default().max_chunks_per_doc, 20);
     }
 }
