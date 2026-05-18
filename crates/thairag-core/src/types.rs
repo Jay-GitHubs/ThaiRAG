@@ -444,6 +444,20 @@ pub struct ChunkMetadata {
     /// Set for image chunks; absent for text chunks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    // ── Retrieval-expansion fields (metadata-replacement pattern) ────
+    /// Sentence-window retrieval: the expanded text (this sentence ± N
+    /// neighbours). When present, post-retrieval expansion swaps `content`
+    /// for this before the chunk reaches the context curator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_text: Option<String>,
+    /// Parent-document retrieval: stable id grouping every child chunk of
+    /// one parent. Used to dedupe so each parent surfaces only once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Parent-document retrieval: the full parent text swapped in at
+    /// retrieval in place of the small indexed child `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_content: Option<String>,
 }
 
 // ── AI Document Preprocessing Types ─────────────────────────────────

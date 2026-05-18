@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use thairag_config::schema::AiPreprocessingConfig;
+use thairag_config::schema::{AiPreprocessingConfig, ChunkingStrategy};
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, DocumentProcessor, LlmProvider};
@@ -35,6 +35,14 @@ pub struct DocumentPipeline {
     image_description_enabled: bool,
     /// Whether to extract tables from text content and add as separate chunks.
     table_extraction_enabled: bool,
+    /// Chunking strategy for the mechanical (and AI) path.
+    chunking_strategy: ChunkingStrategy,
+    /// Sentence-window: neighbour sentences on each side.
+    sentence_window_size: usize,
+    /// Parent-document: target parent chunk size (chars).
+    parent_chunk_size: usize,
+    /// Parent-document: target child chunk size (chars).
+    child_chunk_size: usize,
 }
 
 impl DocumentPipeline {
@@ -63,6 +71,10 @@ impl DocumentPipeline {
             vision_llm: None,
             image_description_enabled: false,
             table_extraction_enabled: true,
+            chunking_strategy: ChunkingStrategy::Standard,
+            sentence_window_size: 3,
+            parent_chunk_size: 2048,
+            child_chunk_size: 384,
         }
     }
 
@@ -164,6 +176,10 @@ impl DocumentPipeline {
             vision_llm: None,
             image_description_enabled: false,
             table_extraction_enabled: true,
+            chunking_strategy: ChunkingStrategy::Standard,
+            sentence_window_size: 3,
+            parent_chunk_size: 2048,
+            child_chunk_size: 384,
         }
     }
 
@@ -180,6 +196,71 @@ impl DocumentPipeline {
     pub fn with_table_extraction(mut self, enabled: bool) -> Self {
         self.table_extraction_enabled = enabled;
         self
+    }
+
+    /// Configure the chunking strategy and its sizing parameters.
+    ///
+    /// A non-`Standard` strategy bypasses the AI preprocessing pipeline for
+    /// chunking — sentence-window and parent-document splitting are an
+    /// alternative chunking philosophy to AI semantic chunking.
+    pub fn with_chunking_strategy(
+        mut self,
+        strategy: ChunkingStrategy,
+        sentence_window_size: usize,
+        parent_chunk_size: usize,
+        child_chunk_size: usize,
+    ) -> Self {
+        self.chunking_strategy = strategy;
+        self.sentence_window_size = sentence_window_size;
+        self.parent_chunk_size = parent_chunk_size;
+        self.child_chunk_size = child_chunk_size;
+        self
+    }
+
+    /// Split converted text into chunks per the configured strategy.
+    fn chunk_with_strategy(
+        &self,
+        text: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Vec<DocumentChunk> {
+        match self.chunking_strategy {
+            ChunkingStrategy::Standard => {
+                let chunks = self
+                    .chunker
+                    .chunk(text, self.max_chunk_size, self.chunk_overlap);
+                chunks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, content)| DocumentChunk {
+                        chunk_id: ChunkId::new(),
+                        doc_id,
+                        workspace_id,
+                        content,
+                        chunk_index: i,
+                        embedding: None,
+                        metadata: None,
+                    })
+                    .collect()
+            }
+            ChunkingStrategy::SentenceWindow => {
+                crate::window_chunker::build_sentence_window_chunks(
+                    text,
+                    self.sentence_window_size,
+                    doc_id,
+                    workspace_id,
+                )
+            }
+            ChunkingStrategy::ParentDocument => {
+                crate::window_chunker::build_parent_document_chunks(
+                    text,
+                    self.parent_chunk_size,
+                    self.child_chunk_size,
+                    doc_id,
+                    workspace_id,
+                )
+            }
+        }
     }
 
     /// Process document bytes into chunks.
@@ -205,7 +286,18 @@ impl DocumentPipeline {
                 .await;
         }
 
-        let mut chunks = if let Some(ai) = &self.ai_pipeline {
+        // A non-Standard chunking strategy bypasses the AI pipeline: the
+        // window/parent splitters are an alternative chunking philosophy.
+        let mut chunks = if self.chunking_strategy != ChunkingStrategy::Standard {
+            if self.ai_pipeline.is_some() {
+                info!(
+                    %doc_id,
+                    strategy = ?self.chunking_strategy,
+                    "Non-standard chunking strategy — bypassing AI preprocessing for chunking"
+                );
+            }
+            self.process_mechanical(raw, mime_type, doc_id, workspace_id)?
+        } else if let Some(ai) = &self.ai_pipeline {
             ai.process(raw, mime_type, doc_id, workspace_id, on_step)
                 .await?
         } else {
@@ -231,6 +323,7 @@ impl DocumentPipeline {
     }
 
     /// Mechanical pipeline: convert → chunk → produce DocumentChunks.
+    /// Honours the configured [`ChunkingStrategy`].
     pub fn process_mechanical(
         &self,
         raw: &[u8],
@@ -239,23 +332,7 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
     ) -> Result<Vec<DocumentChunk>> {
         let text = self.converter.convert(raw, mime_type)?;
-        let chunks = self
-            .chunker
-            .chunk(&text, self.max_chunk_size, self.chunk_overlap);
-
-        Ok(chunks
-            .into_iter()
-            .enumerate()
-            .map(|(i, content)| DocumentChunk {
-                chunk_id: ChunkId::new(),
-                doc_id,
-                workspace_id,
-                content,
-                chunk_index: i,
-                embedding: None,
-                metadata: None,
-            })
-            .collect())
+        Ok(self.chunk_with_strategy(&text, doc_id, workspace_id))
     }
 
     /// Process an image file: generate a text description and return as a single chunk.
@@ -410,6 +487,59 @@ mod tests {
             .unwrap();
         for (i, chunk) in chunks.iter().enumerate() {
             assert_eq!(chunk.chunk_index, i);
+        }
+    }
+
+    #[test]
+    fn process_mechanical_standard_strategy_has_no_window_metadata() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let chunks = pipeline
+            .process_mechanical(
+                b"Plain text here.",
+                "text/plain",
+                DocId::new(),
+                WorkspaceId::new(),
+            )
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].metadata.is_none());
+    }
+
+    #[test]
+    fn process_mechanical_sentence_window_sets_window_text() {
+        let pipeline = DocumentPipeline::new(1000, 0).with_chunking_strategy(
+            ChunkingStrategy::SentenceWindow,
+            2,
+            2048,
+            384,
+        );
+        let text = b"First sentence. Second sentence. Third sentence.";
+        let chunks = pipeline
+            .process_mechanical(text, "text/plain", DocId::new(), WorkspaceId::new())
+            .unwrap();
+        assert_eq!(chunks.len(), 3);
+        for c in &chunks {
+            assert!(c.metadata.as_ref().unwrap().window_text.is_some());
+        }
+    }
+
+    #[test]
+    fn process_mechanical_parent_document_sets_parent_metadata() {
+        let pipeline = DocumentPipeline::new(1000, 0).with_chunking_strategy(
+            ChunkingStrategy::ParentDocument,
+            3,
+            64,
+            16,
+        );
+        let text = b"Alpha beta gamma.\n\nDelta epsilon zeta.\n\nEta theta iota.";
+        let chunks = pipeline
+            .process_mechanical(text, "text/plain", DocId::new(), WorkspaceId::new())
+            .unwrap();
+        assert!(!chunks.is_empty());
+        for c in &chunks {
+            let m = c.metadata.as_ref().unwrap();
+            assert!(m.parent_id.is_some());
+            assert!(m.parent_content.is_some());
         }
     }
 
