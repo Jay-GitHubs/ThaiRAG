@@ -2427,6 +2427,9 @@ where
         query_rewriter_step_back: s("chat_pipeline.query_rewriter_step_back")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.query_rewriter_step_back),
+        structured_citations_enabled: s("chat_pipeline.structured_citations_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.structured_citations_enabled),
         context_curator_enabled: s("chat_pipeline.context_curator_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.context_curator_enabled),

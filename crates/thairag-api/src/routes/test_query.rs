@@ -43,6 +43,9 @@ pub struct TestQueryResponse {
     pub timing: TestQueryTiming,
     pub provider_info: ProviderInfo,
     pub pipeline_stages: Vec<PipelineStage>,
+    /// Per-claim source attributions parsed from the answer's `[N]` markers.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<thairag_core::types::Citation>,
 }
 
 #[derive(Serialize)]
@@ -480,6 +483,7 @@ pub async fn test_query(
         },
         provider_info,
         pipeline_stages,
+        citations: metadata_cell.lock().unwrap().citations.clone(),
     }))
 }
 
@@ -704,18 +708,24 @@ pub async fn test_query_stream(
         let (progress_tx, mut progress_rx) =
             tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
 
+        // Metadata cell — populated by the pipeline; read after generation
+        // to surface structured citations in the streamed result event.
+        let metadata_cell: MetadataCell =
+            std::sync::Arc::new(Mutex::new(PipelineMetadata::default()));
+
         let pipeline_handle = if let Some(ref pipeline) = p.chat_pipeline {
             let pipeline = pipeline.clone();
             let messages = messages.clone();
             let scope = scope_clone.clone();
             let scopes = available_scopes.clone();
             let attachments = attachments.clone();
+            let meta_cell_task = metadata_cell.clone();
             tokio::spawn(async move {
                 if attachments.is_empty() {
-                    pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), None).await
+                    pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), Some(meta_cell_task)).await
                 } else {
                     pipeline
-                        .process_with_attachments(&messages, &attachments, &[], Some(progress_tx), None)
+                        .process_with_attachments(&messages, &attachments, &[], Some(progress_tx), Some(meta_cell_task))
                         .await
                 }
             })
@@ -829,6 +839,7 @@ pub async fn test_query_stream(
                     });
                 }
 
+                let stream_citations = metadata_cell.lock().unwrap().citations.clone();
                 let response = TestQueryResponse {
                     response_id: stream_response_id,
                     query: query_text,
@@ -848,6 +859,7 @@ pub async fn test_query_stream(
                         embedding_model: p.providers_config.embedding.model.clone(),
                     },
                     pipeline_stages: vec![], // Stages were streamed in real-time
+                    citations: stream_citations,
                 };
 
                 let data = serde_json::to_string(&response).unwrap();

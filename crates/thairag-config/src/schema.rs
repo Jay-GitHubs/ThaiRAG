@@ -831,6 +831,11 @@ pub struct ChatPipelineConfig {
     /// Max number of sources listed in the footer.
     #[serde(default = "default_source_footer_max")]
     pub source_footer_max: usize,
+    /// Structured citations: deterministically parse the `[N]` markers the
+    /// response LLM emits into per-claim source attributions exposed in the
+    /// API response. Cheap (no extra LLM call) — default on.
+    #[serde(default = "default_true_val")]
+    pub structured_citations_enabled: bool,
 
     // ── Feature: Live Source Retrieval ──
     /// Enable live retrieval from MCP connectors when vector DB has no results.
@@ -1097,6 +1102,7 @@ impl Default for ChatPipelineConfig {
             // Source Citation Footer
             source_footer_enabled: true,
             source_footer_max: default_source_footer_max(),
+            structured_citations_enabled: true,
             // Live Source Retrieval
             live_retrieval_enabled: false,
             live_retrieval_timeout_secs: default_live_retrieval_timeout_secs(),
