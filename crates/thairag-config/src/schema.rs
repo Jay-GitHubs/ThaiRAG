@@ -606,6 +606,10 @@ pub struct ChatPipelineConfig {
     pub query_analyzer_llm: Option<LlmConfig>,
     #[serde(default)]
     pub query_rewriter_llm: Option<LlmConfig>,
+    /// Step-back prompting: also retrieve with a broader/abstract query
+    /// reformulation and merge the results. Opt-in (one extra retrieval).
+    #[serde(default)]
+    pub query_rewriter_step_back: bool,
     #[serde(default)]
     pub context_curator_llm: Option<LlmConfig>,
     #[serde(default)]
@@ -999,6 +1003,7 @@ impl Default for ChatPipelineConfig {
             language_adapter_enabled: true,
             query_analyzer_llm: None,
             query_rewriter_llm: None,
+            query_rewriter_step_back: false,
             context_curator_llm: None,
             response_generator_llm: None,
             quality_guard_llm: None,

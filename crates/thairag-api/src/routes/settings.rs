@@ -2424,6 +2424,9 @@ where
         query_rewriter_llm: s("chat_pipeline.query_rewriter_llm")
             .and_then(|v| serde_json::from_str(&v).ok())
             .or_else(|| cp.query_rewriter_llm.clone()),
+        query_rewriter_step_back: s("chat_pipeline.query_rewriter_step_back")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.query_rewriter_step_back),
         context_curator_enabled: s("chat_pipeline.context_curator_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.context_curator_enabled),
