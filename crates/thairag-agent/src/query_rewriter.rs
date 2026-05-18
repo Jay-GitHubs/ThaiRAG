@@ -20,6 +20,9 @@ pub struct RewrittenQueries {
     pub expanded_terms: Vec<String>,
     /// Hypothetical document snippet for HyDE retrieval.
     pub hyde_query: Option<String>,
+    /// A broader, more general reformulation of the query (step-back
+    /// prompting). `None` when the query is already general.
+    pub step_back_query: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +35,8 @@ struct LlmRewrite {
     expanded_terms: Vec<String>,
     #[serde(default)]
     hyde_query: Option<String>,
+    #[serde(default)]
+    step_back_query: Option<String>,
 }
 
 const DEFAULT_TEMPLATE: &str = "You are a search query optimizer. Rewrite the user's query for maximum retrieval recall.\n\
@@ -41,12 +46,15 @@ const DEFAULT_TEMPLATE: &str = "You are a search query optimizer. Rewrite the us
                 {\"primary\":\"concise keyword-rich search query\",\
                 \"sub_queries\":[\"sub-query1\",\"sub-query2\"],\
                 \"expanded_terms\":[\"term1_thai\",\"term1_english\"],\
-                \"hyde_query\":\"A hypothetical paragraph that would answer this query\"}\n\n\
+                \"hyde_query\":\"A hypothetical paragraph that would answer this query\",\
+                \"step_back_query\":\"a broader, more general version of the query\"}\n\n\
                 Rules:\n\
                 - primary: Remove fillers, keep keywords\n\
                 - sub_queries: Only for complex queries, break into independent searchable parts\n\
                 - expanded_terms: Cross-language keyword pairs (Thai↔English)\n\
                 - hyde_query: A short paragraph a document might contain that answers this query\n\
+                - step_back_query: A more general/abstract question that retrieves background \
+                principles and context. Use null for queries that are already general.\n\
                 Output ONLY valid JSON.";
 
 const DEFAULT_FEEDBACK_TEMPLATE: &str = "You are a search query optimizer. The previous search returned low-relevance results.\n\
@@ -57,7 +65,8 @@ const DEFAULT_FEEDBACK_TEMPLATE: &str = "You are a search query optimizer. The p
                 {\"primary\":\"alternative keyword-rich search query\",\
                 \"sub_queries\":[\"alt-query1\",\"alt-query2\"],\
                 \"expanded_terms\":[\"synonym1\",\"synonym2\"],\
-                \"hyde_query\":\"A hypothetical paragraph answering this query differently\"}\n\
+                \"hyde_query\":\"A hypothetical paragraph answering this query differently\",\
+                \"step_back_query\":\"a broader, more general version of the query\"}\n\
                 Output ONLY valid JSON.";
 
 pub struct QueryRewriter {
@@ -145,6 +154,7 @@ impl QueryRewriter {
                             sub_queries: r.sub_queries,
                             expanded_terms: r.expanded_terms,
                             hyde_query: r.hyde_query,
+                            step_back_query: normalize_step_back(r.step_back_query),
                         })
                     }
                     Err(e) => {
@@ -204,6 +214,7 @@ impl QueryRewriter {
                             sub_queries: r.sub_queries,
                             expanded_terms: r.expanded_terms,
                             hyde_query: r.hyde_query,
+                            step_back_query: normalize_step_back(r.step_back_query),
                         })
                     }
                     Err(e) => {
@@ -228,5 +239,44 @@ pub fn fallback_rewrite(query: &str) -> RewrittenQueries {
         sub_queries: vec![],
         expanded_terms: vec![],
         hyde_query: None,
+        step_back_query: None,
+    }
+}
+
+/// Drop empty/whitespace-only step-back queries to `None`.
+fn normalize_step_back(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_llm_rewrite_with_step_back_query() {
+        let json = r#"{"primary":"tax rate","step_back_query":"how does taxation work"}"#;
+        let r: LlmRewrite = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            normalize_step_back(r.step_back_query).as_deref(),
+            Some("how does taxation work")
+        );
+    }
+
+    #[test]
+    fn parse_llm_rewrite_missing_step_back_defaults_none() {
+        let json = r#"{"primary":"tax rate"}"#;
+        let r: LlmRewrite = serde_json::from_str(json).unwrap();
+        assert!(normalize_step_back(r.step_back_query).is_none());
+    }
+
+    #[test]
+    fn normalize_step_back_drops_blank() {
+        assert!(normalize_step_back(Some("   ".to_string())).is_none());
+        assert!(normalize_step_back(Some(String::new())).is_none());
+    }
+
+    #[test]
+    fn fallback_rewrite_has_no_step_back() {
+        assert!(fallback_rewrite("some query").step_back_query.is_none());
     }
 }

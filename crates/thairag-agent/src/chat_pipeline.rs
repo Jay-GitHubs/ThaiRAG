@@ -2225,6 +2225,23 @@ impl ChatPipeline {
             }
         }
 
+        // Step-back prompting: retrieve with a broader reformulation so
+        // background/principle chunks surface alongside the specific hits.
+        if self.config.query_rewriter_step_back
+            && let Some(ref step_back) = rewritten.step_back_query
+        {
+            let step_back_query = SearchQuery {
+                text: self.pre_search_transform(step_back),
+                top_k: 3,
+                workspace_ids: scope.workspace_ids.clone(),
+                unrestricted: scope.is_unrestricted(),
+            };
+            if let Ok(mut r) = self.search_engine.search(&step_back_query).await {
+                debug!(results = r.len(), "Step-back retrieval merged");
+                all_results.append(&mut r);
+            }
+        }
+
         deduplicate_results(&mut all_results);
         // Small-to-big retrieval: swap window/parent text in and dedupe
         // parents. No-op for standard chunks.
