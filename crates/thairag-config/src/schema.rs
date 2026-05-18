@@ -124,6 +124,24 @@ impl AppConfig {
             return Err("chat_pipeline.max_llm_calls_per_request must be 1..=50".into());
         }
 
+        // Chunking strategy bounds
+        let d = &self.document;
+        match d.chunking_strategy {
+            ChunkingStrategy::ParentDocument => {
+                if d.child_chunk_size >= d.parent_chunk_size {
+                    return Err(
+                        "document.child_chunk_size must be < document.parent_chunk_size".into(),
+                    );
+                }
+            }
+            ChunkingStrategy::SentenceWindow => {
+                if d.sentence_window_size > 10 {
+                    return Err("document.sentence_window_size must be <= 10".into());
+                }
+            }
+            ChunkingStrategy::Standard => {}
+        }
+
         Ok(())
     }
 }
@@ -361,6 +379,21 @@ pub struct SearchConfig {
     pub text_weight: f32,
 }
 
+/// How documents are split into chunks for indexing and retrieval.
+#[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChunkingStrategy {
+    /// Default paragraph/section chunking; one chunk = one indexed unit.
+    #[default]
+    Standard,
+    /// Index sentence-level chunks; each carries an expanded neighbour
+    /// window swapped in at retrieval (small-to-big by window).
+    SentenceWindow,
+    /// Index small child chunks; each carries its parent's full text,
+    /// swapped in and deduped at retrieval (small-to-big by parent).
+    ParentDocument,
+}
+
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct DocumentConfig {
     pub max_chunk_size: usize,
@@ -377,10 +410,36 @@ pub struct DocumentConfig {
     /// Enable heuristic table extraction from PDF/text content.
     #[serde(default = "default_true")]
     pub table_extraction_enabled: bool,
+    /// Chunking strategy. Switching this requires reprocessing existing
+    /// documents for the change to take effect on the indexed corpus.
+    #[serde(default)]
+    pub chunking_strategy: ChunkingStrategy,
+    /// Sentence-window: neighbour sentences on each side of the indexed
+    /// sentence to include in the stored window text.
+    #[serde(default = "default_sentence_window_size")]
+    pub sentence_window_size: usize,
+    /// Parent-document: target size (chars) of the parent chunk.
+    #[serde(default = "default_parent_chunk_size")]
+    pub parent_chunk_size: usize,
+    /// Parent-document: target size (chars) of the indexed child chunk.
+    #[serde(default = "default_child_chunk_size")]
+    pub child_chunk_size: usize,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_sentence_window_size() -> usize {
+    3
+}
+
+fn default_parent_chunk_size() -> usize {
+    2048
+}
+
+fn default_child_chunk_size() -> usize {
+    384
 }
 
 fn default_max_upload_size_mb() -> usize {
@@ -1636,6 +1695,10 @@ mod tests {
                 ai_preprocessing: AiPreprocessingConfig::default(),
                 image_description_enabled: false,
                 table_extraction_enabled: true,
+                chunking_strategy: ChunkingStrategy::Standard,
+                sentence_window_size: default_sentence_window_size(),
+                parent_chunk_size: default_parent_chunk_size(),
+                child_chunk_size: default_child_chunk_size(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
@@ -1692,5 +1755,38 @@ mod tests {
         cfg.providers.reranker.model = "rerank-v3".into();
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("providers.reranker.api_key"), "got: {err}");
+    }
+
+    #[test]
+    fn chunking_strategy_defaults_to_standard() {
+        assert_eq!(ChunkingStrategy::default(), ChunkingStrategy::Standard);
+    }
+
+    #[test]
+    fn validate_parent_document_rejects_child_ge_parent() {
+        let mut cfg = free_tier_config();
+        cfg.document.chunking_strategy = ChunkingStrategy::ParentDocument;
+        cfg.document.parent_chunk_size = 512;
+        cfg.document.child_chunk_size = 512;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("child_chunk_size"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_parent_document_ok_when_child_smaller() {
+        let mut cfg = free_tier_config();
+        cfg.document.chunking_strategy = ChunkingStrategy::ParentDocument;
+        cfg.document.parent_chunk_size = 2048;
+        cfg.document.child_chunk_size = 384;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_excessive_sentence_window() {
+        let mut cfg = free_tier_config();
+        cfg.document.chunking_strategy = ChunkingStrategy::SentenceWindow;
+        cfg.document.sentence_window_size = 99;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("sentence_window_size"), "got: {err}");
     }
 }

@@ -2226,6 +2226,9 @@ impl ChatPipeline {
         }
 
         deduplicate_results(&mut all_results);
+        // Small-to-big retrieval: swap window/parent text in and dedupe
+        // parents. No-op for standard chunks.
+        let all_results = thairag_search::expand_results(all_results);
         Ok(self.post_search_transform(all_results))
     }
 
