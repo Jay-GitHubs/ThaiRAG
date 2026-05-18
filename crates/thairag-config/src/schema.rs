@@ -606,6 +606,10 @@ pub struct ChatPipelineConfig {
     pub query_analyzer_llm: Option<LlmConfig>,
     #[serde(default)]
     pub query_rewriter_llm: Option<LlmConfig>,
+    /// Step-back prompting: also retrieve with a broader/abstract query
+    /// reformulation and merge the results. Opt-in (one extra retrieval).
+    #[serde(default)]
+    pub query_rewriter_step_back: bool,
     #[serde(default)]
     pub context_curator_llm: Option<LlmConfig>,
     #[serde(default)]
@@ -827,6 +831,11 @@ pub struct ChatPipelineConfig {
     /// Max number of sources listed in the footer.
     #[serde(default = "default_source_footer_max")]
     pub source_footer_max: usize,
+    /// Structured citations: deterministically parse the `[N]` markers the
+    /// response LLM emits into per-claim source attributions exposed in the
+    /// API response. Cheap (no extra LLM call) — default on.
+    #[serde(default = "default_true_val")]
+    pub structured_citations_enabled: bool,
 
     // ── Feature: Live Source Retrieval ──
     /// Enable live retrieval from MCP connectors when vector DB has no results.
@@ -999,6 +1008,7 @@ impl Default for ChatPipelineConfig {
             language_adapter_enabled: true,
             query_analyzer_llm: None,
             query_rewriter_llm: None,
+            query_rewriter_step_back: false,
             context_curator_llm: None,
             response_generator_llm: None,
             quality_guard_llm: None,
@@ -1092,6 +1102,7 @@ impl Default for ChatPipelineConfig {
             // Source Citation Footer
             source_footer_enabled: true,
             source_footer_max: default_source_footer_max(),
+            structured_citations_enabled: true,
             // Live Source Retrieval
             live_retrieval_enabled: false,
             live_retrieval_timeout_secs: default_live_retrieval_timeout_secs(),
@@ -1475,7 +1486,7 @@ fn default_otel_service_name() -> String {
 
 // ── Knowledge Graph Config ───────────────────────────────────────────
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct KnowledgeGraphConfig {
     /// Master switch to enable knowledge graph extraction.
     #[serde(default)]
@@ -1483,6 +1494,23 @@ pub struct KnowledgeGraphConfig {
     /// Whether to automatically extract entities on document ingestion.
     #[serde(default)]
     pub extract_on_ingest: bool,
+    /// Max chunks per document to run entity extraction on (cost bound).
+    #[serde(default = "default_kg_max_chunks")]
+    pub max_chunks_per_doc: usize,
+}
+
+fn default_kg_max_chunks() -> usize {
+    20
+}
+
+impl Default for KnowledgeGraphConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            extract_on_ingest: false,
+            max_chunks_per_doc: default_kg_max_chunks(),
+        }
+    }
 }
 
 // ── Plugins Config ───────────────────────────────────────────────────
@@ -1788,5 +1816,10 @@ mod tests {
         cfg.document.sentence_window_size = 99;
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("sentence_window_size"), "got: {err}");
+    }
+
+    #[test]
+    fn knowledge_graph_config_defaults_max_chunks() {
+        assert_eq!(KnowledgeGraphConfig::default().max_chunks_per_doc, 20);
     }
 }

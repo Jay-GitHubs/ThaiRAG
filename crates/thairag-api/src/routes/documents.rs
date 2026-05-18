@@ -304,64 +304,33 @@ async fn process_document_inner(
             .update_document_version_info(doc_id, doc.version + 1, content_hash);
     }
 
-    // Knowledge graph extraction (if enabled)
+    // Knowledge graph extraction (background task — never blocks or fails
+    // document indexing; the document is already Ready at this point).
     if state.config.knowledge_graph.enabled && state.config.knowledge_graph.extract_on_ingest {
-        info!(%doc_id, "Starting knowledge graph extraction on ingest");
-        if let Ok(Some(content)) = state.km_store.get_document_content(doc_id)
-            && !content.is_empty()
-        {
-            let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> = std::sync::Arc::from(
-                thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
-            );
-
-            let extracted_entities =
-                crate::knowledge_graph::extract_entities_from_text(&llm, &content).await;
-
-            let mut entity_map = std::collections::HashMap::new();
-            for (name, entity_type) in &extracted_entities {
-                match state.km_store.upsert_entity(
-                    name,
-                    entity_type,
-                    workspace_id,
-                    serde_json::json!({}),
-                ) {
-                    Ok(entity) => {
-                        let _ = state.km_store.add_entity_doc_link(entity.id, doc_id);
-                        entity_map.insert(name.clone(), entity.id);
-                    }
-                    Err(e) => {
-                        warn!("KG: Failed to upsert entity '{}': {}", name, e);
-                    }
-                }
-            }
-
-            let extracted_relations = crate::knowledge_graph::extract_relations_from_text(
+        let km_store = state.km_store.clone();
+        let llm_cfg = p.providers_config.llm.clone();
+        let max_chunks = state.config.knowledge_graph.max_chunks_per_doc;
+        let chunk_texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        info!(%doc_id, "Spawning knowledge graph extraction on ingest");
+        tokio::spawn(async move {
+            let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> =
+                std::sync::Arc::from(thairag_provider_llm::create_llm_provider(&llm_cfg));
+            let (entities, relations) = crate::knowledge_graph::extract_and_persist_graph(
+                &km_store,
                 &llm,
-                &content,
-                &extracted_entities,
+                workspace_id,
+                doc_id,
+                &chunk_texts,
+                max_chunks,
             )
             .await;
-
-            let mut relations_created = 0usize;
-            for (from_name, to_name, rel_type, confidence) in &extracted_relations {
-                if let (Some(&from_id), Some(&to_id)) =
-                    (entity_map.get(from_name), entity_map.get(to_name))
-                    && state
-                        .km_store
-                        .insert_relation(from_id, to_id, rel_type, *confidence, doc_id)
-                        .is_ok()
-                {
-                    relations_created += 1;
-                }
-            }
-
             info!(
                 %doc_id,
-                entities = extracted_entities.len(),
-                relations = relations_created,
+                entities,
+                relations,
                 "Knowledge graph extraction on ingest complete"
             );
-        }
+        });
     }
 
     info!(%doc_id, chunk_count, "Document processed successfully");

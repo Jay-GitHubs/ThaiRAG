@@ -221,6 +221,9 @@ pub struct PipelineMetadata {
     /// Codes only — never matched substrings, to keep logs PDPA-safe.
     #[serde(default)]
     pub guardrail_violations: Vec<GuardrailViolationMeta>,
+    /// Per-claim source attributions parsed from the answer's `[N]` markers.
+    #[serde(default)]
+    pub citations: Vec<Citation>,
 }
 
 /// Lightweight violation record for inference logging.
@@ -230,6 +233,24 @@ pub struct GuardrailViolationMeta {
     pub code: String,
     pub severity: String,
     pub stage: String,
+}
+
+/// A per-claim source attribution, derived deterministically by parsing the
+/// `[N]` citation markers the response LLM emits against the curated context.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Citation {
+    /// The sentence/claim the marker was attached to.
+    pub claim: String,
+    /// Citation marker number as emitted by the LLM (1-based).
+    pub marker: u32,
+    /// Resolved source chunk id (empty if the marker was out of range).
+    pub chunk_id: String,
+    /// Resolved source document id.
+    pub doc_id: String,
+    /// Resolved source document title, when known.
+    pub doc_title: Option<String>,
+    /// Relevance score of the cited chunk.
+    pub score: f32,
 }
 
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────

@@ -857,6 +857,16 @@ export interface PipelineProgress {
   model?: string;
 }
 
+/** A per-claim source attribution parsed from the answer's [N] markers. */
+export interface Citation {
+  claim: string;
+  marker: number;
+  chunk_id: string;
+  doc_id: string;
+  doc_title: string | null;
+  score: number;
+}
+
 export interface TestQueryResponse {
   response_id: string;
   query: string;
@@ -866,6 +876,7 @@ export interface TestQueryResponse {
   timing: TestQueryTiming;
   provider_info: TestQueryProviderInfo;
   pipeline_stages: PipelineStage[];
+  citations?: Citation[];
 }
 
 // ── Usage Stats ────────────────────────────────────────────────────
