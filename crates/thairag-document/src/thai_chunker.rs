@@ -49,6 +49,36 @@ const THAI_CLAUSE_BOUNDARIES: &[&str] = &[
     "รวมถึง",      // including
 ];
 
+/// Split non-Thai text into sentences on `.!?` terminators and newlines.
+/// Terminator punctuation is kept attached to the sentence it ends.
+pub fn split_english_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch == '\n' {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                sentences.push(trimmed.to_string());
+            }
+            current.clear();
+            continue;
+        }
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?') {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                sentences.push(trimmed.to_string());
+            }
+            current.clear();
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        sentences.push(trimmed.to_string());
+    }
+    sentences
+}
+
 /// Language-aware chunker that detects Thai content and uses
 /// dictionary-based word segmentation for Thai text.
 pub struct ThaiAwareChunker {
@@ -59,6 +89,19 @@ impl ThaiAwareChunker {
     pub fn new() -> Self {
         Self {
             segmenter: DictionarySegmenter::new(),
+        }
+    }
+
+    /// Split text into sentence-like segments, language-aware.
+    ///
+    /// Thai text uses dictionary-based clause/sentence boundary detection;
+    /// other text splits on `.!?` terminators and newlines. Used by the
+    /// sentence-window chunking strategy.
+    pub fn segment_sentences(&self, text: &str) -> Vec<String> {
+        if is_thai_text(text) {
+            self.split_thai_sentences(text)
+        } else {
+            split_english_sentences(text)
         }
     }
 
