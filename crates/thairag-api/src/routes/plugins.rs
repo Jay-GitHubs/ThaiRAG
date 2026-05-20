@@ -1,10 +1,15 @@
+use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use serde::Serialize;
 
+use thairag_auth::AuthClaims;
+use thairag_core::ThaiRagError;
+
 use crate::app_state::AppState;
+use crate::error::ApiError;
 use crate::plugin_registry::PluginInfo;
+use crate::routes::settings::require_super_admin;
 
 #[derive(Serialize)]
 pub struct PluginListResponse {
@@ -27,8 +32,10 @@ pub async fn list_plugins(State(state): State<AppState>) -> Json<PluginListRespo
 /// POST /api/km/plugins/:name/enable — enable a plugin.
 pub async fn enable_plugin(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path(name): Path<String>,
-) -> Result<Json<PluginActionResponse>, StatusCode> {
+) -> Result<Json<PluginActionResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
     if state.plugin_registry.enable(&name) {
         // Persist to KV store
         persist_enabled_state(&state);
@@ -38,15 +45,17 @@ pub async fn enable_plugin(
             message: format!("Plugin '{name}' enabled"),
         }))
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(ThaiRagError::NotFound(format!("Plugin '{name}' not found")).into())
     }
 }
 
 /// POST /api/km/plugins/:name/disable — disable a plugin.
 pub async fn disable_plugin(
     State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
     Path(name): Path<String>,
-) -> Result<Json<PluginActionResponse>, StatusCode> {
+) -> Result<Json<PluginActionResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
     if state.plugin_registry.disable(&name) {
         // Persist to KV store
         persist_enabled_state(&state);
@@ -56,7 +65,7 @@ pub async fn disable_plugin(
             message: format!("Plugin '{name}' disabled"),
         }))
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(ThaiRagError::NotFound(format!("Plugin '{name}' not found")).into())
     }
 }
 
