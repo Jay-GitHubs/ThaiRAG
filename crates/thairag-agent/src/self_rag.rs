@@ -133,6 +133,8 @@ impl SelfRag {
                         let lower = text.to_lowercase();
                         if lower.contains("\"needs_retrieval\": false")
                             || lower.contains("\"needs_retrieval\":false")
+                            || lower.contains("\"retrieval_needed\": false")
+                            || lower.contains("\"retrieval_needed\":false")
                             || lower.contains("no retrieval needed")
                         {
                             debug!(
@@ -140,7 +142,7 @@ impl SelfRag {
                             );
                             Ok(RetrievalDecision::NoRetrieve { confidence: 0.7 })
                         } else {
-                            warn!(error = %e, "Self-RAG parse failed, defaulting to retrieve");
+                            warn!(error = %e, text = %text, "Self-RAG parse failed, defaulting to retrieve");
                             Ok(RetrievalDecision::Retrieve)
                         }
                     }
@@ -156,12 +158,21 @@ impl SelfRag {
 
 #[derive(serde::Deserialize)]
 struct SelfRagOutput {
-    #[serde(alias = "retrieval_needed", alias = "requires_retrieval")]
+    #[serde(
+        alias = "retrieval_needed",
+        alias = "requires_retrieval",
+        alias = "need_retrieval",
+        default = "default_needs_retrieval"
+    )]
     needs_retrieval: bool,
     #[serde(default = "default_confidence")]
     confidence: f32,
     #[serde(default)]
     reason: String,
+}
+
+fn default_needs_retrieval() -> bool {
+    true
 }
 
 fn default_confidence() -> f32 {
