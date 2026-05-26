@@ -310,6 +310,20 @@ fn convert_pdf_by_pages(raw: &[u8]) -> Result<Vec<(usize, String)>> {
         .collect())
 }
 
+/// Extract PDF text page by page, **including pages with empty text**.
+/// Returns Vec of (1-indexed page number, text). Use this when downstream
+/// code needs page-index alignment to fall back to vision rasterization
+/// for empty pages (e.g. PowerPoint-exported, scanned, or image-only PDFs).
+pub fn extract_pdf_pages_unfiltered(raw: &[u8]) -> Result<Vec<(usize, String)>> {
+    let pages = pdf_extract::extract_text_from_mem_by_pages(raw)
+        .map_err(|e| ThaiRagError::Validation(format!("Failed to read PDF: {e}")))?;
+    Ok(pages
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| (i + 1, text))
+        .collect())
+}
+
 fn convert_xlsx(raw: &[u8]) -> Result<String> {
     let cursor = Cursor::new(raw);
     let mut workbook = open_workbook_auto_from_rs(cursor)

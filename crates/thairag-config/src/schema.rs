@@ -424,10 +424,33 @@ pub struct DocumentConfig {
     /// Parent-document: target size (chars) of the indexed child chunk.
     #[serde(default = "default_child_chunk_size")]
     pub child_chunk_size: usize,
+    /// Fall back to vision-LLM rasterization for PDF pages where text
+    /// extraction returns less than [`pdf_min_chars_per_page`] characters
+    /// (e.g. PowerPoint-exported, scanned, or image-only PDFs).
+    /// Requires `image_description_enabled` and a vision-capable LLM.
+    #[serde(default = "default_true")]
+    pub pdf_vision_fallback_enabled: bool,
+    /// Per-page character threshold below which a PDF page is treated as
+    /// "no extractable text" and routed through the vision fallback.
+    #[serde(default = "default_pdf_min_chars_per_page")]
+    pub pdf_min_chars_per_page: usize,
+    /// Hard cap on how many pages a single PDF may rasterize through the
+    /// vision fallback. Prevents abuse via 10,000-page PDFs that would
+    /// otherwise translate to 10,000 vision-LLM calls.
+    #[serde(default = "default_pdf_max_vision_pages")]
+    pub pdf_max_vision_pages: usize,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_pdf_min_chars_per_page() -> usize {
+    50
+}
+
+fn default_pdf_max_vision_pages() -> usize {
+    100
 }
 
 fn default_sentence_window_size() -> usize {
@@ -1727,6 +1750,9 @@ mod tests {
                 sentence_window_size: default_sentence_window_size(),
                 parent_chunk_size: default_parent_chunk_size(),
                 child_chunk_size: default_child_chunk_size(),
+                pdf_vision_fallback_enabled: true,
+                pdf_min_chars_per_page: default_pdf_min_chars_per_page(),
+                pdf_max_vision_pages: default_pdf_max_vision_pages(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),

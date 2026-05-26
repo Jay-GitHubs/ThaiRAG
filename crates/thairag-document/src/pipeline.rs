@@ -11,10 +11,13 @@ use tracing::info;
 
 use crate::ai::pipeline::AiDocumentPipeline;
 use crate::chunker::MarkdownChunker;
-use crate::converter::MarkdownConverter;
+use crate::converter::{MarkdownConverter, extract_pdf_pages_unfiltered};
 use crate::image;
+use crate::pdf_rasterizer::{self, RasterizeOptions};
 use crate::table_extractor;
 use crate::thai_chunker::ThaiAwareChunker;
+
+const PDF_MIME: &str = "application/pdf";
 
 /// Callback invoked when the pipeline enters a new processing step.
 /// Steps: "analyzing", "converting", "checking_quality", "chunking", "indexing".
@@ -43,6 +46,14 @@ pub struct DocumentPipeline {
     parent_chunk_size: usize,
     /// Parent-document: target child chunk size (chars).
     child_chunk_size: usize,
+    /// Enable vision-LLM rasterization for PDF pages with no extractable text.
+    /// No-op unless [`vision_llm`] is also configured.
+    pdf_vision_fallback_enabled: bool,
+    /// Per-page threshold below which a PDF page is treated as image-only.
+    pdf_min_chars_per_page: usize,
+    /// Hard cap on the number of pages that may be rasterized per PDF
+    /// (prevents pathological 10,000-page uploads from blowing up vision spend).
+    pdf_max_vision_pages: usize,
 }
 
 impl DocumentPipeline {
@@ -75,6 +86,9 @@ impl DocumentPipeline {
             sentence_window_size: 3,
             parent_chunk_size: 2048,
             child_chunk_size: 384,
+            pdf_vision_fallback_enabled: true,
+            pdf_min_chars_per_page: 50,
+            pdf_max_vision_pages: 100,
         }
     }
 
@@ -180,6 +194,9 @@ impl DocumentPipeline {
             sentence_window_size: 3,
             parent_chunk_size: 2048,
             child_chunk_size: 384,
+            pdf_vision_fallback_enabled: true,
+            pdf_min_chars_per_page: 50,
+            pdf_max_vision_pages: 100,
         }
     }
 
@@ -189,6 +206,21 @@ impl DocumentPipeline {
             self.vision_llm = Some(llm);
             self.image_description_enabled = true;
         }
+        self
+    }
+
+    /// Configure the PDF vision fallback (used for PowerPoint-derived or
+    /// scanned PDFs where text extraction yields nothing). The fallback
+    /// is only activated when a vision LLM is also configured.
+    pub fn with_pdf_vision_fallback(
+        mut self,
+        enabled: bool,
+        min_chars_per_page: usize,
+        max_vision_pages: usize,
+    ) -> Self {
+        self.pdf_vision_fallback_enabled = enabled;
+        self.pdf_min_chars_per_page = min_chars_per_page;
+        self.pdf_max_vision_pages = max_vision_pages;
         self
     }
 
@@ -286,6 +318,20 @@ impl DocumentPipeline {
                 .await;
         }
 
+        // Route PDFs through the page-aware vision-fallback path when a
+        // vision LLM is configured and the fallback is enabled. This is
+        // the cure for PowerPoint→PDF exports where slides are rasterized
+        // and `pdf_extract` returns empty text.
+        if mime_type == PDF_MIME
+            && self.pdf_vision_fallback_enabled
+            && self.image_description_enabled
+            && self.vision_llm.is_some()
+        {
+            return self
+                .process_pdf_with_vision(raw, doc_id, workspace_id)
+                .await;
+        }
+
         // A non-Standard chunking strategy bypasses the AI pipeline: the
         // window/parent splitters are an alternative chunking philosophy.
         let mut chunks = if self.chunking_strategy != ChunkingStrategy::Standard {
@@ -333,6 +379,120 @@ impl DocumentPipeline {
     ) -> Result<Vec<DocumentChunk>> {
         let text = self.converter.convert(raw, mime_type)?;
         Ok(self.chunk_with_strategy(&text, doc_id, workspace_id))
+    }
+
+    /// Smart PDF path: extract text per page, fall back to vision-LLM
+    /// rasterization for pages where extraction yields fewer than
+    /// `pdf_min_chars_per_page` characters. Each produced chunk carries
+    /// the originating page number in metadata.
+    ///
+    /// Hard caps on vision usage prevent abusive PDFs from translating to
+    /// thousands of vision-LLM calls.
+    async fn process_pdf_with_vision(
+        &self,
+        raw: &[u8],
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Result<Vec<DocumentChunk>> {
+        let pages = extract_pdf_pages_unfiltered(raw)?;
+        let total_pages = pages.len();
+        let llm = self
+            .vision_llm
+            .as_ref()
+            .expect("process_pdf_with_vision called without vision_llm — caller must check");
+
+        let mut chunks: Vec<DocumentChunk> = Vec::new();
+        let mut vision_pages_used: usize = 0;
+        let mut chunk_index: usize = 0;
+
+        for (page_num, page_text) in pages {
+            let trimmed = page_text.trim();
+            let char_count = trimmed.chars().count();
+            let needs_vision = char_count < self.pdf_min_chars_per_page;
+
+            let (page_content, used_vision) =
+                if needs_vision && vision_pages_used < self.pdf_max_vision_pages {
+                    match rasterize_and_describe(raw, page_num, llm.as_ref()).await {
+                        Ok(desc) => {
+                            vision_pages_used += 1;
+                            info!(
+                                %doc_id,
+                                page = page_num,
+                                desc_len = desc.len(),
+                                "PDF page rasterized via vision fallback"
+                            );
+                            (desc, true)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                %doc_id,
+                                page = page_num,
+                                error = %e,
+                                "Vision fallback failed for PDF page — keeping extracted text"
+                            );
+                            (trimmed.to_string(), false)
+                        }
+                    }
+                } else {
+                    if needs_vision {
+                        tracing::warn!(
+                            %doc_id,
+                            page = page_num,
+                            cap = self.pdf_max_vision_pages,
+                            "Skipping vision fallback — pdf_max_vision_pages cap reached"
+                        );
+                    }
+                    (trimmed.to_string(), false)
+                };
+
+            if page_content.trim().is_empty() {
+                continue;
+            }
+
+            // Chunk the page text and tag each produced chunk with its page number.
+            let page_chunks =
+                self.chunker
+                    .chunk(&page_content, self.max_chunk_size, self.chunk_overlap);
+            for content in page_chunks {
+                chunks.push(DocumentChunk {
+                    chunk_id: ChunkId::new(),
+                    doc_id,
+                    workspace_id,
+                    content,
+                    chunk_index,
+                    embedding: None,
+                    metadata: Some(ChunkMetadata {
+                        content_type: Some(if used_vision {
+                            DocumentContentType::Image
+                        } else {
+                            DocumentContentType::Text
+                        }),
+                        chunk_type: Some(
+                            if used_vision {
+                                "pdf_vision_page"
+                            } else {
+                                "pdf_text_page"
+                            }
+                            .to_string(),
+                        ),
+                        mime_type: Some(PDF_MIME.to_string()),
+                        page_numbers: Some(vec![page_num]),
+                        ..Default::default()
+                    }),
+                });
+                chunk_index += 1;
+            }
+        }
+
+        info!(
+            %doc_id,
+            total_pages,
+            vision_pages_used,
+            chunks_produced = chunks.len(),
+            "Smart PDF processing complete"
+        );
+
+        Ok(chunks)
     }
 
     /// Process an image file: generate a text description and return as a single chunk.
@@ -415,6 +575,30 @@ impl DocumentPipeline {
             })
             .collect()
     }
+}
+
+/// Rasterize one PDF page to PNG and ask the vision LLM to describe it.
+/// Rasterization happens on a blocking thread (subprocess I/O) so it does
+/// not stall the async runtime.
+async fn rasterize_and_describe(
+    pdf_bytes: &[u8],
+    page: usize,
+    llm: &dyn LlmProvider,
+) -> Result<String> {
+    let pdf_owned = pdf_bytes.to_vec();
+    let png_bytes = tokio::task::spawn_blocking(move || {
+        pdf_rasterizer::rasterize_page(
+            &pdf_owned,
+            &RasterizeOptions {
+                page,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .map_err(|e| thairag_core::ThaiRagError::Validation(format!("rasterize task join: {e}")))??;
+
+    image::describe_image(llm, &png_bytes, "image/png").await
 }
 
 #[cfg(test)]
@@ -693,5 +877,145 @@ mod tests {
 
         let meta = chunks[0].metadata.as_ref().unwrap();
         assert_eq!(meta.mime_type.as_deref(), Some("image/jpeg"));
+    }
+
+    // ── PDF vision fallback ───────────────────────────────────────
+
+    /// Mock vision-capable LLM that records how many times it was called.
+    struct MockVisionLlm {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        reply: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockVisionLlm {
+        async fn generate(
+            &self,
+            _messages: &[thairag_core::types::ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(thairag_core::types::LlmResponse {
+                content: self.reply.clone(),
+                usage: Default::default(),
+            })
+        }
+
+        fn model_name(&self) -> &str {
+            "mock-vision"
+        }
+
+        fn supports_vision(&self) -> bool {
+            true
+        }
+
+        async fn generate_vision(
+            &self,
+            _messages: &[thairag_core::types::VisionMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(thairag_core::types::LlmResponse {
+                content: self.reply.clone(),
+                usage: Default::default(),
+            })
+        }
+    }
+
+    fn mock_vision_llm(
+        reply: &str,
+    ) -> (
+        Arc<MockVisionLlm>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let llm = Arc::new(MockVisionLlm {
+            calls: std::sync::Arc::clone(&calls),
+            reply: reply.to_string(),
+        });
+        (llm, calls)
+    }
+
+    #[tokio::test]
+    async fn pdf_vision_fallback_not_triggered_without_vision_llm() {
+        // Without a vision LLM, a PDF goes through the standard path.
+        // We use a garbage PDF so the standard path errors out — proving
+        // we never reached the smart vision path.
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let result = pipeline
+            .process(
+                b"not a pdf",
+                "application/pdf",
+                DocId::new(),
+                WorkspaceId::new(),
+                None,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "garbage PDF should error in mechanical path"
+        );
+    }
+
+    #[tokio::test]
+    async fn pdf_vision_fallback_disabled_by_config() {
+        // With the fallback explicitly disabled, even a configured vision
+        // LLM should not be invoked for PDFs.
+        let (llm, calls) = mock_vision_llm("ignored");
+        let pipeline = DocumentPipeline::new(1000, 0)
+            .with_image_description(llm, true)
+            .with_pdf_vision_fallback(false, 50, 100);
+        let result = pipeline
+            .process(
+                b"not a pdf",
+                "application/pdf",
+                DocId::new(),
+                WorkspaceId::new(),
+                None,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "smart path off → mechanical path errors on bad PDF"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "vision LLM must not be called when fallback disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn pdf_max_vision_pages_zero_skips_all_vision_calls() {
+        // Even with vision configured, a cap of 0 must short-circuit every
+        // page. Uses a malformed PDF; the unfiltered extractor returns
+        // an error before we'd ever rasterize, but the contract we're
+        // asserting is that the vision LLM is never called.
+        let (llm, calls) = mock_vision_llm("never");
+        let pipeline = DocumentPipeline::new(1000, 0)
+            .with_image_description(llm, true)
+            .with_pdf_vision_fallback(true, 50, 0);
+        let _ = pipeline
+            .process(
+                b"%PDF-bogus",
+                "application/pdf",
+                DocId::new(),
+                WorkspaceId::new(),
+                None,
+            )
+            .await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "pdf_max_vision_pages=0 must prevent every vision call"
+        );
+    }
+
+    #[test]
+    fn with_pdf_vision_fallback_sets_fields() {
+        let pipeline = DocumentPipeline::new(1000, 0).with_pdf_vision_fallback(true, 75, 42);
+        assert!(pipeline.pdf_vision_fallback_enabled);
+        assert_eq!(pipeline.pdf_min_chars_per_page, 75);
+        assert_eq!(pipeline.pdf_max_vision_pages, 42);
     }
 }

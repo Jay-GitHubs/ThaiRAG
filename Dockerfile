@@ -42,8 +42,14 @@ RUN find crates/ -name "*.rs" -exec touch {} + && \
 # ── Runtime ────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# poppler-utils provides pdftoppm, used by the PDF vision fallback to
+# rasterize image-only PDF pages so a vision LLM can describe them.
+# util-linux provides prlimit for per-render memory caps.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        poppler-utils \
+        util-linux && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/thairag-api /usr/local/bin/thairag-api

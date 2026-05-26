@@ -2,6 +2,7 @@ pub mod ai;
 pub mod chunker;
 pub mod converter;
 pub mod image;
+pub mod pdf_rasterizer;
 pub mod pipeline;
 pub mod table_extractor;
 pub mod thai_chunker;
