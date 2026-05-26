@@ -1244,7 +1244,14 @@ impl AppState {
             tracing::info!(count = api_keys.len(), "Loaded static API keys");
         }
 
-        let vault = Arc::new(Vault::init("/data"));
+        let data_dir = std::env::var("THAIRAG_DATA_DIR").unwrap_or_else(|_| {
+            if std::path::Path::new("/data").is_dir() {
+                "/data".to_string()
+            } else {
+                "./data".to_string()
+            }
+        });
+        let vault = Arc::new(Vault::init(&data_dir));
 
         // ── Embedding cache backend selection ──
         let embedding_cache: Arc<dyn thairag_core::traits::EmbeddingCache> = match config
