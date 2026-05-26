@@ -316,9 +316,15 @@ impl ProviderBundle {
                 &doc.ai_preprocessing,
                 Arc::clone(&prompts),
             )
-            .with_table_extraction(doc.table_extraction_enabled);
+            .with_table_extraction(doc.table_extraction_enabled)
+            .with_pdf_vision_fallback(
+                doc.pdf_vision_fallback_enabled,
+                doc.pdf_min_chars_per_page,
+                doc.pdf_max_vision_pages,
+            );
 
-            // Enable image description if configured (reuses the primary LLM)
+            // Enable image description if configured (reuses the primary LLM).
+            // Also required for the PDF vision fallback to do anything.
             let pipeline = if doc.image_description_enabled {
                 pipeline.with_image_description(Arc::clone(&llm), true)
             } else {
