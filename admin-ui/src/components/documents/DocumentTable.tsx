@@ -25,6 +25,24 @@ const STEP_LABELS: Record<string, string> = {
   indexing: 'Indexing',
 };
 
+// Human-readable labels for the structured `empty_extraction[<reason>]` codes
+// emitted by the pipeline. Keep in sync with thairag-document::pipeline::empty_reason.
+const EMPTY_REASON_LABELS: Record<string, string> = {
+  no_text_vision_unavailable: 'Vision OCR Required',
+  no_text_vision_failed: 'Vision OCR Failed',
+  vision_budget_exceeded: 'Vision Budget Exceeded',
+  no_text_no_fallback: 'No Text Extracted',
+  no_chunks_after_plugins: 'No Chunks Produced',
+};
+
+/// Parse `empty_extraction[<reason>]: <hint>` into its reason code, or null
+/// if the message is not a structured empty-extraction failure.
+function parseEmptyExtractionReason(msg: string | null | undefined): string | null {
+  if (!msg) return null;
+  const match = /^empty_extraction\[([a-z_]+)\]/.exec(msg);
+  return match ? match[1] : null;
+}
+
 export function DocumentTable({ workspaceId }: Props) {
   const { data, isLoading } = useDocuments(workspaceId);
   const deleteDoc = useDeleteDocument();
@@ -83,12 +101,20 @@ export function DocumentTable({ workspaceId }: Props) {
         );
       case 'ready':
         return <Tag color="success">Ready</Tag>;
-      case 'failed':
+      case 'failed': {
+        const reason = parseEmptyExtractionReason(record.error_message);
+        const label = reason ? (EMPTY_REASON_LABELS[reason] ?? reason) : 'Failed';
         return (
-          <Tooltip title={record.error_message || 'Processing failed'}>
-            <Tag color="error">Failed</Tag>
+          <Tooltip
+            title={record.error_message || 'Processing failed'}
+            styles={{ root: { maxWidth: 480 } }}
+          >
+            <Tag color={reason ? 'warning' : 'error'}>
+              {label}
+            </Tag>
           </Tooltip>
         );
+      }
       default:
         return <Tag>{status}</Tag>;
     }

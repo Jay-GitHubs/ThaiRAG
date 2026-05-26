@@ -27,6 +27,12 @@ impl IntoResponse for ApiError {
             ThaiRagError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             ThaiRagError::Validation(_) => (StatusCode::BAD_REQUEST, "validation_error"),
             ThaiRagError::Config(_) => (StatusCode::INTERNAL_SERVER_ERROR, "config_error"),
+            // Empty extraction is a 422: the request was well-formed, but
+            // the document content was unusable. Operators need the reason
+            // to fix it (enable vision, raise budget, fix the source file).
+            ThaiRagError::EmptyExtraction { .. } => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "empty_extraction")
+            }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         };
 
@@ -56,6 +62,11 @@ impl IntoResponse for ApiError {
             ThaiRagError::Database(_) => "A database error occurred.".into(),
             ThaiRagError::Config(_) => "A server configuration error occurred.".into(),
             ThaiRagError::Internal(_) => "An internal server error occurred.".into(),
+            // Operator-facing: the reason code and hint are safe to surface
+            // (they describe configuration state, not upstream secrets).
+            ThaiRagError::EmptyExtraction { reason, hint } => {
+                format!("empty_extraction[{reason}]: {hint}")
+            }
         };
 
         let body = serde_json::json!({

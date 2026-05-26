@@ -234,13 +234,28 @@ async fn process_document_inner(
         }
     }
 
-    // Convert + chunk (AI or mechanical depending on config)
+    // Convert + chunk (AI or mechanical depending on config). The pipeline
+    // returns `EmptyExtraction` when no meaningful content was produced —
+    // surface its structured reason/hint instead of swallowing it into a
+    // generic failure message so the admin UI can act on it.
     let chunks = match p
         .document_pipeline
         .process(&bytes, &mime_type, doc_id, workspace_id, on_step)
         .await
     {
         Ok(c) => c,
+        Err(thairag_core::ThaiRagError::EmptyExtraction { reason, hint }) => {
+            let msg = format!("empty_extraction[{reason}]: {hint}");
+            warn!(%doc_id, reason, hint, "Document produced no chunks");
+            let _ = state.km_store.update_document_step(doc_id, None);
+            let _ = state.km_store.update_document_status(
+                doc_id,
+                DocStatus::Failed,
+                0,
+                Some(msg.clone()),
+            );
+            return (0, Some(msg));
+        }
         Err(e) => {
             let msg = format!("Document processing failed: {e}");
             warn!(%doc_id, %msg);
@@ -260,6 +275,23 @@ async fn process_document_inner(
     crate::plugin_hooks::apply_chunk_plugins(&state.plugin_registry, &mut chunks);
 
     let chunk_count = chunks.len();
+
+    // Defence-in-depth: the pipeline should have caught this, but guard
+    // against any future code path that returns Ok(empty). Never mark a
+    // document Ready with zero chunks — it would silently become an
+    // unsearchable orphan.
+    if chunk_count == 0 {
+        let msg = "empty_extraction[no_chunks_after_plugins]: pipeline returned no chunks. \
+                   Check chunk plugins and document content."
+            .to_string();
+        warn!(%doc_id, %msg);
+        let _ = state.km_store.update_document_step(doc_id, None);
+        let _ =
+            state
+                .km_store
+                .update_document_status(doc_id, DocStatus::Failed, 0, Some(msg.clone()));
+        return (0, Some(msg));
+    }
 
     // Save chunks to DB for Tantivy rebuild on restart
     if let Err(e) = state.km_store.save_chunks(&chunks) {

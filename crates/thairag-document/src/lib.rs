@@ -5,6 +5,7 @@ pub mod image;
 pub mod pdf_rasterizer;
 pub mod pipeline;
 pub mod table_extractor;
+pub mod text_utils;
 pub mod thai_chunker;
 pub mod window_chunker;
 
