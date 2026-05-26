@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use thairag_config::schema::{AiPreprocessingConfig, ChunkingStrategy};
 use thairag_core::PromptRegistry;
+use thairag_core::ThaiRagError;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, DocumentProcessor, LlmProvider};
 use thairag_core::types::{
@@ -15,9 +16,23 @@ use crate::converter::{MarkdownConverter, extract_pdf_pages_unfiltered};
 use crate::image;
 use crate::pdf_rasterizer::{self, RasterizeOptions};
 use crate::table_extractor;
+use crate::text_utils::meaningful_char_count;
 use crate::thai_chunker::ThaiAwareChunker;
 
 const PDF_MIME: &str = "application/pdf";
+
+/// Stable reason codes for [`ThaiRagError::EmptyExtraction`].
+/// Surface these in admin UIs and treat as a stable API.
+pub mod empty_reason {
+    /// Format produced no meaningful text and no vision-capable LLM is wired up.
+    pub const NO_TEXT_VISION_UNAVAILABLE: &str = "no_text_vision_unavailable";
+    /// Format produced no meaningful text; vision was attempted but also yielded nothing.
+    pub const NO_TEXT_VISION_FAILED: &str = "no_text_vision_failed";
+    /// Document exceeded the per-doc vision-page budget before producing usable content.
+    pub const VISION_BUDGET_EXCEEDED: &str = "vision_budget_exceeded";
+    /// Format produced no meaningful text and no vision fallback exists for this format.
+    pub const NO_TEXT_NO_FALLBACK: &str = "no_text_no_fallback";
+}
 
 /// Callback invoked when the pipeline enters a new processing step.
 /// Steps: "analyzing", "converting", "checking_quality", "chunking", "indexing".
@@ -303,6 +318,10 @@ impl DocumentPipeline {
     /// Supports multi-modal content:
     /// - Image files are described via LLM vision (if enabled) and stored as text chunks.
     /// - Tables in text/PDF content are extracted and appended as structured markdown chunks.
+    ///
+    /// Returns [`ThaiRagError::EmptyExtraction`] when no meaningful content
+    /// could be extracted — callers should surface the structured reason/hint
+    /// to operators rather than silently marking the document as Ready.
     pub async fn process(
         &self,
         raw: &[u8],
@@ -365,11 +384,78 @@ impl DocumentPipeline {
             }
         }
 
+        // Universal zero-chunk guard: if we reach here with no chunks, the
+        // document is unsearchable. Fail loud with a reason the operator
+        // can act on, instead of silently storing an empty document.
+        if chunks.is_empty() {
+            return Err(self.empty_extraction_error(mime_type));
+        }
+
         Ok(chunks)
+    }
+
+    /// Build a structured [`ThaiRagError::EmptyExtraction`] tailored to the
+    /// document format and the current vision-LLM availability. This is the
+    /// single place that decides what hint to surface to operators.
+    fn empty_extraction_error(&self, mime_type: &str) -> ThaiRagError {
+        let vision_ready = self.vision_llm.is_some()
+            && self.image_description_enabled
+            && self
+                .vision_llm
+                .as_ref()
+                .map(|llm| llm.supports_vision())
+                .unwrap_or(false);
+
+        let (reason, hint) = if mime_type == PDF_MIME {
+            if vision_ready {
+                (
+                    empty_reason::NO_TEXT_VISION_FAILED,
+                    "PDF text extraction yielded no content and the vision-LLM fallback \
+                     also produced no usable text. The document may be blank, corrupted, \
+                     or in an unsupported encoding."
+                        .to_string(),
+                )
+            } else {
+                (
+                    empty_reason::NO_TEXT_VISION_UNAVAILABLE,
+                    "PDF appears to be image-only (e.g. exported from PowerPoint or scanned) \
+                     and no vision-capable LLM is configured. Set \
+                     `[document].image_description_enabled = true` and use an LLM that \
+                     supports vision (e.g. Ollama `llava`, Claude 3+, GPT-4V)."
+                        .to_string(),
+                )
+            }
+        } else if image::is_image_mime(mime_type) {
+            (
+                empty_reason::NO_TEXT_VISION_UNAVAILABLE,
+                format!(
+                    "Image upload produced no description. Enable \
+                     `[document].image_description_enabled` with a vision-capable LLM to OCR \
+                     uploaded images. Got mime: {mime_type}."
+                ),
+            )
+        } else {
+            (
+                empty_reason::NO_TEXT_NO_FALLBACK,
+                format!(
+                    "Format `{mime_type}` produced no meaningful text and has no vision \
+                     fallback. The document may be empty, password-protected, or composed \
+                     entirely of embedded images. Try converting it to PDF first so the \
+                     PDF vision fallback can OCR it."
+                ),
+            )
+        };
+
+        ThaiRagError::empty_extraction(reason, hint)
     }
 
     /// Mechanical pipeline: convert → chunk → produce DocumentChunks.
     /// Honours the configured [`ChunkingStrategy`].
+    ///
+    /// Emits [`ThaiRagError::EmptyExtraction`] when the converter produces no
+    /// meaningful text (heuristic: strips page numbers, separators, and
+    /// repeated whitespace before measuring). For PDFs the caller may want
+    /// to handle the error by routing to the vision-fallback path instead.
     pub fn process_mechanical(
         &self,
         raw: &[u8],
@@ -378,6 +464,15 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
     ) -> Result<Vec<DocumentChunk>> {
         let text = self.converter.convert(raw, mime_type)?;
+
+        // Image MIME types are routed through process_image() upstream and
+        // arrive here only when the caller bypassed process(); in that case
+        // the converter returns a placeholder like "[Image: ..., N bytes]"
+        // which we deliberately keep as searchable text.
+        if !image::is_image_mime(mime_type) && meaningful_char_count(&text) == 0 {
+            return Err(self.empty_extraction_error(mime_type));
+        }
+
         Ok(self.chunk_with_strategy(&text, doc_id, workspace_id))
     }
 
@@ -404,11 +499,20 @@ impl DocumentPipeline {
         let mut chunks: Vec<DocumentChunk> = Vec::new();
         let mut vision_pages_used: usize = 0;
         let mut chunk_index: usize = 0;
+        let mut pages_needing_vision: usize = 0;
+        let mut pages_over_budget: usize = 0;
+        let mut pages_vision_failed: usize = 0;
 
         for (page_num, page_text) in pages {
             let trimmed = page_text.trim();
-            let char_count = trimmed.chars().count();
-            let needs_vision = char_count < self.pdf_min_chars_per_page;
+            // Use the meaningful-text heuristic instead of raw char count so
+            // PowerPoint-PDFs that yield only a page number ("- 1 -") still
+            // route to the vision fallback.
+            let meaningful_count = meaningful_char_count(trimmed);
+            let needs_vision = meaningful_count < self.pdf_min_chars_per_page;
+            if needs_vision {
+                pages_needing_vision += 1;
+            }
 
             let (page_content, used_vision) =
                 if needs_vision && vision_pages_used < self.pdf_max_vision_pages {
@@ -424,6 +528,7 @@ impl DocumentPipeline {
                             (desc, true)
                         }
                         Err(e) => {
+                            pages_vision_failed += 1;
                             tracing::warn!(
                                 %doc_id,
                                 page = page_num,
@@ -435,6 +540,7 @@ impl DocumentPipeline {
                     }
                 } else {
                     if needs_vision {
+                        pages_over_budget += 1;
                         tracing::warn!(
                             %doc_id,
                             page = page_num,
@@ -488,14 +594,67 @@ impl DocumentPipeline {
             %doc_id,
             total_pages,
             vision_pages_used,
+            pages_over_budget,
+            pages_vision_failed,
             chunks_produced = chunks.len(),
             "Smart PDF processing complete"
         );
 
+        // If we produced nothing at all, surface a structured reason so the
+        // operator knows whether to raise the vision budget, install a real
+        // vision model, or accept the document is genuinely empty.
+        if chunks.is_empty() {
+            return Err(self.pdf_empty_reason(
+                total_pages,
+                pages_needing_vision,
+                pages_over_budget,
+                pages_vision_failed,
+            ));
+        }
+
         Ok(chunks)
     }
 
+    /// Pick the most informative reason code when a PDF produced zero chunks.
+    /// Ordered most-actionable first.
+    fn pdf_empty_reason(
+        &self,
+        total_pages: usize,
+        pages_needing_vision: usize,
+        pages_over_budget: usize,
+        pages_vision_failed: usize,
+    ) -> ThaiRagError {
+        if pages_over_budget > 0 {
+            return ThaiRagError::empty_extraction(
+                empty_reason::VISION_BUDGET_EXCEEDED,
+                format!(
+                    "PDF needed vision OCR on {pages_needing_vision} of {total_pages} pages but the \
+                     budget of {budget} pages was reached after {used} usable extractions. Raise \
+                     `[document].pdf_max_vision_pages` or split the document.",
+                    budget = self.pdf_max_vision_pages,
+                    used = self.pdf_max_vision_pages.saturating_sub(pages_over_budget),
+                ),
+            );
+        }
+        if pages_vision_failed > 0 {
+            return ThaiRagError::empty_extraction(
+                empty_reason::NO_TEXT_VISION_FAILED,
+                format!(
+                    "PDF needed vision OCR on {pages_needing_vision} of {total_pages} pages but the \
+                     vision LLM failed on {pages_vision_failed} pages. Check the LLM connection \
+                     and that the model supports vision (e.g. Ollama `llava`, Claude 3+)."
+                ),
+            );
+        }
+        self.empty_extraction_error(PDF_MIME)
+    }
+
     /// Process an image file: generate a text description and return as a single chunk.
+    ///
+    /// When `image_description_enabled` is true but the configured LLM
+    /// cannot do vision, this fails loud with a structured reason so the
+    /// operator knows to install a vision model — silently storing a
+    /// metadata placeholder would hide the misconfiguration.
     async fn process_image(
         &self,
         raw: &[u8],
@@ -504,15 +663,26 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
     ) -> Result<Vec<DocumentChunk>> {
         let description = if self.image_description_enabled {
-            if let Some(llm) = &self.vision_llm {
-                image::describe_image(llm.as_ref(), raw, mime_type).await?
-            } else {
-                // No LLM configured — use metadata placeholder
-                let meta = image::extract_image_metadata(raw, mime_type);
-                image::format_placeholder_description(&meta)
+            match &self.vision_llm {
+                Some(llm) if llm.supports_vision() => {
+                    image::describe_image(llm.as_ref(), raw, mime_type).await?
+                }
+                _ => {
+                    return Err(ThaiRagError::empty_extraction(
+                        empty_reason::NO_TEXT_VISION_UNAVAILABLE,
+                        format!(
+                            "Image upload (mime: {mime_type}) requires a vision-capable LLM. \
+                             `image_description_enabled` is on but the configured LLM does not \
+                             support vision. Install a vision model (e.g. Ollama `llava`, \
+                             Claude 3+, GPT-4V) or disable image_description_enabled to fall \
+                             back to a metadata placeholder."
+                        ),
+                    ));
+                }
             }
         } else {
-            // Image description disabled — use metadata placeholder
+            // Image description disabled — operator explicitly opted out, so
+            // store a metadata placeholder rather than failing.
             let meta = image::extract_image_metadata(raw, mime_type);
             image::format_placeholder_description(&meta)
         };
@@ -643,12 +813,59 @@ mod tests {
     }
 
     #[test]
-    fn process_empty_input() {
+    fn process_empty_input_yields_structured_error() {
         let pipeline = DocumentPipeline::new(1000, 0);
-        let chunks = pipeline
+        let err = pipeline
             .process_mechanical(b"", "text/plain", DocId::new(), WorkspaceId::new())
-            .unwrap();
-        assert!(chunks.is_empty());
+            .expect_err("empty input must surface as EmptyExtraction, not Ok(empty chunks)");
+        match err {
+            ThaiRagError::EmptyExtraction { reason, .. } => {
+                assert_eq!(reason, empty_reason::NO_TEXT_NO_FALLBACK);
+            }
+            other => panic!("expected EmptyExtraction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_whitespace_only_input_yields_structured_error() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        // PowerPoint-style page-number-only "content" — must NOT silently
+        // become a Ready document with zero chunks.
+        let err = pipeline
+            .process_mechanical(
+                b"   \n\n  - 1 -  \n\n Page 2 of 3 \n",
+                "text/plain",
+                DocId::new(),
+                WorkspaceId::new(),
+            )
+            .expect_err("page-number-only content must surface as EmptyExtraction");
+        assert!(matches!(err, ThaiRagError::EmptyExtraction { .. }));
+    }
+
+    #[tokio::test]
+    async fn process_async_empty_input_yields_structured_error() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let err = pipeline
+            .process(b"", "text/plain", DocId::new(), WorkspaceId::new(), None)
+            .await
+            .expect_err("empty async input must surface as EmptyExtraction");
+        assert!(matches!(err, ThaiRagError::EmptyExtraction { .. }));
+    }
+
+    #[test]
+    fn empty_extraction_pdf_without_vision_hints_at_config() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let err = pipeline.empty_extraction_error("application/pdf");
+        match err {
+            ThaiRagError::EmptyExtraction { reason, hint } => {
+                assert_eq!(reason, empty_reason::NO_TEXT_VISION_UNAVAILABLE);
+                assert!(
+                    hint.contains("image_description_enabled"),
+                    "hint should mention the config knob, got: {hint}"
+                );
+            }
+            other => panic!("expected EmptyExtraction, got {other:?}"),
+        }
     }
 
     #[test]
@@ -983,6 +1200,62 @@ mod tests {
             0,
             "vision LLM must not be called when fallback disabled"
         );
+    }
+
+    #[tokio::test]
+    async fn process_image_fails_loud_when_vision_required_but_unavailable() {
+        // image_description_enabled is on but the only "LLM" we hand it
+        // does not support vision — pipeline must surface a structured
+        // EmptyExtraction instead of silently writing a placeholder.
+        struct NonVisionLlm;
+        #[async_trait::async_trait]
+        impl LlmProvider for NonVisionLlm {
+            async fn generate(
+                &self,
+                _: &[thairag_core::types::ChatMessage],
+                _: Option<u32>,
+            ) -> Result<thairag_core::types::LlmResponse> {
+                unreachable!("must not be called")
+            }
+            fn model_name(&self) -> &str {
+                "non-vision"
+            }
+            fn supports_vision(&self) -> bool {
+                false
+            }
+        }
+        let pipeline =
+            DocumentPipeline::new(1000, 0).with_image_description(Arc::new(NonVisionLlm), true);
+
+        let png = make_minimal_png(10, 10);
+        let err = pipeline
+            .process(&png, "image/png", DocId::new(), WorkspaceId::new(), None)
+            .await
+            .expect_err("image upload must fail loud when vision unavailable");
+        match err {
+            ThaiRagError::EmptyExtraction { reason, hint } => {
+                assert_eq!(reason, empty_reason::NO_TEXT_VISION_UNAVAILABLE);
+                assert!(
+                    hint.contains("vision"),
+                    "hint should explain vision requirement: {hint}"
+                );
+            }
+            other => panic!("expected EmptyExtraction, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn process_image_without_description_falls_back_to_placeholder() {
+        // image_description_enabled is OFF — operator opted out, so an
+        // image upload should still succeed with a metadata placeholder.
+        let pipeline = DocumentPipeline::new(1000, 0); // image_description disabled by default
+        let png = make_minimal_png(10, 10);
+        let chunks = pipeline
+            .process(&png, "image/png", DocId::new(), WorkspaceId::new(), None)
+            .await
+            .expect("placeholder path must succeed when description is off");
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].content.contains("PNG"));
     }
 
     #[tokio::test]

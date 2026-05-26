@@ -31,6 +31,22 @@ pub enum ThaiRagError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Document ingestion produced no usable text content.
+    /// `reason` is a stable short code for surfacing in UIs.
+    /// `hint` is operator-facing guidance on how to fix it.
+    #[error("Empty extraction [{reason}]: {hint}")]
+    EmptyExtraction { reason: String, hint: String },
+}
+
+impl ThaiRagError {
+    /// Construct an [`EmptyExtraction`] error with a stable reason code + hint.
+    pub fn empty_extraction(reason: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self::EmptyExtraction {
+            reason: reason.into(),
+            hint: hint.into(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ThaiRagError>;
