@@ -133,8 +133,8 @@ impl ChunkPlugin for SummaryChunkPlugin {
             .map(|pos| &trimmed[..=pos])
             .unwrap_or_else(|| {
                 // No sentence-ending punctuation — take first 80 chars
-                if trimmed.len() > 80 {
-                    &trimmed[..80]
+                if let Some((idx, _)) = trimmed.char_indices().nth(80) {
+                    &trimmed[..idx]
                 } else {
                     trimmed
                 }
