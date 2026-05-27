@@ -133,8 +133,8 @@ impl ChunkPlugin for SummaryChunkPlugin {
             .map(|pos| &trimmed[..=pos])
             .unwrap_or_else(|| {
                 // No sentence-ending punctuation — take first 80 chars
-                if trimmed.len() > 80 {
-                    &trimmed[..80]
+                if let Some((idx, _)) = trimmed.char_indices().nth(80) {
+                    &trimmed[..idx]
                 } else {
                     trimmed
                 }
@@ -212,5 +212,19 @@ mod tests {
     fn summary_chunk_handles_empty() {
         let plugin = SummaryChunkPlugin;
         assert_eq!(plugin.transform_chunk(""), "");
+    }
+
+    #[test]
+    fn summary_chunk_handles_thai_character_boundaries() {
+        let plugin = SummaryChunkPlugin;
+        // This long string without punctuation caused a panic before the char_indices fix
+        // because byte 80 is inside a multi-byte Thai character ('ง').
+        let chunk =
+            "เมื่อเริ่มแข่ง กระต่ายก็พุ่งออกไปอย่างรวดเร็ว ทิ้งเต่าไว้ไกลลิบ ส่วนเต่าก็ค่อย ๆ เดินต่อ และจะไม่ยอมแพ้เด็ดขาด";
+        let result = plugin.transform_chunk(chunk);
+
+        assert!(result.starts_with("[Summary:"));
+        // Assert that we successfully processed it without panicking
+        assert!(!result.is_empty());
     }
 }
