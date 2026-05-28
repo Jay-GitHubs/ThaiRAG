@@ -142,6 +142,10 @@ pub struct ProviderConfigResponse {
     pub vector_store: VectorStoreProviderInfo,
     pub text_search: TextSearchProviderInfo,
     pub reranker: RerankerProviderInfo,
+    /// Optional dedicated vision LLM for image/PDF-OCR. Falls back to
+    /// `llm` when unset (only works if primary supports vision).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision_llm: Option<LlmProviderInfo>,
 }
 
 #[derive(Serialize)]
@@ -411,6 +415,15 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: non_empty(&p.reranker.model),
             has_api_key: !p.reranker.api_key.is_empty(),
         },
+        vision_llm: p.vision_llm.as_ref().map(|v| LlmProviderInfo {
+            kind: kind_str(&v.kind),
+            model: v.model.clone(),
+            base_url: non_empty(&v.base_url),
+            has_api_key: !v.api_key.is_empty(),
+            supports_vision: is_vision_model(&v.kind, &v.model),
+            max_tokens: v.max_tokens,
+            profile_id: v.profile_id.clone(),
+        }),
     }
 }
 
@@ -431,6 +444,14 @@ pub struct UpdateProviderConfigRequest {
     pub embedding: Option<UpdateEmbeddingConfig>,
     pub vector_store: Option<UpdateVectorStoreConfig>,
     pub reranker: Option<UpdateRerankerConfig>,
+    /// Optional dedicated vision LLM. Setting this routes image
+    /// description / PDF vision OCR to a separate provider from the
+    /// primary chat `llm`.
+    pub vision_llm: Option<UpdateLlmConfig>,
+    /// When true, remove the vision_llm config entirely (falls back to
+    /// using the primary LLM for vision). Takes precedence over
+    /// `vision_llm` field updates.
+    pub clear_vision_llm: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -563,6 +584,49 @@ pub async fn update_provider_config(
         if let Some(api_key) = rr.api_key {
             pc.reranker.api_key = api_key;
         }
+    }
+
+    // Vision LLM is optional. A `clear_vision_llm = true` flag removes it
+    // (falls back to the primary LLM). Otherwise, fields in `vision_llm`
+    // are merged into the existing config or seed a new one when none
+    // exists. Setting kind requires model; we let the validator catch
+    // missing combinations.
+    if body.clear_vision_llm.unwrap_or(false) {
+        pc.vision_llm = None;
+    } else if let Some(vis) = body.vision_llm {
+        let mut current = pc.vision_llm.clone().unwrap_or_else(|| {
+            // Seed from primary LLM so the user only has to override what differs
+            thairag_config::schema::LlmConfig {
+                kind: pc.llm.kind.clone(),
+                model: pc.llm.model.clone(),
+                base_url: pc.llm.base_url.clone(),
+                api_key: String::new(),
+                max_tokens: None,
+                profile_id: None,
+            }
+        });
+        if let Some(kind) = vis.kind {
+            current.kind =
+                parse_llm_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+        }
+        if let Some(model) = vis.model {
+            current.model = model;
+        }
+        if let Some(base_url) = vis.base_url {
+            current.base_url = base_url;
+        }
+        if let Some(api_key) = vis.api_key {
+            current.api_key = api_key;
+        }
+        if let Some(max_tokens) = vis.max_tokens {
+            current.max_tokens = Some(max_tokens);
+        }
+        if vis.clear_profile.unwrap_or(false) {
+            current.profile_id = None;
+        } else if let Some(pid) = vis.profile_id {
+            current.profile_id = Some(pid);
+        }
+        pc.vision_llm = Some(current);
     }
 
     // Detect embedding dimension or model change — clear stale vectors

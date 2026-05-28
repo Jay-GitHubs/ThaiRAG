@@ -6009,6 +6009,7 @@ version = "0.1.0"
 dependencies = [
  "config",
  "serde",
+ "serde_json",
  "thairag-core",
 ]
 

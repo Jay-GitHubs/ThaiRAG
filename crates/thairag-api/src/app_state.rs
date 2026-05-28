@@ -323,10 +323,38 @@ impl ProviderBundle {
                 doc.pdf_max_vision_pages,
             );
 
-            // Enable image description if configured (reuses the primary LLM).
-            // Also required for the PDF vision fallback to do anything.
+            // Enable image description if configured. Prefer the dedicated
+            // `providers.vision_llm` so operators can keep a fast text-only
+            // chat model for `llm` while routing OCR / image description to
+            // a heavier vision-capable model (e.g. Ollama `llava`, Claude
+            // 3+, GPT-4o). Falls back to the primary LLM when unset, which
+            // only works if the primary model itself supports vision —
+            // pipeline.rs::process_image will fail loud with a structured
+            // EmptyExtraction reason if it doesn't.
             let pipeline = if doc.image_description_enabled {
-                pipeline.with_image_description(Arc::clone(&llm), true)
+                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = providers.vision_llm {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
+                    if !cfg.model.is_empty() {
+                        tracing::info!(
+                            kind = ?resolved.kind,
+                            model = %resolved.model,
+                            "Using dedicated vision LLM for document pipeline"
+                        );
+                    }
+                    Arc::from(create_llm_provider(&resolved))
+                } else {
+                    tracing::info!(
+                        "No `providers.vision_llm` configured — falling back to primary LLM \
+                             for image description. This only works when the primary model is \
+                             itself vision-capable."
+                    );
+                    Arc::clone(&llm)
+                };
+                pipeline.with_image_description(vision_llm, true)
             } else {
                 pipeline
             };

@@ -134,6 +134,44 @@ Connector sync runs are tracked separately in `sync_runs` rows. Each run records
 
 Permissions are layered: **org → dept → workspace** with optional **per-document ACL** on top. A user inherits the lowest-level permission that applies — workspace-level grants give access to everything in the workspace; doc-level ACL can further restrict a sensitive subset. The chat pipeline filters retrieved chunks by the caller's `AccessScope` before they reach the LLM, so an unauthorized document never enters the context window.
 
+### 2.6.5 Vision OCR for image-only PDFs (PowerPoint exports, scans)
+
+PDFs exported from PowerPoint, scanned documents, and image-uploaded files cannot have text extracted by `pdf-extract` directly — their pages are rasterized images. The pipeline detects this and routes them to a vision-capable LLM for OCR.
+
+**Two flags must both be set**:
+
+| Setting | Where | Default | What it controls |
+|---|---|---|---|
+| `image_description_enabled` | `[document]` in `default.toml` or `THAIRAG__DOCUMENT__IMAGE_DESCRIPTION_ENABLED=true` | **`false`** | Master switch; without it, the vision path never fires |
+| `pdf_vision_fallback_enabled` | `[document]` | `true` | Whether image-only PDF pages route to the vision LLM |
+
+**Then point the pipeline at a vision-capable LLM.** Two options:
+
+1. **Dedicated `[providers.vision_llm]`** (recommended) — keep your fast chat model (e.g. `qwen3:32b`, `llama3`) for `[providers.llm]` and configure a separate vision model only for OCR:
+
+   ```toml
+   [providers.llm]
+   kind = "ollama"
+   model = "qwen3:32b"
+   base_url = "http://localhost:11435"
+
+   [providers.vision_llm]
+   kind = "ollama"
+   model = "llava:13b"            # or qwen2.5vl:7b, llama3.2-vision:11b
+   base_url = "http://localhost:11435"
+   ```
+
+   Or in the **Admin UI** → Settings → Providers, toggle the **Vision LLM** card on and fill the fields. The setting persists in the DB and survives restarts.
+
+2. **Single primary LLM that supports vision** — switch `[providers.llm]` to a vision-capable model. The pipeline then reuses it for both chat and OCR. Downside: chat answer quality may regress if the vision model is weaker at conversation.
+
+**Recognised vision models** (`pipeline.rs::process_image` checks `llm.supports_vision()`):
+
+- **Cloud**: Claude 3+ (any Opus/Sonnet/Haiku), GPT-4o/4V, Gemini 1.5+
+- **Ollama**: `llava`, `llava-llama3`, `qwen2.5vl`, `llama3.2-vision`, `minicpm-v`, `bakllava`, `moondream`, `cogvlm`, `internvl`
+
+**What happens when vision is misconfigured**: an image-only PDF upload fails with structured `empty_extraction[no_text_vision_unavailable]: ...` and the admin UI shows a **"Vision OCR Required"** warning badge with the remediation hint. Upload never produces zero-chunk Ready documents (the historic silent failure mode is now impossible — see `docs/INGEST_REVIEW_2026-05-28.md`).
+
 ### 2.6 Bulk ingest
 
 For first-time backfill of a large corpus:
