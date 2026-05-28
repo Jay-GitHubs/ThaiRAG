@@ -12,20 +12,27 @@ env:
 jobs:
   # ── Rust: parallel jobs (fmt / clippy / test / cli build). ──
   #
-  # `runs-on` is conditional on event:
-  # - `push` (main, trusted code) → `mac-studio` self-hosted runner.
-  #   M-series CPU + persistent `target/` cache makes warm builds 5-10×
-  #   faster than ubuntu-latest. Rust toolchain + cargo-nextest +
-  #   poppler are pre-installed on the host (see OPERATOR_GUIDE).
-  # - `pull_request` (untrusted code, including external contributors) →
-  #   `ubuntu-latest`. NEVER expose the self-hosted runner to PR code —
-  #   anyone can modify .github/workflows/*.yml in a PR.
+  # `runs-on` routes by trust level:
+  # - `push` to main (already-reviewed code) → `mac-studio` self-hosted.
+  # - `pull_request` from OWNER (the repo owner authoring their own PRs)
+  #   → `mac-studio`. The owner already has merge rights; running their
+  #   PR code on their own Mac adds no new attack surface and gives them
+  #   the same fast warm-cache builds as main pushes.
+  # - `pull_request` from anyone else (MEMBER, COLLABORATOR, CONTRIBUTOR,
+  #   external) → `ubuntu-latest`. Belt-and-suspenders with the repo
+  #   setting "Require approval for first-time contributors". External
+  #   PRs must NEVER pick up the self-hosted runner — anyone can edit
+  #   .github/workflows/*.yml in a PR, and that would run as the runner
+  #   user with access to its shell, SSH keys, persistent target/, etc.
+  #
+  # Mac Studio prerequisites (rust 1.95, cargo-nextest, poppler) are
+  # installed once on the host — see OPERATOR_GUIDE §4.6.
   #
   # Linux-only setup steps are gated with `if: runner.os == 'Linux'`.
 
   fmt:
     name: Rust fmt
-    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -36,7 +43,7 @@ jobs:
 
   clippy:
     name: Rust clippy
-    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -58,7 +65,7 @@ jobs:
 
   test:
     name: Rust tests
-    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -85,7 +92,7 @@ jobs:
 
   build-cli:
     name: Rust CLI build
-    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
