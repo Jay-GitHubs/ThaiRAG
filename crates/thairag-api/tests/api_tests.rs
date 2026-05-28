@@ -203,6 +203,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
                 model: "".into(),
                 api_key: "".into(),
             },
+            vision_llm: None,
         },
         search: SearchConfig {
             top_k: 5,
@@ -1643,6 +1644,7 @@ fn build_streaming_test_app() -> Router {
                 model: "".into(),
                 api_key: "".into(),
             },
+            vision_llm: None,
         },
         search: SearchConfig {
             top_k: 5,
