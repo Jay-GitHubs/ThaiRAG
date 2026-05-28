@@ -10,12 +10,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── Rust: split into parallel jobs so fmt / clippy / test / cli build don't ──
-  # ── serialise on a single 2-CPU runner. Each job runs ~3-4 min independently. ──
+  # ── Rust: parallel jobs (fmt / clippy / test / cli build). ──
+  #
+  # `runs-on` is conditional on event:
+  # - `push` (main, trusted code) → `mac-studio` self-hosted runner.
+  #   M-series CPU + persistent `target/` cache makes warm builds 5-10×
+  #   faster than ubuntu-latest. Rust toolchain + cargo-nextest +
+  #   poppler are pre-installed on the host (see OPERATOR_GUIDE).
+  # - `pull_request` (untrusted code, including external contributors) →
+  #   `ubuntu-latest`. NEVER expose the self-hosted runner to PR code —
+  #   anyone can modify .github/workflows/*.yml in a PR.
+  #
+  # Linux-only setup steps are gated with `if: runner.os == 'Linux'`.
 
   fmt:
     name: Rust fmt
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -26,56 +36,63 @@ jobs:
 
   clippy:
     name: Rust clippy
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
           components: clippy
+      # rust-cache only helps GitHub-hosted runners — on self-hosted, the
+      # native `target/` directory persists across runs.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
       # poppler-utils provides pdftoppm for PDF vision-fallback tests.
-      - name: Install poppler-utils
+      # On the self-hosted Mac, install via `brew install poppler` once.
+      - name: Install poppler-utils (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Rust tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
-      - name: Install poppler-utils
+      - name: Install poppler-utils (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
-      # cargo-nextest: 2-3× faster than `cargo test` in CI. Compiles each
-      # test binary once and parallelises execution properly. taiki-e/install-action
-      # installs prebuilt binaries (no compile) so the install itself is ~5s.
+      # cargo-nextest: 2-3× faster than `cargo test` in CI. taiki-e/install-action
+      # is idempotent — on the self-hosted runner where nextest is pre-installed
+      # via `cargo install cargo-nextest`, it detects the existing binary and
+      # skips the download.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
       - name: Run tests (nextest)
         run: cargo nextest run --workspace --no-fail-fast
-      # nextest does not run doctests; cover them in a separate step.
-      # `--doc` reuses the warm target dir from the nextest run above.
       - name: Run doctests
         run: cargo test --workspace --doc
 
   build-cli:
     name: Rust CLI build
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
       - run: cargo build -p thairag-cli
