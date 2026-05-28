@@ -191,7 +191,79 @@ fn now_ts() -> i64 {
         .as_secs() as i64
 }
 
+/// Panic-guarded entry point. Spawns the real work as a child task so a
+/// panic in the converter/chunker/plugins (e.g. an `unwrap` on a malformed
+/// PDF, a third-party crate's internal assertion) is caught instead of
+/// leaving the document stuck in `Processing` forever.
+///
+/// On panic or unexpected task error, the document is marked `Failed`
+/// with a structured `panic_during_ingest:` / `ingest_task_error:` message
+/// so admin UIs can surface a clear reason.
 async fn process_document_inner(
+    state: AppState,
+    doc_id: DocId,
+    workspace_id: WorkspaceId,
+    bytes: Vec<u8>,
+    mime_type: String,
+) -> (usize, Option<String>) {
+    let state_for_panic = state.clone();
+    let handle = tokio::spawn(process_document_inner_impl(
+        state,
+        doc_id,
+        workspace_id,
+        bytes,
+        mime_type,
+    ));
+
+    match handle.await {
+        Ok(pair) => pair,
+        Err(join_err) if join_err.is_panic() => {
+            let panic_msg = panic_payload_to_string(join_err.into_panic());
+            let err = format!("panic_during_ingest: {panic_msg}");
+            tracing::error!(%doc_id, panic = %panic_msg, "PANIC during document processing");
+            mark_doc_failed_best_effort(&state_for_panic, doc_id, &err).await;
+            (0, Some(err))
+        }
+        Err(join_err) => {
+            // Task was cancelled or otherwise did not complete normally.
+            // Most likely runtime shutdown — the worst outcome is a doc
+            // briefly stuck Processing until startup reconciliation runs.
+            let err = format!("ingest_task_error: {join_err}");
+            tracing::error!(%doc_id, error = %join_err, "Ingest task did not complete");
+            mark_doc_failed_best_effort(&state_for_panic, doc_id, &err).await;
+            (0, Some(err))
+        }
+    }
+}
+
+/// Format a panic payload (from `JoinError::into_panic`) into a string
+/// safe to store in the document's `error_message`. Panics typically
+/// carry a `String` or `&'static str`; anything else falls back to a
+/// generic marker so we never lose the "this was a panic" signal.
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Best-effort terminal status write for the panic / task-error paths.
+/// Each `let _` is intentional — we are already in an error path and
+/// cannot meaningfully recover from a store failure here.
+async fn mark_doc_failed_best_effort(state: &AppState, doc_id: DocId, error_message: &str) {
+    let _ = state.km_store.update_document_step(doc_id, None);
+    let _ = state.km_store.update_document_status(
+        doc_id,
+        DocStatus::Failed,
+        0,
+        Some(error_message.to_string()),
+    );
+}
+
+async fn process_document_inner_impl(
     state: AppState,
     doc_id: DocId,
     workspace_id: WorkspaceId,
@@ -1954,5 +2026,51 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
                 "source_url": source_url,
             }),
         );
+    }
+}
+
+#[cfg(test)]
+mod panic_guard_tests {
+    use super::*;
+
+    #[test]
+    fn panic_payload_to_string_extracts_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("boom"));
+        assert_eq!(panic_payload_to_string(payload), "boom");
+    }
+
+    #[test]
+    fn panic_payload_to_string_extracts_static_str_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("static panic");
+        assert_eq!(panic_payload_to_string(payload), "static panic");
+    }
+
+    #[test]
+    fn panic_payload_to_string_falls_back_for_unknown_payload() {
+        // panic!(42) produces an i32 payload — we cannot interpret it but
+        // we MUST NOT lose the "this was a panic" signal.
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42_i32);
+        let out = panic_payload_to_string(payload);
+        assert!(!out.is_empty());
+        assert!(
+            out.contains("panic") || out.contains("unknown"),
+            "fallback must hint at panic, got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_task_panic_is_observable_as_join_error_is_panic() {
+        // Regression: confirms the tokio semantics this PR's guard relies on.
+        // If this test ever fails, the panic-guard in `process_document_inner`
+        // is no longer protecting anything and needs a different approach.
+        let handle = tokio::spawn(async {
+            panic!("intentional test panic");
+        });
+        let err = handle
+            .await
+            .expect_err("child task panic must surface as JoinError");
+        assert!(err.is_panic(), "JoinError must report is_panic() == true");
+        let msg = panic_payload_to_string(err.into_panic());
+        assert_eq!(msg, "intentional test panic");
     }
 }
