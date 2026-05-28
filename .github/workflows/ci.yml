@@ -9,6 +9,18 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# When a new commit pushes to a branch, cancel any in-flight run on the
+# same branch. Prevents the single self-hosted Mac Studio runner from
+# queueing up stale jobs from superseded commits — that queue blocks the
+# latest commit's tests until the older job finishes (often 10+ minutes
+# of wasted Mac CPU on code we don't care about anymore).
+#
+# Group key includes `github.ref` so different branches (main vs PR
+# branches) don't cancel each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Rust: parallel jobs (fmt / clippy / test / cli build). ──
   #
