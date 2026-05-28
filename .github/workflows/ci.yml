@@ -54,7 +54,18 @@ jobs:
           shared-key: "rust-${{ runner.os }}"
       - name: Install poppler-utils
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
-      - run: cargo test --workspace
+      # cargo-nextest: 2-3× faster than `cargo test` in CI. Compiles each
+      # test binary once and parallelises execution properly. taiki-e/install-action
+      # installs prebuilt binaries (no compile) so the install itself is ~5s.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Run tests (nextest)
+        run: cargo nextest run --workspace --no-fail-fast
+      # nextest does not run doctests; cover them in a separate step.
+      # `--doc` reuses the warm target dir from the nextest run above.
+      - name: Run doctests
+        run: cargo test --workspace --doc
 
   build-cli:
     name: Rust CLI build
