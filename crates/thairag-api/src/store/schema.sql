@@ -98,6 +98,23 @@ CREATE TABLE IF NOT EXISTS document_blobs (
     created_at       TEXT NOT NULL
 );
 
+-- Extracted image storage for smart-PDF / DOCX / XLSX / HTML / direct image uploads.
+-- Each row holds one image (page render, embedded image, or upload), referenced
+-- from document_chunks via metadata->image_blob_id. Cascade-deletes with the doc.
+CREATE TABLE IF NOT EXISTS document_image_blobs (
+    image_id     TEXT NOT NULL PRIMARY KEY,
+    doc_id       TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL,
+    blob         BLOB NOT NULL,
+    mime         TEXT NOT NULL,
+    width        INTEGER,
+    height       INTEGER,
+    page_num     INTEGER,
+    source       TEXT NOT NULL,  -- 'pdf_page_render' | 'pdf_embedded' | 'docx_embedded' | 'xlsx_embedded' | 'html_embedded' | 'direct_upload'
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_document_image_blobs_doc ON document_image_blobs(doc_id);
+
 CREATE TABLE IF NOT EXISTS permissions (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

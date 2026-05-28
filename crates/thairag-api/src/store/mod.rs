@@ -18,8 +18,8 @@ use thairag_core::models::{
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
-    AclPermission, ApiKeyId, ConnectorId, DeptId, DocId, DocumentAcl, IdpId, OrgId, UserId,
-    WorkspaceAcl, WorkspaceId,
+    AclPermission, ApiKeyId, ConnectorId, DeptId, DocId, DocumentAcl, IdpId, ImageId, OrgId,
+    UserId, WorkspaceAcl, WorkspaceId,
 };
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
@@ -183,6 +183,79 @@ pub fn scope_org_id(scope: &PermissionScope) -> OrgId {
 pub struct UserRecord {
     pub user: User,
     pub password_hash: String,
+}
+
+/// Source of an extracted image — used for telemetry + admin UI badges.
+/// Stored as a string in the DB to keep the schema permissive when new
+/// extraction paths are added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource {
+    /// Full PDF page rendered to PNG via pdfium (smart_pdf ImageHeavy / Scanned / Tabular).
+    PdfPageRender,
+    /// Individual image object extracted from a PDF page (smart_pdf Mixed).
+    PdfEmbedded,
+    /// Image extracted from a DOCX `word/media/...` archive entry.
+    DocxEmbedded,
+    /// Image extracted from an XLSX `xl/media/...` archive entry.
+    XlsxEmbedded,
+    /// Image referenced from an HTML `<img src=...>` tag (data: URL or fetched URL).
+    HtmlEmbedded,
+    /// Image uploaded directly by a user (mime: image/*).
+    DirectUpload,
+}
+
+impl ImageSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PdfPageRender => "pdf_page_render",
+            Self::PdfEmbedded => "pdf_embedded",
+            Self::DocxEmbedded => "docx_embedded",
+            Self::XlsxEmbedded => "xlsx_embedded",
+            Self::HtmlEmbedded => "html_embedded",
+            Self::DirectUpload => "direct_upload",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "pdf_page_render" => Self::PdfPageRender,
+            "pdf_embedded" => Self::PdfEmbedded,
+            "docx_embedded" => Self::DocxEmbedded,
+            "xlsx_embedded" => Self::XlsxEmbedded,
+            "html_embedded" => Self::HtmlEmbedded,
+            "direct_upload" => Self::DirectUpload,
+            _ => Self::DirectUpload,
+        }
+    }
+}
+
+/// Full image record including the bytes — returned by `get_image_blob`.
+#[derive(Debug, Clone)]
+pub struct ImageBlobRecord {
+    pub image_id: ImageId,
+    pub doc_id: DocId,
+    pub workspace_id: WorkspaceId,
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// 1-indexed page number for PDF-derived images; None for non-paginated formats.
+    pub page_num: Option<u32>,
+    pub source: ImageSource,
+}
+
+/// Image metadata only (no bytes) — returned by `list_image_blobs_for_doc`.
+/// Cheaper for admin-UI document detail pages that show an image grid.
+#[derive(Debug, Clone)]
+pub struct ImageBlobMeta {
+    pub image_id: ImageId,
+    pub doc_id: DocId,
+    pub workspace_id: WorkspaceId,
+    pub mime: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub page_num: Option<u32>,
+    pub source: ImageSource,
 }
 
 #[derive(Debug, Clone)]
@@ -697,6 +770,20 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_document_file(&self, doc_id: DocId) -> Result<Option<Vec<u8>>>;
     /// Get image and table counts for a document.
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)>;
+
+    // ── Image blob storage (smart PDF / DOCX / XLSX / HTML / direct uploads) ──
+    /// Persist an extracted image (page render, embedded image, or direct
+    /// upload). The image is referenced from chunks via
+    /// `ChunkMetadata.image_blob_id` so admin UIs and the chat pipeline can
+    /// fetch and display it. Returns the assigned `ImageId`.
+    fn save_image_blob(&self, record: ImageBlobRecord) -> Result<()>;
+    /// Retrieve an image blob by id. Returns None if not found.
+    fn get_image_blob(&self, image_id: ImageId) -> Result<Option<ImageBlobRecord>>;
+    /// List all image blobs for a document (id + metadata, not bytes).
+    fn list_image_blobs_for_doc(&self, doc_id: DocId) -> Result<Vec<ImageBlobMeta>>;
+    /// Delete every image blob for the given document. Idempotent; used on
+    /// document delete and on reprocess (before new blobs are written).
+    fn delete_image_blobs_for_doc(&self, doc_id: DocId) -> Result<()>;
 
     /// Update document version number and content hash.
     fn update_document_version_info(
