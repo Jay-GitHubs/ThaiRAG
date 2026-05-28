@@ -834,12 +834,16 @@ pub async fn reprocess_document(
             ))
         })?;
 
-    // Delete old chunks from search index
+    // Delete old chunks from search index AND from the SQL store. Without
+    // the SQL delete, the document_chunks table accumulates dead rows that
+    // load_all_chunks feeds back into Tantivy on the next restart, doubling
+    // or tripling BM25 hits for every reprocessed doc.
     let _ = state
         .providers()
         .search_engine
         .delete_doc(doc_id_typed)
         .await;
+    let _ = state.km_store.delete_chunks_by_doc(doc_id_typed);
 
     // Mark as processing
     let _ = state
@@ -961,8 +965,10 @@ pub async fn reprocess_all_documents(
             }
         };
 
-        // Delete old chunks from search index
+        // Delete old chunks from search index AND SQL store. See
+        // single-doc reprocess for why both deletes are required.
         let _ = state.providers().search_engine.delete_doc(doc_id).await;
+        let _ = state.km_store.delete_chunks_by_doc(doc_id);
 
         // Mark as processing
         let _ = state
@@ -1914,8 +1920,15 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
         return;
     }
 
-    // Delete old chunks from search index
+    // Preserve the current bytes + chunks as a version snapshot before
+    // we overwrite them with the fetched content. Otherwise the user's
+    // original upload is lost the first time a scheduled refresh fires.
+    save_current_version(&state, doc_id, None);
+
+    // Delete old chunks from search index AND SQL store. See
+    // single-doc reprocess for why both deletes are required.
     let _ = state.providers().search_engine.delete_doc(doc_id).await;
+    let _ = state.km_store.delete_chunks_by_doc(doc_id);
 
     // Mark as processing
     let _ = state
