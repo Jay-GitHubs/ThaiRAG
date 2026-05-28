@@ -106,6 +106,27 @@ async fn main() {
         tracing::info!("Loaded saved config from database");
     }
 
+    // Reconcile any documents stuck in DocStatus::Processing after the
+    // previous shutdown. The in-memory JobQueue (and its in-flight tasks)
+    // do not survive a restart, so any Processing doc at this point is an
+    // orphan that would otherwise stay stuck forever. Mark them Failed
+    // with an `ingest_interrupted_by_restart` message so admins can
+    // identify and reprocess them.
+    match state.km_store.reconcile_orphaned_processing_documents() {
+        Ok(reconciled) if !reconciled.is_empty() => {
+            tracing::warn!(
+                count = reconciled.len(),
+                "Reconciled orphaned Processing documents after restart"
+            );
+        }
+        Ok(_) => {
+            tracing::info!("No orphaned Processing documents at startup");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to reconcile orphaned Processing documents");
+        }
+    }
+
     // Rebuild Tantivy text search index if empty but DB has chunks
     {
         let p = state.providers();

@@ -2,6 +2,13 @@ pub mod memory;
 pub mod postgres;
 pub mod sqlite;
 
+/// Error message written to `documents.error_message` when the startup
+/// reconciliation pass fails an orphaned `Processing` document. Operators
+/// (and the admin UI) can match on the `ingest_interrupted_by_restart:`
+/// prefix to surface a clear remediation hint.
+pub const ORPHAN_RECONCILE_MESSAGE: &str = "ingest_interrupted_by_restart: the server restarted while this document was still \
+     processing. Use the Reprocess action to retry, or delete and re-upload.";
+
 use std::collections::HashMap;
 
 use thairag_core::ThaiRagError;
@@ -667,6 +674,14 @@ pub trait KmStoreTrait: Send + Sync {
     ) -> Result<()>;
     fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()>;
     fn delete_document(&self, id: DocId) -> Result<()>;
+    /// Sweep every document still in `DocStatus::Processing` and mark it
+    /// `Failed` with reason `ingest_interrupted_by_restart`. The in-memory
+    /// job queue (and its in-flight tasks) are lost on every process
+    /// restart, so any Processing doc at startup is an orphan and must
+    /// be reconciled — otherwise it stays stuck forever.
+    ///
+    /// Returns the list of reconciled document IDs (caller logs the count).
+    fn reconcile_orphaned_processing_documents(&self) -> Result<Vec<DocId>>;
     /// Store original file bytes and converted markdown for a document.
     fn save_document_blob(
         &self,

@@ -15,7 +15,7 @@ use thairag_core::types::{
 };
 use uuid::Uuid;
 
-use super::{KmStoreTrait, UserRecord};
+use super::{KmStoreTrait, ORPHAN_RECONCILE_MESSAGE, UserRecord};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
@@ -708,6 +708,47 @@ impl KmStoreTrait for SqliteKmStore {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
         Ok(())
+    }
+
+    fn reconcile_orphaned_processing_documents(&self) -> Result<Vec<DocId>> {
+        let conn = self.conn.lock().unwrap();
+        // Read the IDs first so we can return them; UPDATE-RETURNING isn't
+        // portable across rusqlite versions in this repo.
+        let mut stmt = conn
+            .prepare("SELECT id FROM documents WHERE status = 'processing'")
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite prepare reconcile: {e}")))?;
+        let ids: Vec<DocId> = stmt
+            .query_map([], |row| {
+                let s: String = row.get(0)?;
+                Ok(s)
+            })
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite query reconcile: {e}")))?
+            .filter_map(|r| r.ok())
+            .filter_map(|s| uuid::Uuid::parse_str(&s).ok().map(DocId))
+            .collect();
+
+        if ids.is_empty() {
+            return Ok(ids);
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = conn
+            .execute(
+                "UPDATE documents \
+                 SET status = 'failed', \
+                     processing_step = NULL, \
+                     error_message = ?1, \
+                     updated_at = ?2 \
+                 WHERE status = 'processing'",
+                params![ORPHAN_RECONCILE_MESSAGE, now],
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite reconcile update: {e}")))?;
+
+        tracing::warn!(
+            reconciled = affected,
+            "Reconciled orphaned documents stuck in Processing after restart"
+        );
+        Ok(ids)
     }
 
     fn save_document_blob(
@@ -4919,6 +4960,72 @@ mod tests {
         assert_eq!(store.list_workspaces_in_dept(dept.id).len(), 1);
         store.delete_workspace(ws.id).unwrap();
         assert!(store.get_workspace(ws.id).is_err());
+    }
+
+    #[test]
+    fn reconcile_orphaned_processing_documents_marks_processing_as_failed() {
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+
+        // Build three docs: two Processing (should be reconciled), one
+        // Ready (should be untouched).
+        let make_doc = |status: DocStatus| {
+            let now = Utc::now();
+            Document {
+                id: DocId::new(),
+                workspace_id: ws.id,
+                title: format!("doc-{status}"),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+                status,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: Some("chunking".into()),
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            }
+        };
+        let p1 = store
+            .insert_document(make_doc(DocStatus::Processing))
+            .unwrap();
+        let p2 = store
+            .insert_document(make_doc(DocStatus::Processing))
+            .unwrap();
+        let ready = store.insert_document(make_doc(DocStatus::Ready)).unwrap();
+
+        let reconciled = store.reconcile_orphaned_processing_documents().unwrap();
+        assert_eq!(reconciled.len(), 2, "should reconcile both Processing docs");
+        let reconciled_set: std::collections::HashSet<DocId> = reconciled.into_iter().collect();
+        assert!(reconciled_set.contains(&p1.id));
+        assert!(reconciled_set.contains(&p2.id));
+
+        // Both Processing docs are now Failed with the standard message,
+        // and processing_step is cleared.
+        for doc_id in [p1.id, p2.id] {
+            let doc = store.get_document(doc_id).unwrap();
+            assert_eq!(doc.status, DocStatus::Failed);
+            assert!(doc.processing_step.is_none());
+            let msg = doc.error_message.expect("error_message must be set");
+            assert!(
+                msg.starts_with("ingest_interrupted_by_restart:"),
+                "must use the stable reason prefix, got: {msg}"
+            );
+        }
+
+        // Ready doc unchanged.
+        let after = store.get_document(ready.id).unwrap();
+        assert_eq!(after.status, DocStatus::Ready);
+
+        // Calling again is a no-op (no Processing docs left).
+        let second = store.reconcile_orphaned_processing_documents().unwrap();
+        assert!(second.is_empty());
     }
 
     #[test]

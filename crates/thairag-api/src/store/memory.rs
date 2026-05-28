@@ -13,7 +13,7 @@ use thairag_core::types::{
     McpConnectorConfig, OrgId, SyncRun, SyncState, UserId, WorkspaceAcl, WorkspaceId,
 };
 
-use super::{KmStoreTrait, UserRecord, scope_org_id, scopes_match};
+use super::{KmStoreTrait, ORPHAN_RECONCILE_MESSAGE, UserRecord, scope_org_id, scopes_match};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
@@ -305,6 +305,22 @@ impl KmStoreTrait for MemoryKmStore {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
         Ok(())
+    }
+
+    fn reconcile_orphaned_processing_documents(&self) -> Result<Vec<DocId>> {
+        let mut docs = self.documents.write().unwrap();
+        let mut reconciled = Vec::new();
+        let now = chrono::Utc::now();
+        for doc in docs.values_mut() {
+            if doc.status == DocStatus::Processing {
+                doc.status = DocStatus::Failed;
+                doc.processing_step = None;
+                doc.error_message = Some(ORPHAN_RECONCILE_MESSAGE.to_string());
+                doc.updated_at = now;
+                reconciled.push(doc.id);
+            }
+        }
+        Ok(reconciled)
     }
 
     fn save_document_blob(
