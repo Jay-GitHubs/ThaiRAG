@@ -8,36 +8,75 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # sccache caches rustc outputs in the GitHub Actions cache backend.
+  # Pairs with Swatinem/rust-cache (which caches the target dir + registry).
+  # The two are complementary: rust-cache hits on cold-start, sccache hits on
+  # incremental recompiles within the same job.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
-  check:
-    name: Check, Lint & Test
+  # ── Rust: split into parallel jobs so fmt / clippy / test / cli build don't ──
+  # ── serialise on a single 2-CPU runner. Each job runs ~3-4 min independently. ──
+
+  fmt:
+    name: Rust fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
-          components: rustfmt, clippy
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
+  clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
-
+        with:
+          shared-key: "rust-${{ runner.os }}"
       # poppler-utils provides pdftoppm for PDF vision-fallback tests.
       - name: Install poppler-utils
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+  test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-${{ runner.os }}"
+      - name: Install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+      - run: cargo test --workspace
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: Build CLI
-        run: cargo build -p thairag-cli
+  build-cli:
+    name: Rust CLI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95"
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-${{ runner.os }}"
+      - run: cargo build -p thairag-cli
 
   admin-ui:
     name: Admin UI Build
@@ -91,39 +130,45 @@ jobs:
       - name: Import check
         run: python -c "from thairag import ThaiRAGClient; print('ThaiRAGClient import OK')"
 
-  # On PRs: just verify images build
+  # ── PRs: build amd64 only to avoid QEMU emulation (5-15× slower than native). ──
+  # ── ARM coverage is still validated on every push to main below. ──
   docker-build:
-    name: Docker Build
+    name: Docker Build (PR)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [check, admin-ui, typescript-sdk, python-sdk]
+    needs: [fmt, clippy, test, build-cli, admin-ui, typescript-sdk, python-sdk]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build Docker images
+      - name: Build Docker images (amd64 only — PR validation)
         run: docker compose build
 
-  # On merge to main: build and publish images
-  docker-publish:
-    name: Publish Docker Images
+  # ── On merge to main: matrix-build per platform on native runners. ──
+  # ── amd64 runs on ubuntu-latest, arm64 runs on the free ubuntu-24.04-arm ──
+  # ── runner (no QEMU emulation). Digests are then merged into one manifest. ──
+  docker-publish-build:
+    name: Build ${{ matrix.platform }} on ${{ matrix.runner }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    needs: [check, admin-ui, typescript-sdk, python-sdk]
+    needs: [fmt, clippy, test, build-cli, admin-ui, typescript-sdk, python-sdk]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch_tag: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch_tag: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Login to GitHub Container Registry
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -131,56 +176,120 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Login to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: jdevspecialist
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Generate tags (latest + short SHA)
-      - name: Generate metadata for API image
-        id: meta-api
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/thairag
-            jdevspecialist/thairag
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=
-
-      - name: Generate metadata for Admin UI image
-        id: meta-admin
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/thairag-admin
-            jdevspecialist/thairag-admin
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=
-
-      # Build and push API image
-      - name: Build and push ThaiRAG API
+      # Build single-platform image and push by digest. The merge job below
+      # combines all the digests into the public multi-arch manifest tags.
+      - name: Build & push API by digest
+        id: build-api
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta-api.outputs.tags }}
-          labels: ${{ steps.meta-api.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: |
+            type=image,name=ghcr.io/${{ github.repository_owner }}/thairag,push-by-digest=true,name-canonical=true,push=true
+            type=image,name=jdevspecialist/thairag,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=api-${{ matrix.arch_tag }}
+          cache-to: type=gha,mode=max,scope=api-${{ matrix.arch_tag }}
 
-      # Build and push Admin UI image
-      - name: Build and push Admin UI
+      - name: Build & push Admin UI by digest
+        id: build-admin
         uses: docker/build-push-action@v6
         with:
           context: ./admin-ui
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta-admin.outputs.tags }}
-          labels: ${{ steps.meta-admin.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: |
+            type=image,name=ghcr.io/${{ github.repository_owner }}/thairag-admin,push-by-digest=true,name-canonical=true,push=true
+            type=image,name=jdevspecialist/thairag-admin,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=admin-${{ matrix.arch_tag }}
+          cache-to: type=gha,mode=max,scope=admin-${{ matrix.arch_tag }}
+
+      # Persist the per-platform digests so the merge job can pick them up.
+      - name: Export digests
+        run: |
+          mkdir -p /tmp/digests/api /tmp/digests/admin
+          echo "${{ steps.build-api.outputs.digest }}" > /tmp/digests/api/${{ matrix.arch_tag }}
+          echo "${{ steps.build-admin.outputs.digest }}" > /tmp/digests/admin/${{ matrix.arch_tag }}
+
+      - name: Upload digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch_tag }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  docker-publish-manifest:
+    name: Merge multi-arch manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [docker-publish-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: jdevspecialist
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build the multi-arch manifest from the per-platform digests. Two tags
+      # per registry: `latest` and the short SHA, matching the previous workflow.
+      - name: Create API manifest
+        env:
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${SHA_TAG:0:7}"
+          API_DIGEST_AMD=$(cat /tmp/digests/api/amd64)
+          API_DIGEST_ARM=$(cat /tmp/digests/api/arm64)
+          for REG in \
+            "ghcr.io/${{ github.repository_owner }}/thairag" \
+            "jdevspecialist/thairag" ; do
+            for TAG in latest "${SHORT_SHA}"; do
+              docker buildx imagetools create \
+                --tag "${REG}:${TAG}" \
+                "${REG}@${API_DIGEST_AMD}" \
+                "${REG}@${API_DIGEST_ARM}"
+            done
+          done
+
+      - name: Create Admin UI manifest
+        env:
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${SHA_TAG:0:7}"
+          ADMIN_DIGEST_AMD=$(cat /tmp/digests/admin/amd64)
+          ADMIN_DIGEST_ARM=$(cat /tmp/digests/admin/arm64)
+          for REG in \
+            "ghcr.io/${{ github.repository_owner }}/thairag-admin" \
+            "jdevspecialist/thairag-admin" ; do
+            for TAG in latest "${SHORT_SHA}"; do
+              docker buildx imagetools create \
+                --tag "${REG}:${TAG}" \
+                "${REG}@${ADMIN_DIGEST_AMD}" \
+                "${REG}@${ADMIN_DIGEST_ARM}"
+            done
+          done
