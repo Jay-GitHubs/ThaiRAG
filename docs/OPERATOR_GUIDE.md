@@ -557,7 +557,7 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 ### Security expectations
 
 - The runner runs as the user that installed it. Anything that user can read (SSH keys, browser cookies, persistent shell history) is reachable from any job that lands on the runner.
-- **Never enable PR builds on the self-hosted runner.** The workflow already gates with `runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}` — preserve that pattern.
+- **PR runs only land on the self-hosted runner when the PR author is the repo OWNER.** The workflow gates with `runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}`. External contributors (and any future MEMBER/COLLABORATOR PRs) stay on `ubuntu-latest`. If you ever expand the trusted set, do it explicitly in the conditional — never broaden to all `pull_request` events.
 - Enable **Settings → Actions → General → Require approval for first-time contributors** so workflows from a new contributor's PR don't run until you click approve. Belt and suspenders against attackers crafting a workflow that exfiltrates GitHub tokens from the GitHub-hosted runner.
 - Periodically: `./svc.sh stop && ./run.sh check` to see pending updates from GitHub. The runner self-updates when a job picks it up, but health-checking once a month catches drift.
 
