@@ -287,6 +287,16 @@ pub struct ProvidersConfig {
     pub vector_store: VectorStoreConfig,
     pub text_search: TextSearchConfig,
     pub reranker: RerankerConfig,
+    /// Optional dedicated vision-capable LLM used by the document pipeline
+    /// for image-description (`process_image`) and the PDF vision OCR
+    /// fallback (`process_pdf_with_vision`). When unset, the document
+    /// pipeline reuses [`llm`], which only works when the primary chat
+    /// model is itself vision-capable (e.g. Claude 3+, GPT-4o, Ollama
+    /// `llava`/`qwen2.5vl`). Separating the two lets operators keep a
+    /// fast text-only model for chat while pointing OCR at a heavier
+    /// vision model only when needed.
+    #[serde(default)]
+    pub vision_llm: Option<LlmConfig>,
 }
 
 #[derive(Clone, Deserialize, serde::Serialize)]
@@ -1730,6 +1740,7 @@ mod tests {
                     model: String::new(),
                     api_key: String::new(),
                 },
+                vision_llm: None,
             },
             search: SearchConfig {
                 top_k: 5,
@@ -1775,6 +1786,44 @@ mod tests {
     #[test]
     fn validate_free_tier_ok() {
         assert!(free_tier_config().validate().is_ok());
+    }
+
+    #[test]
+    fn providers_config_defaults_vision_llm_to_none() {
+        // Deserialize a minimal ProvidersConfig that omits `vision_llm` —
+        // it must default to None so existing deployments are not broken
+        // by the new field.
+        let json = serde_json::json!({
+            "llm": { "kind": "ollama", "model": "qwen3:32b", "base_url": "http://localhost:11435" },
+            "embedding": { "kind": "fastembed", "model": "all-MiniLM-L6-v2", "dimension": 384 },
+            "vector_store": { "kind": "in_memory" },
+            "text_search": { "kind": "tantivy", "index_path": "/tmp/x" },
+            "reranker": { "kind": "passthrough" },
+        });
+        let parsed: ProvidersConfig =
+            serde_json::from_value(json).expect("must parse without vision_llm");
+        assert!(parsed.vision_llm.is_none());
+    }
+
+    #[test]
+    fn providers_config_accepts_dedicated_vision_llm() {
+        let json = serde_json::json!({
+            "llm": { "kind": "ollama", "model": "qwen3:32b", "base_url": "http://localhost:11435" },
+            "embedding": { "kind": "fastembed", "model": "all-MiniLM-L6-v2", "dimension": 384 },
+            "vector_store": { "kind": "in_memory" },
+            "text_search": { "kind": "tantivy", "index_path": "/tmp/x" },
+            "reranker": { "kind": "passthrough" },
+            "vision_llm": {
+                "kind": "ollama",
+                "model": "llava:13b",
+                "base_url": "http://localhost:11435"
+            },
+        });
+        let parsed: ProvidersConfig =
+            serde_json::from_value(json).expect("vision_llm should parse");
+        let vision = parsed.vision_llm.expect("vision_llm should be Some");
+        assert_eq!(vision.model, "llava:13b");
+        assert_eq!(vision.base_url, "http://localhost:11435");
     }
 
     #[test]

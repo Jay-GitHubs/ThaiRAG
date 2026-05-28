@@ -7,3 +7,6 @@ version.workspace = true
 thairag-core = { workspace = true }
 serde = { workspace = true }
 config = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
