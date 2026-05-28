@@ -521,6 +521,52 @@ Live retrieval is the more privacy-preserving path: the connector content is nev
 
 ---
 
+## 4.6 Self-hosted CI runner (Mac Studio)
+
+CI uses a hybrid runner setup to keep PR builds safe while making main-branch builds fast:
+
+- **`pull_request`** events run on GitHub-hosted `ubuntu-latest`. Anyone can edit `.github/workflows/*.yml` in a PR, so PRs must run on a runner GitHub controls.
+- **`push` to main** events run on the self-hosted Mac Studio (`mac-studio` label). Persistent `target/` cache + M-series CPU = main-branch builds in ~1-2 min instead of ~5-8 min on GitHub-hosted.
+
+### One-time runner setup
+
+On the Mac Studio (Apple Silicon, 36 GB):
+
+```bash
+# Toolchain prereqs the workflow expects to find
+brew install poppler
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default 1.95
+rustup component add rustfmt clippy
+cargo install cargo-nextest --locked
+
+# Runner installation directory
+mkdir -p ~/actions-runner && cd ~/actions-runner
+
+# GitHub UI: Settings → Actions → Runners → New self-hosted runner
+# Select macOS / ARM64. GitHub provides the download URL + token.
+# When asked for labels, add: self-hosted,macOS,ARM64,mac-studio
+./config.sh --url https://github.com/<owner>/<repo> --token <TOKEN>
+
+# Install as a launchd service so the runner survives reboots + crashes.
+./svc.sh install
+./svc.sh start
+./svc.sh status     # confirm "active"
+```
+
+### Security expectations
+
+- The runner runs as the user that installed it. Anything that user can read (SSH keys, browser cookies, persistent shell history) is reachable from any job that lands on the runner.
+- **Never enable PR builds on the self-hosted runner.** The workflow already gates with `runs-on: ${{ github.event_name == 'push' && 'mac-studio' || 'ubuntu-latest' }}` — preserve that pattern.
+- Enable **Settings → Actions → General → Require approval for first-time contributors** so workflows from a new contributor's PR don't run until you click approve. Belt and suspenders against attackers crafting a workflow that exfiltrates GitHub tokens from the GitHub-hosted runner.
+- Periodically: `./svc.sh stop && ./run.sh check` to see pending updates from GitHub. The runner self-updates when a job picks it up, but health-checking once a month catches drift.
+
+### Verifying the runner is healthy
+
+- GitHub UI: Settings → Actions → Runners → look for `mac-studio` → status **Idle** (green) means ready, **Offline** (red) means the launchd service stopped.
+- Local check: `cd ~/actions-runner && ./svc.sh status`
+- Logs: `cd ~/actions-runner/_diag` — tail the most recent `.log` file. Runner startup, job pickup, and any errors land there.
+
 ## 5. Operations checklist
 
 Things to decide once, then let the platform run.
