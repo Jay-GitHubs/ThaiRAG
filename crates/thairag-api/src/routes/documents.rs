@@ -793,6 +793,98 @@ pub async fn download_document(
         .unwrap())
 }
 
+/// Serve a stored image blob for inline display in the admin UI or for
+/// the chat pipeline's multimodal context. The image must belong to the
+/// requested document, which must belong to the requested workspace —
+/// the same ACL check the chunks endpoint uses.
+pub async fn get_document_image(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((workspace_id, doc_id, image_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<axum::response::Response, ApiError> {
+    let workspace_id_typed = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id_typed)?;
+    require_doc(&perm, Role::can_read, "view document image")?;
+
+    let doc_id_typed = DocId(doc_id);
+    // Confirm the doc actually lives in this workspace before serving any bytes.
+    let doc = state.km_store.get_document(doc_id_typed)?;
+    if doc.workspace_id != workspace_id_typed {
+        return Err(ApiError(ThaiRagError::NotFound("image not found".into())));
+    }
+
+    let image_id_typed = thairag_core::types::ImageId(image_id);
+    let record = state
+        .km_store
+        .get_image_blob(image_id_typed)
+        .map_err(ApiError)?
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("image not found".into())))?;
+
+    if record.doc_id != doc_id_typed || record.workspace_id != workspace_id_typed {
+        // Belt-and-suspenders: image_id is a UUID and effectively unguessable,
+        // but never serve an image cross-document or cross-workspace.
+        return Err(ApiError(ThaiRagError::NotFound("image not found".into())));
+    }
+
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", record.mime)
+        .header("content-length", record.bytes.len().to_string())
+        .header("cache-control", "private, max-age=3600")
+        .body(axum::body::Body::from(record.bytes))
+        .unwrap())
+}
+
+#[derive(Serialize)]
+pub struct DocumentImageInfo {
+    pub image_id: Uuid,
+    pub mime: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub page_num: Option<u32>,
+    pub source: String,
+}
+
+/// List image-blob metadata for a document. Used by the admin UI to
+/// render an image grid on the document detail page. Returns metadata
+/// only (no bytes) — clients fetch each image via `get_document_image`.
+pub async fn list_document_images(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<DocumentImageInfo>>, ApiError> {
+    let workspace_id_typed = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id_typed)?;
+    require_doc(&perm, Role::can_read, "list document images")?;
+
+    let doc_id_typed = DocId(doc_id);
+    let doc = state.km_store.get_document(doc_id_typed)?;
+    if doc.workspace_id != workspace_id_typed {
+        return Err(ApiError(ThaiRagError::NotFound(
+            "document not found".into(),
+        )));
+    }
+
+    let metas = state
+        .km_store
+        .list_image_blobs_for_doc(doc_id_typed)
+        .map_err(ApiError)?;
+
+    Ok(Json(
+        metas
+            .into_iter()
+            .map(|m| DocumentImageInfo {
+                image_id: m.image_id.0,
+                mime: m.mime,
+                width: m.width,
+                height: m.height,
+                page_num: m.page_num,
+                source: m.source.as_str().to_string(),
+            })
+            .collect(),
+    ))
+}
+
 #[derive(Serialize)]
 pub struct ChunkInfo {
     pub chunk_id: String,

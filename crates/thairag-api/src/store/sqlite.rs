@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use thairag_core::ThaiRagError;
 use thairag_core::models::{
     Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
@@ -1063,6 +1063,124 @@ impl KmStoreTrait for SqliteKmStore {
             params![doc_id.0.to_string()],
         )
         .map_err(|e| ThaiRagError::Internal(format!("SQLite delete chunks: {e}")))?;
+        Ok(())
+    }
+
+    // ── Image blob storage ────────────────────────────────────────────
+
+    fn save_image_blob(&self, record: super::ImageBlobRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO document_image_blobs \
+             (image_id, doc_id, workspace_id, blob, mime, width, height, page_num, source, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                record.image_id.0.to_string(),
+                record.doc_id.0.to_string(),
+                record.workspace_id.0.to_string(),
+                record.bytes,
+                record.mime,
+                record.width,
+                record.height,
+                record.page_num,
+                record.source.as_str(),
+                now,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite save image blob: {e}")))?;
+        Ok(())
+    }
+
+    fn get_image_blob(
+        &self,
+        image_id: thairag_core::types::ImageId,
+    ) -> Result<Option<super::ImageBlobRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT image_id, doc_id, workspace_id, blob, mime, width, height, page_num, source \
+                 FROM document_image_blobs WHERE image_id = ?1",
+                params![image_id.0.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite get image blob: {e}")))?;
+        Ok(row.and_then(|(iid, did, wid, bytes, mime, w, h, p, src)| {
+            Some(super::ImageBlobRecord {
+                image_id: thairag_core::types::ImageId(uuid::Uuid::parse_str(&iid).ok()?),
+                doc_id: DocId(uuid::Uuid::parse_str(&did).ok()?),
+                workspace_id: thairag_core::types::WorkspaceId(uuid::Uuid::parse_str(&wid).ok()?),
+                bytes,
+                mime,
+                width: w.map(|x| x as u32),
+                height: h.map(|x| x as u32),
+                page_num: p.map(|x| x as u32),
+                source: super::ImageSource::from_str_lossy(&src),
+            })
+        }))
+    }
+
+    fn list_image_blobs_for_doc(&self, doc_id: DocId) -> Result<Vec<super::ImageBlobMeta>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT image_id, workspace_id, mime, width, height, page_num, source \
+                 FROM document_image_blobs WHERE doc_id = ?1 \
+                 ORDER BY COALESCE(page_num, 99999999), image_id",
+            )
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite list image blobs prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![doc_id.0.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite list image blobs query: {e}")))?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .filter_map(|(iid, wid, mime, w, h, p, src)| {
+                Some(super::ImageBlobMeta {
+                    image_id: thairag_core::types::ImageId(uuid::Uuid::parse_str(&iid).ok()?),
+                    doc_id,
+                    workspace_id: thairag_core::types::WorkspaceId(
+                        uuid::Uuid::parse_str(&wid).ok()?,
+                    ),
+                    mime,
+                    width: w.map(|x| x as u32),
+                    height: h.map(|x| x as u32),
+                    page_num: p.map(|x| x as u32),
+                    source: super::ImageSource::from_str_lossy(&src),
+                })
+            })
+            .collect())
+    }
+
+    fn delete_image_blobs_for_doc(&self, doc_id: DocId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM document_image_blobs WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite delete image blobs: {e}")))?;
         Ok(())
     }
 
@@ -4960,6 +5078,133 @@ mod tests {
         assert_eq!(store.list_workspaces_in_dept(dept.id).len(), 1);
         store.delete_workspace(ws.id).unwrap();
         assert!(store.get_workspace(ws.id).is_err());
+    }
+
+    #[test]
+    fn image_blob_save_get_list_delete_roundtrip() {
+        use thairag_core::types::ImageId;
+
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let now = Utc::now();
+        let doc = store
+            .insert_document(Document {
+                id: DocId::new(),
+                workspace_id: ws.id,
+                title: "img-doc".into(),
+                mime_type: "application/pdf".into(),
+                size_bytes: 100,
+                status: DocStatus::Ready,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: None,
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let img1 = crate::store::ImageBlobRecord {
+            image_id: ImageId::new(),
+            doc_id: doc.id,
+            workspace_id: ws.id,
+            bytes: vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4],
+            mime: "image/png".into(),
+            width: Some(640),
+            height: Some(480),
+            page_num: Some(1),
+            source: crate::store::ImageSource::PdfPageRender,
+        };
+        let img2 = crate::store::ImageBlobRecord {
+            image_id: ImageId::new(),
+            doc_id: doc.id,
+            workspace_id: ws.id,
+            bytes: vec![0xFF, 0xD8, 0xFF, 0xE0],
+            mime: "image/jpeg".into(),
+            width: Some(320),
+            height: Some(240),
+            page_num: Some(2),
+            source: crate::store::ImageSource::PdfEmbedded,
+        };
+
+        store.save_image_blob(img1.clone()).unwrap();
+        store.save_image_blob(img2.clone()).unwrap();
+
+        // get_image_blob returns the full record with bytes
+        let fetched = store.get_image_blob(img1.image_id).unwrap().unwrap();
+        assert_eq!(fetched.image_id, img1.image_id);
+        assert_eq!(fetched.bytes, img1.bytes);
+        assert_eq!(fetched.mime, "image/png");
+        assert_eq!(fetched.width, Some(640));
+        assert_eq!(fetched.source, crate::store::ImageSource::PdfPageRender);
+
+        // list_image_blobs_for_doc returns metadata for both, ordered by page_num
+        let metas = store.list_image_blobs_for_doc(doc.id).unwrap();
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas[0].page_num, Some(1));
+        assert_eq!(metas[1].page_num, Some(2));
+        // List response carries no bytes, only metadata.
+        assert_eq!(metas[0].mime, "image/png");
+        assert_eq!(metas[1].source, crate::store::ImageSource::PdfEmbedded);
+
+        // Deleting one doc's blobs leaves other docs untouched
+        store.delete_image_blobs_for_doc(doc.id).unwrap();
+        assert!(store.list_image_blobs_for_doc(doc.id).unwrap().is_empty());
+        assert!(store.get_image_blob(img1.image_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn deleting_document_cascades_image_blobs() {
+        use thairag_core::types::ImageId;
+
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let now = Utc::now();
+        let doc = store
+            .insert_document(Document {
+                id: DocId::new(),
+                workspace_id: ws.id,
+                title: "x".into(),
+                mime_type: "application/pdf".into(),
+                size_bytes: 1,
+                status: DocStatus::Ready,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: None,
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let img = crate::store::ImageBlobRecord {
+            image_id: ImageId::new(),
+            doc_id: doc.id,
+            workspace_id: ws.id,
+            bytes: vec![1, 2, 3],
+            mime: "image/png".into(),
+            width: None,
+            height: None,
+            page_num: None,
+            source: crate::store::ImageSource::DirectUpload,
+        };
+        store.save_image_blob(img.clone()).unwrap();
+
+        // delete_document → ON DELETE CASCADE on the FK → image blob gone
+        store.delete_document(doc.id).unwrap();
+        assert!(store.get_image_blob(img.image_id).unwrap().is_none());
     }
 
     /// Regression for C3 in docs/INGEST_REVIEW_2026-05-28.md: reprocess

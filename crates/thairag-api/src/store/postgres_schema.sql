@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS document_blobs (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Extracted image storage for smart-PDF / DOCX / XLSX / HTML / direct image uploads.
+-- See SQLite schema.sql for the source-of-truth design; same columns, Postgres types.
+CREATE TABLE IF NOT EXISTS document_image_blobs (
+    image_id     UUID PRIMARY KEY,
+    doc_id       UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    workspace_id UUID NOT NULL,
+    blob         BYTEA NOT NULL,
+    mime         TEXT NOT NULL,
+    width        INTEGER,
+    height       INTEGER,
+    page_num     INTEGER,
+    source       TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_document_image_blobs_doc ON document_image_blobs(doc_id);
+
 -- Document chunks (for Tantivy re-indexing on startup)
 CREATE TABLE IF NOT EXISTS document_chunks (
     chunk_id       UUID NOT NULL,

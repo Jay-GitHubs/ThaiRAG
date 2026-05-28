@@ -1021,6 +1021,118 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(())
     }
 
+    // ── Image blob storage ────────────────────────────────────────────
+
+    fn save_image_blob(&self, record: super::ImageBlobRecord) -> Result<()> {
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_image_blobs \
+                 (image_id, doc_id, workspace_id, blob, mime, width, height, page_num, source, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())",
+            )
+            .bind(record.image_id.0)
+            .bind(record.doc_id.0)
+            .bind(record.workspace_id.0)
+            .bind(record.bytes)
+            .bind(&record.mime)
+            .bind(record.width.map(|x| x as i32))
+            .bind(record.height.map(|x| x as i32))
+            .bind(record.page_num.map(|x| x as i32))
+            .bind(record.source.as_str())
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres save image blob: {e}")))?;
+        Ok(())
+    }
+
+    fn get_image_blob(
+        &self,
+        image_id: thairag_core::types::ImageId,
+    ) -> Result<Option<super::ImageBlobRecord>> {
+        // (image_id, doc_id, workspace_id, bytes, mime, width, height, page_num, source)
+        type ImageRow = (
+            uuid::Uuid,
+            uuid::Uuid,
+            uuid::Uuid,
+            Vec<u8>,
+            String,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            String,
+        );
+        let row: Option<ImageRow> = block_on(
+            sqlx::query_as(
+                "SELECT image_id, doc_id, workspace_id, blob, mime, width, height, page_num, source \
+                 FROM document_image_blobs WHERE image_id = $1",
+            )
+            .bind(image_id.0)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres get image blob: {e}")))?;
+
+        Ok(row.map(
+            |(iid, did, wid, bytes, mime, w, h, p, src)| super::ImageBlobRecord {
+                image_id: thairag_core::types::ImageId(iid),
+                doc_id: DocId(did),
+                workspace_id: thairag_core::types::WorkspaceId(wid),
+                bytes,
+                mime,
+                width: w.map(|x| x as u32),
+                height: h.map(|x| x as u32),
+                page_num: p.map(|x| x as u32),
+                source: super::ImageSource::from_str_lossy(&src),
+            },
+        ))
+    }
+
+    fn list_image_blobs_for_doc(&self, doc_id: DocId) -> Result<Vec<super::ImageBlobMeta>> {
+        // (image_id, workspace_id, mime, width, height, page_num, source)
+        type ImageMetaRow = (
+            uuid::Uuid,
+            uuid::Uuid,
+            String,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            String,
+        );
+        let rows: Vec<ImageMetaRow> = block_on(
+            sqlx::query_as(
+                "SELECT image_id, workspace_id, mime, width, height, page_num, source \
+                 FROM document_image_blobs WHERE doc_id = $1 \
+                 ORDER BY COALESCE(page_num, 99999999), image_id",
+            )
+            .bind(doc_id.0)
+            .fetch_all(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres list image blobs: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(iid, wid, mime, w, h, p, src)| super::ImageBlobMeta {
+                image_id: thairag_core::types::ImageId(iid),
+                doc_id,
+                workspace_id: thairag_core::types::WorkspaceId(wid),
+                mime,
+                width: w.map(|x| x as u32),
+                height: h.map(|x| x as u32),
+                page_num: p.map(|x| x as u32),
+                source: super::ImageSource::from_str_lossy(&src),
+            })
+            .collect())
+    }
+
+    fn delete_image_blobs_for_doc(&self, doc_id: DocId) -> Result<()> {
+        block_on(
+            sqlx::query("DELETE FROM document_image_blobs WHERE doc_id = $1")
+                .bind(doc_id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete image blobs: {e}")))?;
+        Ok(())
+    }
+
     // ── User ────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {
