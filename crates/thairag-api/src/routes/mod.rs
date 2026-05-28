@@ -320,6 +320,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(documents::get_document_chunks),
         )
         .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/images",
+            get(documents::list_document_images),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/images/{image_id}",
+            get(documents::get_document_image),
+        )
+        .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/reprocess",
             post(documents::reprocess_document),
         )

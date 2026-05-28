@@ -52,6 +52,7 @@ define_id!(JobId);
 define_id!(ApiKeyId);
 define_id!(WebhookId);
 define_id!(EntityId);
+define_id!(ImageId);
 
 // ── Provider Kind Enums ──────────────────────────────────────────────
 
@@ -479,6 +480,26 @@ pub struct ChunkMetadata {
     /// retrieval in place of the small indexed child `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_content: Option<String>,
+    // ── Image-as-KM fields (smart-PDF / DOCX / XLSX / HTML / direct image upload) ──
+    /// Reference into `document_image_blobs` for the source image that this
+    /// chunk's text was derived from (vision-LLM OCR, page render, or direct
+    /// image upload). When present, admin UIs and the chat pipeline can fetch
+    /// the original image alongside the chunk text. `None` for pure-text chunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_blob_id: Option<ImageId>,
+    /// Pixel width of the source image. Diagnostic only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_width: Option<u32>,
+    /// Pixel height of the source image. Diagnostic only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_height: Option<u32>,
+    /// Which `PageStrategy` (or per-format equivalent) produced this chunk.
+    /// Used for telemetry, admin-UI badges, and search-result diagnostics.
+    /// One of: `pdf_text_page`, `pdf_image_heavy`, `pdf_mixed`, `pdf_tabular`,
+    /// `pdf_scanned`, `pdf_vision_unavailable`, `docx_embedded_image`,
+    /// `xlsx_embedded_image`, `html_embedded_image`, `image_description`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_strategy: Option<String>,
 }
 
 // ── AI Document Preprocessing Types ─────────────────────────────────
