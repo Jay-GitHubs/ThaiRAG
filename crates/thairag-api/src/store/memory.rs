@@ -65,6 +65,7 @@ pub struct MemoryKmStore {
     training_datasets: RwLock<HashMap<String, super::TrainingDataset>>,
     training_pairs: RwLock<Vec<super::TrainingPair>>,
     finetune_jobs: RwLock<HashMap<String, crate::store::FinetuneJob>>,
+    image_blobs: RwLock<HashMap<thairag_core::types::ImageId, super::ImageBlobRecord>>,
 }
 
 impl Default for MemoryKmStore {
@@ -116,6 +117,7 @@ impl MemoryKmStore {
             training_datasets: RwLock::new(HashMap::new()),
             training_pairs: RwLock::new(Vec::new()),
             finetune_jobs: RwLock::new(HashMap::new()),
+            image_blobs: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -515,6 +517,51 @@ impl KmStoreTrait for MemoryKmStore {
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
         let mut store = self.chunks.write().unwrap();
         store.retain(|c| c.doc_id != doc_id);
+        Ok(())
+    }
+
+    // ── Image blob storage ────────────────────────────────────────────
+
+    fn save_image_blob(&self, record: super::ImageBlobRecord) -> Result<()> {
+        self.image_blobs
+            .write()
+            .unwrap()
+            .insert(record.image_id, record);
+        Ok(())
+    }
+
+    fn get_image_blob(
+        &self,
+        image_id: thairag_core::types::ImageId,
+    ) -> Result<Option<super::ImageBlobRecord>> {
+        Ok(self.image_blobs.read().unwrap().get(&image_id).cloned())
+    }
+
+    fn list_image_blobs_for_doc(&self, doc_id: DocId) -> Result<Vec<super::ImageBlobMeta>> {
+        let blobs = self.image_blobs.read().unwrap();
+        let mut out: Vec<super::ImageBlobMeta> = blobs
+            .values()
+            .filter(|r| r.doc_id == doc_id)
+            .map(|r| super::ImageBlobMeta {
+                image_id: r.image_id,
+                doc_id: r.doc_id,
+                workspace_id: r.workspace_id,
+                mime: r.mime.clone(),
+                width: r.width,
+                height: r.height,
+                page_num: r.page_num,
+                source: r.source,
+            })
+            .collect();
+        out.sort_by_key(|m| (m.page_num.unwrap_or(u32::MAX), m.image_id.0));
+        Ok(out)
+    }
+
+    fn delete_image_blobs_for_doc(&self, doc_id: DocId) -> Result<()> {
+        self.image_blobs
+            .write()
+            .unwrap()
+            .retain(|_, r| r.doc_id != doc_id);
         Ok(())
     }
 

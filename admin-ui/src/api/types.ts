@@ -66,6 +66,17 @@ export interface ChunksResponse {
   total: number;
 }
 
+/** Metadata for one image extracted from a document. Bytes are served separately. */
+export interface DocumentImageInfo {
+  image_id: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  page_num: number | null;
+  /** One of: pdf_page_render | pdf_embedded | docx_embedded | xlsx_embedded | html_embedded | direct_upload. */
+  source: string;
+}
+
 // ── Presets & Ollama ─────────────────────────────────────────────────
 export interface PresetModelInfo {
   model: string;

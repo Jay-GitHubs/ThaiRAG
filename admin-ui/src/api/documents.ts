@@ -3,6 +3,7 @@ import type {
   ChunksResponse,
   Document,
   DocumentContentResponse,
+  DocumentImageInfo,
   IngestRequest,
   IngestResponse,
   ListResponse,
@@ -68,6 +69,22 @@ export async function getDocumentChunks(workspaceId: string, docId: string) {
     `/api/km/workspaces/${workspaceId}/documents/${docId}/chunks`,
   );
   return res.data;
+}
+
+export async function listDocumentImages(workspaceId: string, docId: string) {
+  const res = await client.get<DocumentImageInfo[]>(
+    `/api/km/workspaces/${workspaceId}/documents/${docId}/images`,
+  );
+  return res.data;
+}
+
+/**
+ * Build the URL for an extracted image blob. The endpoint streams the bytes
+ * with the correct content-type, so we can drop this into an `<img src>`.
+ * ACL is enforced at the API; unauthorized requests return 404.
+ */
+export function documentImageUrl(workspaceId: string, docId: string, imageId: string) {
+  return `/api/km/workspaces/${workspaceId}/documents/${docId}/images/${imageId}`;
 }
 
 export async function reprocessDocument(workspaceId: string, docId: string) {
