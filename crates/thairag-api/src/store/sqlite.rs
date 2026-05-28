@@ -4921,6 +4921,95 @@ mod tests {
         assert!(store.get_workspace(ws.id).is_err());
     }
 
+    /// Regression for C3 in docs/INGEST_REVIEW_2026-05-28.md: reprocess
+    /// generates fresh chunk_ids, so save_chunks does NOT overwrite the
+    /// old chunks via `INSERT OR REPLACE` (PK is chunk_id). Without an
+    /// explicit `delete_chunks_by_doc` before reprocess, the SQL table
+    /// accumulates dead rows that `load_all_chunks` would later feed back
+    /// into Tantivy, double-indexing every reprocessed document.
+    #[test]
+    fn save_chunks_with_fresh_ids_accumulates_unless_deleted_first() {
+        use thairag_core::types::{ChunkId, DocumentChunk};
+
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let now = Utc::now();
+        let doc = store
+            .insert_document(Document {
+                id: DocId::new(),
+                workspace_id: ws.id,
+                title: "x".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+                status: DocStatus::Ready,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: None,
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let make_chunks = |n: usize| -> Vec<DocumentChunk> {
+            (0..n)
+                .map(|i| DocumentChunk {
+                    chunk_id: ChunkId::new(), // fresh ID each call — mimics reprocess
+                    doc_id: doc.id,
+                    workspace_id: ws.id,
+                    content: format!("chunk {i}"),
+                    chunk_index: i,
+                    embedding: None,
+                    metadata: None,
+                })
+                .collect()
+        };
+
+        // Initial ingest: 3 chunks.
+        store.save_chunks(&make_chunks(3)).unwrap();
+        assert_eq!(
+            store
+                .load_all_chunks()
+                .iter()
+                .filter(|c| c.doc_id == doc.id)
+                .count(),
+            3
+        );
+
+        // Reprocess WITHOUT delete: simulates the pre-fix bug. New chunks
+        // are appended; old ones remain in the table. Total: 3 + 5 = 8.
+        store.save_chunks(&make_chunks(5)).unwrap();
+        assert_eq!(
+            store
+                .load_all_chunks()
+                .iter()
+                .filter(|c| c.doc_id == doc.id)
+                .count(),
+            8,
+            "pre-fix behaviour: save_chunks does not replace by doc_id"
+        );
+
+        // Reprocess WITH delete first: the fix. After deletion + save,
+        // only the new chunks are present.
+        store.delete_chunks_by_doc(doc.id).unwrap();
+        store.save_chunks(&make_chunks(4)).unwrap();
+        assert_eq!(
+            store
+                .load_all_chunks()
+                .iter()
+                .filter(|c| c.doc_id == doc.id)
+                .count(),
+            4,
+            "post-fix behaviour: delete_chunks_by_doc clears old rows"
+        );
+    }
+
     #[test]
     fn document_crud_roundtrip() {
         let store = mem_store();
