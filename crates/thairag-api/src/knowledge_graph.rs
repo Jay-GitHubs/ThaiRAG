@@ -62,6 +62,23 @@ Rules:
 - Extract both Thai and English entities
 - Keep entity names concise but unambiguous"#;
 
+/// Truncate `text` to at most `max_bytes` bytes, snapping to the nearest
+/// char boundary at or below the limit. Naive byte slicing (`&text[..N]`)
+/// panics when `N` lands inside a multi-byte UTF-8 codepoint — common with
+/// Thai (3 bytes per char) once `text.len() > N`.
+///
+/// Returns the original `text` unchanged if it's already within the budget.
+fn truncate_at_char_boundary(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut idx = max_bytes;
+    while !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    &text[..idx]
+}
+
 /// Extract entities from text using an LLM.
 ///
 /// Returns a list of (entity_name, entity_type) pairs.
@@ -69,12 +86,8 @@ pub async fn extract_entities_from_text(
     llm: &Arc<dyn LlmProvider>,
     text: &str,
 ) -> Vec<ExtractedEntity> {
-    // Truncate text to avoid exceeding context window
-    let truncated = if text.len() > 8000 {
-        &text[..8000]
-    } else {
-        text
-    };
+    // Truncate text to avoid exceeding context window (char-boundary safe).
+    let truncated = truncate_at_char_boundary(text, 8000);
 
     let messages = vec![
         ChatMessage {
@@ -128,11 +141,7 @@ pub async fn extract_relations_from_text(
         return vec![];
     }
 
-    let truncated = if text.len() > 8000 {
-        &text[..8000]
-    } else {
-        text
-    };
+    let truncated = truncate_at_char_boundary(text, 8000);
 
     let entity_list: Vec<String> = entities
         .iter()
@@ -467,5 +476,54 @@ mod tests {
         assert_eq!(normalize_entity_type("company"), "Organization");
         assert_eq!(normalize_entity_type("city"), "Location");
         assert_eq!(normalize_entity_type("unknown"), "Concept");
+    }
+
+    // ── truncate_at_char_boundary ──────────────────────────────────
+    //
+    // Regression coverage for the same bug class fixed in PR #72
+    // (builtin_plugins.rs:137 panic on Thai char boundary). KG extraction
+    // hit it on any Thai document > 8000 bytes during doc-ingest.
+
+    #[test]
+    fn truncate_at_char_boundary_passes_short_text_through() {
+        let s = "hello";
+        assert_eq!(truncate_at_char_boundary(s, 8000), s);
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_truncates_ascii_to_exact_byte_limit() {
+        let s = "a".repeat(100);
+        assert_eq!(truncate_at_char_boundary(&s, 80).len(), 80);
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_never_panics_mid_thai_char() {
+        // Each Thai character is 3 bytes. Build a long Thai string and
+        // truncate at byte limits that deliberately land mid-character.
+        // Pre-fix `&s[..n]` would panic with "byte index N is not a char
+        // boundary".
+        let thai =
+            "เมื่อเริ่มแข่ง กระต่ายก็พุ่งออกไปอย่างรวดเร็ว ทิ้งเต่าไว้ไกลลิบ ส่วนเต่าก็ค่อย ๆ เดินต่อ และจะไม่ยอมแพ้";
+        let long_thai = thai.repeat(100);
+        assert!(long_thai.len() > 8000);
+
+        // Try several limits that are very likely to land mid-codepoint.
+        for limit in [80, 8000, 9000, 12345] {
+            let result = truncate_at_char_boundary(&long_thai, limit);
+            assert!(result.len() <= limit, "must not exceed byte budget");
+            assert!(
+                long_thai.is_char_boundary(result.len()),
+                "result must end on a char boundary"
+            );
+            // Round-trip: the slice must be valid UTF-8 (implicit in &str)
+            // and a prefix of the original.
+            assert!(long_thai.starts_with(result));
+        }
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_handles_limit_equal_to_text_len() {
+        let s = "abcdef";
+        assert_eq!(truncate_at_char_boundary(s, s.len()), s);
     }
 }
