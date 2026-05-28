@@ -17,7 +17,7 @@ use thairag_core::types::{
 };
 use uuid::Uuid;
 
-use super::{KmStoreTrait, UserRecord};
+use super::{KmStoreTrait, ORPHAN_RECONCILE_MESSAGE, UserRecord};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
@@ -647,6 +647,34 @@ impl KmStoreTrait for PostgresKmStore {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
         Ok(())
+    }
+
+    fn reconcile_orphaned_processing_documents(&self) -> Result<Vec<DocId>> {
+        // UPDATE ... RETURNING gives us the IDs and the row update in one
+        // round-trip — Postgres-native, atomic.
+        let rows: Vec<(uuid::Uuid,)> = block_on(
+            sqlx::query_as::<_, (uuid::Uuid,)>(
+                "UPDATE documents \
+                 SET status = 'failed', \
+                     processing_step = NULL, \
+                     error_message = $1, \
+                     updated_at = NOW() \
+                 WHERE status = 'processing' \
+                 RETURNING id",
+            )
+            .bind(ORPHAN_RECONCILE_MESSAGE)
+            .fetch_all(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres reconcile: {e}")))?;
+
+        let ids: Vec<DocId> = rows.into_iter().map(|(id,)| DocId(id)).collect();
+        if !ids.is_empty() {
+            tracing::warn!(
+                reconciled = ids.len(),
+                "Reconciled orphaned documents stuck in Processing after restart"
+            );
+        }
+        Ok(ids)
     }
 
     fn save_document_blob(
