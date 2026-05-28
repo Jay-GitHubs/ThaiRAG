@@ -281,6 +281,9 @@ export interface ProviderConfigResponse {
   vector_store: VectorStoreProviderInfo;
   text_search: TextSearchProviderInfo;
   reranker: RerankerProviderInfo;
+  /** Optional dedicated vision LLM for image/PDF OCR.
+   * When omitted, the primary `llm` is used (only works if it supports vision). */
+  vision_llm?: LlmProviderInfo;
 }
 
 export interface AvailableModel {
@@ -300,6 +303,11 @@ export interface UpdateProviderConfigRequest {
   embedding?: { kind?: string; model?: string; dimension?: number; api_key?: string };
   vector_store?: { kind?: string; url?: string; collection?: string; isolation?: string };
   reranker?: { kind?: string; model?: string; api_key?: string };
+  /** Set fields on the dedicated vision LLM. Unset fields preserve existing values
+   * (or seed from primary `llm` if no vision config exists yet). */
+  vision_llm?: { kind?: string; model?: string; base_url?: string; api_key?: string };
+  /** When true, remove the vision_llm entirely so the pipeline falls back to primary `llm`. */
+  clear_vision_llm?: boolean;
 }
 
 // ── Document Config ────────────────────────────────────────────────
