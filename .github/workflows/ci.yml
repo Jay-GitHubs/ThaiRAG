@@ -220,29 +220,30 @@ jobs:
           username: jdevspecialist
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Build single-platform image and push by digest. The merge job below
-      # combines all the digests into the public multi-arch manifest tags.
-      - name: Build & push API by digest
+      # Build single-platform image and push by digest to GHCR only.
+      # The merge job builds the multi-arch manifest in GHCR, then
+      # copies the finished manifest to Docker Hub via `imagetools create`.
+      # Pushing by digest to multiple registries in one outputs: block does
+      # not produce reliable digest outputs (build-push-action's
+      # `digest` output corresponds to one target, not all of them) — using
+      # a single canonical registry per build is the documented pattern.
+      - name: Build & push API by digest (GHCR)
         id: build-api
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          outputs: |
-            type=image,name=ghcr.io/jay-githubs/thairag,push-by-digest=true,name-canonical=true,push=true
-            type=image,name=jdevspecialist/thairag,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/jay-githubs/thairag,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=api-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=api-${{ matrix.arch_tag }}
 
-      - name: Build & push Admin UI by digest
+      - name: Build & push Admin UI by digest (GHCR)
         id: build-admin
         uses: docker/build-push-action@v6
         with:
           context: ./admin-ui
           platforms: ${{ matrix.platform }}
-          outputs: |
-            type=image,name=ghcr.io/jay-githubs/thairag-admin,push-by-digest=true,name-canonical=true,push=true
-            type=image,name=jdevspecialist/thairag-admin,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/jay-githubs/thairag-admin,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=admin-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=admin-${{ matrix.arch_tag }}
 
@@ -292,9 +293,12 @@ jobs:
           username: jdevspecialist
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Build the multi-arch manifest from the per-platform digests. Two tags
-      # per registry: `latest` and the short SHA, matching the previous workflow.
-      - name: Create API manifest
+      # Build the multi-arch manifest in GHCR (the registry the build jobs
+      # pushed to by digest), then mirror the completed manifest to Docker
+      # Hub. `imagetools create --tag DEST SRC` reads the multi-arch manifest
+      # at SRC and republishes it at DEST — much simpler than re-pushing
+      # each per-platform digest to Docker Hub by hand.
+      - name: Create API manifest (GHCR) and mirror to Docker Hub
         env:
           SHA_TAG: ${{ github.sha }}
         run: |
@@ -302,18 +306,22 @@ jobs:
           SHORT_SHA="${SHA_TAG:0:7}"
           API_DIGEST_AMD=$(cat /tmp/digests/api/amd64)
           API_DIGEST_ARM=$(cat /tmp/digests/api/arm64)
-          for REG in \
-            "ghcr.io/jay-githubs/thairag" \
-            "jdevspecialist/thairag" ; do
-            for TAG in latest "${SHORT_SHA}"; do
-              docker buildx imagetools create \
-                --tag "${REG}:${TAG}" \
-                "${REG}@${API_DIGEST_AMD}" \
-                "${REG}@${API_DIGEST_ARM}"
-            done
+          GHCR="ghcr.io/jay-githubs/thairag"
+          HUB="jdevspecialist/thairag"
+
+          for TAG in latest "${SHORT_SHA}"; do
+            # Build the multi-arch manifest in GHCR from the per-platform digests.
+            docker buildx imagetools create \
+              --tag "${GHCR}:${TAG}" \
+              "${GHCR}@${API_DIGEST_AMD}" \
+              "${GHCR}@${API_DIGEST_ARM}"
+            # Mirror the just-published GHCR manifest to Docker Hub.
+            docker buildx imagetools create \
+              --tag "${HUB}:${TAG}" \
+              "${GHCR}:${TAG}"
           done
 
-      - name: Create Admin UI manifest
+      - name: Create Admin UI manifest (GHCR) and mirror to Docker Hub
         env:
           SHA_TAG: ${{ github.sha }}
         run: |
@@ -321,13 +329,15 @@ jobs:
           SHORT_SHA="${SHA_TAG:0:7}"
           ADMIN_DIGEST_AMD=$(cat /tmp/digests/admin/amd64)
           ADMIN_DIGEST_ARM=$(cat /tmp/digests/admin/arm64)
-          for REG in \
-            "ghcr.io/jay-githubs/thairag-admin" \
-            "jdevspecialist/thairag-admin" ; do
-            for TAG in latest "${SHORT_SHA}"; do
-              docker buildx imagetools create \
-                --tag "${REG}:${TAG}" \
-                "${REG}@${ADMIN_DIGEST_AMD}" \
-                "${REG}@${ADMIN_DIGEST_ARM}"
-            done
+          GHCR="ghcr.io/jay-githubs/thairag-admin"
+          HUB="jdevspecialist/thairag-admin"
+
+          for TAG in latest "${SHORT_SHA}"; do
+            docker buildx imagetools create \
+              --tag "${GHCR}:${TAG}" \
+              "${GHCR}@${ADMIN_DIGEST_AMD}" \
+              "${GHCR}@${ADMIN_DIGEST_ARM}"
+            docker buildx imagetools create \
+              --tag "${HUB}:${TAG}" \
+              "${GHCR}:${TAG}"
           done
