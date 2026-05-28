@@ -210,7 +210,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           outputs: |
-            type=image,name=ghcr.io/${{ github.repository_owner }}/thairag,push-by-digest=true,name-canonical=true,push=true
+            type=image,name=ghcr.io/jay-githubs/thairag,push-by-digest=true,name-canonical=true,push=true
             type=image,name=jdevspecialist/thairag,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=api-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=api-${{ matrix.arch_tag }}
@@ -222,7 +222,7 @@ jobs:
           context: ./admin-ui
           platforms: ${{ matrix.platform }}
           outputs: |
-            type=image,name=ghcr.io/${{ github.repository_owner }}/thairag-admin,push-by-digest=true,name-canonical=true,push=true
+            type=image,name=ghcr.io/jay-githubs/thairag-admin,push-by-digest=true,name-canonical=true,push=true
             type=image,name=jdevspecialist/thairag-admin,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=admin-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=admin-${{ matrix.arch_tag }}
@@ -284,7 +284,7 @@ jobs:
           API_DIGEST_AMD=$(cat /tmp/digests/api/amd64)
           API_DIGEST_ARM=$(cat /tmp/digests/api/arm64)
           for REG in \
-            "ghcr.io/${{ github.repository_owner }}/thairag" \
+            "ghcr.io/jay-githubs/thairag" \
             "jdevspecialist/thairag" ; do
             for TAG in latest "${SHORT_SHA}"; do
               docker buildx imagetools create \
@@ -303,7 +303,7 @@ jobs:
           ADMIN_DIGEST_AMD=$(cat /tmp/digests/admin/amd64)
           ADMIN_DIGEST_ARM=$(cat /tmp/digests/admin/arm64)
           for REG in \
-            "ghcr.io/${{ github.repository_owner }}/thairag-admin" \
+            "ghcr.io/jay-githubs/thairag-admin" \
             "jdevspecialist/thairag-admin" ; do
             for TAG in latest "${SHORT_SHA}"; do
               docker buildx imagetools create \
