@@ -49,6 +49,18 @@ fn vmem_limit_kb() -> u64 {
         .unwrap_or(DEFAULT_CHILD_VMEM_LIMIT_KB)
 }
 
+/// The virtual-memory limit as a **byte** count, for `prlimit --as`.
+///
+/// `prlimit --as` takes its value in bytes (the native unit of `RLIMIT_AS`),
+/// unlike `ulimit -v` which is in KiB. Passing the KiB number straight to
+/// `--as` was a 1024× under-cap: the intended 4 GiB became 4 MiB, far too
+/// small for the dynamic linker to even `mmap` poppler's shared libraries
+/// (the symptom was `pdftoppm: error while loading shared libraries:
+/// liblcms2.so.2: failed to map segment from shared object`).
+fn vmem_limit_bytes() -> u64 {
+    vmem_limit_kb().saturating_mul(1024)
+}
+
 /// `true` when the operator has explicitly disabled the prlimit wrapper.
 /// Useful when running under container memory cgroups (which provide their
 /// own enforcement) or when even 4 GiB virtual address space is too tight
@@ -103,7 +115,8 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
 
     let mut cmd = if use_prlimit {
         let mut c = Command::new("prlimit");
-        c.arg(format!("--as={}", vmem_limit_kb()));
+        // `--as` is a byte count, not KiB — see `vmem_limit_bytes`.
+        c.arg(format!("--as={}", vmem_limit_bytes()));
         c.arg("--");
         c.arg("pdftoppm");
         c
@@ -363,6 +376,18 @@ mod tests {
             std::env::remove_var("THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB");
         }
         assert_eq!(vmem_limit_kb(), DEFAULT_CHILD_VMEM_LIMIT_KB);
+    }
+
+    #[test]
+    fn vmem_limit_bytes_is_kib_times_1024() {
+        // The historical bug: `--as` is bytes, not KiB. Guard the conversion
+        // so the default cap is a real 4 GiB, not 4 MiB.
+        // SAFETY: env access requires unsafe in edition 2024.
+        unsafe {
+            std::env::remove_var("THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB");
+        }
+        assert_eq!(vmem_limit_bytes(), DEFAULT_CHILD_VMEM_LIMIT_KB * 1024);
+        assert_eq!(vmem_limit_bytes(), 4 * 1024 * 1024 * 1024); // 4 GiB
     }
 
     #[test]
