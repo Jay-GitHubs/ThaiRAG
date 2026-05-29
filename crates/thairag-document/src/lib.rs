@@ -2,6 +2,7 @@ pub mod ai;
 pub mod chunker;
 pub mod converter;
 pub mod image;
+pub mod office_media;
 pub mod pdf_rasterizer;
 pub mod pdfium_engine;
 pub mod pipeline;

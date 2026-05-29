@@ -358,7 +358,7 @@ async fn process_document_inner_impl(
                 mime: blob.mime.clone(),
                 width: blob.width,
                 height: blob.height,
-                page_num: Some(blob.page_num),
+                page_num: blob.page_num,
                 source: crate::store::ImageSource::from_str_lossy(blob.source),
             };
             match state.km_store.save_image_blob(record) {

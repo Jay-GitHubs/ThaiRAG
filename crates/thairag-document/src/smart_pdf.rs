@@ -105,8 +105,8 @@ pub struct ExtractedImageBlob {
     pub mime: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// 1-indexed source page.
-    pub page_num: u32,
+    /// 1-indexed source page, or `None` for non-paged sources (office/html).
+    pub page_num: Option<u32>,
     /// Stable source tag (e.g. `pdf_page_render`); maps to the store's
     /// `ImageSource` via `from_str_lossy`.
     pub source: &'static str,
@@ -282,7 +282,24 @@ pub async fn render_to_document(
                     for png in &ex.embedded {
                         match describe(llm, png, prompt, IMAGE_VISION_TOKENS).await {
                             Ok(desc) => {
+                                // Persist the embedded image and embed its
+                                // marker before the description.
+                                let image_id = ImageId::new();
+                                let meta = crate::image::extract_image_metadata(png, PNG_MIME);
+                                images.push(ExtractedImageBlob {
+                                    image_id,
+                                    bytes: png.clone(),
+                                    mime: PNG_MIME.to_string(),
+                                    width: meta.width,
+                                    height: meta.height,
+                                    page_num: Some(ex.page_num as u32),
+                                    source: "pdf_embedded",
+                                });
                                 body.push_str("\n\n");
+                                body.push_str(&crate::semantic::image_marker(
+                                    &image_id.to_string(),
+                                ));
+                                body.push('\n');
                                 body.push_str(&desc);
                                 described += 1;
                             }
@@ -320,7 +337,7 @@ pub async fn render_to_document(
                 mime: PNG_MIME.to_string(),
                 width: meta.width,
                 height: meta.height,
-                page_num: ex.page_num as u32,
+                page_num: Some(ex.page_num as u32),
                 source: "pdf_page_render",
             });
             body = format!(
@@ -447,7 +464,7 @@ mod tests {
         // The full-page render is collected as a blob and its id embedded.
         assert_eq!(doc.images.len(), 1);
         assert_eq!(doc.images[0].source, "pdf_page_render");
-        assert_eq!(doc.images[0].page_num, 1);
+        assert_eq!(doc.images[0].page_num, Some(1));
         let marker = crate::semantic::image_marker(&doc.images[0].image_id.to_string());
         assert!(
             doc.markdown.contains(&marker),
