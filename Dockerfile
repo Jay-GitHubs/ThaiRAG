@@ -42,14 +42,41 @@ RUN find crates/ -name "*.rs" -exec touch {} + && \
 # ── Runtime ────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-# poppler-utils provides pdftoppm, used by the PDF vision fallback to
+# poppler-utils provides pdftoppm, used by the legacy PDF vision fallback to
 # rasterize image-only PDF pages so a vision LLM can describe them.
 # util-linux provides prlimit for per-render memory caps.
+# curl is used just below to fetch libpdfium, then purged.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         poppler-utils \
-        util-linux && \
+        util-linux \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Bake the native libpdfium onto the system library path so the smart-PDF
+# engine (pdfium-render) can `bind_to_system_library()` at runtime. The Rust
+# build.rs downloads this for local dev; in the image we install it explicitly
+# for the image's architecture. Pin via PDFIUM_RELEASE (default: latest).
+ARG PDFIUM_RELEASE=latest
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) asset=pdfium-linux-x64.tgz ;; \
+        arm64) asset=pdfium-linux-arm64.tgz ;; \
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    if [ "$PDFIUM_RELEASE" = "latest" ]; then \
+        url="https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset"; \
+    else \
+        url="https://github.com/bblanchon/pdfium-binaries/releases/download/$PDFIUM_RELEASE/$asset"; \
+    fi; \
+    curl -fsSL "$url" -o /tmp/pdfium.tgz; \
+    tar -xzf /tmp/pdfium.tgz -C /tmp lib/libpdfium.so; \
+    install -m 0644 /tmp/lib/libpdfium.so /usr/lib/libpdfium.so; \
+    rm -rf /tmp/pdfium.tgz /tmp/lib; \
+    ldconfig; \
+    apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/thairag-api /usr/local/bin/thairag-api

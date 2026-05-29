@@ -1,0 +1,255 @@
+//! Native PDF page extraction via pdfium (Chromium's PDF engine), wrapping the
+//! `pdfium-render` crate. Mirrors `Jay-RAG-Tools/crates/core/src/pdf.rs`.
+//!
+//! pdfium's handles are `!Send`, so every method here is synchronous and must
+//! be driven from a `tokio::task::spawn_blocking` task — never hold a
+//! [`PdfEngine`], document, or page across an `.await`.
+//!
+//! The native `libpdfium` is provisioned by `build.rs` (downloaded from
+//! bblanchon/pdfium-binaries) for local builds and baked onto the system
+//! library path in Docker. When it cannot be loaded, [`is_available`] returns
+//! `false` and the pipeline falls back to the legacy `pdf-extract` path.
+
+use image::DynamicImage;
+use pdfium_render::prelude::*;
+use thairag_core::ThaiRagError;
+use thairag_core::error::Result;
+
+/// Cheap per-page signals used to pick an extraction strategy.
+#[derive(Debug, Clone)]
+pub struct PageSignals {
+    /// 0-indexed page number.
+    pub index: usize,
+    /// Fraction of page area covered by image objects (0.0..=1.0).
+    pub coverage: f64,
+    /// Extracted text, trimmed.
+    pub text: String,
+}
+
+/// A PNG-encoded image extracted (or rendered) from a page.
+#[derive(Debug, Clone)]
+pub struct ExtractedImage {
+    pub png_bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// 1-indexed position on the page; `0` for a full-page render.
+    pub index: u32,
+}
+
+fn err(msg: impl Into<String>) -> ThaiRagError {
+    ThaiRagError::Validation(msg.into())
+}
+
+/// Bind to libpdfium: build-time path → system library → current directory.
+fn bind() -> Result<Pdfium> {
+    // 1. Path baked in by build.rs (downloaded binary) — best for local dev.
+    if let Some(path) = option_env!("PDFIUM_DYLIB_PATH")
+        && let Ok(bindings) = Pdfium::bind_to_library(path)
+    {
+        return Ok(Pdfium::new(bindings));
+    }
+    // 2. System library (Docker bakes libpdfium into /usr/lib).
+    if let Ok(bindings) = Pdfium::bind_to_system_library() {
+        return Ok(Pdfium::new(bindings));
+    }
+    // 3. Current working directory.
+    if let Ok(bindings) = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("."))
+    {
+        return Ok(Pdfium::new(bindings));
+    }
+    Err(err(
+        "libpdfium not found — install it on the system library path or set \
+         PDFIUM_DYLIB_PATH (see OPERATOR_GUIDE). Smart-PDF extraction is disabled.",
+    ))
+}
+
+/// `true` when libpdfium can be loaded. Gate the smart-PDF path on this.
+pub fn is_available() -> bool {
+    bind().is_ok()
+}
+
+/// Sharpen + contrast boost to help Thai OCR (mirrors Jay-RAG-Tools).
+fn enhance(img: DynamicImage) -> DynamicImage {
+    img.adjust_contrast(20.0).unsharpen(1.5, 3)
+}
+
+fn encode_png(img: &DynamicImage) -> Result<Vec<u8>> {
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| err(format!("PNG encode failed: {e}")))?;
+    Ok(png)
+}
+
+/// A loaded pdfium binding. Construct once inside a `spawn_blocking` task and
+/// reuse for every page of a document.
+pub struct PdfEngine {
+    pdfium: Pdfium,
+}
+
+impl PdfEngine {
+    /// Load libpdfium. Errors if the native library can't be found.
+    pub fn new() -> Result<Self> {
+        Ok(Self { pdfium: bind()? })
+    }
+
+    fn load<'a>(&'a self, pdf: &'a [u8]) -> Result<PdfDocument<'a>> {
+        // pdfium loads the slice by reference (zero-copy), so `pdf` must
+        // outlive the returned document — hence the shared `'a`.
+        self.pdfium
+            .load_pdf_from_byte_slice(pdf, None)
+            .map_err(|e| err(format!("failed to open PDF: {e}")))
+    }
+
+    /// Number of pages in the document.
+    pub fn page_count(&self, pdf: &[u8]) -> Result<usize> {
+        Ok(self.load(pdf)?.pages().len() as usize)
+    }
+
+    /// Cheap signals (image coverage + text) for every page, in one load.
+    pub fn page_signals(&self, pdf: &[u8]) -> Result<Vec<PageSignals>> {
+        let doc = self.load(pdf)?;
+        let mut out = Vec::new();
+        for (i, page) in doc.pages().iter().enumerate() {
+            out.push(PageSignals {
+                index: i,
+                coverage: image_coverage(&page),
+                text: page_text(&page),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Render one page to a PNG at `dpi`. `sharpen` applies OCR enhancement.
+    pub fn render_page_png(
+        &self,
+        pdf: &[u8],
+        page_index: usize,
+        dpi: u32,
+        sharpen: bool,
+    ) -> Result<ExtractedImage> {
+        let doc = self.load(pdf)?;
+        let page = doc
+            .pages()
+            .get(page_index as u16)
+            .map_err(|e| err(format!("get page {page_index}: {e}")))?;
+
+        let scale = dpi as f32 / 72.0;
+        let width = (page.width().value * scale) as i32;
+        let height = (page.height().value * scale) as i32;
+        let config = PdfRenderConfig::new()
+            .set_target_width(width)
+            .set_target_height(height);
+
+        let bitmap = page
+            .render_with_config(&config)
+            .map_err(|e| err(format!("render page {page_index}: {e}")))?;
+        let mut img = bitmap.as_image();
+        if sharpen {
+            img = enhance(img);
+        }
+        let (width, height) = (img.width(), img.height());
+        Ok(ExtractedImage {
+            png_bytes: encode_png(&img)?,
+            width,
+            height,
+            index: 0,
+        })
+    }
+
+    /// Extract embedded raster images from one page, skipping tiny ones
+    /// (smaller than `min_size` px on either axis).
+    pub fn embedded_images(
+        &self,
+        pdf: &[u8],
+        page_index: usize,
+        min_size: u32,
+        sharpen: bool,
+    ) -> Result<Vec<ExtractedImage>> {
+        let doc = self.load(pdf)?;
+        let page = doc
+            .pages()
+            .get(page_index as u16)
+            .map_err(|e| err(format!("get page {page_index}: {e}")))?;
+
+        let mut images = Vec::new();
+        let mut idx = 0u32;
+        for object in page.objects().iter() {
+            if object.object_type() != PdfPageObjectType::Image {
+                continue;
+            }
+            let Some(image_object) = object.as_image_object() else {
+                continue;
+            };
+            let mut raw = match image_object.get_raw_image() {
+                Ok(img) => img,
+                Err(_) => continue,
+            };
+            let (w, h) = (raw.width(), raw.height());
+            if w < min_size || h < min_size {
+                continue;
+            }
+            idx += 1;
+            if sharpen {
+                raw = enhance(raw);
+            }
+            let Ok(png) = encode_png(&raw) else {
+                continue;
+            };
+            images.push(ExtractedImage {
+                png_bytes: png,
+                width: w,
+                height: h,
+                index: idx,
+            });
+        }
+        Ok(images)
+    }
+}
+
+/// Fraction of a page's area covered by image objects (0.0..=1.0).
+fn image_coverage(page: &PdfPage) -> f64 {
+    let area = page.width().value as f64 * page.height().value as f64;
+    if area == 0.0 {
+        return 0.0;
+    }
+    let mut image_area = 0.0;
+    for object in page.objects().iter() {
+        if object.object_type() == PdfPageObjectType::Image
+            && let Ok(b) = object.bounds()
+        {
+            let w = (b.right().value - b.left().value).abs() as f64;
+            let h = (b.top().value - b.bottom().value).abs() as f64;
+            image_area += w * h;
+        }
+    }
+    (image_area / area).min(1.0)
+}
+
+fn page_text(page: &PdfPage) -> String {
+    page.text()
+        .map(|t| t.all())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_available_does_not_panic() {
+        // Result depends on whether libpdfium was provisioned; either is fine.
+        let _ = is_available();
+    }
+
+    #[test]
+    fn garbage_bytes_error_cleanly_when_available() {
+        if !is_available() {
+            return; // libpdfium not provisioned in this environment — skip.
+        }
+        let engine = PdfEngine::new().expect("bind pdfium");
+        let err = engine.page_count(b"not a pdf at all").unwrap_err();
+        assert!(format!("{err}").contains("open PDF"), "unexpected: {err}");
+    }
+}
