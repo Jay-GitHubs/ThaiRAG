@@ -18,6 +18,7 @@
 
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
+use thairag_core::types::ImageId;
 use tracing::warn;
 
 use crate::pdfium_engine::PdfEngine;
@@ -94,14 +95,33 @@ pub struct PageExtract {
     pub embedded: Vec<Vec<u8>>,
 }
 
+/// An image blob extracted during processing, with a minted id, ready for the
+/// caller (the API/store layer) to persist. The id is already embedded in the
+/// page markdown (`[IMAGE:<id>]`) and on the page's chunks (`image_blob_id`).
+#[derive(Debug, Clone)]
+pub struct ExtractedImageBlob {
+    pub image_id: ImageId,
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// 1-indexed source page.
+    pub page_num: u32,
+    /// Stable source tag (e.g. `pdf_page_render`); maps to the store's
+    /// `ImageSource` via `from_str_lossy`.
+    pub source: &'static str,
+}
+
 /// The assembled document plus the per-page renders (for chunking with
-/// page/strategy metadata) and telemetry counters.
+/// page/strategy metadata), the extracted image blobs, and telemetry counters.
 #[derive(Debug, Clone)]
 pub struct SmartPdfDocument {
     /// One canonical semantic-markdown document (page-ordered).
     pub markdown: String,
     /// Per-page rendered markdown + strategy, for metadata-tagged chunking.
     pub pages: Vec<RenderedPage>,
+    /// Image blobs (full-page renders) with minted ids, for the caller to save.
+    pub images: Vec<ExtractedImageBlob>,
     pub total_pages: usize,
     pub vision_pages_used: usize,
     pub pages_vision_failed: usize,
@@ -187,12 +207,13 @@ pub async fn render_to_document(
     let mut vision_pages_used = 0usize;
     let mut pages_vision_failed = 0usize;
     let mut rendered = Vec::with_capacity(total_pages);
+    let mut images: Vec<ExtractedImageBlob> = Vec::new();
 
     for ex in extracts {
         let lang = Language::detect(&ex.text);
         let over_budget = vision_pages_used >= cfg.max_vision_pages;
 
-        let body = match ex.strategy {
+        let mut body = match ex.strategy {
             PageStrategy::TextOnly => ex.text.clone(),
 
             PageStrategy::Tabular => {
@@ -281,6 +302,34 @@ pub async fn render_to_document(
             }
         };
 
+        // Persist the full-page render for the vision strategies (one image per
+        // page). Mint the id here so it can be embedded both in the page
+        // markdown (`[IMAGE:<id>]`) and on the page's chunks (`image_blob_id`).
+        // Embedded-image (Mixed) blob persistence is deferred — those images are
+        // described inline.
+        if matches!(
+            ex.strategy,
+            PageStrategy::ImageHeavy | PageStrategy::Scanned | PageStrategy::Tabular
+        ) && let Some(png) = ex.page_png.as_ref()
+        {
+            let image_id = ImageId::new();
+            let meta = crate::image::extract_image_metadata(png, PNG_MIME);
+            images.push(ExtractedImageBlob {
+                image_id,
+                bytes: png.clone(),
+                mime: PNG_MIME.to_string(),
+                width: meta.width,
+                height: meta.height,
+                page_num: ex.page_num as u32,
+                source: "pdf_page_render",
+            });
+            body = format!(
+                "{}\n{}",
+                crate::semantic::image_marker(&image_id.to_string()),
+                body
+            );
+        }
+
         rendered.push(rp(&ex, body));
     }
 
@@ -288,6 +337,7 @@ pub async fn render_to_document(
     SmartPdfDocument {
         markdown,
         pages: rendered,
+        images,
         total_pages,
         vision_pages_used,
         pages_vision_failed,
@@ -394,6 +444,16 @@ mod tests {
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
         assert!(doc.markdown.contains("OCR heading"));
+        // The full-page render is collected as a blob and its id embedded.
+        assert_eq!(doc.images.len(), 1);
+        assert_eq!(doc.images[0].source, "pdf_page_render");
+        assert_eq!(doc.images[0].page_num, 1);
+        let marker = crate::semantic::image_marker(&doc.images[0].image_id.to_string());
+        assert!(
+            doc.markdown.contains(&marker),
+            "marker missing: {}",
+            doc.markdown
+        );
     }
 
     #[tokio::test]

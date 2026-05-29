@@ -38,6 +38,17 @@ pub mod empty_reason {
 /// Steps: "analyzing", "converting", "checking_quality", "chunking", "indexing".
 pub type StepCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Output of [`DocumentPipeline::process_to_document`]: the chunks plus the
+/// artifacts the caller (the API/store layer) persists — the canonical
+/// semantic-markdown document (smart-PDF path) and any extracted image blobs.
+/// Image ids are already embedded in the chunks (`image_blob_id`) and the
+/// markdown (`[IMAGE:<id>]`), so the caller only needs to save the bytes.
+pub struct ProcessedDocument {
+    pub chunks: Vec<DocumentChunk>,
+    pub images: Vec<crate::smart_pdf::ExtractedImageBlob>,
+    pub markdown: Option<String>,
+}
+
 /// Orchestrates: convert raw bytes → chunk text → produce DocumentChunks.
 /// When AI preprocessing is enabled, delegates to the AI agent team.
 /// Supports multi-modal content: images (via LLM vision) and table extraction.
@@ -330,6 +341,78 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
     ) -> Result<Vec<DocumentChunk>> {
+        if self.smart_pdf_eligible(mime_type) && crate::pdfium_engine::is_available() {
+            match self.process_pdf_smart(raw, doc_id, workspace_id).await {
+                Ok(doc) if !doc.chunks.is_empty() => return Ok(doc.chunks),
+                Ok(_) => tracing::warn!(
+                    %doc_id,
+                    "smart-pdf produced no chunks — falling back to legacy vision path"
+                ),
+                Err(e) => tracing::warn!(
+                    %doc_id, error = %e,
+                    "smart-pdf path failed — falling back to legacy vision path"
+                ),
+            }
+        }
+        self.process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
+            .await
+    }
+
+    /// Like [`process`](Self::process), but also returns the canonical semantic
+    /// markdown and the extracted image blobs (smart-PDF path) so the caller
+    /// can persist them. Non-smart paths return chunks only (`markdown: None`,
+    /// no images).
+    pub async fn process_to_document(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        on_step: Option<StepCallback>,
+    ) -> Result<ProcessedDocument> {
+        if self.smart_pdf_eligible(mime_type) && crate::pdfium_engine::is_available() {
+            match self.process_pdf_smart(raw, doc_id, workspace_id).await {
+                Ok(doc) if !doc.chunks.is_empty() => return Ok(doc),
+                Ok(_) => tracing::warn!(
+                    %doc_id,
+                    "smart-pdf produced no chunks — falling back to legacy vision path"
+                ),
+                Err(e) => tracing::warn!(
+                    %doc_id, error = %e,
+                    "smart-pdf path failed — falling back to legacy vision path"
+                ),
+            }
+        }
+        let chunks = self
+            .process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
+            .await?;
+        Ok(ProcessedDocument {
+            chunks,
+            images: Vec::new(),
+            markdown: None,
+        })
+    }
+
+    /// Whether the pdfium smart-PDF engine should be attempted for this input.
+    fn smart_pdf_eligible(&self, mime_type: &str) -> bool {
+        mime_type == PDF_MIME
+            && self.pdf_vision_fallback_enabled
+            && self.image_description_enabled
+            && self.vision_llm.is_some()
+    }
+
+    /// All non-smart-PDF processing: the image route, the legacy page-aware PDF
+    /// vision fallback (used when pdfium is unavailable or the smart path
+    /// produced nothing), and the mechanical/AI text path with table extraction
+    /// and the universal zero-chunk guard.
+    async fn process_non_smart(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        on_step: Option<StepCallback>,
+    ) -> Result<Vec<DocumentChunk>> {
         // Route image files to the image description pipeline
         if image::is_image_mime(mime_type) {
             return self
@@ -337,31 +420,13 @@ impl DocumentPipeline {
                 .await;
         }
 
-        // Route PDFs through the page-aware vision-fallback path when a
-        // vision LLM is configured and the fallback is enabled. This is
-        // the cure for PowerPoint→PDF exports where slides are rasterized
-        // and `pdf_extract` returns empty text.
+        // Legacy page-aware vision fallback for PowerPoint→PDF exports and
+        // scanned PDFs, used when the pdfium smart engine is unavailable.
         if mime_type == PDF_MIME
             && self.pdf_vision_fallback_enabled
             && self.image_description_enabled
             && self.vision_llm.is_some()
         {
-            // Prefer the pdfium-based smart engine (per-page strategy → one
-            // semantic-markdown document). Fall back to the legacy whole-page
-            // vision path when pdfium is unavailable or yields nothing.
-            if crate::pdfium_engine::is_available() {
-                match self.process_pdf_smart(raw, doc_id, workspace_id).await {
-                    Ok(chunks) if !chunks.is_empty() => return Ok(chunks),
-                    Ok(_) => tracing::warn!(
-                        %doc_id,
-                        "smart-pdf produced no chunks — falling back to legacy vision path"
-                    ),
-                    Err(e) => tracing::warn!(
-                        %doc_id, error = %e,
-                        "smart-pdf path failed — falling back to legacy vision path"
-                    ),
-                }
-            }
             return self
                 .process_pdf_with_vision(raw, doc_id, workspace_id)
                 .await;
@@ -508,7 +573,7 @@ impl DocumentPipeline {
         raw: &[u8],
         doc_id: DocId,
         workspace_id: WorkspaceId,
-    ) -> Result<Vec<DocumentChunk>> {
+    ) -> Result<ProcessedDocument> {
         use crate::semantic::PageStrategy;
         use crate::smart_pdf::SmartPdfConfig;
 
@@ -563,6 +628,13 @@ impl DocumentPipeline {
                 PageStrategy::TextOnly => DocumentContentType::Text,
             };
             let strategy = page.strategy.as_str().to_string();
+            // Link every chunk of this page to the page's persisted image blob
+            // (if one was rendered), so retrieval can surface the page image.
+            let image_blob_id = doc
+                .images
+                .iter()
+                .find(|b| b.page_num == page.page_num as u32)
+                .map(|b| b.image_id);
             for content in self
                 .chunker
                 .chunk(body, self.max_chunk_size, self.chunk_overlap)
@@ -580,13 +652,18 @@ impl DocumentPipeline {
                         mime_type: Some(PDF_MIME.to_string()),
                         page_numbers: Some(vec![page.page_num]),
                         page_strategy: Some(strategy.clone()),
+                        image_blob_id,
                         ..Default::default()
                     }),
                 });
                 chunk_index += 1;
             }
         }
-        Ok(chunks)
+        Ok(ProcessedDocument {
+            chunks,
+            images: doc.images,
+            markdown: Some(doc.markdown),
+        })
     }
 
     async fn process_pdf_with_vision(
