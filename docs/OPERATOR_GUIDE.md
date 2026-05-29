@@ -195,6 +195,18 @@ A `pdftoppm` rasterization failure is **server-side** and unrelated to the visio
 
 The hard timeout (`RasterizeOptions.timeout`, default 15s) and the 32 MiB output PNG cap (`MAX_PNG_BYTES`) still apply regardless.
 
+### 2.6.7 The smart-PDF engine (libpdfium)
+
+The smart document-extraction engine uses **pdfium** (Chromium's PDF engine, via the `pdfium-render` crate) to measure per-page image coverage, extract text, pull embedded images, and render pages — choosing a per-page strategy (text-only / mixed / image-heavy / scanned / tabular) before producing semantic markdown.
+
+pdfium needs a native `libpdfium` library that is **not** on crates.io:
+
+- **Docker** (production): the image downloads the architecture-appropriate `libpdfium.so` from [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) and installs it to `/usr/lib`, so the engine finds it via `bind_to_system_library()`. Pin a release with the `PDFIUM_RELEASE` build arg (default `latest`).
+- **Local dev**: the crate's `build.rs` downloads the right binary at build time and bakes its path into the binary. Needs network during `cargo build`; failures are non-fatal (the engine simply reports unavailable).
+- **Override / air-gapped**: set `PDFIUM_DYLIB_PATH=/abs/path/to/libpdfium.{so,dylib}` to use a pre-installed binary and skip downloading.
+
+When libpdfium can't be loaded, the engine reports unavailable and ingestion **falls back to the legacy `pdf-extract` + pdftoppm path** — no hard failure.
+
 ### 2.6 Bulk ingest
 
 For first-time backfill of a large corpus:
