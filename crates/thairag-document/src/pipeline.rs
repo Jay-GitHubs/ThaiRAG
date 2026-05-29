@@ -83,6 +83,11 @@ pub struct DocumentPipeline {
     /// Hard cap on the number of pages that may be rasterized per PDF
     /// (prevents pathological 10,000-page uploads from blowing up vision spend).
     pdf_max_vision_pages: usize,
+    /// Smart-PDF (pdfium) tunables: render DPI, image-coverage threshold,
+    /// embedded-image filtering, per-page image cap, high-quality, enhance. Its
+    /// `min_chars_per_page`/`max_vision_pages` are overridden at use time from
+    /// the two fields above (shared with the legacy vision fallback).
+    smart_pdf: crate::smart_pdf::SmartPdfConfig,
 }
 
 impl DocumentPipeline {
@@ -118,6 +123,7 @@ impl DocumentPipeline {
             pdf_vision_fallback_enabled: true,
             pdf_min_chars_per_page: 50,
             pdf_max_vision_pages: 100,
+            smart_pdf: crate::smart_pdf::SmartPdfConfig::default(),
         }
     }
 
@@ -226,6 +232,7 @@ impl DocumentPipeline {
             pdf_vision_fallback_enabled: true,
             pdf_min_chars_per_page: 50,
             pdf_max_vision_pages: 100,
+            smart_pdf: crate::smart_pdf::SmartPdfConfig::default(),
         }
     }
 
@@ -250,6 +257,30 @@ impl DocumentPipeline {
         self.pdf_vision_fallback_enabled = enabled;
         self.pdf_min_chars_per_page = min_chars_per_page;
         self.pdf_max_vision_pages = max_vision_pages;
+        self
+    }
+
+    /// Configure the smart-PDF (pdfium) engine tunables. `min_chars_per_page`
+    /// and `max_vision_pages` are controlled by [`with_pdf_vision_fallback`]
+    /// (shared with the legacy fallback), not here.
+    ///
+    /// [`with_pdf_vision_fallback`]: Self::with_pdf_vision_fallback
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_smart_pdf_options(
+        mut self,
+        image_dpi: u32,
+        page_as_image_threshold: f64,
+        min_image_size: u32,
+        max_images_per_page: usize,
+        high_quality: bool,
+        enhance: bool,
+    ) -> Self {
+        self.smart_pdf.image_dpi = image_dpi;
+        self.smart_pdf.page_as_image_threshold = page_as_image_threshold;
+        self.smart_pdf.min_image_size = min_image_size;
+        self.smart_pdf.max_images_per_page = max_images_per_page;
+        self.smart_pdf.high_quality = high_quality;
+        self.smart_pdf.enhance = enhance;
         self
     }
 
@@ -612,7 +643,7 @@ impl DocumentPipeline {
         let cfg = SmartPdfConfig {
             min_chars_per_page: self.pdf_min_chars_per_page,
             max_vision_pages: self.pdf_max_vision_pages,
-            ..SmartPdfConfig::default()
+            ..self.smart_pdf.clone()
         };
 
         // Phase 1 (sync, pdfium is !Send): extract per-page data off the async

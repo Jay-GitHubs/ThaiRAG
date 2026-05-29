@@ -207,6 +207,19 @@ pdfium needs a native `libpdfium` library that is **not** on crates.io:
 
 When libpdfium can't be loaded, the engine reports unavailable and ingestion **falls back to the legacy `pdf-extract` + pdftoppm path** — no hard failure.
 
+**Tuning** — `[document]` config keys (all optional; defaults shown):
+
+| Key | Default | Effect |
+|---|---|---|
+| `pdf_image_dpi` | `150` | Render DPI for full-page images sent to the vision model. Higher = sharper OCR, larger images, more cost. |
+| `pdf_page_as_image_threshold` | `0.5` | Image-coverage ratio (0–1) at/above which a page is treated as image-heavy (rendered whole + OCR'd) vs text + embedded images. |
+| `pdf_min_image_size` | `100` | Skip embedded images smaller than this (px, either axis). |
+| `pdf_max_images_per_page` | `5` | Cap on embedded images described per mixed page. |
+| `pdf_high_quality` | `false` | Vision-first OCR for **every** page (highest fidelity + cost). |
+| `pdf_image_enhance` | `false` | Sharpen/contrast before OCR (helps Thai diacritics). |
+
+`pdf_min_chars_per_page` and `pdf_max_vision_pages` (above) also apply to the smart engine. Embedded images from DOCX/XLSX (`*/media/`) and HTML (`data:` URLs) and direct image uploads are described and stored the same way; the originals are retrievable via `GET /workspaces/{ws}/documents/{doc}/images`.
+
 ### 2.6 Bulk ingest
 
 For first-time backfill of a large corpus:
