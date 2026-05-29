@@ -18,6 +18,78 @@ pub fn extract_tables(text: &str) -> Vec<ExtractedTable> {
     tables
 }
 
+/// Heuristic: does this text *look* like it contains a table?
+///
+/// Used by the smart-PDF strategy selector to decide whether to route a page
+/// through the vision model's table-extraction prompt. Ported from
+/// `Jay-RAG-Tools/crates/core/src/table.rs`. Two independent signals; either
+/// triggers:
+/// 1. **Multi-space columns** — ≥40% of non-empty lines have ≥2 groups of 2+
+///    consecutive spaces/tabs.
+/// 2. **Row consistency** — ≥6 consecutive lines each with ≥3 whitespace
+///    tokens whose counts vary by ≤2 (catches pdfium collapsing column gaps to
+///    single spaces). The run threshold of 6 avoids false positives from
+///    bullet lists and tables of contents.
+pub fn looks_like_table(text: &str) -> bool {
+    let non_empty: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    if non_empty.len() < 3 {
+        return false;
+    }
+
+    // Method 1: multi-space column detection.
+    let tabular_lines = non_empty
+        .iter()
+        .filter(|line| {
+            let mut space_groups = 0;
+            let mut in_spaces = false;
+            let mut space_count = 0;
+            for ch in line.chars() {
+                if ch == ' ' || ch == '\t' {
+                    space_count += 1;
+                    if space_count >= 2 && !in_spaces {
+                        space_groups += 1;
+                        in_spaces = true;
+                    }
+                } else {
+                    space_count = 0;
+                    in_spaces = false;
+                }
+            }
+            space_groups >= 2
+        })
+        .count();
+
+    if (tabular_lines as f64 / non_empty.len() as f64) >= 0.4 {
+        return true;
+    }
+
+    // Method 2: row consistency — consecutive lines with similar token counts.
+    let token_counts: Vec<usize> = non_empty
+        .iter()
+        .map(|line| line.split_whitespace().count())
+        .collect();
+
+    let mut best_run = 1;
+    let mut current_run = 1;
+    for i in 1..token_counts.len() {
+        let prev = token_counts[i - 1];
+        let curr = token_counts[i];
+        if prev >= 3 && curr >= 3 && ((prev as isize) - (curr as isize)).abs() <= 2 {
+            current_run += 1;
+            best_run = best_run.max(current_run);
+        } else {
+            current_run = 1;
+        }
+    }
+
+    best_run >= 6
+}
+
 /// Convert an `ExtractedTable` to a markdown table string.
 pub fn table_to_markdown(table: &ExtractedTable) -> String {
     if table.headers.is_empty() && table.rows.is_empty() {

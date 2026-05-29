@@ -336,6 +336,13 @@ pub fn is_available() -> bool {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate process-global env vars. They all touch the
+    /// same `THAIRAG__PDF_RASTERIZER__*` variables, so without this lock they
+    /// race under the parallel test runner (one test's `remove_var` clobbering
+    /// another's `set_var`). Poison is ignored — a panicking test still frees
+    /// the lock for the rest.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn rejects_page_zero() {
         let opts = RasterizeOptions {
@@ -369,8 +376,7 @@ mod tests {
 
     #[test]
     fn vmem_limit_defaults_when_env_unset() {
-        // Safety: this test mutates a process-global env var. It's small
-        // and only sets/unsets one variable; no other test reads it.
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: env access requires unsafe in edition 2024.
         unsafe {
             std::env::remove_var("THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB");
@@ -380,6 +386,7 @@ mod tests {
 
     #[test]
     fn vmem_limit_bytes_is_kib_times_1024() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The historical bug: `--as` is bytes, not KiB. Guard the conversion
         // so the default cap is a real 4 GiB, not 4 MiB.
         // SAFETY: env access requires unsafe in edition 2024.
@@ -392,6 +399,7 @@ mod tests {
 
     #[test]
     fn vmem_limit_honours_env_override() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: env access requires unsafe in edition 2024.
         unsafe {
             std::env::set_var("THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB", "8388608");
@@ -404,6 +412,7 @@ mod tests {
 
     #[test]
     fn vmem_limit_ignores_invalid_env() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Garbage env var falls back to default rather than blocking ingestion.
         unsafe {
             std::env::set_var("THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB", "not-a-number");
@@ -420,6 +429,7 @@ mod tests {
 
     #[test]
     fn prlimit_disable_flag_recognised() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for val in ["1", "true", "yes"] {
             unsafe {
                 std::env::set_var("THAIRAG__PDF_RASTERIZER__DISABLE_PRLIMIT", val);
