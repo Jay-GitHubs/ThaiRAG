@@ -501,7 +501,11 @@ impl DocumentPipeline {
         let mut chunk_index: usize = 0;
         let mut pages_needing_vision: usize = 0;
         let mut pages_over_budget: usize = 0;
-        let mut pages_vision_failed: usize = 0;
+        // Tracked separately so the failure reason can tell an operator
+        // whether the problem is server-side page rendering (pdftoppm) or the
+        // vision model itself — they need very different fixes.
+        let mut pages_rasterize_failed: usize = 0;
+        let mut pages_llm_failed: usize = 0;
 
         for (page_num, page_text) in pages {
             let trimmed = page_text.trim();
@@ -514,42 +518,63 @@ impl DocumentPipeline {
                 pages_needing_vision += 1;
             }
 
-            let (page_content, used_vision) =
-                if needs_vision && vision_pages_used < self.pdf_max_vision_pages {
-                    match rasterize_and_describe(raw, page_num, llm.as_ref()).await {
+            let (page_content, used_vision) = if needs_vision
+                && vision_pages_used < self.pdf_max_vision_pages
+            {
+                // Two distinct stages: render the page to PNG (pdftoppm),
+                // then ask the vision model to describe it. Keep their
+                // failures apart so diagnostics point at the right layer.
+                match rasterize_pdf_page(raw, page_num).await {
+                    Err(e) => {
+                        pages_rasterize_failed += 1;
+                        tracing::warn!(
+                            %doc_id,
+                            page = page_num,
+                            error = %e,
+                            "PDF page rasterization (pdftoppm) failed — keeping extracted \
+                             text. This is a server-side rendering problem, not the vision \
+                             model."
+                        );
+                        (trimmed.to_string(), false)
+                    }
+                    Ok(png) => match image::describe_image(llm.as_ref(), &png, "image/png").await {
                         Ok(desc) => {
                             vision_pages_used += 1;
                             info!(
                                 %doc_id,
                                 page = page_num,
+                                vision_model = llm.model_name(),
                                 desc_len = desc.len(),
-                                "PDF page rasterized via vision fallback"
+                                "PDF page rasterized and described via vision fallback"
                             );
                             (desc, true)
                         }
                         Err(e) => {
-                            pages_vision_failed += 1;
+                            pages_llm_failed += 1;
                             tracing::warn!(
                                 %doc_id,
                                 page = page_num,
+                                vision_model = llm.model_name(),
                                 error = %e,
-                                "Vision fallback failed for PDF page — keeping extracted text"
+                                "Vision model failed to describe PDF page — keeping \
+                                 extracted text"
                             );
                             (trimmed.to_string(), false)
                         }
-                    }
-                } else {
-                    if needs_vision {
-                        pages_over_budget += 1;
-                        tracing::warn!(
-                            %doc_id,
-                            page = page_num,
-                            cap = self.pdf_max_vision_pages,
-                            "Skipping vision fallback — pdf_max_vision_pages cap reached"
-                        );
-                    }
-                    (trimmed.to_string(), false)
-                };
+                    },
+                }
+            } else {
+                if needs_vision {
+                    pages_over_budget += 1;
+                    tracing::warn!(
+                        %doc_id,
+                        page = page_num,
+                        cap = self.pdf_max_vision_pages,
+                        "Skipping vision fallback — pdf_max_vision_pages cap reached"
+                    );
+                }
+                (trimmed.to_string(), false)
+            };
 
             if page_content.trim().is_empty() {
                 continue;
@@ -595,7 +620,9 @@ impl DocumentPipeline {
             total_pages,
             vision_pages_used,
             pages_over_budget,
-            pages_vision_failed,
+            pages_rasterize_failed,
+            pages_llm_failed,
+            vision_model = llm.model_name(),
             chunks_produced = chunks.len(),
             "Smart PDF processing complete"
         );
@@ -608,7 +635,9 @@ impl DocumentPipeline {
                 total_pages,
                 pages_needing_vision,
                 pages_over_budget,
-                pages_vision_failed,
+                pages_rasterize_failed,
+                pages_llm_failed,
+                llm.model_name(),
             ));
         }
 
@@ -622,7 +651,9 @@ impl DocumentPipeline {
         total_pages: usize,
         pages_needing_vision: usize,
         pages_over_budget: usize,
-        pages_vision_failed: usize,
+        pages_rasterize_failed: usize,
+        pages_llm_failed: usize,
+        vision_model: &str,
     ) -> ThaiRagError {
         if pages_over_budget > 0 {
             return ThaiRagError::empty_extraction(
@@ -636,13 +667,30 @@ impl DocumentPipeline {
                 ),
             );
         }
-        if pages_vision_failed > 0 {
+        // Rasterization runs before the model is ever called, so a pdftoppm
+        // failure is a server-side rendering problem — say so instead of
+        // pointing the operator at the (innocent) vision model.
+        if pages_rasterize_failed > 0 {
+            return ThaiRagError::empty_extraction(
+                empty_reason::NO_TEXT_VISION_FAILED,
+                format!(
+                    "PDF needed vision OCR on {pages_needing_vision} of {total_pages} pages, but \
+                     rendering the page(s) to images with pdftoppm (poppler-utils) failed on \
+                     {pages_rasterize_failed}. This is a server-side rasterization problem, not \
+                     the vision model — check the poppler-utils install and the \
+                     `THAIRAG__PDF_RASTERIZER__*` limits (see OPERATOR_GUIDE §2.6.6). The \
+                     per-page warning logs carry pdftoppm's exact error."
+                ),
+            );
+        }
+        if pages_llm_failed > 0 {
             return ThaiRagError::empty_extraction(
                 empty_reason::NO_TEXT_VISION_FAILED,
                 format!(
                     "PDF needed vision OCR on {pages_needing_vision} of {total_pages} pages but the \
-                     vision LLM failed on {pages_vision_failed} pages. Check the LLM connection \
-                     and that the model supports vision (e.g. Ollama `llava`, Claude 3+)."
+                     vision model `{vision_model}` failed on {pages_llm_failed} pages. Check the \
+                     LLM connection and that the model supports vision (e.g. Ollama `llava`, \
+                     Claude 3+)."
                 ),
             );
         }
@@ -747,16 +795,12 @@ impl DocumentPipeline {
     }
 }
 
-/// Rasterize one PDF page to PNG and ask the vision LLM to describe it.
-/// Rasterization happens on a blocking thread (subprocess I/O) so it does
-/// not stall the async runtime.
-async fn rasterize_and_describe(
-    pdf_bytes: &[u8],
-    page: usize,
-    llm: &dyn LlmProvider,
-) -> Result<String> {
+/// Rasterize one PDF page to PNG on a blocking thread (subprocess I/O) so it
+/// does not stall the async runtime. Describing the PNG with the vision model
+/// is left to the caller, so rasterization and model failures stay distinct.
+async fn rasterize_pdf_page(pdf_bytes: &[u8], page: usize) -> Result<Vec<u8>> {
     let pdf_owned = pdf_bytes.to_vec();
-    let png_bytes = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         pdf_rasterizer::rasterize_page(
             &pdf_owned,
             &RasterizeOptions {
@@ -766,9 +810,7 @@ async fn rasterize_and_describe(
         )
     })
     .await
-    .map_err(|e| thairag_core::ThaiRagError::Validation(format!("rasterize task join: {e}")))??;
-
-    image::describe_image(llm, &png_bytes, "image/png").await
+    .map_err(|e| thairag_core::ThaiRagError::Validation(format!("rasterize task join: {e}")))?
 }
 
 #[cfg(test)]

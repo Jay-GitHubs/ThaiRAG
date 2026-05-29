@@ -180,13 +180,17 @@ When rasterization fails, the pipeline surfaces `empty_extraction[no_text_vision
 
 **Note on `--as`**: it bounds *virtual* address space, not RSS. Modern poppler links libcairo + libfontconfig + libfreetype + libpng, and just loading those shared libraries commonly maps 500MB-2GB of VAS before any user PDF arrives. If the limit is set too tight, pdftoppm can crash on startup; the default of 4 GiB is generous headroom while still bounding pathological inputs.
 
-> **Historical note**: builds before this fix piped the PDF into `pdftoppm` via stdin, which poppler rejects. That produced `write to pdftoppm stdin: Broken pipe (os error 32)` regardless of the vmem limit. Raising `VMEM_LIMIT_KB` did **not** help — the fix was to stop using stdin. If you still see that exact message, you are running an old image; rebuild.
+> **Historical note (stdin)**: builds before the stdin fix piped the PDF into `pdftoppm` via stdin, which poppler rejects. That produced `write to pdftoppm stdin: Broken pipe (os error 32)` regardless of the vmem limit. The fix was to stop using stdin. If you still see that exact message, you are running an old image; rebuild.
+>
+> **Historical note (vmem unit)**: builds before the vmem-unit fix passed the limit to `prlimit --as` as if it were KiB, but `--as` is a **byte** count. The intended 4 GiB became 4 MiB — far too small for the dynamic linker to even `mmap` poppler's libraries, so pdftoppm died with `error while loading shared libraries: liblcms2.so.2: failed to map segment from shared object`. The config is denominated in KiB and converted to bytes internally; `8388608` now genuinely means 8 GiB. If you see the `liblcms2 ... failed to map segment` message, you are on an old image; rebuild (or set `DISABLE_PRLIMIT=1` as an immediate workaround).
 
-**Defaults**: 4 GiB virtual memory, plenty for any real slide deck. Override via env:
+A `pdftoppm` rasterization failure is **server-side** and unrelated to the vision model — the zero-chunk reason and the per-page `WARN` logs now say so explicitly, and the success/failure logs include `vision_model=<id>` so you can see which model is wired up.
+
+**Defaults**: 4 GiB virtual memory, plenty for any real slide deck. Override via env (value in **KiB**):
 
 | Env var | Effect |
 |---|---|
-| `THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB` | Override the VAS cap. e.g. `8388608` for 8 GiB. Invalid values fall back to the default. |
+| `THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB` | Override the VAS cap, in KiB. e.g. `8388608` for 8 GiB. Invalid values fall back to the default. |
 | `THAIRAG__PDF_RASTERIZER__DISABLE_PRLIMIT=1` | Disable the wrapper entirely. Useful when running under container cgroups that already enforce memory bounds. Accepted values: `1`, `true`, `yes`. |
 
 The hard timeout (`RasterizeOptions.timeout`, default 15s) and the 32 MiB output PNG cap (`MAX_PNG_BYTES`) still apply regardless.
