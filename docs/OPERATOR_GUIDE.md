@@ -172,6 +172,27 @@ PDFs exported from PowerPoint, scanned documents, and image-uploaded files canno
 
 **What happens when vision is misconfigured**: an image-only PDF upload fails with structured `empty_extraction[no_text_vision_unavailable]: ...` and the admin UI shows a **"Vision OCR Required"** warning badge with the remediation hint. Upload never produces zero-chunk Ready documents (the historic silent failure mode is now impossible — see `docs/INGEST_REVIEW_2026-05-28.md`).
 
+### 2.6.6 Tuning the pdftoppm vmem limit
+
+The PDF vision fallback shells out to `pdftoppm` (poppler-utils) to render image-only pages to PNG before the vision LLM sees them. On Linux the child is wrapped with `prlimit --as=N` to bound virtual address space — a safety net against zip-bomb-style PDFs.
+
+**The catch**: `--as` bounds *virtual* address space, not RSS. Modern poppler links libcairo + libfontconfig + libfreetype + libpng, and just loading those shared libraries commonly maps 500MB-2GB of VAS before any user PDF arrives. If the limit is too tight, pdftoppm SIGSEGVs on startup and the parent sees:
+
+```
+write to pdftoppm stdin: Broken pipe (os error 32)
+```
+
+The pipeline surfaces this as `empty_extraction[no_text_vision_failed]` with a hint pointing back here.
+
+**Defaults**: 4 GiB virtual memory, plenty for any real slide deck. Override via env:
+
+| Env var | Effect |
+|---|---|
+| `THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB` | Override the VAS cap. e.g. `8388608` for 8 GiB. Invalid values fall back to the default. |
+| `THAIRAG__PDF_RASTERIZER__DISABLE_PRLIMIT=1` | Disable the wrapper entirely. Useful when running under container cgroups that already enforce memory bounds. Accepted values: `1`, `true`, `yes`. |
+
+The hard timeout (`RasterizeOptions.timeout`, default 15s) and the 32 MiB output PNG cap (`MAX_PNG_BYTES`) still apply regardless.
+
 ### 2.6 Bulk ingest
 
 For first-time backfill of a large corpus:
