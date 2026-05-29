@@ -449,6 +449,26 @@ pub struct DocumentConfig {
     /// otherwise translate to 10,000 vision-LLM calls.
     #[serde(default = "default_pdf_max_vision_pages")]
     pub pdf_max_vision_pages: usize,
+    /// Smart-PDF (pdfium) render DPI for full-page images sent to the vision
+    /// model. Higher = sharper OCR, larger images, more cost.
+    #[serde(default = "default_pdf_image_dpi")]
+    pub pdf_image_dpi: u32,
+    /// Image-coverage ratio (0.0–1.0) at/above which a PDF page is treated as
+    /// image-heavy (rendered whole and OCR'd) rather than text+embedded-images.
+    #[serde(default = "default_pdf_page_as_image_threshold")]
+    pub pdf_page_as_image_threshold: f64,
+    /// Skip embedded PDF images smaller than this many pixels on either axis.
+    #[serde(default = "default_pdf_min_image_size")]
+    pub pdf_min_image_size: u32,
+    /// Cap on embedded images described per mixed PDF page (cost guard).
+    #[serde(default = "default_pdf_max_images_per_page")]
+    pub pdf_max_images_per_page: usize,
+    /// Vision-first OCR for every PDF page (highest fidelity, highest cost).
+    #[serde(default)]
+    pub pdf_high_quality: bool,
+    /// Apply sharpen/contrast enhancement before OCR (helps Thai diacritics).
+    #[serde(default)]
+    pub pdf_image_enhance: bool,
 }
 
 fn default_true() -> bool {
@@ -461,6 +481,22 @@ fn default_pdf_min_chars_per_page() -> usize {
 
 fn default_pdf_max_vision_pages() -> usize {
     100
+}
+
+fn default_pdf_image_dpi() -> u32 {
+    150
+}
+
+fn default_pdf_page_as_image_threshold() -> f64 {
+    0.5
+}
+
+fn default_pdf_min_image_size() -> u32 {
+    100
+}
+
+fn default_pdf_max_images_per_page() -> usize {
+    5
 }
 
 fn default_sentence_window_size() -> usize {
@@ -1764,6 +1800,12 @@ mod tests {
                 pdf_vision_fallback_enabled: true,
                 pdf_min_chars_per_page: default_pdf_min_chars_per_page(),
                 pdf_max_vision_pages: default_pdf_max_vision_pages(),
+                pdf_image_dpi: default_pdf_image_dpi(),
+                pdf_page_as_image_threshold: default_pdf_page_as_image_threshold(),
+                pdf_min_image_size: default_pdf_min_image_size(),
+                pdf_max_images_per_page: default_pdf_max_images_per_page(),
+                pdf_high_quality: false,
+                pdf_image_enhance: false,
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
