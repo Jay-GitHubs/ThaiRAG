@@ -346,6 +346,22 @@ impl DocumentPipeline {
             && self.image_description_enabled
             && self.vision_llm.is_some()
         {
+            // Prefer the pdfium-based smart engine (per-page strategy → one
+            // semantic-markdown document). Fall back to the legacy whole-page
+            // vision path when pdfium is unavailable or yields nothing.
+            if crate::pdfium_engine::is_available() {
+                match self.process_pdf_smart(raw, doc_id, workspace_id).await {
+                    Ok(chunks) if !chunks.is_empty() => return Ok(chunks),
+                    Ok(_) => tracing::warn!(
+                        %doc_id,
+                        "smart-pdf produced no chunks — falling back to legacy vision path"
+                    ),
+                    Err(e) => tracing::warn!(
+                        %doc_id, error = %e,
+                        "smart-pdf path failed — falling back to legacy vision path"
+                    ),
+                }
+            }
             return self
                 .process_pdf_with_vision(raw, doc_id, workspace_id)
                 .await;
@@ -483,6 +499,96 @@ impl DocumentPipeline {
     ///
     /// Hard caps on vision usage prevent abusive PDFs from translating to
     /// thousands of vision-LLM calls.
+    /// Smart per-page PDF extraction (pdfium): pick a strategy per page, build
+    /// one semantic-markdown document, and chunk it per page with strategy /
+    /// page metadata. The caller has already confirmed pdfium is available and
+    /// a vision LLM is configured.
+    async fn process_pdf_smart(
+        &self,
+        raw: &[u8],
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Result<Vec<DocumentChunk>> {
+        use crate::semantic::PageStrategy;
+        use crate::smart_pdf::SmartPdfConfig;
+
+        let llm = self
+            .vision_llm
+            .as_ref()
+            .expect("process_pdf_smart called without vision_llm — caller must check")
+            .clone();
+
+        let cfg = SmartPdfConfig {
+            min_chars_per_page: self.pdf_min_chars_per_page,
+            max_vision_pages: self.pdf_max_vision_pages,
+            ..SmartPdfConfig::default()
+        };
+
+        // Phase 1 (sync, pdfium is !Send): extract per-page data off the async
+        // runtime. The PDF bytes are moved into the blocking task.
+        let raw_owned = raw.to_vec();
+        let cfg_blocking = cfg.clone();
+        let extracts = tokio::task::spawn_blocking(move || {
+            crate::smart_pdf::extract_pages(&raw_owned, &cfg_blocking)
+        })
+        .await
+        .map_err(|e| ThaiRagError::Validation(format!("smart-pdf extract task join: {e}")))??;
+
+        // Phase 2 (async): vision per page + assemble the document.
+        let doc = crate::smart_pdf::render_to_document("", extracts, llm.as_ref(), &cfg).await;
+
+        info!(
+            %doc_id,
+            total_pages = doc.total_pages,
+            vision_pages_used = doc.vision_pages_used,
+            pages_vision_failed = doc.pages_vision_failed,
+            markdown_bytes = doc.markdown.len(),
+            vision_model = llm.model_name(),
+            "Smart PDF (pdfium) processing complete"
+        );
+
+        // Chunk each page's markdown separately so chunks carry page number,
+        // strategy, and content-type metadata.
+        let mut chunks = Vec::new();
+        let mut chunk_index = 0usize;
+        for page in &doc.pages {
+            let body = page.markdown.trim();
+            if body.is_empty() {
+                continue;
+            }
+            let content_type = match page.strategy {
+                PageStrategy::Tabular => DocumentContentType::Table,
+                PageStrategy::ImageHeavy | PageStrategy::Scanned => DocumentContentType::Image,
+                PageStrategy::Mixed => DocumentContentType::Mixed,
+                PageStrategy::TextOnly => DocumentContentType::Text,
+            };
+            let strategy = page.strategy.as_str().to_string();
+            for content in self
+                .chunker
+                .chunk(body, self.max_chunk_size, self.chunk_overlap)
+            {
+                chunks.push(DocumentChunk {
+                    chunk_id: ChunkId::new(),
+                    doc_id,
+                    workspace_id,
+                    content,
+                    chunk_index,
+                    embedding: None,
+                    metadata: Some(ChunkMetadata {
+                        content_type: Some(content_type.clone()),
+                        chunk_type: Some(strategy.clone()),
+                        mime_type: Some(PDF_MIME.to_string()),
+                        page_numbers: Some(vec![page.page_num]),
+                        page_strategy: Some(strategy.clone()),
+                        ..Default::default()
+                    }),
+                });
+                chunk_index += 1;
+            }
+        }
+        Ok(chunks)
+    }
+
     async fn process_pdf_with_vision(
         &self,
         raw: &[u8],

@@ -7,6 +7,7 @@ pub mod pdfium_engine;
 pub mod pipeline;
 pub mod semantic;
 pub mod semantic_prompts;
+pub mod smart_pdf;
 pub mod table_extractor;
 pub mod text_utils;
 pub mod thai_chunker;
