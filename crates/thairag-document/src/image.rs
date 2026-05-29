@@ -34,12 +34,32 @@ pub fn extract_image_metadata(image_bytes: &[u8], mime_type: &str) -> ImageMetad
     }
 }
 
-/// Describe an image using a vision-capable LLM.
-/// If the LLM does not support vision, returns a placeholder description with metadata.
+/// Default prompt for a plain image description (direct image uploads).
+const DEFAULT_IMAGE_PROMPT: &str = "Describe this image in detail. Include any text, diagrams, charts, \
+     tables, or visual elements you can identify. If there is text in the image, \
+     transcribe it accurately.";
+
+/// Describe an image using a vision-capable LLM with the default prompt.
+/// If the LLM does not support vision, returns a placeholder description.
 pub async fn describe_image(
     llm: &dyn LlmProvider,
     image_bytes: &[u8],
     mime_type: &str,
+) -> Result<String> {
+    describe_image_with_prompt(llm, image_bytes, mime_type, DEFAULT_IMAGE_PROMPT, 1024).await
+}
+
+/// Describe an image with a caller-supplied prompt and token budget.
+///
+/// Used by the smart-PDF engine to apply strategy-specific prompts (full-page
+/// transcription, table extraction, OCR) instead of the generic description.
+/// If the LLM does not support vision, returns a metadata placeholder.
+pub async fn describe_image_with_prompt(
+    llm: &dyn LlmProvider,
+    image_bytes: &[u8],
+    mime_type: &str,
+    prompt: &str,
+    max_tokens: u32,
 ) -> Result<String> {
     let metadata = extract_image_metadata(image_bytes, mime_type);
 
@@ -56,17 +76,14 @@ pub async fn describe_image(
 
     let vision_msg = VisionMessage {
         role: "user".to_string(),
-        text: "Describe this image in detail. Include any text, diagrams, charts, \
-               tables, or visual elements you can identify. If there is text in the image, \
-               transcribe it accurately."
-            .to_string(),
+        text: prompt.to_string(),
         images: vec![ImageContent {
             base64_data,
             media_type: mime_type.to_string(),
         }],
     };
 
-    let response = llm.generate_vision(&[vision_msg], Some(1024)).await?;
+    let response = llm.generate_vision(&[vision_msg], Some(max_tokens)).await?;
 
     info!(
         format = %metadata.format,
