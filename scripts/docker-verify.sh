@@ -3,11 +3,18 @@
 #
 # Usage:
 #   ./scripts/docker-verify.sh [--no-teardown] [--native-ollama]
+#                              [--smart-pdf <file.pdf> --workspace <id>]
 #
 # Options:
-#   --no-teardown    Keep containers running after verification
-#   --native-ollama  Use native Ollama instead of Docker (recommended on macOS
-#                    for Metal GPU acceleration). Requires `ollama serve` running.
+#   --no-teardown      Keep containers running after verification
+#   --native-ollama    Use native Ollama instead of Docker (recommended on macOS
+#                      for Metal GPU acceleration). Requires `ollama serve`.
+#   --smart-pdf <f>    Upload <f> and verify the smart-PDF pipeline end to end:
+#                      semantic-markdown content, persisted image blobs, page
+#                      strategies, and that the pdfium engine actually loaded.
+#                      Requires --workspace and a vision-capable vision_llm
+#                      configured on the server (e.g. Ollama llava/qwen2.5vl).
+#   --workspace <id>   Existing workspace id to upload the --smart-pdf file into.
 #
 # Prerequisites: docker, docker compose, curl, jq
 set -euo pipefail
@@ -23,12 +30,19 @@ HEALTH_WAIT=120     # seconds to wait for ThaiRAG health
 PULL_TIMEOUT=600    # seconds for model pull
 TEARDOWN=true
 NATIVE_OLLAMA=false # set true on macOS to skip Docker Ollama (uses Metal GPU)
+SMART_PDF_FILE=""
+SMART_PDF_WS=""
 
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-teardown)   TEARDOWN=false ;;
         --native-ollama) NATIVE_OLLAMA=true ;;
+        --smart-pdf)     SMART_PDF_FILE="${2:-}"; shift ;;
+        --smart-pdf=*)   SMART_PDF_FILE="${1#*=}" ;;
+        --workspace)     SMART_PDF_WS="${2:-}"; shift ;;
+        --workspace=*)   SMART_PDF_WS="${1#*=}" ;;
     esac
+    shift
 done
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -48,10 +62,10 @@ check() {
     local desc="$1"; shift
     if "$@"; then
         log "$desc"
-        ((pass++))
+        pass=$((pass + 1))
     else
         err "$desc"
-        ((fail++))
+        fail=$((fail + 1))
     fi
 }
 
@@ -263,6 +277,70 @@ check "Phase 6: GET /finetune/datasets" \
 
 check "Phase 6: GET /finetune/jobs" \
     check_phase6_get "/api/km/finetune/jobs"
+
+# ── Step 9: Smart-PDF extraction (optional: --smart-pdf <file>) ───────
+if [ -n "$SMART_PDF_FILE" ]; then
+    echo ""
+    echo "▸ Step 9: Smart-PDF extraction ($SMART_PDF_FILE)..."
+    if [ -z "$TOKEN" ]; then
+        err "Smart-PDF: no auth token (Step 8 must succeed first)"; fail=$((fail + 1))
+    elif [ -z "$SMART_PDF_WS" ]; then
+        err "Smart-PDF: --workspace <id> is required with --smart-pdf"; fail=$((fail + 1))
+    elif [ ! -f "$SMART_PDF_FILE" ]; then
+        err "Smart-PDF: file not found: $SMART_PDF_FILE"; fail=$((fail + 1))
+    else
+        SP_BASE="${API_URL}/api/km/workspaces/${SMART_PDF_WS}/documents"
+        UP_RESP=$(curl -sf -X POST "${SP_BASE}/upload" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -F "file=@${SMART_PDF_FILE}" 2>/dev/null || true)
+        SP_DOC=$(echo "$UP_RESP" | jq -r '.id // .doc_id // .document.id // empty' 2>/dev/null || true)
+
+        test_uploaded() { [ -n "$SP_DOC" ]; }
+        check "Smart-PDF: upload accepted" test_uploaded
+
+        if [ -n "$SP_DOC" ]; then
+            # Poll until the document leaves Processing (up to ~180s).
+            SP_STATUS=""
+            for _ in $(seq 1 90); do
+                SP_JSON=$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
+                    "${SP_BASE}/${SP_DOC}" 2>/dev/null || true)
+                SP_STATUS=$(echo "$SP_JSON" | jq -r '.status // .document.status // empty' 2>/dev/null || true)
+                case "$SP_STATUS" in ready|failed) break ;; esac
+                sleep 2
+            done
+
+            test_ready() { [ "$SP_STATUS" = "ready" ]; }
+            check "Smart-PDF: document reached Ready (status=${SP_STATUS:-unknown})" test_ready
+
+            SP_CONTENT=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "${SP_BASE}/${SP_DOC}/content" 2>/dev/null || true)
+            test_md_pages() { echo "$SP_CONTENT" | grep -q "## Page "; }
+            check "Smart-PDF: content has semantic '## Page' sections" test_md_pages
+
+            SP_IMAGES=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "${SP_BASE}/${SP_DOC}/images" 2>/dev/null || true)
+            test_has_images() { echo "$SP_IMAGES" | jq -e 'length > 0' >/dev/null 2>&1; }
+            check "Smart-PDF: image blobs persisted (PR #79 producer)" test_has_images
+
+            SP_CHUNKS=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "${SP_BASE}/${SP_DOC}/chunks" 2>/dev/null || true)
+            test_page_strategy() {
+                echo "$SP_CHUNKS" | jq -e \
+                    '[.[] | .metadata.page_strategy // empty | select(startswith("pdf_"))] | length > 0' \
+                    >/dev/null 2>&1
+            }
+            check "Smart-PDF: chunks carry pdf_* page_strategy" test_page_strategy
+
+            # Decisive: confirm the pdfium engine ran (validates the Dockerfile
+            # libpdfium install — the one piece not covered by unit tests).
+            test_pdfium_log() {
+                docker compose -f "$COMPOSE_FILE" logs thairag 2>/dev/null \
+                    | grep -q "Smart PDF (pdfium) processing complete"
+            }
+            check "Smart-PDF: pdfium engine ran (libpdfium loaded in image)" test_pdfium_log
+
+            echo "  Content preview:"
+            echo "$SP_CONTENT" | head -12 | sed 's/^/    /'
+        fi
+    fi
+fi
 
 # ── Results ───────────────────────────────────────────────────────────
 echo ""
