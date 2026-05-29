@@ -321,6 +321,14 @@ impl ProviderBundle {
                 doc.pdf_vision_fallback_enabled,
                 doc.pdf_min_chars_per_page,
                 doc.pdf_max_vision_pages,
+            )
+            .with_smart_pdf_options(
+                doc.pdf_image_dpi,
+                doc.pdf_page_as_image_threshold,
+                doc.pdf_min_image_size,
+                doc.pdf_max_images_per_page,
+                doc.pdf_high_quality,
+                doc.pdf_image_enhance,
             );
 
             // Enable image description if configured. Prefer the dedicated
