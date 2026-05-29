@@ -310,12 +310,12 @@ async fn process_document_inner_impl(
     // returns `EmptyExtraction` when no meaningful content was produced —
     // surface its structured reason/hint instead of swallowing it into a
     // generic failure message so the admin UI can act on it.
-    let chunks = match p
+    let processed = match p
         .document_pipeline
-        .process(&bytes, &mime_type, doc_id, workspace_id, on_step)
+        .process_to_document(&bytes, &mime_type, doc_id, workspace_id, on_step)
         .await
     {
-        Ok(c) => c,
+        Ok(d) => d,
         Err(thairag_core::ThaiRagError::EmptyExtraction { reason, hint }) => {
             let msg = format!("empty_extraction[{reason}]: {hint}");
             warn!(%doc_id, reason, hint, "Document produced no chunks");
@@ -341,6 +341,48 @@ async fn process_document_inner_impl(
             return (0, Some(msg));
         }
     };
+
+    // Smart-PDF path: persist the extracted image blobs and replace the
+    // mechanical markdown preview saved above with the canonical semantic
+    // markdown. Image ids are already embedded in chunks + markdown.
+    if let Some(markdown) = processed.markdown.as_ref() {
+        // Clear any prior blobs (covers reprocess) before re-saving.
+        let _ = state.km_store.delete_image_blobs_for_doc(doc_id);
+        let mut saved_images = 0i32;
+        for blob in &processed.images {
+            let record = crate::store::ImageBlobRecord {
+                image_id: blob.image_id,
+                doc_id,
+                workspace_id,
+                bytes: blob.bytes.clone(),
+                mime: blob.mime.clone(),
+                width: blob.width,
+                height: blob.height,
+                page_num: Some(blob.page_num),
+                source: crate::store::ImageSource::from_str_lossy(blob.source),
+            };
+            match state.km_store.save_image_blob(record) {
+                Ok(()) => saved_images += 1,
+                Err(e) => warn!(%doc_id, error = %e, "Failed to save image blob (non-fatal)"),
+            }
+        }
+        let table_count = processed
+            .chunks
+            .iter()
+            .filter(|c| {
+                c.metadata.as_ref().and_then(|m| m.page_strategy.as_deref()) == Some("pdf_tabular")
+            })
+            .count() as i32;
+        let _ = state.km_store.save_document_blob(
+            doc_id,
+            Some(bytes.clone()),
+            Some(markdown.clone()),
+            saved_images,
+            table_count,
+        );
+    }
+
+    let chunks = processed.chunks;
 
     // Apply chunk plugins (e.g., summary headers) after splitting
     let mut chunks = chunks;
