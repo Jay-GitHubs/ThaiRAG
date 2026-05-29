@@ -3,6 +3,7 @@ pub mod chunker;
 pub mod converter;
 pub mod image;
 pub mod pdf_rasterizer;
+pub mod pdfium_engine;
 pub mod pipeline;
 pub mod semantic;
 pub mod semantic_prompts;
