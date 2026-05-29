@@ -2,11 +2,15 @@
 //!
 //! Subprocess isolation is intentional: a malformed/malicious PDF that
 //! crashes the renderer will only kill the child process, not the API.
-//! All inputs are passed via stdin (no temp files, no shell), and every
-//! invocation has a hard timeout plus a virtual-memory cap (Linux only).
+//! The PDF is staged in a private temp file (poppler needs a *seekable*
+//! input — it cannot parse a PDF from a pipe) and no input is interpolated
+//! into shell arguments. Every invocation has a hard timeout plus a
+//! virtual-memory cap (Linux only).
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use thairag_core::ThaiRagError;
@@ -24,9 +28,9 @@ const MAX_PNG_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
 /// libcairo + libfontconfig + libfreetype + libpng + a stack of small libs;
 /// even an idle pdftoppm process commonly maps 500MB-2GB of virtual address
 /// space just from loading shared libraries — well before any user PDF is
-/// processed. If `--as` is set too tight, pdftoppm SIGSEGVs on startup and
-/// the parent gets EPIPE on its write_all to stdin (the symptom is
-/// "write to pdftoppm stdin: Broken pipe").
+/// processed. If `--as` is set too tight, pdftoppm crashes on startup and
+/// the render fails (non-zero exit / no PNG produced) — captured from the
+/// child's stderr rather than as a stdin broken pipe.
 ///
 /// 4 GiB is a safe headroom for any real slide deck (typical RSS at 150 DPI
 /// is 50-200 MB) while still bounding pathological inputs. Operators can
@@ -79,9 +83,11 @@ impl Default for RasterizeOptions {
 
 /// Rasterize a single PDF page to PNG bytes.
 ///
-/// PDF bytes are streamed to `pdftoppm` via stdin; PNG bytes are read from
-/// stdout. No filesystem temp files are created and no user input is
-/// interpolated into shell arguments — only fixed flags and integer values.
+/// The PDF is written to a private temp file and its path handed to
+/// `pdftoppm` (poppler cannot read a PDF from a non-seekable pipe). The PNG
+/// is written to a sibling temp file and read back. Both are removed when
+/// the `RasterTemp` guard drops. No user input is interpolated into shell
+/// arguments — only fixed flags, integer values, and the temp path.
 pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u8>> {
     if opts.page == 0 {
         return Err(ThaiRagError::Validation(
@@ -105,6 +111,13 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
         Command::new("pdftoppm")
     };
 
+    // poppler parses a PDF back-to-front (the xref table lives at the end),
+    // so it needs a *seekable* input — it cannot read a PDF from a pipe.
+    // Stage the bytes in a private temp file and hand pdftoppm the path; the
+    // rendered PNG is written to a sibling temp file. Both are cleaned up
+    // when `temp` drops.
+    let temp = RasterTemp::new(pdf_bytes)?;
+
     cmd.arg("-png")
         .arg("-r")
         .arg(opts.dpi.to_string())
@@ -113,9 +126,10 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
         .arg("-l")
         .arg(opts.page.to_string())
         .arg("-singlefile")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .arg(&temp.input)
+        .arg(&temp.base)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
@@ -123,35 +137,6 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
             "pdftoppm not available — install poppler-utils ({e})"
         ))
     })?;
-
-    // Stream PDF to stdin in its own scope so the pipe closes before we wait.
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| ThaiRagError::Validation("failed to open pdftoppm stdin".into()))?;
-        if let Err(e) = stdin.write_all(pdf_bytes) {
-            // EPIPE means pdftoppm closed its stdin before our write completed,
-            // which almost always means it crashed on startup. The most common
-            // cause is the prlimit virtual-memory cap being too tight for the
-            // child to even load its shared libraries. Surface that hint in the
-            // error so operators don't have to dig.
-            let hint = if use_prlimit && e.kind() == std::io::ErrorKind::BrokenPipe {
-                format!(
-                    " — pdftoppm likely crashed on startup. The current vmem \
-                     limit is {} KiB; try raising it via \
-                     THAIRAG__PDF_RASTERIZER__VMEM_LIMIT_KB or disable the cap \
-                     with THAIRAG__PDF_RASTERIZER__DISABLE_PRLIMIT=1.",
-                    vmem_limit_kb()
-                )
-            } else {
-                String::new()
-            };
-            return Err(ThaiRagError::Validation(format!(
-                "write to pdftoppm stdin: {e}{hint}"
-            )));
-        }
-    }
 
     // Poll for completion with a hard deadline. If exceeded, kill the child.
     let deadline = Instant::now() + opts.timeout;
@@ -196,14 +181,34 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
         )));
     }
 
-    if output.stdout.len() > MAX_PNG_BYTES {
+    // pdftoppm wrote the page to `<base>.png`. Check the on-disk size before
+    // reading so a pathological PDF can't make us slurp a multi-GB image
+    // into memory.
+    let png_path = temp.output_png();
+    let size = std::fs::metadata(&png_path).map(|m| m.len()).map_err(|e| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ThaiRagError::Validation(format!(
+            "pdftoppm reported success but produced no PNG for page {} ({e}){}",
+            opts.page,
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr.trim())
+            }
+        ))
+    })?;
+
+    if size as usize > MAX_PNG_BYTES {
         return Err(ThaiRagError::Validation(format!(
             "rasterized page exceeds {} bytes — possible abusive PDF",
             MAX_PNG_BYTES
         )));
     }
 
-    if !is_png(&output.stdout) {
+    let png = std::fs::read(&png_path)
+        .map_err(|e| ThaiRagError::Validation(format!("failed to read rasterized PNG: {e}")))?;
+
+    if !is_png(&png) {
         return Err(ThaiRagError::Validation(
             "pdftoppm produced output that is not a PNG".into(),
         ));
@@ -212,27 +217,27 @@ pub fn rasterize_page(pdf_bytes: &[u8], opts: &RasterizeOptions) -> Result<Vec<u
     debug!(
         page = opts.page,
         dpi = opts.dpi,
-        png_bytes = output.stdout.len(),
+        png_bytes = png.len(),
         "rasterized PDF page"
     );
 
-    Ok(output.stdout)
+    Ok(png)
 }
 
 /// Return how many pages the PDF reports via `pdfinfo`, or `None` if the
 /// tool isn't installed or the output can't be parsed.
 pub fn page_count(pdf_bytes: &[u8]) -> Option<usize> {
-    let mut child = Command::new("pdfinfo")
-        .arg("-")
-        .stdin(Stdio::piped())
+    // Same constraint as rasterize_page: pdfinfo needs a seekable file, not a
+    // pipe. Stage the PDF in a temp file and pass the path.
+    let temp = RasterTemp::new(pdf_bytes).ok()?;
+    let output = Command::new("pdfinfo")
+        .arg(&temp.input)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
+        .output()
         .ok()?;
 
-    child.stdin.as_mut()?.write_all(pdf_bytes).ok()?;
-
-    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -247,6 +252,55 @@ pub fn page_count(pdf_bytes: &[u8]) -> Option<usize> {
 
 fn is_png(bytes: &[u8]) -> bool {
     bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n"
+}
+
+/// A private pair of temp files for one rasterization: `<base>.pdf` holds the
+/// input PDF we feed to `pdftoppm`, and `<base>.png` is where pdftoppm writes
+/// the rendered page (poppler appends `.png` to the output root we pass it).
+/// Both are removed when the guard drops, even on the error paths.
+struct RasterTemp {
+    /// Output root handed to pdftoppm (`<tmp>/thairag-raster-<pid>-<n>`).
+    base: PathBuf,
+    /// Input PDF path (`<base>.pdf`).
+    input: PathBuf,
+}
+
+impl RasterTemp {
+    fn new(pdf_bytes: &[u8]) -> Result<Self> {
+        // Unique within this process: pid disambiguates across processes, the
+        // atomic counter across concurrent renders. No randomness needed.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!("thairag-raster-{}-{n}", std::process::id()));
+        let input = base.with_extension("pdf");
+
+        // `create_new` fails if the path already exists, defeating symlink /
+        // pre-creation races in the shared temp dir.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&input)
+            .map_err(|e| {
+                ThaiRagError::Validation(format!("failed to create temp PDF for pdftoppm: {e}"))
+            })?;
+        f.write_all(pdf_bytes).map_err(|e| {
+            ThaiRagError::Validation(format!("failed to write temp PDF for pdftoppm: {e}"))
+        })?;
+
+        Ok(Self { base, input })
+    }
+
+    /// Path pdftoppm writes for `-singlefile` given `base` as the output root.
+    fn output_png(&self) -> PathBuf {
+        self.base.with_extension("png")
+    }
+}
+
+impl Drop for RasterTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.input);
+        let _ = std::fs::remove_file(self.output_png());
+    }
 }
 
 fn which_exists(binary: &str) -> bool {
