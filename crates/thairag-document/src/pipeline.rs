@@ -20,6 +20,9 @@ use crate::text_utils::meaningful_char_count;
 use crate::thai_chunker::ThaiAwareChunker;
 
 const PDF_MIME: &str = "application/pdf";
+const DOCX_MIME: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const HTML_MIME: &str = "text/html";
 
 /// Stable reason codes for [`ThaiRagError::EmptyExtraction`].
 /// Surface these in admin UIs and treat as a stable API.
@@ -341,21 +344,10 @@ impl DocumentPipeline {
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
     ) -> Result<Vec<DocumentChunk>> {
-        if self.smart_pdf_eligible(mime_type) && crate::pdfium_engine::is_available() {
-            match self.process_pdf_smart(raw, doc_id, workspace_id).await {
-                Ok(doc) if !doc.chunks.is_empty() => return Ok(doc.chunks),
-                Ok(_) => tracing::warn!(
-                    %doc_id,
-                    "smart-pdf produced no chunks — falling back to legacy vision path"
-                ),
-                Err(e) => tracing::warn!(
-                    %doc_id, error = %e,
-                    "smart-pdf path failed — falling back to legacy vision path"
-                ),
-            }
-        }
-        self.process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
-            .await
+        Ok(self
+            .process_to_document(raw, mime_type, doc_id, workspace_id, on_step)
+            .await?
+            .chunks)
     }
 
     /// Like [`process`](Self::process), but also returns the canonical semantic
@@ -383,6 +375,21 @@ impl DocumentPipeline {
                 ),
             }
         }
+        // Office/HTML embedded media: convert to markdown, then describe and
+        // persist embedded images as image chunks + blobs (vision available).
+        if self.media_eligible(mime_type) {
+            return self
+                .process_embedded_media(raw, mime_type, doc_id, workspace_id)
+                .await;
+        }
+
+        // Direct image upload: describe + persist the image as a blob.
+        if image::is_image_mime(mime_type) && self.vision_capable() {
+            return self
+                .process_direct_image(raw, mime_type, doc_id, workspace_id)
+                .await;
+        }
+
         let chunks = self
             .process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
             .await?;
@@ -399,6 +406,25 @@ impl DocumentPipeline {
             && self.pdf_vision_fallback_enabled
             && self.image_description_enabled
             && self.vision_llm.is_some()
+    }
+
+    /// Whether a DOCX/XLSX/HTML file should go through the embedded-media path
+    /// (requires a vision-capable model to describe the extracted images).
+    fn media_eligible(&self, mime_type: &str) -> bool {
+        self.vision_capable() && matches!(mime_type, DOCX_MIME | XLSX_MIME | HTML_MIME)
+    }
+
+    /// True when image description is enabled AND the configured vision model
+    /// can actually do vision. Image-bearing artifact paths gate on this so a
+    /// non-vision model falls through to the mechanical path, which fails loud
+    /// for image-only inputs that genuinely need vision.
+    fn vision_capable(&self) -> bool {
+        self.image_description_enabled
+            && self
+                .vision_llm
+                .as_ref()
+                .map(|l| l.supports_vision())
+                .unwrap_or(false)
     }
 
     /// All non-smart-PDF processing: the image route, the legacy page-aware PDF
@@ -633,7 +659,7 @@ impl DocumentPipeline {
             let image_blob_id = doc
                 .images
                 .iter()
-                .find(|b| b.page_num == page.page_num as u32)
+                .find(|b| b.page_num == Some(page.page_num as u32))
                 .map(|b| b.image_id);
             for content in self
                 .chunker
@@ -663,6 +689,167 @@ impl DocumentPipeline {
             chunks,
             images: doc.images,
             markdown: Some(doc.markdown),
+        })
+    }
+
+    /// Convert a DOCX/XLSX/HTML file to markdown, then describe and persist its
+    /// embedded images as image chunks + blobs. Text chunks come from the
+    /// mechanical conversion; each embedded image becomes one image chunk with
+    /// its `image_blob_id` set and an `[IMAGE:<id>]` marker in the markdown.
+    async fn process_embedded_media(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Result<ProcessedDocument> {
+        use thairag_core::types::ImageId;
+
+        let text = self.converter.convert(raw, mime_type)?;
+        let (raw_images, source): (Vec<crate::office_media::RawImage>, &'static str) =
+            match mime_type {
+                DOCX_MIME => (
+                    crate::office_media::extract_office_images(raw),
+                    "docx_embedded",
+                ),
+                XLSX_MIME => (
+                    crate::office_media::extract_office_images(raw),
+                    "xlsx_embedded",
+                ),
+                HTML_MIME => (
+                    crate::office_media::extract_html_images(raw),
+                    "html_embedded",
+                ),
+                _ => (Vec::new(), "direct_upload"),
+            };
+
+        let mut chunks = self.chunk_with_strategy(&text, doc_id, workspace_id);
+        let mut markdown = text;
+        let mut images = Vec::new();
+        let mut chunk_index = chunks.len();
+
+        let llm = self
+            .vision_llm
+            .as_ref()
+            .expect("process_embedded_media called without vision_llm — caller must check")
+            .clone();
+
+        if !raw_images.is_empty() {
+            markdown.push_str("\n\n## Embedded images\n");
+        }
+        for img in raw_images {
+            let desc = match crate::image::describe_image(llm.as_ref(), &img.bytes, &img.mime).await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(%doc_id, error = %e,
+                        "embedded media: image description failed — skipping image");
+                    continue;
+                }
+            };
+            let image_id = ImageId::new();
+            let meta = crate::image::extract_image_metadata(&img.bytes, &img.mime);
+            let content = format!(
+                "{}\n{}",
+                crate::semantic::image_marker(&image_id.to_string()),
+                desc
+            );
+            markdown.push_str("\n\n");
+            markdown.push_str(&content);
+            chunks.push(DocumentChunk {
+                chunk_id: ChunkId::new(),
+                doc_id,
+                workspace_id,
+                content,
+                chunk_index,
+                embedding: None,
+                metadata: Some(ChunkMetadata {
+                    content_type: Some(DocumentContentType::Image),
+                    chunk_type: Some(source.to_string()),
+                    mime_type: Some(mime_type.to_string()),
+                    image_blob_id: Some(image_id),
+                    ..Default::default()
+                }),
+            });
+            chunk_index += 1;
+            images.push(crate::smart_pdf::ExtractedImageBlob {
+                image_id,
+                bytes: img.bytes,
+                mime: img.mime,
+                width: meta.width,
+                height: meta.height,
+                page_num: None,
+                source,
+            });
+        }
+
+        if chunks.is_empty() {
+            return Err(self.empty_extraction_error(mime_type));
+        }
+        Ok(ProcessedDocument {
+            chunks,
+            images,
+            markdown: Some(markdown),
+        })
+    }
+
+    /// Describe a directly-uploaded image and persist it as a `DirectUpload`
+    /// blob, linking the single chunk to it via `image_blob_id`.
+    async fn process_direct_image(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+    ) -> Result<ProcessedDocument> {
+        use thairag_core::types::ImageId;
+
+        let llm = self
+            .vision_llm
+            .as_ref()
+            .expect("process_direct_image called without vision_llm — caller must check")
+            .clone();
+
+        let desc = crate::image::describe_image(llm.as_ref(), raw, mime_type).await?;
+        if meaningful_char_count(&desc) == 0 {
+            return Err(self.empty_extraction_error(mime_type));
+        }
+
+        let image_id = ImageId::new();
+        let meta = crate::image::extract_image_metadata(raw, mime_type);
+        let content = format!(
+            "{}\n{}",
+            crate::semantic::image_marker(&image_id.to_string()),
+            desc
+        );
+        let chunk = DocumentChunk {
+            chunk_id: ChunkId::new(),
+            doc_id,
+            workspace_id,
+            content: content.clone(),
+            chunk_index: 0,
+            embedding: None,
+            metadata: Some(ChunkMetadata {
+                content_type: Some(DocumentContentType::Image),
+                chunk_type: Some("image_description".to_string()),
+                mime_type: Some(mime_type.to_string()),
+                image_blob_id: Some(image_id),
+                ..Default::default()
+            }),
+        };
+        let blob = crate::smart_pdf::ExtractedImageBlob {
+            image_id,
+            bytes: raw.to_vec(),
+            mime: mime_type.to_string(),
+            width: meta.width,
+            height: meta.height,
+            page_num: None,
+            source: "direct_upload",
+        };
+        Ok(ProcessedDocument {
+            chunks: vec![chunk],
+            images: vec![blob],
+            markdown: Some(content),
         })
     }
 
