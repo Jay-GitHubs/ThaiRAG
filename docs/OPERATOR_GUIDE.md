@@ -174,15 +174,13 @@ PDFs exported from PowerPoint, scanned documents, and image-uploaded files canno
 
 ### 2.6.6 Tuning the pdftoppm vmem limit
 
-The PDF vision fallback shells out to `pdftoppm` (poppler-utils) to render image-only pages to PNG before the vision LLM sees them. On Linux the child is wrapped with `prlimit --as=N` to bound virtual address space — a safety net against zip-bomb-style PDFs.
+The PDF vision fallback shells out to `pdftoppm` (poppler-utils) to render image-only pages to PNG before the vision LLM sees them. The PDF is written to a private temp file and its path handed to `pdftoppm` — poppler parses a PDF back-to-front (the xref table lives at the end), so it needs a *seekable* file and cannot read one from a pipe. On Linux the child is additionally wrapped with `prlimit --as=N` to bound virtual address space — a safety net against zip-bomb-style PDFs.
 
-**The catch**: `--as` bounds *virtual* address space, not RSS. Modern poppler links libcairo + libfontconfig + libfreetype + libpng, and just loading those shared libraries commonly maps 500MB-2GB of VAS before any user PDF arrives. If the limit is too tight, pdftoppm SIGSEGVs on startup and the parent sees:
+When rasterization fails, the pipeline surfaces `empty_extraction[no_text_vision_failed]` and the error carries `pdftoppm`'s own stderr (e.g. a parse error on a corrupt PDF), so the real cause is visible without digging through source.
 
-```
-write to pdftoppm stdin: Broken pipe (os error 32)
-```
+**Note on `--as`**: it bounds *virtual* address space, not RSS. Modern poppler links libcairo + libfontconfig + libfreetype + libpng, and just loading those shared libraries commonly maps 500MB-2GB of VAS before any user PDF arrives. If the limit is set too tight, pdftoppm can crash on startup; the default of 4 GiB is generous headroom while still bounding pathological inputs.
 
-The pipeline surfaces this as `empty_extraction[no_text_vision_failed]` with a hint pointing back here.
+> **Historical note**: builds before this fix piped the PDF into `pdftoppm` via stdin, which poppler rejects. That produced `write to pdftoppm stdin: Broken pipe (os error 32)` regardless of the vmem limit. Raising `VMEM_LIMIT_KB` did **not** help — the fix was to stop using stdin. If you still see that exact message, you are running an old image; rebuild.
 
 **Defaults**: 4 GiB virtual memory, plenty for any real slide deck. Override via env:
 
