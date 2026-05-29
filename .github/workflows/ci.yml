@@ -46,7 +46,15 @@ jobs:
     name: Rust fmt
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
+      # `clean: false` preserves the runner's `target/` directory between
+      # jobs. Default `clean: true` runs `git clean -ffdx` which removes
+      # untracked files INCLUDING gitignored ones (the `-x` flag) — that
+      # wipes `target/` and forces every job on the self-hosted Mac to
+      # cold-compile from scratch. On ephemeral ubuntu-latest runners
+      # this setting is a no-op (nothing to preserve).
       - uses: actions/checkout@v4
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
@@ -58,6 +66,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
@@ -80,6 +90,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
@@ -107,6 +119,8 @@ jobs:
     runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
