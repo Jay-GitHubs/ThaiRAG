@@ -66,6 +66,7 @@ scraper = "0.22"
 calamine = "0.26"
 image = "0.25"
 pdfium-render = { version = "0.8", features = ["image", "thread_safe"] }
+zip = "0.6"
 
 # Embeddings
 fastembed = "4.4"
