@@ -640,6 +640,21 @@ impl DocumentPipeline {
             .expect("process_pdf_smart called without vision_llm — caller must check")
             .clone();
 
+        // Loud, actionable warning: without a vision-capable model the smart
+        // path still renders + stores page images, but pages are NOT OCR'd —
+        // chunks get placeholder descriptions, not text. This is the single
+        // most common misconfiguration, so name the model and the fix.
+        if !llm.supports_vision() {
+            tracing::warn!(
+                %doc_id,
+                vision_model = llm.model_name(),
+                "smart-pdf: configured vision model is NOT recognized as vision-capable — \
+                 pages will be rendered and stored but not OCR'd (placeholder descriptions). \
+                 Set [providers.vision_llm] to a vision model (e.g. Ollama llava / qwen2.5vl / \
+                 qwen3-vl / llama3.2-vision)."
+            );
+        }
+
         let cfg = SmartPdfConfig {
             min_chars_per_page: self.pdf_min_chars_per_page,
             max_vision_pages: self.pdf_max_vision_pages,
