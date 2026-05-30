@@ -528,6 +528,19 @@ impl KmStoreTrait for MemoryKmStore {
         self.chunks.read().unwrap().clone()
     }
 
+    fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk> {
+        let mut chunks: Vec<thairag_core::types::DocumentChunk> = self
+            .chunks
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|c| c.doc_id == doc_id)
+            .cloned()
+            .collect();
+        chunks.sort_by_key(|c| c.chunk_index);
+        chunks
+    }
+
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
         let mut store = self.chunks.write().unwrap();
         store.retain(|c| c.doc_id != doc_id);

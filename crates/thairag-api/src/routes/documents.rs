@@ -964,46 +964,27 @@ pub async fn get_document_chunks(
     let doc_id_typed = DocId(doc_id);
     let doc = state.km_store.get_document(doc_id_typed)?;
 
-    // Get stored converted text and re-chunk it for preview
-    let converted = state
-        .km_store
-        .get_document_content(doc_id_typed)
-        .unwrap_or(None);
+    // Return the *persisted* chunks as actually indexed. We must NOT re-run the
+    // document pipeline here: with AI preprocessing enabled, `process()` invokes
+    // the LLM agents synchronously inside this request, which makes the preview
+    // hang for seconds-to-minutes (or forever while a model loads). Reading the
+    // stored chunks is both fast and faithful to what search actually sees.
+    let stored = state.km_store.load_chunks_by_doc(doc_id_typed);
 
-    let chunks: Vec<ChunkInfo> = if let Some(text) = converted {
-        let p = state.providers();
-        let doc_chunks = p
-            .document_pipeline
-            .process(
-                text.as_bytes(),
-                "text/plain",
-                doc_id_typed,
-                workspace_id,
-                None,
-            )
-            .await
-            .unwrap_or_default();
-
-        doc_chunks
+    let chunks: Vec<ChunkInfo> = if !stored.is_empty() {
+        stored
             .into_iter()
             .enumerate()
-            .map(|(i, c)| {
-                let page = c
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.page_numbers.as_ref())
-                    .and_then(|pages| pages.first())
-                    .map(|&p| p as i32);
-                ChunkInfo {
-                    chunk_id: c.chunk_id.0.to_string(),
-                    text: c.content,
-                    page,
-                    index: i,
-                }
+            .map(|(i, c)| ChunkInfo {
+                chunk_id: c.chunk_id.0.to_string(),
+                text: c.content,
+                page: None,
+                index: i,
             })
             .collect()
     } else {
-        // No converted text; return chunk count from doc metadata
+        // No persisted chunks (older docs predating chunk storage); fall back to
+        // the count from doc metadata so the modal still reports something.
         let count = doc.chunk_count as usize;
         (0..count)
             .map(|i| ChunkInfo {

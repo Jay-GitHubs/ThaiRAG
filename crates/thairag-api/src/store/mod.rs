@@ -833,6 +833,10 @@ pub trait KmStoreTrait: Send + Sync {
     // ── Document Chunks (for Tantivy rebuild) ──────────────────────
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()>;
     fn load_all_chunks(&self) -> Vec<thairag_core::types::DocumentChunk>;
+    /// Load the persisted chunks for a single document, ordered by chunk_index.
+    /// Used by the admin-UI chunk preview so it can show the *actual* indexed
+    /// chunks without re-running the (possibly AI-driven) pipeline.
+    fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk>;
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()>;
 
     // ── User ────────────────────────────────────────────────────────
