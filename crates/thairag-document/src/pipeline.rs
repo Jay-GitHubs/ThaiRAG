@@ -445,17 +445,15 @@ impl DocumentPipeline {
         self.vision_capable() && matches!(mime_type, DOCX_MIME | XLSX_MIME | HTML_MIME)
     }
 
-    /// True when image description is enabled AND the configured vision model
-    /// can actually do vision. Image-bearing artifact paths gate on this so a
-    /// non-vision model falls through to the mechanical path, which fails loud
-    /// for image-only inputs that genuinely need vision.
+    /// Whether to route an image-bearing input through the vision path.
+    ///
+    /// Advisory, never enforcing: true whenever image description is enabled and
+    /// a vision LLM is configured — we do NOT pre-judge by model name. Whether
+    /// the model is *recognized* as vision-capable only drives recommendations
+    /// and warnings; the call is attempted regardless and degrades gracefully
+    /// (metadata placeholder) if it fails.
     fn vision_capable(&self) -> bool {
-        self.image_description_enabled
-            && self
-                .vision_llm
-                .as_ref()
-                .map(|l| l.supports_vision())
-                .unwrap_or(false)
+        self.image_description_enabled && self.vision_llm.is_some()
     }
 
     /// All non-smart-PDF processing: the image route, the legacy page-aware PDF
@@ -640,18 +638,17 @@ impl DocumentPipeline {
             .expect("process_pdf_smart called without vision_llm — caller must check")
             .clone();
 
-        // Loud, actionable warning: without a vision-capable model the smart
-        // path still renders + stores page images, but pages are NOT OCR'd —
-        // chunks get placeholder descriptions, not text. This is the single
-        // most common misconfiguration, so name the model and the fix.
+        // Advisory heads-up: the model isn't in our recommended-vision list. We
+        // still attempt OCR (it may be vision-capable anyway); this only flags a
+        // likely misconfiguration if pages come back as placeholders.
         if !llm.supports_vision() {
             tracing::warn!(
                 %doc_id,
                 vision_model = llm.model_name(),
-                "smart-pdf: configured vision model is NOT recognized as vision-capable — \
-                 pages will be rendered and stored but not OCR'd (placeholder descriptions). \
-                 Set [providers.vision_llm] to a vision model (e.g. Ollama llava / qwen2.5vl / \
-                 qwen3-vl / llama3.2-vision)."
+                "smart-pdf: vision model is not in the recommended-vision list — attempting \
+                 OCR anyway. If pages come back as placeholders, set [providers.vision_llm] to \
+                 a known vision model (e.g. Ollama llava / qwen2.5vl / qwen3-vl / \
+                 llama3.2-vision)."
             );
         }
 
@@ -1661,19 +1658,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_image_fails_loud_when_vision_required_but_unavailable() {
-        // image_description_enabled is on but the only "LLM" we hand it
-        // does not support vision — pipeline must surface a structured
-        // EmptyExtraction instead of silently writing a placeholder.
-        struct NonVisionLlm;
+    async fn process_image_degrades_gracefully_when_vision_fails() {
+        // Advisory policy: image_description_enabled is on but the model's
+        // vision call fails. The pipeline must NOT hard-fail — it attempts
+        // vision and falls back to a metadata-placeholder chunk (the image is
+        // still stored and searchable) rather than refusing the upload.
+        struct FailingVisionLlm;
         #[async_trait::async_trait]
-        impl LlmProvider for NonVisionLlm {
+        impl LlmProvider for FailingVisionLlm {
             async fn generate(
                 &self,
                 _: &[thairag_core::types::ChatMessage],
                 _: Option<u32>,
             ) -> Result<thairag_core::types::LlmResponse> {
-                unreachable!("must not be called")
+                Err(ThaiRagError::Validation("text-only model".into()))
             }
             fn model_name(&self) -> &str {
                 "non-vision"
@@ -1681,25 +1679,28 @@ mod tests {
             fn supports_vision(&self) -> bool {
                 false
             }
+            async fn generate_vision(
+                &self,
+                _: &[thairag_core::types::VisionMessage],
+                _: Option<u32>,
+            ) -> Result<thairag_core::types::LlmResponse> {
+                Err(ThaiRagError::Validation("model cannot do vision".into()))
+            }
         }
         let pipeline =
-            DocumentPipeline::new(1000, 0).with_image_description(Arc::new(NonVisionLlm), true);
+            DocumentPipeline::new(1000, 0).with_image_description(Arc::new(FailingVisionLlm), true);
 
         let png = make_minimal_png(10, 10);
-        let err = pipeline
+        let chunks = pipeline
             .process(&png, "image/png", DocId::new(), WorkspaceId::new(), None)
             .await
-            .expect_err("image upload must fail loud when vision unavailable");
-        match err {
-            ThaiRagError::EmptyExtraction { reason, hint } => {
-                assert_eq!(reason, empty_reason::NO_TEXT_VISION_UNAVAILABLE);
-                assert!(
-                    hint.contains("vision"),
-                    "hint should explain vision requirement: {hint}"
-                );
-            }
-            other => panic!("expected EmptyExtraction, got {other:?}"),
-        }
+            .expect("advisory: image upload should degrade to a placeholder, not fail loud");
+        assert_eq!(chunks.len(), 1, "expected a single placeholder chunk");
+        assert!(
+            chunks[0].content.contains("[Image:"),
+            "expected a metadata placeholder, got: {}",
+            chunks[0].content
+        );
     }
 
     #[tokio::test]
