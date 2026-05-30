@@ -160,6 +160,9 @@ pub struct LlmProviderInfo {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
+    /// Ollama-only adaptive context-window ceiling. `0` = inherit the model
+    /// default. Ignored for non-Ollama providers.
+    pub ollama_num_ctx_max: usize,
 }
 
 #[derive(Serialize)]
@@ -391,6 +394,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             supports_vision: is_vision_model(&p.llm.kind, &p.llm.model),
             max_tokens: None,
             profile_id: p.llm.profile_id.clone(),
+            ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -423,6 +427,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             supports_vision: is_vision_model(&v.kind, &v.model),
             max_tokens: v.max_tokens,
             profile_id: v.profile_id.clone(),
+            ollama_num_ctx_max: v.ollama_num_ctx_max,
         }),
     }
 }
@@ -465,6 +470,9 @@ pub struct UpdateLlmConfig {
     pub profile_id: Option<String>,
     /// When true, clear the current profile_id (set to None).
     pub clear_profile: Option<bool>,
+    /// Ollama-only adaptive context-window ceiling. `0` = inherit the model
+    /// default (don't send `num_ctx`).
+    pub ollama_num_ctx_max: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -518,6 +526,9 @@ pub async fn update_provider_config(
         }
         if let Some(api_key) = llm.api_key {
             pc.llm.api_key = api_key;
+        }
+        if let Some(v) = llm.ollama_num_ctx_max {
+            pc.llm.ollama_num_ctx_max = v;
         }
         // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
         // clear base_url so it doesn't keep the old Ollama URL
@@ -603,6 +614,7 @@ pub async fn update_provider_config(
                 api_key: String::new(),
                 max_tokens: None,
                 profile_id: None,
+                ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
             }
         });
         if let Some(kind) = vis.kind {
@@ -620,6 +632,9 @@ pub async fn update_provider_config(
         }
         if let Some(max_tokens) = vis.max_tokens {
             current.max_tokens = Some(max_tokens);
+        }
+        if let Some(v) = vis.ollama_num_ctx_max {
+            current.ollama_num_ctx_max = v;
         }
         if vis.clear_profile.unwrap_or(false) {
             current.profile_id = None;
@@ -1683,6 +1698,8 @@ pub struct DocumentConfigResponse {
     pub max_chunk_size: usize,
     pub chunk_overlap: usize,
     pub max_upload_size_mb: usize,
+    /// Render DPI for PDF pages sent to the vision model (smart-PDF + fallback).
+    pub pdf_image_dpi: u32,
     pub ai_preprocessing: AiPreprocessingResponse,
 }
 
@@ -1734,6 +1751,7 @@ pub struct UpdateDocumentConfigRequest {
     pub max_chunk_size: Option<usize>,
     pub chunk_overlap: Option<usize>,
     pub max_upload_size_mb: Option<usize>,
+    pub pdf_image_dpi: Option<u32>,
     pub ai_preprocessing: Option<UpdateAiPreprocessing>,
 }
 
@@ -1800,6 +1818,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         supports_vision: is_vision_model(&llm.kind, &llm.model),
         max_tokens: llm.max_tokens,
         profile_id: llm.profile_id.clone(),
+        ollama_num_ctx_max: llm.ollama_num_ctx_max,
     }
 }
 
@@ -2026,6 +2045,11 @@ pub async fn get_document_config(
             .get_setting("document.max_upload_size_mb")
             .and_then(|v| v.parse().ok())
             .unwrap_or(doc.max_upload_size_mb),
+        pdf_image_dpi: state
+            .km_store
+            .get_setting("document.pdf_image_dpi")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.pdf_image_dpi),
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }
@@ -2067,6 +2091,16 @@ pub async fn update_document_config(
         state
             .km_store
             .set_setting("document.max_upload_size_mb", &v.to_string());
+    }
+    if let Some(v) = req.pdf_image_dpi {
+        if !(72..=600).contains(&v) {
+            return Err(ApiError(ThaiRagError::Validation(
+                "pdf_image_dpi must be between 72 and 600".into(),
+            )));
+        }
+        state
+            .km_store
+            .set_setting("document.pdf_image_dpi", &v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
@@ -2305,12 +2339,18 @@ pub async fn update_document_config(
         .get_setting("document.max_upload_size_mb")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.max_upload_size_mb);
+    let eff_pdf_image_dpi = state
+        .km_store
+        .get_setting("document.pdf_image_dpi")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_image_dpi);
 
     // Hot-reload the document pipeline with updated config
     let mut effective_doc = doc.clone();
     effective_doc.max_chunk_size = eff_max_chunk_size;
     effective_doc.chunk_overlap = eff_chunk_overlap;
     effective_doc.max_upload_size_mb = eff_max_upload_size_mb;
+    effective_doc.pdf_image_dpi = eff_pdf_image_dpi;
     effective_doc.ai_preprocessing.enabled = effective_ai.enabled;
     effective_doc.ai_preprocessing.auto_params = effective_ai.auto_params;
     effective_doc.ai_preprocessing.quality_threshold = effective_ai.quality_threshold;
@@ -2369,6 +2409,7 @@ pub async fn update_document_config(
         max_chunk_size: eff_max_chunk_size,
         chunk_overlap: eff_chunk_overlap,
         max_upload_size_mb: eff_max_upload_size_mb,
+        pdf_image_dpi: eff_pdf_image_dpi,
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }

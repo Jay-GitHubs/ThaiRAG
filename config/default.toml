@@ -23,6 +23,9 @@ kind = "ollama"
 model = "llama3.2"
 base_url = "http://localhost:11435"
 api_key = ""
+# Adaptive Ollama context-window ceiling (num_ctx). Sized to the prompt and
+# clamped here; 0 inherits the model's default. Prevents 128K KV-cache blowups.
+ollama_num_ctx_max = 16384
 
 [providers.embedding]
 kind = "fastembed"
@@ -56,6 +59,10 @@ chunk_overlap = 64
 language_aware_chunking = true
 image_description_enabled = false    # requires vision-capable LLM
 table_extraction_enabled = true
+# Render DPI for PDF pages sent to the vision model (both the pdfium smart-PDF
+# path and the pdftoppm fallback). Higher = sharper OCR but more vision tokens
+# and memory; lower if a single slide blows up the vision model's context.
+pdf_image_dpi = 150
 
 [chat_pipeline]
 # live_retrieval_enabled = false

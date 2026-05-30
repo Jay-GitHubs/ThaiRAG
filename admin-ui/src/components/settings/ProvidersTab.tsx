@@ -14,6 +14,7 @@ import {
   Form,
   Select,
   Input,
+  InputNumber,
   AutoComplete,
   Tooltip,
   message,
@@ -352,6 +353,7 @@ function EditForm({
       llm_model: config.llm.model,
       llm_base_url: config.llm.base_url || '',
       llm_api_key: '',
+      llm_num_ctx_max: config.llm.ollama_num_ctx_max ?? 16384,
       rr_kind: config.reranker.kind,
       rr_model: config.reranker.model || '',
       rr_api_key: '',
@@ -359,6 +361,8 @@ function EditForm({
       vision_model: config.vision_llm?.model || '',
       vision_base_url: config.vision_llm?.base_url || '',
       vision_api_key: '',
+      vision_num_ctx_max:
+        config.vision_llm?.ollama_num_ctx_max ?? config.llm.ollama_num_ctx_max ?? 16384,
     });
   }, [config, form]);
 
@@ -372,6 +376,8 @@ function EditForm({
     if (values.llm_model !== config.llm.model) llm.model = values.llm_model;
     if (values.llm_base_url !== (config.llm.base_url || '')) llm.base_url = values.llm_base_url;
     if (values.llm_api_key) llm.api_key = values.llm_api_key;
+    if (values.llm_kind === 'Ollama' && values.llm_num_ctx_max !== config.llm.ollama_num_ctx_max)
+      llm.ollama_num_ctx_max = values.llm_num_ctx_max;
     if (Object.keys(llm).length > 0) req.llm = llm;
 
     const rr: Record<string, unknown> = {};
@@ -393,6 +399,8 @@ function EditForm({
       };
       if (values.vision_base_url) vision.base_url = values.vision_base_url;
       if (values.vision_api_key) vision.api_key = values.vision_api_key;
+      if (values.vision_kind === 'Ollama' && values.vision_num_ctx_max != null)
+        vision.ollama_num_ctx_max = values.vision_num_ctx_max;
       req.vision_llm = vision;
     }
 
@@ -688,6 +696,15 @@ function EditForm({
               <Input placeholder="http://localhost:11435" />
             </Form.Item>
           )}
+          {llmKind === 'Ollama' && (
+            <Form.Item
+              name="llm_num_ctx_max"
+              label="Max Context (num_ctx)"
+              extra="Adaptive ceiling — sized to the prompt, capped here. 0 = inherit the model default (can blow up memory on 128K models)."
+            >
+              <InputNumber min={0} max={131072} step={1024} style={{ width: 200 }} />
+            </Form.Item>
+          )}
           {llmKind === 'OpenAiCompatible' && (
             <Form.Item name="llm_base_url" label="Base URL" rules={[{ required: true }]} extra="The base URL of your OpenAI-compatible API provider">
               <Input placeholder="e.g. https://api.groq.com/openai, https://api.together.xyz" />
@@ -805,6 +822,15 @@ function EditForm({
                       : 'e.g. https://api.together.xyz'
                   }
                 />
+              </Form.Item>
+            )}
+            {visionKind === 'Ollama' && (
+              <Form.Item
+                name="vision_num_ctx_max"
+                label="Max Context (num_ctx)"
+                extra="Vision calls request this full value (image token counts aren't known up front). Lower it, or lower PDF Render DPI, to cut memory. 0 = inherit model default."
+              >
+                <InputNumber min={0} max={131072} step={1024} style={{ width: 200 }} />
               </Form.Item>
             )}
             {(visionKind === 'Claude' ||

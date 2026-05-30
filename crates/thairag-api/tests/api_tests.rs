@@ -179,6 +179,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
                 api_key: "".into(),
                 max_tokens: None,
                 profile_id: None,
+                ollama_num_ctx_max: 0,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
@@ -1626,6 +1627,7 @@ fn build_streaming_test_app() -> Router {
                 api_key: "".into(),
                 max_tokens: None,
                 profile_id: None,
+                ollama_num_ctx_max: 0,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,

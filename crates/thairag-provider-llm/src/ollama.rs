@@ -35,6 +35,10 @@ pub fn is_ollama_vision_model(model: &str) -> bool {
         || m.contains("llama4")
 }
 
+/// Floor for the adaptive context window. Below this, model quality degrades and
+/// the memory saved is negligible.
+const MIN_NUM_CTX: usize = 2048;
+
 pub struct OllamaProvider {
     client: reqwest::Client,
     /// Separate client for streaming — no overall timeout so long generations aren't killed.
@@ -42,6 +46,9 @@ pub struct OllamaProvider {
     base_url: String,
     model: String,
     keep_alive: Option<serde_json::Value>,
+    /// Adaptive `num_ctx` ceiling. `0` = inherit the model's default context
+    /// (don't send `num_ctx`).
+    num_ctx_max: usize,
 }
 
 impl OllamaProvider {
@@ -58,6 +65,16 @@ impl OllamaProvider {
         model: &str,
         timeout_secs: u64,
         keep_alive: Option<&str>,
+    ) -> Self {
+        Self::with_options(base_url, model, timeout_secs, keep_alive, 0)
+    }
+
+    pub fn with_options(
+        base_url: &str,
+        model: &str,
+        timeout_secs: u64,
+        keep_alive: Option<&str>,
+        num_ctx_max: usize,
     ) -> Self {
         // Non-streaming client: overall timeout covers the full request lifecycle
         let client = reqwest::Client::builder()
@@ -88,6 +105,7 @@ impl OllamaProvider {
             model,
             timeout_secs,
             ?keep_alive,
+            num_ctx_max,
             "Initialized Ollama provider"
         );
 
@@ -97,8 +115,73 @@ impl OllamaProvider {
             base_url: base_url.to_string(),
             model: model.to_string(),
             keep_alive: keep_alive_val,
+            num_ctx_max,
         }
     }
+
+    /// Build the Ollama `options` object, attaching `num_predict` (output cap)
+    /// and an adaptive `num_ctx` when enabled. Returns `None` when neither is
+    /// set, so the request omits `options` entirely (preserves prior behavior).
+    fn build_options(
+        &self,
+        max_tokens: Option<u32>,
+        num_ctx: Option<usize>,
+    ) -> Option<serde_json::Value> {
+        let mut opts = serde_json::Map::new();
+        if let Some(num_predict) = max_tokens {
+            opts.insert("num_predict".into(), serde_json::json!(num_predict));
+        }
+        if let Some(ctx) = num_ctx {
+            opts.insert("num_ctx".into(), serde_json::json!(ctx));
+        }
+        if opts.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(opts))
+        }
+    }
+
+    /// Adaptive `num_ctx` for a text prompt: size to the estimated prompt tokens
+    /// plus output headroom, bucketed to a power of two (so distinct prompt
+    /// sizes don't each trigger an Ollama model reload), clamped to
+    /// `[MIN_NUM_CTX, num_ctx_max]`. Returns `None` when the cap is disabled.
+    fn text_num_ctx(&self, messages: &[ChatMessage], max_tokens: Option<u32>) -> Option<usize> {
+        if self.num_ctx_max == 0 {
+            return None;
+        }
+        let prompt = estimate_message_tokens(messages);
+        let needed = prompt.saturating_add(max_tokens.unwrap_or(0) as usize);
+        Some(bucket_num_ctx(needed).clamp(MIN_NUM_CTX, self.num_ctx_max))
+    }
+
+    /// Adaptive `num_ctx` for a vision call. Image token counts depend on the
+    /// model's dynamic-resolution tiling and aren't known up front, so request
+    /// the full cap rather than risk truncating the image. Returns `None` when
+    /// the cap is disabled.
+    fn vision_num_ctx(&self) -> Option<usize> {
+        if self.num_ctx_max == 0 {
+            None
+        } else {
+            Some(self.num_ctx_max)
+        }
+    }
+}
+
+/// Estimate token count for a set of chat messages. Uses the common ~4-chars-
+/// per-token heuristic over role + content, plus a small per-message overhead
+/// for chat-template framing. Intentionally conservative (rounds up).
+fn estimate_message_tokens(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|m| (m.role.len() + m.content.len()) / 4 + 8)
+        .sum()
+}
+
+/// Round a token estimate up to the next power of two (floored at MIN_NUM_CTX).
+/// Bucketing keeps the number of distinct `num_ctx` values small so Ollama
+/// reuses a loaded model instead of reloading it for every prompt length.
+fn bucket_num_ctx(tokens: usize) -> usize {
+    tokens.max(MIN_NUM_CTX).next_power_of_two()
 }
 
 #[async_trait]
@@ -115,8 +198,9 @@ impl LlmProvider for OllamaProvider {
             "stream": false,
         });
 
-        if let Some(num_predict) = max_tokens {
-            body["options"] = serde_json::json!({ "num_predict": num_predict });
+        if let Some(opts) = self.build_options(max_tokens, self.text_num_ctx(messages, max_tokens))
+        {
+            body["options"] = opts;
         }
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
@@ -170,8 +254,9 @@ impl LlmProvider for OllamaProvider {
             "stream": true,
         });
 
-        if let Some(num_predict) = max_tokens {
-            body["options"] = serde_json::json!({ "num_predict": num_predict });
+        if let Some(opts) = self.build_options(max_tokens, self.text_num_ctx(messages, max_tokens))
+        {
+            body["options"] = opts;
         }
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
@@ -300,8 +385,8 @@ impl LlmProvider for OllamaProvider {
             "stream": false,
         });
 
-        if let Some(num_predict) = max_tokens {
-            body["options"] = serde_json::json!({ "num_predict": num_predict });
+        if let Some(opts) = self.build_options(max_tokens, self.vision_num_ctx()) {
+            body["options"] = opts;
         }
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
@@ -366,6 +451,67 @@ fn format_ollama_error(base_url: &str, err: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::is_ollama_vision_model as v;
+    use super::{MIN_NUM_CTX, OllamaProvider, bucket_num_ctx, estimate_message_tokens};
+    use thairag_core::types::ChatMessage;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: content.into(),
+            images: vec![],
+        }
+    }
+
+    fn provider(num_ctx_max: usize) -> OllamaProvider {
+        OllamaProvider::with_options("http://localhost:11434", "qwen2.5vl", 5, None, num_ctx_max)
+    }
+
+    #[test]
+    fn bucket_rounds_up_to_power_of_two_with_floor() {
+        assert_eq!(bucket_num_ctx(0), MIN_NUM_CTX);
+        assert_eq!(bucket_num_ctx(100), MIN_NUM_CTX); // floored then already a pow2
+        assert_eq!(bucket_num_ctx(3000), 4096);
+        assert_eq!(bucket_num_ctx(5000), 8192);
+        assert_eq!(bucket_num_ctx(16384), 16384);
+    }
+
+    #[test]
+    fn estimate_scales_with_content() {
+        let small = estimate_message_tokens(&[msg("user", "hi")]);
+        let big = estimate_message_tokens(&[msg("user", &"x".repeat(4000))]);
+        assert!(big > small);
+        // ~4 chars/token + 8 overhead: 4000/4 + ~3 ≈ 1003.
+        assert!((1000..1100).contains(&big), "got {big}");
+    }
+
+    #[test]
+    fn text_ctx_is_adaptive_and_clamped() {
+        let p = provider(16384);
+        // Short prompt → floored at MIN_NUM_CTX, not the cap.
+        assert_eq!(
+            p.text_num_ctx(&[msg("user", "hi")], Some(256)),
+            Some(MIN_NUM_CTX)
+        );
+        // Large prompt is clamped to the cap, never exceeding it.
+        let huge = msg("user", &"x".repeat(200_000));
+        assert_eq!(p.text_num_ctx(&[huge], Some(1024)), Some(16384));
+    }
+
+    #[test]
+    fn disabled_cap_omits_num_ctx() {
+        let p = provider(0);
+        assert_eq!(p.text_num_ctx(&[msg("user", "hi")], Some(256)), None);
+        assert_eq!(p.vision_num_ctx(), None);
+        // build_options still emits num_predict alone, mirroring prior behavior.
+        let opts = p.build_options(Some(512), None).unwrap();
+        assert_eq!(opts["num_predict"], 512);
+        assert!(opts.get("num_ctx").is_none());
+    }
+
+    #[test]
+    fn vision_requests_full_cap() {
+        assert_eq!(provider(16384).vision_num_ctx(), Some(16384));
+    }
 
     #[test]
     fn vision_model_recognition() {

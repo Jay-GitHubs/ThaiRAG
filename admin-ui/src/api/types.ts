@@ -257,6 +257,8 @@ export interface LlmProviderInfo {
   max_tokens?: number;
   profile_id?: string;
   profile_name?: string;
+  /** Ollama-only adaptive context-window ceiling. 0 = inherit model default. */
+  ollama_num_ctx_max?: number;
 }
 
 export interface EmbeddingProviderInfo {
@@ -393,10 +395,11 @@ export interface DocumentConfigResponse {
   max_chunk_size: number;
   chunk_overlap: number;
   max_upload_size_mb: number;
+  pdf_image_dpi: number;
   ai_preprocessing: AiPreprocessingConfig;
 }
 
-export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean };
+export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean; ollama_num_ctx_max?: number };
 
 // ── API Key Vault ──────────────────────────────────────────────────
 export interface VaultKeyInfo {
@@ -463,6 +466,7 @@ export interface UpdateDocumentConfigRequest {
   max_chunk_size?: number;
   chunk_overlap?: number;
   max_upload_size_mb?: number;
+  pdf_image_dpi?: number;
   ai_preprocessing?: Partial<Omit<AiPreprocessingConfig, 'llm' | 'analyzer_llm' | 'converter_llm' | 'quality_llm' | 'chunker_llm' | 'orchestrator_llm' | 'enricher_llm' | 'retry'>> & {
     llm?: LlmConfigUpdate;
     remove_llm?: boolean;
