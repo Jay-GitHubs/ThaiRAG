@@ -191,6 +191,23 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/providers/models/sync",
             post(settings::sync_models),
         )
+        // Model discovery + advisory recommendations (PR-D)
+        .route(
+            "/settings/model-discovery",
+            get(settings::get_model_discovery_config).put(settings::update_model_discovery_config),
+        )
+        .route(
+            "/settings/recommendations/status",
+            get(settings::recommendations_status),
+        )
+        .route(
+            "/settings/recommendations/refresh",
+            post(settings::refresh_recommendations),
+        )
+        .route(
+            "/settings/recommendations/resolve",
+            post(settings::resolve_recommendations),
+        )
         .route(
             "/settings/providers/embedding-models/sync",
             post(settings::sync_embedding_models),

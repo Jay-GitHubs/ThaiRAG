@@ -13,8 +13,11 @@ import type {
   IdentityProvider,
   ListResponse,
   LlmProfileInfo,
+  ModelDiscoveryConfig,
   ModelsResponse,
   OllamaPullResponse,
+  RecommendationsStatus,
+  ResolveRecommendationsResponse,
   PresetInfo,
   PromptEntry,
   ProviderConfigResponse,
@@ -108,6 +111,36 @@ export async function syncEmbeddingModels(data: { kind: string; base_url?: strin
 
 export async function syncRerankerModels(data: { kind: string }) {
   const res = await client.post<ModelsResponse>('/api/km/settings/providers/reranker-models/sync', data);
+  return res.data;
+}
+
+// ── Model discovery / advisory recommendations (PR-D) ────────────────
+
+export async function getModelDiscoveryConfig() {
+  const res = await client.get<ModelDiscoveryConfig>('/api/km/settings/model-discovery');
+  return res.data;
+}
+
+export async function updateModelDiscoveryConfig(data: ModelDiscoveryConfig) {
+  const res = await client.put<ModelDiscoveryConfig>('/api/km/settings/model-discovery', data);
+  return res.data;
+}
+
+export async function getRecommendationsStatus() {
+  const res = await client.get<RecommendationsStatus>('/api/km/settings/recommendations/status');
+  return res.data;
+}
+
+export async function refreshRecommendations() {
+  const res = await client.post<RecommendationsStatus>('/api/km/settings/recommendations/refresh');
+  return res.data;
+}
+
+export async function resolveRecommendations(data: { kind: string; models: string[] }) {
+  const res = await client.post<ResolveRecommendationsResponse>(
+    '/api/km/settings/recommendations/resolve',
+    data,
+  );
   return res.data;
 }
 

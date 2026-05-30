@@ -1114,6 +1114,137 @@ pub async fn sync_models(
     ))
 }
 
+// ── Model discovery / recommendations (PR-D) ────────────────────────
+
+/// Load the persisted model-discovery config, or the default.
+fn load_model_discovery(state: &AppState) -> crate::model_catalog::ModelDiscoveryConfig {
+    state
+        .km_store
+        .get_setting("model_discovery")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// GET /settings/model-discovery — current discovery settings.
+pub async fn get_model_discovery_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<crate::model_catalog::ModelDiscoveryConfig>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    Ok(Json(load_model_discovery(&state)))
+}
+
+/// PUT /settings/model-discovery — persist discovery settings. Disabling clears
+/// any cached catalog so air-gapped deploys fall straight to the built-in floor.
+pub async fn update_model_discovery_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Json(cfg): Json<crate::model_catalog::ModelDiscoveryConfig>,
+) -> Result<Json<crate::model_catalog::ModelDiscoveryConfig>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let json = serde_json::to_string(&cfg)
+        .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?;
+    state.km_store.set_setting("model_discovery", &json);
+    if !cfg.enabled {
+        state.model_catalog.clear();
+    }
+    Ok(Json(cfg))
+}
+
+#[derive(Serialize)]
+pub struct RecommendationsStatus {
+    #[serde(flatten)]
+    catalog: crate::model_catalog::CatalogStatus,
+    /// Whether external discovery is enabled (false ⇒ built-in floor only).
+    enabled: bool,
+    /// Whether a custom catalog URL is configured.
+    configured: bool,
+}
+
+fn recommendations_status_for(state: &AppState) -> RecommendationsStatus {
+    let cfg = load_model_discovery(state);
+    RecommendationsStatus {
+        catalog: state.model_catalog.status(),
+        enabled: cfg.enabled,
+        configured: !cfg.catalog_url.trim().is_empty(),
+    }
+}
+
+/// GET /settings/recommendations/status — cache state for the admin-UI banner.
+pub async fn recommendations_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<RecommendationsStatus>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    Ok(Json(recommendations_status_for(&state)))
+}
+
+/// POST /settings/recommendations/refresh — fire-and-forget background refresh
+/// of the external catalog when enabled and stale. Returns current status
+/// immediately (the frontend re-fetches status/resolve once it warms).
+pub async fn refresh_recommendations(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<RecommendationsStatus>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let cfg = load_model_discovery(&state);
+    if cfg.enabled && state.model_catalog.is_stale() {
+        let catalog = std::sync::Arc::clone(&state.model_catalog);
+        let url = cfg.effective_url().to_string();
+        tokio::spawn(async move {
+            if let Err(e) = catalog.refresh(&url).await {
+                tracing::warn!(error = %e, "model catalog refresh failed");
+            }
+        });
+    }
+    Ok(Json(recommendations_status_for(&state)))
+}
+
+#[derive(Deserialize)]
+pub struct ResolveRecommendationsRequest {
+    pub kind: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+/// POST /settings/recommendations/resolve — resolve advisory vision/recommended
+/// flags for a set of model ids. Catalog hit → catalog verdict; otherwise the
+/// built-in floor. Also opportunistically warms a stale catalog in the
+/// background so the next open is fresh.
+pub async fn resolve_recommendations(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Json(req): Json<ResolveRecommendationsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let kind = parse_llm_kind(&req.kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+
+    let cfg = load_model_discovery(&state);
+    if cfg.enabled && state.model_catalog.is_stale() {
+        let catalog = std::sync::Arc::clone(&state.model_catalog);
+        let url = cfg.effective_url().to_string();
+        tokio::spawn(async move {
+            if let Err(e) = catalog.refresh(&url).await {
+                tracing::warn!(error = %e, "model catalog refresh failed");
+            }
+        });
+    }
+
+    let mut resolved = serde_json::Map::new();
+    for id in &req.models {
+        let caps = state.model_catalog.resolve(&kind, id);
+        resolved.insert(
+            id.clone(),
+            serde_json::to_value(caps)
+                .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?,
+        );
+    }
+    Ok(Json(serde_json::json!({
+        "resolved": resolved,
+        "status": recommendations_status_for(&state),
+    })))
+}
+
 // ── Embedding model sync ────────────────────────────────────────────
 
 async fn fetch_models_for_embedding_provider(

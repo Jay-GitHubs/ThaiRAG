@@ -33,8 +33,24 @@ import {
   useAvailableModels,
   useUpdateProviderConfig,
 } from '../../hooks/useSettings';
-import { syncModels, syncEmbeddingModels, syncRerankerModels } from '../../api/settings';
-import type { AvailableModel, ProviderConfigResponse, SettingsScopeParam } from '../../api/types';
+import {
+  syncModels,
+  syncEmbeddingModels,
+  syncRerankerModels,
+  resolveRecommendations,
+  refreshRecommendations,
+  getRecommendationsStatus,
+  getModelDiscoveryConfig,
+  updateModelDiscoveryConfig,
+} from '../../api/settings';
+import type {
+  AvailableModel,
+  ModelCapabilities,
+  ModelDiscoveryConfig,
+  ProviderConfigResponse,
+  RecommendationsStatus,
+  SettingsScopeParam,
+} from '../../api/types';
 import { ChatPipelineCard } from './ChatPipelineCard';
 
 const kindColors: Record<string, string> = {
@@ -62,6 +78,13 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatAge(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  return `${Math.floor(secs / 86400)}d`;
 }
 
 // Known vision-capable model name fragments — a frontend hint mirroring the
@@ -104,12 +127,24 @@ function looksVisionCapable(kind: string, modelId: string): boolean {
 // Normalized shape consumed by the model AutoComplete options builder.
 type PickerModel = { id: string; name?: string; size?: number; vision?: boolean };
 
-// Advisory capability badge: a star + "vision" tag, explicitly framed as a
-// recommendation rather than a requirement (unknown models stay selectable).
+// Advisory ⭐ "recommended" badge — explicitly framed as a recommendation, not a
+// requirement (unknown models always stay selectable; capability informs, never
+// enforces — see PR-A).
+function RecommendedBadge() {
+  return (
+    <Tooltip title="On the recommended shortlist — a recommendation, not a requirement.">
+      <Tag color="gold" icon={<StarFilled />} style={{ marginInlineEnd: 0 }}>
+        recommended
+      </Tag>
+    </Tooltip>
+  );
+}
+
+// Advisory "vision" capability tag.
 function VisionBadge() {
   return (
     <Tooltip title="Recognized as vision-capable — a recommendation, not a requirement.">
-      <Tag color="gold" icon={<StarFilled />} style={{ marginInlineEnd: 0 }}>
+      <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>
         vision
       </Tag>
     </Tooltip>
@@ -117,31 +152,42 @@ function VisionBadge() {
 }
 
 // Build AutoComplete options. `value` is the model id (what gets saved); the
-// rich `label` shows name + id + capability badge + size; `searchName` lets the
-// filter match a friendly name as well as the id.
-function toPickerOptions(models: PickerModel[]) {
-  return models.map((m) => ({
-    value: m.id,
-    searchName: m.name ?? '',
-    label: (
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} size={4}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          <Typography.Text>{m.name || m.id}</Typography.Text>
-          {m.name && m.name !== m.id && (
-            <Typography.Text type="secondary" code style={{ marginLeft: 6 }}>
-              {m.id}
-            </Typography.Text>
-          )}
-        </span>
-        <Space size={4}>
-          {m.vision && <VisionBadge />}
-          {m.size != null && (
-            <Typography.Text type="secondary">{formatBytes(m.size)}</Typography.Text>
-          )}
+// rich `label` shows name + id + capability badges + size; `searchName` lets the
+// filter match a friendly name as well as the id. `caps` (when present) carries
+// server-resolved vision/recommended flags that take precedence over the local
+// heuristic; falling back to the local hint keeps badges working offline.
+function toPickerOptions(
+  models: PickerModel[],
+  caps?: Record<string, ModelCapabilities>,
+) {
+  return models.map((m) => {
+    const c = caps?.[m.id];
+    const vision = c?.vision ?? m.vision ?? false;
+    const recommended = c?.recommended ?? false;
+    return {
+      value: m.id,
+      searchName: m.name ?? '',
+      label: (
+        <Space style={{ width: '100%', justifyContent: 'space-between' }} size={4}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <Typography.Text>{m.name || m.id}</Typography.Text>
+            {m.name && m.name !== m.id && (
+              <Typography.Text type="secondary" code style={{ marginLeft: 6 }}>
+                {m.id}
+              </Typography.Text>
+            )}
+          </span>
+          <Space size={4}>
+            {recommended && <RecommendedBadge />}
+            {vision && <VisionBadge />}
+            {m.size != null && (
+              <Typography.Text type="secondary">{formatBytes(m.size)}</Typography.Text>
+            )}
+          </Space>
         </Space>
-      </Space>
-    ),
-  }));
+      ),
+    };
+  });
 }
 
 // Filter against both the model id (option.value) and its friendly name so the
@@ -288,6 +334,10 @@ function EditForm({
   const [syncingRr, setSyncingRr] = useState(false);
   const [syncedVisionModels, setSyncedVisionModels] = useState<AvailableModel[] | null>(null);
   const [syncingVision, setSyncingVision] = useState(false);
+  // Server-resolved capability flags (vision/recommended) for the displayed
+  // option sets. Falls back to the local heuristic when the resolve call fails.
+  const [llmCaps, setLlmCaps] = useState<Record<string, ModelCapabilities>>({});
+  const [visionCaps, setVisionCaps] = useState<Record<string, ModelCapabilities>>({});
   // Vision LLM is a dedicated provider for image/PDF OCR — falls back
   // to the primary `llm` when disabled. See pipeline.rs::process_image
   // and process_pdf_with_vision.
@@ -404,7 +454,26 @@ function EditForm({
       vision: looksVisionCapable(llmKind, m.value),
     }));
   })();
-  const llmOptions = toPickerOptions(llmPickerModels);
+  const llmModelIds = llmPickerModels.map((m) => m.id).filter(Boolean).join(',');
+  useEffect(() => {
+    const ids = llmModelIds ? llmModelIds.split(',') : [];
+    if (ids.length === 0) {
+      setLlmCaps({});
+      return;
+    }
+    let cancelled = false;
+    resolveRecommendations({ kind: llmKind, models: ids })
+      .then((r) => {
+        if (!cancelled) setLlmCaps(r.resolved);
+      })
+      .catch(() => {
+        /* keep local-heuristic fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [llmKind, llmModelIds]);
+  const llmOptions = toPickerOptions(llmPickerModels, llmCaps);
 
   // Sync models from provider API using current form values
   const handleSyncModels = async () => {
@@ -468,7 +537,26 @@ function EditForm({
           vision: looksVisionCapable(visionKind, m.value),
         }))
   );
-  const visionOptions = toPickerOptions(visionPickerModels);
+  const visionModelIds = visionPickerModels.map((m) => m.id).filter(Boolean).join(',');
+  useEffect(() => {
+    const ids = visionModelIds ? visionModelIds.split(',') : [];
+    if (ids.length === 0) {
+      setVisionCaps({});
+      return;
+    }
+    let cancelled = false;
+    resolveRecommendations({ kind: visionKind, models: ids })
+      .then((r) => {
+        if (!cancelled) setVisionCaps(r.resolved);
+      })
+      .catch(() => {
+        /* keep local-heuristic fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [visionKind, visionModelIds]);
+  const visionOptions = toPickerOptions(visionPickerModels, visionCaps);
 
   // Reset synced vision models when switching the vision provider kind.
   useEffect(() => {
@@ -961,6 +1049,154 @@ function AvailableModelsPanel({
   );
 }
 
+// Model-discovery status + config UX. Surfaces where the advisory ⭐/vision
+// badges come from (external catalog vs built-in floor) and lets an admin
+// enable/point the catalog or trigger a refresh. On mount it warms the catalog
+// in the background (fire-and-forget) so the next Settings open is fresh.
+function RecommendationsCard() {
+  const [status, setStatus] = useState<RecommendationsStatus | null>(null);
+  const [cfg, setCfg] = useState<ModelDiscoveryConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [s, c] = await Promise.all([getRecommendationsStatus(), getModelDiscoveryConfig()]);
+      setStatus(s);
+      setCfg(c);
+    } catch {
+      /* non-fatal — the pickers still work with the local heuristic */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshRecommendations().catch(() => {});
+    load();
+  }, [load]);
+
+  const handleSave = async () => {
+    if (!cfg) return;
+    setSaving(true);
+    try {
+      const saved = await updateModelDiscoveryConfig(cfg);
+      setCfg(saved);
+      message.success('Model discovery settings saved');
+      await load();
+    } catch {
+      message.error('Failed to save model discovery settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshRecommendations();
+      message.info('Refreshing recommendations from the catalog…');
+      // The server refresh runs in the background; poll status shortly after.
+      window.setTimeout(() => {
+        load();
+        setRefreshing(false);
+      }, 2000);
+    } catch {
+      message.error('Failed to trigger refresh');
+      setRefreshing(false);
+    }
+  };
+
+  const usingBuiltin = !status?.has_data;
+  const sourceText = !status
+    ? '—'
+    : status.has_data
+      ? `External catalog — ${status.model_count} models${
+          status.age_secs != null ? `, updated ${formatAge(status.age_secs)} ago` : ''
+        }`
+      : 'Built-in recommendations (offline floor)';
+
+  return (
+    <Collapse
+      size="small"
+      items={[
+        {
+          key: 'recommendations',
+          label: (
+            <span>
+              Model Recommendations
+              {usingBuiltin ? (
+                <Tag style={{ marginLeft: 8 }}>built-in</Tag>
+              ) : (
+                <Tag color="gold" style={{ marginLeft: 8 }}>
+                  catalog
+                </Tag>
+              )}
+            </span>
+          ),
+          children: (
+            <Space direction="vertical" style={{ width: '100%' }} size="middle">
+              {usingBuiltin && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Using built-in recommendations"
+                  description="Enable an external catalog (e.g. LiteLLM / models.dev) below to keep the ⭐ recommended and vision badges accurate as new models ship. Fetches are GETs of a public catalog — no data leaves your deployment, and it can be disabled for air-gapped installs."
+                />
+              )}
+              {status?.last_error && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Last catalog fetch failed"
+                  description={status.last_error}
+                />
+              )}
+              <Descriptions size="small" column={1} bordered>
+                <Descriptions.Item label="Source">{sourceText}</Descriptions.Item>
+              </Descriptions>
+              {cfg && (
+                <>
+                  <Space>
+                    <span>Enable external catalog</span>
+                    <Switch
+                      checked={cfg.enabled}
+                      onChange={(v) => setCfg({ ...cfg, enabled: v })}
+                    />
+                  </Space>
+                  <div>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Catalog URL (leave blank for the default LiteLLM catalog)
+                    </Typography.Text>
+                    <Input
+                      value={cfg.catalog_url}
+                      onChange={(e) => setCfg({ ...cfg, catalog_url: e.target.value })}
+                      placeholder="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+                      disabled={!cfg.enabled}
+                      style={{ marginTop: 2 }}
+                    />
+                  </div>
+                  <Space>
+                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
+                      Save
+                    </Button>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={refreshing}
+                      onClick={handleRefresh}
+                      disabled={!cfg.enabled}
+                    >
+                      Refresh now
+                    </Button>
+                  </Space>
+                </>
+              )}
+            </Space>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 export function ProvidersTab({ scope }: { scope?: SettingsScopeParam }) {
   const config = useProviderConfig();
   const models = useAvailableModels();
@@ -1010,6 +1246,8 @@ export function ProvidersTab({ scope }: { scope?: SettingsScopeParam }) {
       )}
 
       <AvailableModelsPanel config={p} llmModels={models} onRefreshLlm={() => models.refetch()} />
+
+      <RecommendationsCard />
 
       <ChatPipelineCard scope={scope} />
     </Space>
