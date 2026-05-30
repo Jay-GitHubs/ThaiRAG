@@ -2,8 +2,10 @@
 
 ## Install
 
+Not yet published to PyPI — install from source for now:
+
 ```
-pip install thairag
+pip install -e sdks/python
 ```
 
 ## Usage
@@ -26,6 +28,14 @@ client = ThaiRAGClient("http://localhost:8080", api_key="trag_...")
 client = ThaiRAGClient("http://localhost:8080")
 token = client.login("admin@example.com", "password")
 ```
+
+> **Write operations require JWT auth.** The server's CSRF protection rejects
+> any non-GET request (POST/PUT/DELETE) that carries neither a Bearer token nor
+> an `X-CSRF-Token` header. An `api_key`-only client sends `X-API-Key` but no
+> Bearer header, so it can perform read-only GETs (e.g. `list_orgs`,
+> `get_search_analytics_popular`) but write calls (`create_org`,
+> `upload_document`, `create_tenant`, etc.) are rejected with **403**. To do
+> writes, authenticate with `login()` so the client sends a Bearer token.
 
 ## Streaming
 
@@ -68,8 +78,13 @@ ws = client.create_workspace(org["id"], dept["id"], "Docs")
 # Upload a document
 doc = client.upload_document(ws["id"], "/path/to/file.pdf")
 
-# Search
-results = client.search(ws["id"], "deployment guide")
+# Search (returns a RAG response, not a bare results list)
+response = client.search(ws["id"], "deployment guide")
+print(response["answer"])
+for chunk in response["chunks"]:
+    title = chunk.get("doc_title", chunk["doc_id"])
+    print(f"[{chunk['score']:.3f}] {title}")
+    print(chunk["content"])
 ```
 
 ## Context Manager

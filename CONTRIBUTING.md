@@ -29,12 +29,12 @@ Before your contribution can be accepted, you must agree to our [Contributor Lic
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Make your changes
-4. Run tests (the project has 326+ backend tests):
+4. Run the same checks CI runs (the project has 500+ backend tests):
    ```bash
-   cargo fmt --check
-   cargo clippy -- -D warnings
-   cargo test
-   cd admin-ui && npx tsc --noEmit
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace          # CI gates with `cargo nextest run --workspace --no-fail-fast` + `cargo test --workspace --doc`
+   cd admin-ui && npm run build
    ```
 5. Commit with clear messages
 6. Open a pull request against `main`
@@ -48,6 +48,8 @@ Before your contribution can be accepted, you must agree to our [Contributor Lic
 
 ## Development Setup
 
+**Prerequisites:** Rust 1.95+ (edition 2024) and Node 22 (matching CI).
+
 ```bash
 # Backend
 THAIRAG_TIER=free cargo run -p thairag-api
@@ -56,7 +58,7 @@ THAIRAG_TIER=free cargo run -p thairag-api
 cd admin-ui && npm install && npm run dev
 
 # Run all tests
-cargo test
+cargo test --workspace
 ```
 
 ## Questions?

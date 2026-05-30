@@ -109,26 +109,30 @@ DELETE /api/km/orgs/{org_id}
 ```
 GET    /api/km/orgs/{org_id}/depts
 POST   /api/km/orgs/{org_id}/depts
-DELETE /api/km/depts/{dept_id}
+DELETE /api/km/orgs/{org_id}/depts/{dept_id}
 ```
 
 ### Workspaces
 ```
-GET    /api/km/depts/{dept_id}/workspaces
-POST   /api/km/depts/{dept_id}/workspaces
-DELETE /api/km/workspaces/{ws_id}
+GET    /api/km/orgs/{org_id}/depts/{dept_id}/workspaces
+POST   /api/km/orgs/{org_id}/depts/{dept_id}/workspaces
+DELETE /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}
 ```
 
 ### Documents
 ```
 GET    /api/km/workspaces/{ws_id}/documents
-POST   /api/km/workspaces/{ws_id}/documents/ingest    # multipart or JSON
-DELETE /api/km/documents/{doc_id}
+POST   /api/km/workspaces/{ws_id}/documents              # JSON ingest (IngestRequest)
+POST   /api/km/workspaces/{ws_id}/documents/upload       # multipart file upload
+DELETE /api/km/workspaces/{ws_id}/documents/{doc_id}
 ```
 
 ### Users
 ```
 GET    /api/km/users
+POST   /api/km/users
+PUT    /api/km/users/{user_id}/role
+PUT    /api/km/users/{user_id}/status
 DELETE /api/km/users/{user_id}    # Cannot delete super admins
 ```
 
@@ -136,7 +140,7 @@ DELETE /api/km/users/{user_id}    # Cannot delete super admins
 ```
 GET    /api/km/orgs/{org_id}/permissions
 POST   /api/km/orgs/{org_id}/permissions
-DELETE /api/km/permissions/{perm_id}
+DELETE /api/km/orgs/{org_id}/permissions    # JSON body: {email, scope}
 ```
 
 Supports scoped permissions: org, dept, workspace.
@@ -209,7 +213,7 @@ GET    /api/km/settings/audit-log          # Query audit log (super admin only)
        &limit=100                         # Max entries (default: 100, max: 1000)
 ```
 
-Actions logged: `login`, `login_failed`, `register`, `user_deleted`, `permission_granted`, `permission_revoked`, `settings_changed`, `idp_created`, `idp_updated`, `idp_deleted`, `prompt_updated`, `prompt_deleted`.
+Actions logged: `login`, `login_failed`, `register`, `user_deleted`, `permission_granted`, `permission_revoked`, `settings_changed`, `idp_created`, `idp_updated`, `idp_deleted`, `prompt_updated`, `prompt_deleted`, `vector_db_cleared`, `api_key_created`, `api_key_revoked`.
 
 ### Config Snapshots
 ```
@@ -223,8 +227,8 @@ Snapshots capture the complete system configuration (providers, chat pipeline, d
 
 ### Test Query (with Pipeline Stages)
 ```
-GET    /api/km/test-query?q=<query>         # Test query with pipeline_stages in response
-GET    /api/km/test-query-stream?q=<query>  # SSE stream with real-time pipeline progress
+POST   /api/km/workspaces/{ws_id}/test-query         # Test query with pipeline_stages in response
+POST   /api/km/workspaces/{ws_id}/test-query-stream  # SSE stream with real-time pipeline progress
 ```
 
 The `test-query` response includes a `pipeline_stages` array showing timing for each pipeline stage (query analysis, retrieval, reranking, context assembly, response generation).
@@ -386,7 +390,7 @@ Returns current usage against quota (active users, document count, storage used)
 
 ### Assign Organization to Tenant
 ```bash
-curl -s -X POST http://localhost:8080/api/km/tenants/{tenant_id}/orgs \
+curl -s -X POST http://localhost:8080/api/km/tenants/{tenant_id}/assign-org \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"org_id": "org-uuid"}'
@@ -492,7 +496,7 @@ Share, discover, and reuse prompt templates across the organization.
 
 ### List Prompts
 ```bash
-curl -s http://localhost:8080/api/km/prompts \
+curl -s http://localhost:8080/api/km/prompts/marketplace \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -500,7 +504,7 @@ Supports query parameters: `?category=rag&sort=popular&page=1&per_page=20`.
 
 ### Create a Prompt
 ```bash
-curl -s -X POST http://localhost:8080/api/km/prompts \
+curl -s -X POST http://localhost:8080/api/km/prompts/marketplace \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "Summarizer", "description": "Concise document summarization", "content": "Summarize the following document in 3 bullet points:\n\n{context}", "category": "summarization", "tags": ["summary", "concise"]}'
@@ -508,13 +512,13 @@ curl -s -X POST http://localhost:8080/api/km/prompts \
 
 ### Get a Prompt
 ```bash
-curl -s http://localhost:8080/api/km/prompts/{prompt_id} \
+curl -s http://localhost:8080/api/km/prompts/marketplace/{prompt_id} \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Update a Prompt
 ```bash
-curl -s -X PUT http://localhost:8080/api/km/prompts/{prompt_id} \
+curl -s -X PUT http://localhost:8080/api/km/prompts/marketplace/{prompt_id} \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"description": "Updated description", "content": "Updated template..."}'
@@ -522,13 +526,13 @@ curl -s -X PUT http://localhost:8080/api/km/prompts/{prompt_id} \
 
 ### Delete a Prompt
 ```bash
-curl -s -X DELETE http://localhost:8080/api/km/prompts/{prompt_id} \
+curl -s -X DELETE http://localhost:8080/api/km/prompts/marketplace/{prompt_id} \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Rate a Prompt
 ```bash
-curl -s -X POST http://localhost:8080/api/km/prompts/{prompt_id}/rate \
+curl -s -X POST http://localhost:8080/api/km/prompts/marketplace/{prompt_id}/rate \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"rating": 5, "comment": "Works great for technical docs"}'
@@ -538,7 +542,7 @@ Rating is an integer from 1 to 5.
 
 ### Fork a Prompt
 ```bash
-curl -s -X POST http://localhost:8080/api/km/prompts/{prompt_id}/fork \
+curl -s -X POST http://localhost:8080/api/km/prompts/marketplace/{prompt_id}/fork \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "Summarizer (Thai)", "content": "สรุปเอกสารต่อไปนี้ใน 3 หัวข้อ:\n\n{context}"}'
@@ -591,7 +595,15 @@ curl -s -X POST http://localhost:8080/api/km/finetune/jobs \
 curl -s http://localhost:8080/api/km/finetune/jobs/{job_id} \
   -H "Authorization: Bearer $TOKEN"
 
-# Cancel a job
+# Start a job
+curl -s -X POST http://localhost:8080/api/km/finetune/jobs/{job_id}/start \
+  -H "Authorization: Bearer $TOKEN"
+
+# Cancel a running job
+curl -s -X POST http://localhost:8080/api/km/finetune/jobs/{job_id}/cancel \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete a job (removes the job record entirely)
 curl -s -X DELETE http://localhost:8080/api/km/finetune/jobs/{job_id} \
   -H "Authorization: Bearer $TOKEN"
 ```

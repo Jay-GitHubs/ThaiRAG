@@ -33,6 +33,8 @@ This guide describes how to deploy multiple ThaiRAG instances behind a load bala
 
 Horizontal scaling requires all stateful backends to be externalized. The free tier defaults (in-memory session store, in-memory vector store) will **not** work because each instance would have its own isolated state.
 
+> The base `docker-compose.yml` already ships Redis and Qdrant services, but the app's backend config keys default to `memory`/`in_memory`. They must be switched to Redis/Qdrant — which `docker-compose.scale.yml` does for you via environment variables (see [Configuration Requirements](#configuration-requirements) for the manual equivalents).
+
 You need:
 
 | Component    | Requirement                        | Why                                             |
@@ -182,7 +184,7 @@ Each instance is labeled by its container IP so metrics can be viewed per-instan
 | `http_requests_total`           | Request count by instance            |
 | `http_request_duration_seconds` | Latency distribution by instance     |
 | `llm_tokens_total`             | LLM token consumption                |
-| `active_sessions_total`        | Sessions per instance (should be ~0 with Redis) |
+| `active_sessions_total`        | Sessions per instance. Maintained by the in-memory session store only — the Redis session backend does not increment it, so it sits ~0 under Redis. |
 
 ### Grafana
 

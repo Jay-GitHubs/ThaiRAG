@@ -49,6 +49,8 @@ THAIRAG_TAG=abc1234
 
 ### Services
 
+> **Which compose file?** The base `docker-compose.yml` (below) includes redis, prometheus, and grafana. The pre-built registry stack `docker-compose.registry.yml` is leaner — only postgres, qdrant, thairag, admin-ui, and open-webui (no redis/prometheus/grafana).
+
 The `docker-compose.yml` defines these services:
 
 | Service | Image | Port | Purpose |
@@ -58,9 +60,9 @@ The `docker-compose.yml` defines these services:
 | `postgres` | postgres:16-alpine | 5432 | Database |
 | `qdrant` | qdrant/qdrant:latest | 6333, 6334 | Vector database |
 | `redis` | redis:7-alpine | 6379 | Session store, embedding cache, job queue |
-| `prometheus` | prom/prometheus | 9090 | Metrics collection |
+| `prometheus` | prom/prometheus | 9091 | Metrics collection (host 9091 → container 9090) |
 | `grafana` | grafana/grafana | 3001 | Dashboards & visualization |
-| `ollama` | ollama/ollama (commented) | 11434 | Local LLM (free tier) |
+| `ollama` | ollama/ollama (commented) | 11435 | Local LLM (free tier) |
 | `open-webui` | open-webui (commented) | 3000 | Chat interface (optional) |
 
 ### Setup
@@ -121,10 +123,12 @@ curl http://localhost:8080/health?deep=true
 # Admin UI
 open http://localhost:8081
 
-# If using full stack:
+# If using full stack (only present when -f docker-compose.test-idp.yml is included):
 # Keycloak:   http://localhost:9090  (admin / admin)
 # Open WebUI: http://localhost:3000  (login via Keycloak SSO)
 ```
+
+> **Note:** Keycloak is defined only in `docker-compose.test-idp.yml` (on port 9090). The base `docker-compose.yml` and the registry stack do not include Keycloak — it appears only when you add `-f docker-compose.test-idp.yml`.
 
 4. **Stop services:**
 
@@ -160,7 +164,7 @@ ollama serve &
 ollama pull llama3.2
 
 # Set ThaiRAG to use host Ollama
-THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11434
+THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11435
 ```
 
 ### Adding Open WebUI
@@ -319,16 +323,16 @@ cd admin-ui && npx playwright test
 
 | Key | Env Override | Description |
 |-----|-------------|-------------|
-| `providers.llm.kind` | `THAIRAG__PROVIDERS__LLM__KIND` | `ollama`, `claude`, `openai` |
+| `providers.llm.kind` | `THAIRAG__PROVIDERS__LLM__KIND` | `ollama`, `claude`, `openai`, `openai_compatible`, `gemini` |
 | `providers.llm.model` | `THAIRAG__PROVIDERS__LLM__MODEL` | Model name |
 | `providers.llm.api_key` | `THAIRAG__PROVIDERS__LLM__API_KEY` | API key |
 | `providers.llm.base_url` | `THAIRAG__PROVIDERS__LLM__BASE_URL` | Base URL (Ollama/OpenAI) |
-| `providers.embedding.kind` | `THAIRAG__PROVIDERS__EMBEDDING__KIND` | `fastembed`, `openai` |
+| `providers.embedding.kind` | `THAIRAG__PROVIDERS__EMBEDDING__KIND` | `fastembed`, `openai`, `ollama`, `cohere` |
 | `providers.embedding.model` | `THAIRAG__PROVIDERS__EMBEDDING__MODEL` | Model name |
 | `providers.embedding.dimension` | `THAIRAG__PROVIDERS__EMBEDDING__DIMENSION` | Vector dimension |
-| `providers.vector_store.kind` | `THAIRAG__PROVIDERS__VECTOR_STORE__KIND` | `in_memory`, `qdrant` |
+| `providers.vector_store.kind` | `THAIRAG__PROVIDERS__VECTOR_STORE__KIND` | `in_memory`, `qdrant`, `pgvector`, `chroma_db`, `pinecone`, `weaviate`, `milvus` |
 | `providers.vector_store.url` | `THAIRAG__PROVIDERS__VECTOR_STORE__URL` | Qdrant gRPC URL |
-| `providers.reranker.kind` | `THAIRAG__PROVIDERS__RERANKER__KIND` | `passthrough`, `cohere` |
+| `providers.reranker.kind` | `THAIRAG__PROVIDERS__RERANKER__KIND` | `passthrough`, `cohere`, `jina` |
 
 ### Search
 
@@ -366,7 +370,7 @@ cd admin-ui && npx playwright test
 | `mcp.max_concurrent_syncs` | `THAIRAG__MCP__MAX_CONCURRENT_SYNCS` | `3` | Max concurrent sync operations |
 | `mcp.connect_timeout_secs` | `THAIRAG__MCP__CONNECT_TIMEOUT_SECS` | `30` | MCP server connection timeout |
 | `mcp.read_timeout_secs` | `THAIRAG__MCP__READ_TIMEOUT_SECS` | `120` | Resource read timeout |
-| `mcp.max_resource_size_bytes` | `THAIRAG__MCP__MAX_RESOURCE_SIZE_BYTES` | `10485760` | Max resource size (10MB) |
+| `mcp.max_resource_size_bytes` | `THAIRAG__MCP__MAX_RESOURCE_SIZE_BYTES` | `52428800` | Max resource size (50MB) |
 | `mcp.sync_retry_max_attempts` | `THAIRAG__MCP__SYNC_RETRY_MAX_ATTEMPTS` | `3` | Retry attempts on sync failure |
 | `mcp.sync_retry_base_delay_secs` | `THAIRAG__MCP__SYNC_RETRY_BASE_DELAY_SECS` | `2` | Base delay for exponential backoff |
 | `mcp.sync_retry_max_delay_secs` | `THAIRAG__MCP__SYNC_RETRY_MAX_DELAY_SECS` | `60` | Max retry delay |
@@ -392,7 +396,7 @@ cd admin-ui && npx playwright test
 |-----|-------------|---------|-------------|
 | `embedding_cache.backend` | `THAIRAG__EMBEDDING_CACHE__BACKEND` | `memory` | Backend: `memory` or `redis` |
 | `embedding_cache.max_entries` | `THAIRAG__EMBEDDING_CACHE__MAX_ENTRIES` | `10000` | Max cached embeddings (memory backend) |
-| `embedding_cache.ttl_secs` | `THAIRAG__EMBEDDING_CACHE__TTL_SECS` | `86400` | Cache entry TTL in seconds |
+| `embedding_cache.ttl_secs` | `THAIRAG__EMBEDDING_CACHE__TTL_SECS` | `3600` | Cache entry TTL in seconds |
 
 ### Job Queue
 
@@ -405,7 +409,7 @@ cd admin-ui && npx playwright test
 
 | Key | Env Override | Default | Description |
 |-----|-------------|---------|-------------|
-| `redis.url` | `THAIRAG__REDIS__URL` | `redis://localhost:6379` | Redis connection URL |
+| `redis.url` | `THAIRAG__REDIS__URL` | `redis://127.0.0.1:6379` | Redis connection URL |
 
 ### OpenTelemetry
 
@@ -575,15 +579,17 @@ ThaiRAG includes a deployment CLI (`thairag`) for operational tasks. The CLI con
 
 ### Health Check
 
-```bash
-# Basic health check (returns OK/DEGRADED/UNHEALTHY)
-thairag health
+The health endpoint needs no CLI — hit it directly (ideal for load-balancer probes, monitoring, and CI/CD):
 
-# Deep health check — probes all configured providers (embedding, vector store, LLM)
-thairag health --deep
+```bash
+# Basic health (returns status ok/degraded/unhealthy)
+curl -fsS "http://localhost:8080/health"
+
+# Deep health — probes all configured providers (embedding, vector store, LLM)
+curl -fsS "http://localhost:8080/health?deep=true"
 ```
 
-The `--deep` flag is equivalent to calling `GET /health?deep=true`. Use it in monitoring scripts and CI/CD pipelines to verify all dependencies are reachable.
+Use `?deep=true` in monitoring scripts and CI/CD pipelines to verify all dependencies are reachable. For a CLI summary of the running instance, use `thairag status` (below).
 
 ### Status
 
@@ -597,62 +603,56 @@ Displays a summary of the running instance including version, tier, uptime, numb
 ### Configuration
 
 ```bash
-# Show the resolved configuration (merges default + tier + local + env overrides)
+# Show the resolved provider configuration
 thairag config show
 
-# Show only a specific section
-thairag config show --section providers
-
-# Validate configuration without starting the server
-thairag config validate
+# Get a single setting value by dot-separated key (e.g. "llm.model")
+thairag config get llm.model
 ```
 
-Sensitive values (API keys, JWT secrets, database passwords) are redacted in the output. Use `--show-secrets` to display them (requires `--yes-i-know-what-i-am-doing` flag).
+`config show` fetches the resolved provider configuration from the running instance. Sensitive values (API keys, JWT secrets, database passwords) are redacted in the output.
 
 ### Backup
 
 ```bash
-# Create a backup (PostgreSQL dump + Qdrant snapshot + Tantivy index archive)
+# Create a backup (writes a single .zip file)
 thairag backup create
 
-# Create a backup with a custom output directory
-thairag backup create --output /backups/$(date +%Y%m%d)
+# Create a backup with a custom output file
+thairag backup create --output /backups/thairag-$(date +%Y%m%d).zip
 
-# List available backups
-thairag backup list
-
-# Restore from a backup
-thairag backup restore --from /backups/20260330
+# Preview what would be included in a backup (no file written)
+thairag backup preview
 ```
 
-Backups include the PostgreSQL database, Qdrant collection snapshots, and the Tantivy BM25 index directory. The `create` command produces a timestamped archive in the configured backup directory (default: `/data/backups`). Always create a backup before Docker volume rebuilds or embedding model changes.
+A backup is a single `.zip` archive containing settings, users, documents, and org structure. When `--output` is omitted, the file is written to the current directory as `thairag-backup-<timestamp>.zip`. Always create a backup before Docker volume rebuilds or embedding model changes.
 
 ### Deploy
 
 ```bash
-# Pull latest images and restart services with zero-downtime rolling update
+# Generate a docker-compose file for the standard profile in the current directory
 thairag deploy
 
-# Deploy a specific version
-thairag deploy --tag v1.2.3
+# Generate into a specific output directory
+thairag deploy --output ./deploy
 
-# Dry-run: show what would change without applying
-thairag deploy --dry-run
+# Generate for a specific profile (free, standard, premium)
+thairag deploy --profile free
 ```
 
-The `deploy` command orchestrates a rolling update: it pulls the specified image tag, stops the old container, starts the new one, waits for the health check to pass, and rolls back automatically if the health check fails within 60 seconds.
+The `deploy` command **generates a deployment compose file** (`docker-compose.<profile>.yml`) for the chosen `--profile` into `--output <dir>` (default: current directory). It does not pull images, restart services, or perform rolling updates/rollbacks — after generating the file, copy `.env.example` to `.env`, configure it, then run `docker compose -f docker-compose.<profile>.yml up -d` yourself.
 
 ### CI/CD Integration
 
 Use the CLI in CI/CD pipelines for automated verification and operations:
 
 ```bash
-# Post-deployment verification
-thairag health --deep || { echo "Deployment health check failed"; exit 1; }
+# Post-deployment verification (deep health probe)
+curl -fsS "http://localhost:8080/health?deep=true" || { echo "Deployment health check failed"; exit 1; }
 
 # Scheduled backup (e.g., daily cron job)
-thairag backup create --output /backups/$(date +%Y%m%d)
+thairag backup create --output /backups/thairag-$(date +%Y%m%d).zip
 
-# Pre-deployment config validation
-thairag config validate || { echo "Invalid configuration"; exit 1; }
+# Inspect resolved provider configuration
+thairag config show
 ```
