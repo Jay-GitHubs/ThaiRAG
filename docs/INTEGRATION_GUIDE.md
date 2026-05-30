@@ -383,7 +383,7 @@ curl -X POST "http://localhost:8080/api/km/workspaces/$WORKSPACE_ID/documents" \
   -d '{
     "title": "Meeting Notes",
     "content": "Discussion points from the team meeting...",
-    "format": "text/plain"
+    "mime_type": "text/plain"
   }'
 ```
 
@@ -407,7 +407,7 @@ Version selection via URL path (`/v2/...`) or `X-API-Version: v2` header.
 For real-time bidirectional chat, connect to `/ws/chat`:
 ```javascript
 const ws = new WebSocket('ws://localhost:8080/ws/chat?token=your-jwt');
-ws.send(JSON.stringify({ type: 'chat', content: 'Hello', session_id: 'optional-uuid' }));
+ws.send(JSON.stringify({ type: 'chat', messages: [{ role: 'user', content: 'Hello' }], session_id: 'optional-uuid' }));
 ws.onmessage = (event) => console.log(JSON.parse(event.data));
 ```
 
@@ -655,27 +655,30 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Pre-deployment backup
-        run: thairag backup create --output /backups/pre-deploy-${{ github.sha }}
+        run: thairag backup create --output thairag-backup-${{ github.sha }}.zip
 
-      - name: Validate configuration
-        run: thairag config validate
+      - name: Inspect current configuration
+        run: thairag config show
 
-      - name: Deploy new version
-        run: thairag deploy --tag ${{ github.sha }}
+      - name: Deploy new image
+        # CI publishes the image to the registry; pull + roll it out via compose.
+        run: |
+          docker compose -f docker-compose.registry.yml pull thairag
+          docker compose -f docker-compose.registry.yml up -d thairag
 
       - name: Post-deployment health check
         run: |
           sleep 10
-          thairag health --deep || {
-            echo "Health check failed, rolling back"
-            thairag deploy --tag ${{ env.PREVIOUS_TAG }}
+          curl -fsS "http://localhost:8080/health?deep=true" || {
+            echo "Health check failed — roll back by redeploying the previous image tag"
             exit 1
           }
 
-      - name: Verify search quality
-        run: |
-          thairag status | grep -q "index_health: ok"
+      - name: Status
+        run: thairag status
 ```
+
+> The `thairag` CLI provides `status`, `config show|get`, `backup create|preview`, and `deploy` (which **generates** compose files — it does not perform a rolling update). The actual rollout above is done with Docker Compose against the registry image; for a local build use `./scripts/docker-rebuild.sh thairag` (which backs up the DB first).
 
 ### Scheduled Backup (Cron)
 
@@ -705,15 +708,15 @@ Every RAG query automatically records an analytics event when `search_analytics.
 
 ```bash
 # Get popular queries
-curl "http://localhost:8080/api/km/analytics/popular-queries?days=30&limit=10" \
-  -H "Authorization: Bearer $TOKEN"
-
-# Get zero-result queries (knowledge gaps)
-curl "http://localhost:8080/api/km/analytics/zero-result-queries?days=7" \
+curl "http://localhost:8080/api/km/search-analytics/popular" \
   -H "Authorization: Bearer $TOKEN"
 
 # Get summary statistics
-curl "http://localhost:8080/api/km/analytics/summary?days=30" \
+curl "http://localhost:8080/api/km/search-analytics/summary" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Get raw analytics events
+curl "http://localhost:8080/api/km/search-analytics/events" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -727,11 +730,11 @@ Zero-result queries indicate topics that users are asking about but your knowled
 
 ### Integrating with External Analytics
 
-Export analytics data for external dashboards (e.g., Grafana, Kibana):
+Pull raw analytics events for external dashboards (e.g., Grafana, Kibana):
 
 ```bash
-# Export raw analytics events as JSON
-curl "http://localhost:8080/api/km/analytics/export?format=json&from=2026-01-01&to=2026-03-30" \
+# Fetch raw analytics events as JSON
+curl "http://localhost:8080/api/km/search-analytics/events" \
   -H "Authorization: Bearer $TOKEN" \
   -o analytics-export.json
 ```
@@ -752,11 +755,11 @@ Document lineage tracks which document chunks contributed to each RAG response, 
 
 ```bash
 # Get lineage for a specific response
-curl "http://localhost:8080/api/km/lineage/responses/$RESPONSE_ID" \
+curl "http://localhost:8080/api/km/lineage/response/$RESPONSE_ID" \
   -H "Authorization: Bearer $TOKEN"
 
 # Get all lineage records for a document (which responses cited this document)
-curl "http://localhost:8080/api/km/lineage/documents/$DOCUMENT_ID" \
+curl "http://localhost:8080/api/km/lineage/document/$DOCUMENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -798,27 +801,27 @@ ThaiRAG records structured audit events for security-relevant actions. These log
 - User registration
 - Permission grants and revocations
 - User deletion
-- Document upload and deletion
-- KM hierarchy changes (org, dept, workspace CRUD)
 - Settings changes
 - API key creation and revocation
 - Identity provider configuration changes
+- Prompt updates and deletions
+- Vector DB clears
 
 ### Export API
 
 ```bash
 # Export audit logs as JSON (for SIEM ingestion)
-curl "http://localhost:8080/api/km/audit/export?format=json&from=2026-03-01&to=2026-03-30" \
+curl "http://localhost:8080/api/km/settings/audit-log/export?format=json&from=2026-03-01&to=2026-03-30" \
   -H "Authorization: Bearer $TOKEN" \
   -o audit-log.json
 
 # Export as CSV (for spreadsheet analysis)
-curl "http://localhost:8080/api/km/audit/export?format=csv&from=2026-03-01&to=2026-03-30" \
+curl "http://localhost:8080/api/km/settings/audit-log/export?format=csv&from=2026-03-01&to=2026-03-30" \
   -H "Authorization: Bearer $TOKEN" \
   -o audit-log.csv
 
 # Filter by action type
-curl "http://localhost:8080/api/km/audit/export?format=json&action=login_failed&from=2026-03-01" \
+curl "http://localhost:8080/api/km/settings/audit-log/export?format=json&action=login_failed&from=2026-03-01" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -826,7 +829,7 @@ curl "http://localhost:8080/api/km/audit/export?format=json&action=login_failed&
 
 ```bash
 # Get action counts by type (useful for dashboards)
-curl "http://localhost:8080/api/km/audit/analytics?from=2026-03-01&to=2026-03-30" \
+curl "http://localhost:8080/api/km/settings/audit-log/analytics?from=2026-03-01&to=2026-03-30" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -841,7 +844,7 @@ For continuous ingestion, set up a scheduled job that exports audit logs since t
 LAST_EXPORT=$(cat /var/lib/thairag/last-audit-export 2>/dev/null || echo "1970-01-01")
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-curl -s "http://localhost:8080/api/km/audit/export?format=json&from=$LAST_EXPORT&to=$NOW" \
+curl -s "http://localhost:8080/api/km/settings/audit-log/export?format=json&from=$LAST_EXPORT&to=$NOW" \
   -H "Authorization: Bearer $TOKEN" \
   | /opt/splunk/bin/splunk add oneshot -sourcetype thairag_audit
 

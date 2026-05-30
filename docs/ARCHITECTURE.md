@@ -63,7 +63,7 @@ Layered configuration via the `config` crate:
 3. `config/local.toml` — local overrides (git-ignored)
 4. Environment variables — `THAIRAG__` prefix with `__` separator
 
-Key config sections: `server`, `auth`, `database`, `providers` (llm, embedding, vector_store, text_search, reranker), `search`, `document`, `session`, `embedding_cache`, `job_queue`, `redis`, `otel` (OpenTelemetry), `knowledge_graph`, `plugins`, `chat_pipeline` (with advanced RAG sub-configs: `self_rag`, `graph_rag`, `crag`, `speculative_rag`, `map_reduce`, `raptor`, `colbert`, `active_learning`, `context_compaction`, `personal_memory`, `multimodal`, `compression`, `auto_summarize`, `live_retrieval`, `conversation_memory`, `retrieval_refinement`, `tool_use`, `adaptive_threshold`).
+Key config sections: `server`, `auth`, `database`, `providers` (llm, embedding, vector_store, text_search, reranker), `search`, `document`, `session`, `attachments`, `embedding_cache`, `job_queue`, `redis`, `otel` (OpenTelemetry), `knowledge_graph`, `plugins`, `search_analytics`, `personal_memory`, `multi_tenancy`, `search_quality`, `embedding_finetune`, `chat_pipeline` (with advanced RAG sub-configs: `self_rag`, `graph_rag`, `crag`, `speculative_rag`, `map_reduce`, `raptor`, `colbert`, `active_learning`, `context_compaction`, `personal_memory`, `multimodal`, `compression`, `auto_summarize`, `live_retrieval`, `conversation_memory`, `retrieval_refinement`, `tool_use`, `adaptive_threshold`).
 
 ### thairag-auth
 JWT-based authentication middleware for Axum:
@@ -101,7 +101,7 @@ Redis implementations for horizontal scaling:
 
 ### thairag-document
 Document ingestion pipeline:
-1. **Format detection** — MIME type validation (PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text)
+1. **Format detection** — MIME type validation (PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text), plus image-only PDF vision OCR and direct image uploads via the smart-PDF/pdfium engine
 2. **Conversion** — Format-specific extractors (pdf-extract, docx-rs, calamine, scraper)
 3. **Chunking** — Configurable chunk size and overlap, preserving metadata (page numbers, section titles)
 4. **Embedding** — Chunks are embedded via the configured `EmbeddingProvider`

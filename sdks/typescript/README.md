@@ -5,8 +5,11 @@ supports both non-streaming and streaming (SSE) chat completions.
 
 ## Installation
 
+Not yet published to npm — install from source for now (e.g. build it locally
+in `sdks/typescript` and reference it via a file/workspace dependency):
+
 ```bash
-npm install @thairag/client
+cd sdks/typescript && npm install && npm run build
 ```
 
 ## Quick Start
@@ -47,6 +50,14 @@ const client = new ThaiRAGClient({ baseUrl: "http://localhost:8080" });
 const token = await client.login("admin@example.com", "P@ssw0rd123");
 // The client stores the token automatically for subsequent requests.
 ```
+
+> **Write operations require a JWT Bearer token.** The server's CSRF protection
+> rejects any non-GET request (POST/PUT/DELETE) that carries neither a Bearer
+> token nor an `X-CSRF-Token` header. An `apiKey`-only client sends `X-API-Key`
+> but no Bearer header, so it can perform read-only GETs but write calls
+> (`createOrg`, `uploadDocument`, `submitFeedback`, `createTenant`, etc.) are
+> rejected with **403**. Use `login()` (or pass a `token`) so the client sends a
+> Bearer token for writes.
 
 ### Register a new user
 
@@ -141,12 +152,16 @@ await client.deleteDocument(ws.id, doc.id);
 
 Run a hybrid search (vector + BM25 with RRF merge) against a workspace.
 
+`search` returns a RAG response shaped `{ response_id, query, chunks, answer,
+usage, timing }` — there is no top-level `results` array. Iterate `chunks`:
+
 ```typescript
 const result = await client.search(ws.id, "deployment guide");
 
-for (const hit of result.results) {
-  console.log(`[${hit.score.toFixed(3)}] ${hit.title}`);
-  console.log(hit.content);
+console.log(result.answer);
+for (const chunk of result.chunks) {
+  console.log(`[${chunk.score.toFixed(3)}] ${chunk.doc_title ?? chunk.doc_id}`);
+  console.log(chunk.content);
 }
 ```
 

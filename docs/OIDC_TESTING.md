@@ -51,11 +51,15 @@ docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d
 
 This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
 
+> The command composes two files (`-f docker-compose.yml -f docker-compose.test-idp.yml`). The `test-idp.yml` override only adds Keycloak and Open WebUI (and wires OIDC env onto ThaiRAG); PostgreSQL, the Admin UI, Redis, Qdrant, Prometheus, and Grafana all come from the base `docker-compose.yml`.
+
+> **Note:** `scripts/keycloak-init.sh` only bootstraps the permanent Keycloak **ADMIN** account in the `master` realm. The `thairag` realm, its OIDC clients, and the `testuser` are created manually via the steps below.
+
 | Service      | URL                        | Credentials              |
 |-------------|----------------------------|--------------------------|
 | Keycloak    | http://localhost:9090       | admin / admin            |
 | ThaiRAG API | http://localhost:8080       | (internal, accessed via nginx) |
-| Admin UI    | http://localhost:8081       | admin@thairag.local / Admin123 |
+| Admin UI    | http://localhost:8081       | admin@thairag.local / admin123 |
 | Open WebUI  | http://localhost:3000       | via Keycloak SSO         |
 
 ## 2. Configure Keycloak
@@ -126,7 +130,7 @@ This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
 
 ### Via Admin UI (recommended)
 
-1. Open http://localhost:8081 and log in with `admin@thairag.local` / `Admin123`
+1. Open http://localhost:8081 and log in with `admin@thairag.local` / `admin123`
 2. Go to **Settings** → **Identity Providers** tab
 3. Click **Add Provider** and fill in:
    - **Name**: `Keycloak`
@@ -149,7 +153,7 @@ This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
 # Login as super admin
 TOKEN=$(curl -s http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@thairag.local","password":"Admin123"}' | jq -r .token)
+  -d '{"email":"admin@thairag.local","password":"admin123"}' | jq -r .token)
 
 # Create the identity provider
 curl -s http://localhost:8080/api/km/settings/identity-providers \
@@ -198,7 +202,7 @@ To simulate a production setup where Keycloak federates to Microsoft Entra ID:
    - **Tenant**: your Azure AD tenant ID (or `common` for multi-tenant)
 3. Click **Save**
 
-Now when users click "Keycloak" on the login page, Keycloak will show a "Microsoft" button that redirects to Entra ID. This mirrors the Duende IdentityServer federation pattern.
+Now when users click "Keycloak" on the login page, Keycloak will show a "Microsoft" button that redirects to Entra ID. This is the standard identity-broker federation pattern (Keycloak fronting an upstream IdP).
 
 ## 6. Networking Notes
 
