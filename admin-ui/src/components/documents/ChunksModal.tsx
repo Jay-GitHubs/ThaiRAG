@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Modal, Spin, List, Tag, Typography, Empty, theme } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { Modal, Spin, List, Tag, Typography, Empty, Alert, Button, theme } from 'antd';
+import axios from 'axios';
 import { getDocumentChunks } from '../../api/documents';
 import type { ChunkInfo, ChunksResponse, Document } from '../../api/types';
 
@@ -13,17 +14,33 @@ interface Props {
 export function ChunksModal({ workspaceId, doc, open, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<ChunksResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const { token: themeToken } = theme.useToken();
 
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    getDocumentChunks(workspaceId, doc.id)
+      .then((res) => {
+        setData(res);
+        setError(null);
+      })
+      .catch((err) => {
+        setData(null);
+        if (axios.isAxiosError(err) && (err.code === 'ECONNABORTED' || !err.response)) {
+          setError(
+            'Timed out loading chunks. The server may be busy reprocessing or not responding — try again shortly.',
+          );
+        } else {
+          setError('Failed to load chunks. Please try again.');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [workspaceId, doc.id]);
+
   useEffect(() => {
-    if (open) {
-      setLoading(true);
-      getDocumentChunks(workspaceId, doc.id)
-        .then(setData)
-        .catch(() => setData(null))
-        .finally(() => setLoading(false));
-    }
-  }, [open, workspaceId, doc.id]);
+    if (open) load();
+  }, [open, load]);
 
   return (
     <Modal
@@ -35,6 +52,18 @@ export function ChunksModal({ workspaceId, doc, open, onClose }: Props) {
     >
       {loading ? (
         <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+      ) : error ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Could not load chunks"
+          description={error}
+          action={
+            <Button size="small" onClick={load}>
+              Retry
+            </Button>
+          }
+        />
       ) : data && data.chunks.length > 0 ? (
         <List
           dataSource={data.chunks}
