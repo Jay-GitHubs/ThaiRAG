@@ -51,13 +51,11 @@ const token = await client.login("admin@example.com", "P@ssw0rd123");
 // The client stores the token automatically for subsequent requests.
 ```
 
-> **Write operations require a JWT Bearer token.** The server's CSRF protection
-> rejects any non-GET request (POST/PUT/DELETE) that carries neither a Bearer
-> token nor an `X-CSRF-Token` header. An `apiKey`-only client sends `X-API-Key`
-> but no Bearer header, so it can perform read-only GETs but write calls
-> (`createOrg`, `uploadDocument`, `submitFeedback`, `createTenant`, etc.) are
-> rejected with **403**. Use `login()` (or pass a `token`) so the client sends a
-> Bearer token for writes.
+> **Auth & writes.** Both an `apiKey` and a `login()` JWT (Bearer token)
+> authenticate all operations, reads and writes alike — the server's CSRF
+> protection exempts Bearer- and API-key-authenticated requests (neither is
+> auto-attached by browsers). Only cookie-based browser sessions need to send an
+> `X-CSRF-Token` header on state-changing calls.
 
 ### Register a new user
 

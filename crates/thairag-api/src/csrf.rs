@@ -17,8 +17,10 @@ use thairag_auth::AuthClaims;
 /// Middleware that validates the `X-CSRF-Token` header on state-changing requests.
 ///
 /// Safe methods (GET, HEAD, OPTIONS) are always allowed.
-/// For POST/PUT/DELETE, the request must include a `Bearer` token (which is
-/// inherently CSRF-safe) or an `X-CSRF-Token` header.
+/// For POST/PUT/DELETE, the request must carry one of: a `Bearer` token, an
+/// `X-API-Key` header, or an `X-CSRF-Token` header. Bearer tokens and API keys
+/// are inherently CSRF-safe — browsers never attach them automatically the way
+/// they do cookies — so a request authenticated by either is exempt.
 ///
 /// If auth is disabled (anonymous claims present without bearer token), CSRF
 /// validation is skipped since there's no session to protect.
@@ -44,14 +46,17 @@ pub async fn csrf_guard(req: Request<Body>, next: Next) -> Response {
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("Bearer "));
+    // API keys (X-API-Key), like Bearer tokens, are not auto-attached by
+    // browsers, so they are inherently CSRF-safe — exempt them too. Without
+    // this, API-key clients could only issue GETs.
+    let has_api_key = req.headers().contains_key("x-api-key");
 
-    // If using Bearer auth, the token itself serves as CSRF protection
-    // (Bearer tokens are not automatically sent by browsers like cookies are).
-    // If no Bearer token and no CSRF token, reject.
-    if !has_bearer && !has_csrf {
+    // If using Bearer or API-key auth, the credential itself serves as CSRF
+    // protection. Otherwise an X-CSRF-Token header is required.
+    if !has_bearer && !has_api_key && !has_csrf {
         let body = serde_json::json!({
             "error": {
-                "message": "Missing CSRF token. Include X-CSRF-Token header or use Bearer auth.",
+                "message": "Missing CSRF token. Include X-CSRF-Token header or use Bearer/API-key auth.",
                 "type": "csrf_error"
             }
         });
