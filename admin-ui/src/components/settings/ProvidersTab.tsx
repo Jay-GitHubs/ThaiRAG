@@ -1156,7 +1156,7 @@ function RecommendationsCard() {
               {cfg && (
                 <>
                   <Space>
-                    <span>Enable external catalog</span>
+                    <span>Enable external discovery</span>
                     <Switch
                       checked={cfg.enabled}
                       onChange={(v) => setCfg({ ...cfg, enabled: v })}
@@ -1164,16 +1164,115 @@ function RecommendationsCard() {
                   </Space>
                   <div>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Catalog URL (leave blank for the default LiteLLM catalog)
+                      Discovery source
                     </Typography.Text>
-                    <Input
-                      value={cfg.catalog_url}
-                      onChange={(e) => setCfg({ ...cfg, catalog_url: e.target.value })}
-                      placeholder="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+                    <Select
+                      value={cfg.mode || 'catalog'}
+                      onChange={(v) => setCfg({ ...cfg, mode: v })}
                       disabled={!cfg.enabled}
-                      style={{ marginTop: 2 }}
+                      style={{ width: '100%', marginTop: 2 }}
+                      options={[
+                        { label: 'Built-in catalog (LiteLLM)', value: 'catalog' },
+                        { label: 'Custom HTTP catalog', value: 'http_catalog' },
+                        { label: 'MCP discovery tool', value: 'mcp' },
+                      ]}
                     />
                   </div>
+
+                  {cfg.mode === 'catalog' && (
+                    <div>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        Catalog URL (leave blank for the default LiteLLM catalog)
+                      </Typography.Text>
+                      <Input
+                        value={cfg.catalog_url}
+                        onChange={(e) => setCfg({ ...cfg, catalog_url: e.target.value })}
+                        placeholder="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+                        disabled={!cfg.enabled}
+                        style={{ marginTop: 2 }}
+                      />
+                    </div>
+                  )}
+
+                  {cfg.mode === 'http_catalog' && (
+                    <>
+                      <div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Catalog endpoint URL — returns either LiteLLM-style JSON or a
+                          {' '}
+                          <Typography.Text code>{'{ "<id>": { vision, recommended } }'}</Typography.Text>
+                          {' '}map
+                        </Typography.Text>
+                        <Input
+                          value={cfg.endpoint}
+                          onChange={(e) => setCfg({ ...cfg, endpoint: e.target.value })}
+                          placeholder="https://your-host/model-capabilities.json"
+                          disabled={!cfg.enabled}
+                          style={{ marginTop: 2 }}
+                        />
+                      </div>
+                      <div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Bearer token (optional)
+                        </Typography.Text>
+                        <Input.Password
+                          value={cfg.auth}
+                          onChange={(e) => setCfg({ ...cfg, auth: e.target.value })}
+                          placeholder="(none)"
+                          disabled={!cfg.enabled}
+                          style={{ marginTop: 2 }}
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {cfg.mode === 'mcp' && (
+                    <>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="Best-effort MCP discovery"
+                        description="Requires MCP enabled ([mcp].enabled). The configured tool is called with no arguments and its result is parsed for model capabilities; on any error the built-in floor is used."
+                      />
+                      <div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          MCP server URL (SSE / streamable HTTP)
+                        </Typography.Text>
+                        <Input
+                          value={cfg.endpoint}
+                          onChange={(e) => setCfg({ ...cfg, endpoint: e.target.value })}
+                          placeholder="https://your-mcp-server/sse"
+                          disabled={!cfg.enabled}
+                          style={{ marginTop: 2 }}
+                        />
+                      </div>
+                      <div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Tool name (default: list_models)
+                        </Typography.Text>
+                        <Input
+                          value={cfg.tool}
+                          onChange={(e) => setCfg({ ...cfg, tool: e.target.value })}
+                          placeholder="list_models"
+                          disabled={!cfg.enabled}
+                          style={{ marginTop: 2 }}
+                        />
+                      </div>
+                      <div>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Bearer token (optional)
+                        </Typography.Text>
+                        <Input.Password
+                          value={cfg.auth}
+                          onChange={(e) => setCfg({ ...cfg, auth: e.target.value })}
+                          placeholder="(none)"
+                          disabled={!cfg.enabled}
+                          style={{ marginTop: 2 }}
+                        />
+                      </div>
+                    </>
+                  )}
+
                   <Space>
                     <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
                       Save
