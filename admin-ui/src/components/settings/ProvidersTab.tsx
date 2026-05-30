@@ -14,11 +14,20 @@ import {
   Form,
   Select,
   Input,
+  AutoComplete,
+  Tooltip,
   message,
   Divider,
   Switch,
 } from 'antd';
-import { EditOutlined, ReloadOutlined, SaveOutlined, CloseOutlined, SyncOutlined } from '@ant-design/icons';
+import {
+  EditOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  CloseOutlined,
+  SyncOutlined,
+  StarFilled,
+} from '@ant-design/icons';
 import {
   useProviderConfig,
   useAvailableModels,
@@ -53,6 +62,99 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+// Known vision-capable model name fragments — a frontend hint mirroring the
+// backend's built-in list (is_ollama_vision_model / is_vision_model). This is
+// ADVISORY only: it drives the ⭐ "vision" badge, never gates model selection
+// (capability detection informs, never enforces — see PR-A). PR-D will replace
+// this heuristic with the resolver-backed catalog.
+const OLLAMA_VISION_PREFIXES = [
+  'llava', 'llama3.2-vision', 'minicpm-v', 'bakllava',
+  'moondream', 'moondream2', 'cogvlm', 'internvl',
+  'qwen2.5vl', 'qwen2-vl', 'qwen3-vl', 'qwenvl', 'gemma3',
+];
+
+function looksVisionCapable(kind: string, modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  switch (kind) {
+    case 'Ollama':
+    case 'OpenAiCompatible': {
+      const base = lower.split(':')[0]; // strip tag like ":latest", ":8b-instruct"
+      return OLLAMA_VISION_PREFIXES.some((p) => base === p || base.startsWith(p + '-'));
+    }
+    case 'Claude':
+      // All Claude 3.x and 4.x models are vision-capable.
+      return (
+        lower.startsWith('claude-3') ||
+        lower.startsWith('claude-4') ||
+        lower.includes('opus-4') ||
+        lower.includes('sonnet-4') ||
+        lower.includes('haiku-4')
+      );
+    case 'OpenAi':
+      return ['gpt-4o', 'gpt-4.1', 'gpt-4-vision', 'o3', 'o4'].some((f) => lower.includes(f));
+    case 'Gemini':
+      return lower.includes('gemini-1.5') || lower.includes('gemini-2');
+    default:
+      return false;
+  }
+}
+
+// Normalized shape consumed by the model AutoComplete options builder.
+type PickerModel = { id: string; name?: string; size?: number; vision?: boolean };
+
+// Advisory capability badge: a star + "vision" tag, explicitly framed as a
+// recommendation rather than a requirement (unknown models stay selectable).
+function VisionBadge() {
+  return (
+    <Tooltip title="Recognized as vision-capable — a recommendation, not a requirement.">
+      <Tag color="gold" icon={<StarFilled />} style={{ marginInlineEnd: 0 }}>
+        vision
+      </Tag>
+    </Tooltip>
+  );
+}
+
+// Build AutoComplete options. `value` is the model id (what gets saved); the
+// rich `label` shows name + id + capability badge + size; `searchName` lets the
+// filter match a friendly name as well as the id.
+function toPickerOptions(models: PickerModel[]) {
+  return models.map((m) => ({
+    value: m.id,
+    searchName: m.name ?? '',
+    label: (
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} size={4}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <Typography.Text>{m.name || m.id}</Typography.Text>
+          {m.name && m.name !== m.id && (
+            <Typography.Text type="secondary" code style={{ marginLeft: 6 }}>
+              {m.id}
+            </Typography.Text>
+          )}
+        </span>
+        <Space size={4}>
+          {m.vision && <VisionBadge />}
+          {m.size != null && (
+            <Typography.Text type="secondary">{formatBytes(m.size)}</Typography.Text>
+          )}
+        </Space>
+      </Space>
+    ),
+  }));
+}
+
+// Filter against both the model id (option.value) and its friendly name so the
+// search box works whether the admin types "gpt-4o" or "GPT-4o".
+function modelFilterOption(
+  input: string,
+  option?: { value?: unknown; searchName?: string },
+): boolean {
+  const q = input.toLowerCase();
+  return (
+    String(option?.value ?? '').toLowerCase().includes(q) ||
+    String(option?.searchName ?? '').toLowerCase().includes(q)
+  );
 }
 
 function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
@@ -184,6 +286,8 @@ function EditForm({
   const [syncing, setSyncing] = useState(false);
   const [syncedRrModels, setSyncedRrModels] = useState<AvailableModel[] | null>(null);
   const [syncingRr, setSyncingRr] = useState(false);
+  const [syncedVisionModels, setSyncedVisionModels] = useState<AvailableModel[] | null>(null);
+  const [syncingVision, setSyncingVision] = useState(false);
   // Vision LLM is a dedicated provider for image/PDF OCR — falls back
   // to the primary `llm` when disabled. See pipeline.rs::process_image
   // and process_pdf_with_vision.
@@ -277,24 +381,30 @@ function EditForm({
     ],
   };
 
-  const toOptions = (models: AvailableModel[]) =>
-    models.map((m) => ({
-      label: m.size ? `${m.name} (${formatBytes(m.size)})` : m.name,
-      value: m.id,
+  // Build LLM picker models — prefer synced, then API-fetched, then static.
+  // Each is tagged with an advisory vision flag for the ⭐ badge.
+  const llmPickerModels: PickerModel[] = (() => {
+    const fromAvailable =
+      syncedModels && syncedModels.length > 0
+        ? syncedModels
+        : llmKind === config.llm.kind && availableModels.length > 0
+          ? availableModels
+          : null;
+    if (fromAvailable) {
+      return fromAvailable.map((m) => ({
+        id: m.id,
+        name: m.name,
+        size: m.size,
+        vision: looksVisionCapable(llmKind, m.id),
+      }));
+    }
+    return (staticModels[llmKind] || []).map((m) => ({
+      id: m.value,
+      name: m.label,
+      vision: looksVisionCapable(llmKind, m.value),
     }));
-
-  // Build model options — prefer synced, then API-fetched, then static
-  const getModelOptions = () => {
-    if (syncedModels && syncedModels.length > 0) {
-      return toOptions(syncedModels);
-    }
-    if (llmKind === config.llm.kind && availableModels.length > 0) {
-      return toOptions(availableModels);
-    }
-    return staticModels[llmKind] || [];
-  };
-  const modelOptions = getModelOptions();
-  const useModelSelect = modelOptions.length > 0;
+  })();
+  const llmOptions = toPickerOptions(llmPickerModels);
 
   // Sync models from provider API using current form values
   const handleSyncModels = async () => {
@@ -318,6 +428,52 @@ function EditForm({
       setSyncing(false);
     }
   };
+
+  // Sync vision models from the (possibly dedicated) vision provider API.
+  const handleSyncVisionModels = async () => {
+    const values = form.getFieldsValue();
+    setSyncingVision(true);
+    try {
+      const result = await syncModels({
+        kind: visionKind,
+        base_url: values.vision_base_url || '',
+        api_key: values.vision_api_key || '',
+      });
+      if (result.models.length === 0) {
+        message.warning('No models found. Check your credentials and try again.');
+      } else {
+        message.success(`Found ${result.models.length} model(s) from ${result.provider}`);
+      }
+      setSyncedVisionModels(result.models);
+    } catch {
+      message.error('Failed to sync models. Check your credentials.');
+    } finally {
+      setSyncingVision(false);
+    }
+  };
+
+  // Vision picker models — synced list (vision provider) or the static fallback,
+  // each tagged with the advisory vision flag.
+  const visionPickerModels: PickerModel[] = (
+    syncedVisionModels && syncedVisionModels.length > 0
+      ? syncedVisionModels.map((m) => ({
+          id: m.id,
+          name: m.name,
+          size: m.size,
+          vision: looksVisionCapable(visionKind, m.id),
+        }))
+      : (staticModels[visionKind] || []).map((m) => ({
+          id: m.value,
+          name: m.label,
+          vision: looksVisionCapable(visionKind, m.value),
+        }))
+  );
+  const visionOptions = toPickerOptions(visionPickerModels);
+
+  // Reset synced vision models when switching the vision provider kind.
+  useEffect(() => {
+    setSyncedVisionModels(null);
+  }, [visionKind]);
 
   // Reset synced models and model selection when switching provider kind
   useEffect(() => {
@@ -349,13 +505,11 @@ function EditForm({
     ],
   };
 
-  const rrModelOptions = (() => {
-    if (syncedRrModels && syncedRrModels.length > 0) {
-      return toOptions(syncedRrModels);
-    }
-    return staticRrModels[rrKind] || [];
-  })();
-  const useRrModelSelect = rrModelOptions.length > 0;
+  const rrPickerModels: PickerModel[] =
+    syncedRrModels && syncedRrModels.length > 0
+      ? syncedRrModels.map((m) => ({ id: m.id, name: m.name, size: m.size }))
+      : (staticRrModels[rrKind] || []).map((m) => ({ id: m.value, name: m.label }));
+  const rrOptions = toPickerOptions(rrPickerModels);
 
   const handleSyncRrModels = async () => {
     setSyncingRr(true);
@@ -412,17 +566,24 @@ function EditForm({
               ]}
             />
           </Form.Item>
-          <Form.Item label="Model" required style={{ marginBottom: 0 }}>
+          <Form.Item
+            label="Model"
+            required
+            style={{ marginBottom: 0 }}
+            extra="Search the synced list or type any model id — unrecognized models stay selectable."
+          >
             <Space.Compact style={{ width: '100%' }}>
               <Form.Item name="llm_model" noStyle rules={[{ required: true, message: 'Model is required' }]}>
-                {useModelSelect ? (
-                  <Select showSearch optionFilterProp="label" options={modelOptions} allowClear={false} placeholder="Select a model" style={{ width: '100%' }} />
-                ) : (
-                  <Input placeholder={
-                    llmKind === 'OpenAiCompatible' ? 'e.g. deepseek-chat, mistral-large-latest' :
-                    'Enter model name'
-                  } style={{ width: '100%' }} />
-                )}
+                <AutoComplete
+                  options={llmOptions}
+                  filterOption={modelFilterOption}
+                  placeholder={
+                    llmKind === 'OpenAiCompatible'
+                      ? 'e.g. deepseek-chat, mistral-large-latest'
+                      : 'Select or type a model'
+                  }
+                  style={{ width: '100%' }}
+                />
               </Form.Item>
               <Button
                 icon={<SyncOutlined spin={syncing} />}
@@ -500,12 +661,12 @@ function EditForm({
               />
             </Form.Item>
             <Form.Item
-              name="vision_model"
               label="Model"
-              rules={[{ required: true, message: 'Model is required' }]}
+              required
+              style={{ marginBottom: 0 }}
               extra={
                 visionKind === 'Ollama'
-                  ? 'e.g. llava:13b, qwen2.5vl:7b, llama3.2-vision:11b'
+                  ? 'e.g. llava:13b, qwen2.5vl:7b, llama3.2-vision:11b — or type any model id.'
                   : visionKind === 'Claude'
                   ? 'e.g. claude-sonnet-4-20250514 (all Claude 3+ models support vision)'
                   : visionKind === 'OpenAi'
@@ -515,7 +676,28 @@ function EditForm({
                   : 'Any OpenAI-compatible vision model'
               }
             >
-              <Input placeholder="Enter vision model name" />
+              <Space.Compact style={{ width: '100%' }}>
+                <Form.Item
+                  name="vision_model"
+                  noStyle
+                  rules={[{ required: true, message: 'Model is required' }]}
+                >
+                  <AutoComplete
+                    options={visionOptions}
+                    filterOption={modelFilterOption}
+                    placeholder="Select or type a vision model"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
+                <Button
+                  icon={<SyncOutlined spin={syncingVision} />}
+                  onClick={handleSyncVisionModels}
+                  loading={syncingVision}
+                  title="Sync models from provider"
+                >
+                  Sync
+                </Button>
+              </Space.Compact>
             </Form.Item>
             {(visionKind === 'Ollama' || visionKind === 'OpenAiCompatible') && (
               <Form.Item
@@ -573,11 +755,12 @@ function EditForm({
             <Form.Item label="Model" required style={{ marginBottom: 0 }}>
               <Space.Compact style={{ width: '100%' }}>
                 <Form.Item name="rr_model" noStyle rules={[{ required: true, message: 'Model is required' }]}>
-                  {useRrModelSelect ? (
-                    <Select showSearch optionFilterProp="label" options={rrModelOptions} allowClear={false} placeholder="Select a reranker model" style={{ width: '100%' }} />
-                  ) : (
-                    <Input placeholder="Enter model name" style={{ width: '100%' }} />
-                  )}
+                  <AutoComplete
+                    options={rrOptions}
+                    filterOption={modelFilterOption}
+                    placeholder="Select or type a reranker model"
+                    style={{ width: '100%' }}
+                  />
                 </Form.Item>
                 <Button
                   icon={<SyncOutlined spin={syncingRr} />}
