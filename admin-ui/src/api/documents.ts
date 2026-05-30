@@ -65,8 +65,11 @@ export async function downloadDocument(workspaceId: string, docId: string) {
 }
 
 export async function getDocumentChunks(workspaceId: string, docId: string) {
+  // Reading persisted chunks is a fast DB lookup; cap it so a hung/overloaded
+  // backend surfaces as a visible error instead of an indefinite spinner.
   const res = await client.get<ChunksResponse>(
     `/api/km/workspaces/${workspaceId}/documents/${docId}/chunks`,
+    { timeout: 15000 },
   );
   return res.data;
 }
