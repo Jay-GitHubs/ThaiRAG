@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use base64::Engine;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
@@ -6,6 +8,43 @@ use tracing::{info, warn};
 
 /// MIME types recognized as images for multi-modal processing.
 pub const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+/// Downscale `bytes` so its longest edge is at most `max_edge` px, preserving
+/// aspect ratio and re-encoding as PNG. Returns the original bytes/mime
+/// untouched when `max_edge == 0`, when the image already fits, or when
+/// decode/encode fails (a bad decode must never block the vision call).
+///
+/// This is the single chokepoint that bounds vision token cost/RAM for every
+/// describe path — embedded document images, direct uploads, and rasterized
+/// PDF pages all flow through [`describe_image_with_prompt`].
+fn downscale_for_vision<'a>(
+    bytes: &'a [u8],
+    mime: &'a str,
+    max_edge: u32,
+) -> (Cow<'a, [u8]>, &'a str) {
+    if max_edge == 0 {
+        return (Cow::Borrowed(bytes), mime);
+    }
+    let img = match ::image::load_from_memory(bytes) {
+        Ok(img) => img,
+        Err(_) => return (Cow::Borrowed(bytes), mime),
+    };
+    if img.width().max(img.height()) <= max_edge {
+        return (Cow::Borrowed(bytes), mime);
+    }
+    let resized = img.resize(max_edge, max_edge, ::image::imageops::FilterType::Lanczos3);
+    let mut png = Vec::new();
+    if resized
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            ::image::ImageFormat::Png,
+        )
+        .is_err()
+    {
+        return (Cow::Borrowed(bytes), mime);
+    }
+    (Cow::Owned(png), "image/png")
+}
 
 /// Check if a MIME type is an image type we support.
 pub fn is_image_mime(mime_type: &str) -> bool {
@@ -41,12 +80,24 @@ const DEFAULT_IMAGE_PROMPT: &str = "Describe this image in detail. Include any t
 
 /// Describe an image using a vision-capable LLM with the default prompt.
 /// If the LLM does not support vision, returns a placeholder description.
+///
+/// `max_image_edge` caps the longest edge (px) of the image actually sent to
+/// the model; `0` disables downscaling. See [`describe_image_with_prompt`].
 pub async fn describe_image(
     llm: &dyn LlmProvider,
     image_bytes: &[u8],
     mime_type: &str,
+    max_image_edge: u32,
 ) -> Result<String> {
-    describe_image_with_prompt(llm, image_bytes, mime_type, DEFAULT_IMAGE_PROMPT, 1024).await
+    describe_image_with_prompt(
+        llm,
+        image_bytes,
+        mime_type,
+        DEFAULT_IMAGE_PROMPT,
+        1024,
+        max_image_edge,
+    )
+    .await
 }
 
 /// Describe an image with a caller-supplied prompt and token budget.
@@ -60,17 +111,19 @@ pub async fn describe_image_with_prompt(
     mime_type: &str,
     prompt: &str,
     max_tokens: u32,
+    max_image_edge: u32,
 ) -> Result<String> {
     let metadata = extract_image_metadata(image_bytes, mime_type);
 
-    let base64_data = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+    let (vision_bytes, vision_mime) = downscale_for_vision(image_bytes, mime_type, max_image_edge);
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(vision_bytes.as_ref());
 
     let vision_msg = VisionMessage {
         role: "user".to_string(),
         text: prompt.to_string(),
         images: vec![ImageContent {
             base64_data,
-            media_type: mime_type.to_string(),
+            media_type: vision_mime.to_string(),
         }],
     };
 
@@ -257,6 +310,57 @@ mod tests {
         let (w, h) = extract_gif_dimensions(&data);
         assert!(w.is_none());
         assert!(h.is_none());
+    }
+
+    /// Encode a solid-color RGB image of the given size as PNG bytes.
+    fn png_of_size(w: u32, h: u32) -> Vec<u8> {
+        let img = ::image::DynamicImage::ImageRgb8(::image::RgbImage::new(w, h));
+        let mut buf = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut buf),
+            ::image::ImageFormat::Png,
+        )
+        .unwrap();
+        buf
+    }
+
+    #[test]
+    fn downscale_disabled_returns_original() {
+        let bytes = png_of_size(4000, 3000);
+        let (out, mime) = downscale_for_vision(&bytes, "image/png", 0);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out.as_ref(), bytes.as_slice());
+        assert_eq!(mime, "image/png");
+    }
+
+    #[test]
+    fn downscale_passthrough_when_already_small() {
+        let bytes = png_of_size(800, 600);
+        let (out, _) = downscale_for_vision(&bytes, "image/png", 2048);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out.as_ref(), bytes.as_slice());
+    }
+
+    #[test]
+    fn downscale_shrinks_oversized_image_preserving_aspect() {
+        let bytes = png_of_size(4000, 3000);
+        let (out, mime) = downscale_for_vision(&bytes, "image/png", 2048);
+        assert!(matches!(out, Cow::Owned(_)));
+        assert_eq!(mime, "image/png");
+        let decoded = ::image::load_from_memory(out.as_ref()).unwrap();
+        assert_eq!(decoded.width().max(decoded.height()), 2048);
+        // 4000x3000 (4:3) scaled to long edge 2048 → 2048x1536.
+        assert_eq!(decoded.width(), 2048);
+        assert_eq!(decoded.height(), 1536);
+    }
+
+    #[test]
+    fn downscale_bad_bytes_fall_through_untouched() {
+        let bytes = b"not an image".to_vec();
+        let (out, mime) = downscale_for_vision(&bytes, "image/png", 2048);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out.as_ref(), bytes.as_slice());
+        assert_eq!(mime, "image/png");
     }
 
     #[test]

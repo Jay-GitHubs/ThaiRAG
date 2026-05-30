@@ -269,6 +269,7 @@ impl DocumentPipeline {
     pub fn with_smart_pdf_options(
         mut self,
         image_dpi: u32,
+        max_image_edge: u32,
         page_as_image_threshold: f64,
         min_image_size: u32,
         max_images_per_page: usize,
@@ -276,6 +277,7 @@ impl DocumentPipeline {
         enhance: bool,
     ) -> Self {
         self.smart_pdf.image_dpi = image_dpi;
+        self.smart_pdf.max_image_edge = max_image_edge;
         self.smart_pdf.page_as_image_threshold = page_as_image_threshold;
         self.smart_pdf.min_image_size = min_image_size;
         self.smart_pdf.max_images_per_page = max_images_per_page;
@@ -781,7 +783,13 @@ impl DocumentPipeline {
             markdown.push_str("\n\n## Embedded images\n");
         }
         for img in raw_images {
-            let desc = match crate::image::describe_image(llm.as_ref(), &img.bytes, &img.mime).await
+            let desc = match crate::image::describe_image(
+                llm.as_ref(),
+                &img.bytes,
+                &img.mime,
+                self.smart_pdf.max_image_edge,
+            )
+            .await
             {
                 Ok(d) => d,
                 Err(e) => {
@@ -853,7 +861,13 @@ impl DocumentPipeline {
             .expect("process_direct_image called without vision_llm — caller must check")
             .clone();
 
-        let desc = crate::image::describe_image(llm.as_ref(), raw, mime_type).await?;
+        let desc = crate::image::describe_image(
+            llm.as_ref(),
+            raw,
+            mime_type,
+            self.smart_pdf.max_image_edge,
+        )
+        .await?;
         if meaningful_char_count(&desc) == 0 {
             return Err(self.empty_extraction_error(mime_type));
         }
@@ -931,63 +945,69 @@ impl DocumentPipeline {
                 pages_needing_vision += 1;
             }
 
-            let (page_content, used_vision) = if needs_vision
-                && vision_pages_used < self.pdf_max_vision_pages
-            {
-                // Two distinct stages: render the page to PNG (pdftoppm),
-                // then ask the vision model to describe it. Keep their
-                // failures apart so diagnostics point at the right layer.
-                match rasterize_pdf_page(raw, page_num, self.smart_pdf.image_dpi).await {
-                    Err(e) => {
-                        pages_rasterize_failed += 1;
-                        tracing::warn!(
-                            %doc_id,
-                            page = page_num,
-                            error = %e,
-                            "PDF page rasterization (pdftoppm) failed — keeping extracted \
-                             text. This is a server-side rendering problem, not the vision \
-                             model."
-                        );
-                        (trimmed.to_string(), false)
-                    }
-                    Ok(png) => match image::describe_image(llm.as_ref(), &png, "image/png").await {
-                        Ok(desc) => {
-                            vision_pages_used += 1;
-                            info!(
-                                %doc_id,
-                                page = page_num,
-                                vision_model = llm.model_name(),
-                                desc_len = desc.len(),
-                                "PDF page rasterized and described via vision fallback"
-                            );
-                            (desc, true)
-                        }
+            let (page_content, used_vision) =
+                if needs_vision && vision_pages_used < self.pdf_max_vision_pages {
+                    // Two distinct stages: render the page to PNG (pdftoppm),
+                    // then ask the vision model to describe it. Keep their
+                    // failures apart so diagnostics point at the right layer.
+                    match rasterize_pdf_page(raw, page_num, self.smart_pdf.image_dpi).await {
                         Err(e) => {
-                            pages_llm_failed += 1;
+                            pages_rasterize_failed += 1;
                             tracing::warn!(
                                 %doc_id,
                                 page = page_num,
-                                vision_model = llm.model_name(),
                                 error = %e,
-                                "Vision model failed to describe PDF page — keeping \
-                                 extracted text"
+                                "PDF page rasterization (pdftoppm) failed — keeping extracted \
+                                 text. This is a server-side rendering problem, not the vision \
+                                 model."
                             );
                             (trimmed.to_string(), false)
                         }
-                    },
-                }
-            } else {
-                if needs_vision {
-                    pages_over_budget += 1;
-                    tracing::warn!(
-                        %doc_id,
-                        page = page_num,
-                        cap = self.pdf_max_vision_pages,
-                        "Skipping vision fallback — pdf_max_vision_pages cap reached"
-                    );
-                }
-                (trimmed.to_string(), false)
-            };
+                        Ok(png) => match image::describe_image(
+                            llm.as_ref(),
+                            &png,
+                            "image/png",
+                            self.smart_pdf.max_image_edge,
+                        )
+                        .await
+                        {
+                            Ok(desc) => {
+                                vision_pages_used += 1;
+                                info!(
+                                    %doc_id,
+                                    page = page_num,
+                                    vision_model = llm.model_name(),
+                                    desc_len = desc.len(),
+                                    "PDF page rasterized and described via vision fallback"
+                                );
+                                (desc, true)
+                            }
+                            Err(e) => {
+                                pages_llm_failed += 1;
+                                tracing::warn!(
+                                    %doc_id,
+                                    page = page_num,
+                                    vision_model = llm.model_name(),
+                                    error = %e,
+                                    "Vision model failed to describe PDF page — keeping \
+                                     extracted text"
+                                );
+                                (trimmed.to_string(), false)
+                            }
+                        },
+                    }
+                } else {
+                    if needs_vision {
+                        pages_over_budget += 1;
+                        tracing::warn!(
+                            %doc_id,
+                            page = page_num,
+                            cap = self.pdf_max_vision_pages,
+                            "Skipping vision fallback — pdf_max_vision_pages cap reached"
+                        );
+                    }
+                    (trimmed.to_string(), false)
+                };
 
             if page_content.trim().is_empty() {
                 continue;
@@ -1126,7 +1146,13 @@ impl DocumentPipeline {
         let description = if self.image_description_enabled {
             match &self.vision_llm {
                 Some(llm) if llm.supports_vision() => {
-                    image::describe_image(llm.as_ref(), raw, mime_type).await?
+                    image::describe_image(
+                        llm.as_ref(),
+                        raw,
+                        mime_type,
+                        self.smart_pdf.max_image_edge,
+                    )
+                    .await?
                 }
                 _ => {
                     return Err(ThaiRagError::empty_extraction(

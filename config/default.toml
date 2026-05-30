@@ -63,6 +63,12 @@ table_extraction_enabled = true
 # path and the pdftoppm fallback). Higher = sharper OCR but more vision tokens
 # and memory; lower if a single slide blows up the vision model's context.
 pdf_image_dpi = 150
+# Longest-edge pixel cap for *any* image sent to the vision model — embedded
+# DOCX/XLSX/HTML images, direct image uploads, and rasterized PDF pages alike.
+# Larger images are downscaled (aspect preserved, re-encoded PNG) before
+# description, bounding vision token cost and RAM regardless of source format.
+# 0 disables downscaling. Unlike pdf_image_dpi this is not PDF-specific.
+max_image_edge = 2048
 
 [chat_pipeline]
 # live_retrieval_enabled = false

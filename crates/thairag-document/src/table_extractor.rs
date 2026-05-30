@@ -123,6 +123,168 @@ pub fn table_to_markdown(table: &ExtractedTable) -> String {
     lines.join("\n")
 }
 
+// ── Table-aware chunking ─────────────────────────────────────────────
+//
+// Tables embed and retrieve badly when a chunker splits them: a chunk of data
+// rows without the header `| Col | Col |` row is meaningless to the LLM at
+// inference. These helpers let a chunker keep a markdown (pipe) table intact as
+// one chunk, and — when a table is too large for one chunk — split it by rows
+// while repeating the header (+ separator) on every fragment so each piece is
+// self-describing.
+
+/// The raw lines of a contiguous markdown (pipe) table: the header row, an
+/// optional `|---|---|` separator, and the data rows. Lines are kept verbatim.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableBlock {
+    pub header: String,
+    pub separator: Option<String>,
+    pub rows: Vec<String>,
+}
+
+/// A span of source text: either free text (chunk it normally) or a table
+/// (keep atomic / header-propagate). Produced by [`split_table_segments`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextSegment {
+    Text(String),
+    Table(TableBlock),
+}
+
+/// Split `text` into alternating free-text and table segments. A table segment
+/// is a run of ≥2 consecutive pipe-rows that parses as a real table; everything
+/// else (including isolated pipe-bearing prose lines) stays free text.
+pub fn split_table_segments(text: &str) -> Vec<TextSegment> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut segments = Vec::new();
+    let mut text_buf: Vec<&str> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        if count_pipes(lines[i]) >= 2 {
+            let start = i;
+            while i < lines.len() && count_pipes(lines[i]) >= 2 {
+                i += 1;
+            }
+            let block = &lines[start..i];
+            if block.len() >= 2
+                && let Some(tb) = parse_table_block_lines(block)
+            {
+                if !text_buf.is_empty() {
+                    segments.push(TextSegment::Text(text_buf.join("\n")));
+                    text_buf.clear();
+                }
+                segments.push(TextSegment::Table(tb));
+                continue;
+            }
+            // Not a real table — fall through and treat the run as text.
+            text_buf.extend_from_slice(block);
+        } else {
+            text_buf.push(lines[i]);
+            i += 1;
+        }
+    }
+
+    if !text_buf.is_empty() {
+        segments.push(TextSegment::Text(text_buf.join("\n")));
+    }
+    segments
+}
+
+/// Validate a run of pipe-lines is a real table and split it into header /
+/// separator / rows (verbatim lines). Returns `None` if it isn't a table.
+fn parse_table_block_lines(lines: &[&str]) -> Option<TableBlock> {
+    // Reuse the cell-level parser purely as a validity gate.
+    parse_pipe_block(lines)?;
+
+    let has_separator = lines.len() > 1 && is_separator_line(lines[1]);
+    let (separator, rows) = if has_separator {
+        (
+            Some(lines[1].to_string()),
+            lines[2..].iter().map(|l| l.to_string()).collect(),
+        )
+    } else {
+        (None, lines[1..].iter().map(|l| l.to_string()).collect())
+    };
+
+    Some(TableBlock {
+        header: lines[0].to_string(),
+        separator,
+        rows,
+    })
+}
+
+/// Chunk a single table block. If the whole table fits in `max_size` it is
+/// emitted as one atomic chunk; otherwise rows are split into groups that fit,
+/// each prefixed with the header (and separator) so no fragment loses its
+/// column context. Sizes are measured in characters. A lone row larger than
+/// `max_size` is still emitted whole (with its header) rather than dropped.
+pub fn chunk_table_block(block: &TableBlock, max_size: usize) -> Vec<String> {
+    let head = match &block.separator {
+        Some(sep) => format!("{}\n{}", block.header, sep),
+        None => block.header.clone(),
+    };
+    let head_len = head.chars().count();
+
+    let mut whole = head.clone();
+    for row in &block.rows {
+        whole.push('\n');
+        whole.push_str(row);
+    }
+    if whole.chars().count() <= max_size {
+        return vec![whole];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = head.clone();
+    let mut current_len = head_len;
+    let mut has_rows = false;
+
+    for row in &block.rows {
+        let row_len = row.chars().count() + 1; // + newline
+        if has_rows && current_len + row_len > max_size {
+            chunks.push(std::mem::take(&mut current));
+            current = head.clone();
+            current_len = head_len;
+        }
+        current.push('\n');
+        current.push_str(row);
+        current_len += row_len;
+        has_rows = true;
+    }
+    if has_rows {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Wrap an inner chunking strategy with table-awareness. Free-text spans go to
+/// `inner` unchanged; table spans are kept atomic / header-propagated via
+/// [`chunk_table_block`]. When the text contains no tables, `inner` is called
+/// on the original text verbatim (zero behavioral change).
+pub fn chunk_table_aware<F>(text: &str, max_size: usize, overlap: usize, inner: F) -> Vec<String>
+where
+    F: Fn(&str, usize, usize) -> Vec<String>,
+{
+    let segments = split_table_segments(text);
+
+    // Fast path: no table → behave exactly like `inner` on the whole input.
+    if !segments.iter().any(|s| matches!(s, TextSegment::Table(_))) {
+        return inner(text, max_size, overlap);
+    }
+
+    let mut out = Vec::new();
+    for seg in segments {
+        match seg {
+            TextSegment::Text(t) => {
+                if !t.trim().is_empty() {
+                    out.extend(inner(&t, max_size, overlap));
+                }
+            }
+            TextSegment::Table(tb) => out.extend(chunk_table_block(&tb, max_size)),
+        }
+    }
+    out
+}
+
 /// Detect pipe-separated tables in text.
 /// A pipe table is a consecutive block of lines where each line contains `|`.
 fn extract_pipe_tables(text: &str) -> Vec<ExtractedTable> {
@@ -341,5 +503,136 @@ Some text between tables.
         assert_eq!(tables.len(), 2);
         assert_eq!(tables[0].headers.len(), 2);
         assert_eq!(tables[1].headers.len(), 3);
+    }
+
+    // ── Table-aware chunking ────────────────────────────────────────
+
+    #[test]
+    fn split_segments_separates_text_and_table() {
+        let text = "\
+Intro line.
+
+| Name | Age |
+|------|-----|
+| Alice | 30 |
+| Bob | 25 |
+
+Closing line.";
+        let segs = split_table_segments(text);
+        assert_eq!(segs.len(), 3);
+        assert!(matches!(&segs[0], TextSegment::Text(t) if t.contains("Intro")));
+        assert!(matches!(&segs[1], TextSegment::Table(_)));
+        assert!(matches!(&segs[2], TextSegment::Text(t) if t.contains("Closing")));
+        if let TextSegment::Table(tb) = &segs[1] {
+            assert_eq!(tb.header, "| Name | Age |");
+            assert_eq!(tb.separator.as_deref(), Some("|------|-----|"));
+            assert_eq!(tb.rows.len(), 2);
+        }
+    }
+
+    #[test]
+    fn split_segments_isolated_pipe_line_is_text() {
+        // A single pipe-bearing prose line is not a table.
+        let text = "Use a | b syntax for alternatives.";
+        let segs = split_table_segments(text);
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(&segs[0], TextSegment::Text(_)));
+    }
+
+    #[test]
+    fn chunk_table_block_atomic_when_fits() {
+        let block = TableBlock {
+            header: "| Name | Age |".into(),
+            separator: Some("|------|-----|".into()),
+            rows: vec!["| Alice | 30 |".into(), "| Bob | 25 |".into()],
+        };
+        let chunks = chunk_table_block(&block, 1000);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].contains("| Name | Age |"));
+        assert!(chunks[0].contains("| Alice | 30 |"));
+        assert!(chunks[0].contains("| Bob | 25 |"));
+    }
+
+    #[test]
+    fn chunk_table_block_propagates_header_when_split() {
+        let block = TableBlock {
+            header: "| Name | Age |".into(),
+            separator: Some("|------|-----|".into()),
+            rows: vec![
+                "| Alice | 30 |".into(),
+                "| Bob | 25 |".into(),
+                "| Carol | 40 |".into(),
+            ],
+        };
+        // Header (~29 chars incl. separator+newline) + one row per chunk.
+        let chunks = chunk_table_block(&block, 45);
+        assert!(chunks.len() >= 2, "expected a split, got {chunks:?}");
+        // Every fragment repeats the header and separator.
+        for c in &chunks {
+            assert!(c.contains("| Name | Age |"), "missing header in: {c}");
+            assert!(c.contains("|------|-----|"), "missing separator in: {c}");
+        }
+        // No data row is lost.
+        let joined = chunks.join("\n");
+        assert!(joined.contains("| Alice | 30 |"));
+        assert!(joined.contains("| Bob | 25 |"));
+        assert!(joined.contains("| Carol | 40 |"));
+    }
+
+    #[test]
+    fn chunk_table_block_oversized_row_kept_whole() {
+        let block = TableBlock {
+            header: "| H |".into(),
+            separator: None,
+            rows: vec!["| this single row is far larger than max |".into()],
+        };
+        let chunks = chunk_table_block(&block, 5);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].contains("far larger than max"));
+        assert!(chunks[0].contains("| H |"));
+    }
+
+    #[test]
+    fn chunk_table_aware_no_table_is_passthrough() {
+        let text = "just some\nplain text\nno pipes";
+        let called = std::cell::Cell::new(false);
+        let out = chunk_table_aware(text, 100, 0, |t, _m, _o| {
+            called.set(true);
+            // Identity inner: prove the original text is passed verbatim.
+            assert_eq!(t, text);
+            vec![t.to_string()]
+        });
+        assert!(called.get());
+        assert_eq!(out, vec![text.to_string()]);
+    }
+
+    #[test]
+    fn chunk_table_aware_routes_table_atomically() {
+        let text = "\
+Before.
+
+| K | V |
+|---|---|
+| a | 1 |
+| b | 2 |
+
+After.";
+        // Inner splits text on blank lines; tables must bypass it and stay whole.
+        let out = chunk_table_aware(text, 1000, 0, |t, _m, _o| {
+            t.split("\n\n")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        });
+        // The table chunk should contain header + both rows intact.
+        let table_chunk = out
+            .iter()
+            .find(|c| c.contains("| K | V |"))
+            .expect("table chunk present");
+        assert!(table_chunk.contains("| a | 1 |"));
+        assert!(table_chunk.contains("| b | 2 |"));
+        // Surrounding text preserved.
+        assert!(out.iter().any(|c| c == "Before."));
+        assert!(out.iter().any(|c| c == "After."));
     }
 }

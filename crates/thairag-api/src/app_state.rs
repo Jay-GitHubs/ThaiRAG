@@ -325,6 +325,7 @@ impl ProviderBundle {
             )
             .with_smart_pdf_options(
                 doc.pdf_image_dpi,
+                doc.max_image_edge,
                 doc.pdf_page_as_image_threshold,
                 doc.pdf_min_image_size,
                 doc.pdf_max_images_per_page,

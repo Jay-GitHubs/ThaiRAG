@@ -40,6 +40,10 @@ const IMAGE_VISION_TOKENS: u32 = 1024;
 pub struct SmartPdfConfig {
     /// Render DPI for full-page images.
     pub image_dpi: u32,
+    /// Longest-edge pixel cap for images sent to the vision model (`0` = off).
+    /// A safety net on top of `image_dpi`: oversized renders are downscaled
+    /// before description. Shared with the embedded-media / direct-image paths.
+    pub max_image_edge: u32,
     /// Image-coverage ratio at/above which a page is image-heavy.
     pub page_as_image_threshold: f64,
     /// Minimum meaningful chars for a page's text to count as readable.
@@ -61,6 +65,7 @@ impl Default for SmartPdfConfig {
     fn default() -> Self {
         Self {
             image_dpi: 150,
+            max_image_edge: 2048,
             page_as_image_threshold: 0.5,
             min_chars_per_page: 50,
             min_image_size: 100,
@@ -225,7 +230,7 @@ pub async fn render_to_document(
                     ex.text.clone()
                 } else {
                     let prompt = get_prompts(lang).table_extraction;
-                    match describe(llm, png, prompt, PAGE_VISION_TOKENS).await {
+                    match describe(llm, png, prompt, PAGE_VISION_TOKENS, cfg.max_image_edge).await {
                         Ok(desc) => {
                             vision_pages_used += 1;
                             desc // contains the markdown table; raw text suppressed
@@ -253,7 +258,8 @@ pub async fn render_to_document(
                     } else {
                         get_prompts(lang).full_page.to_string()
                     };
-                    match describe(llm, png, &prompt, PAGE_VISION_TOKENS).await {
+                    match describe(llm, png, &prompt, PAGE_VISION_TOKENS, cfg.max_image_edge).await
+                    {
                         Ok(desc) => {
                             vision_pages_used += 1;
                             // ImageHeavy keeps the readable pdfium text as a
@@ -280,7 +286,9 @@ pub async fn render_to_document(
                     let prompt = get_prompts(lang).single_image;
                     let mut described = 0usize;
                     for png in &ex.embedded {
-                        match describe(llm, png, prompt, IMAGE_VISION_TOKENS).await {
+                        match describe(llm, png, prompt, IMAGE_VISION_TOKENS, cfg.max_image_edge)
+                            .await
+                        {
                             Ok(desc) => {
                                 // Persist the embedded image and embed its
                                 // marker before the description.
@@ -375,8 +383,10 @@ async fn describe(
     png: &[u8],
     prompt: &str,
     max_tokens: u32,
+    max_image_edge: u32,
 ) -> Result<String> {
-    crate::image::describe_image_with_prompt(llm, png, PNG_MIME, prompt, max_tokens).await
+    crate::image::describe_image_with_prompt(llm, png, PNG_MIME, prompt, max_tokens, max_image_edge)
+        .await
 }
 
 #[cfg(test)]

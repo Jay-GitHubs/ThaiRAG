@@ -462,6 +462,14 @@ pub struct DocumentConfig {
     /// model. Higher = sharper OCR, larger images, more cost.
     #[serde(default = "default_pdf_image_dpi")]
     pub pdf_image_dpi: u32,
+    /// Longest-edge pixel cap for *any* image sent to the vision model —
+    /// embedded document images (DOCX/XLSX/HTML), direct image uploads, and
+    /// rasterized PDF pages. Larger images are downscaled (aspect preserved,
+    /// re-encoded as PNG) before description, bounding vision token cost/RAM.
+    /// `0` disables downscaling. Unlike `pdf_image_dpi` this applies to every
+    /// format, not just PDFs.
+    #[serde(default = "default_max_image_edge")]
+    pub max_image_edge: u32,
     /// Image-coverage ratio (0.0–1.0) at/above which a PDF page is treated as
     /// image-heavy (rendered whole and OCR'd) rather than text+embedded-images.
     #[serde(default = "default_pdf_page_as_image_threshold")]
@@ -494,6 +502,10 @@ fn default_pdf_max_vision_pages() -> usize {
 
 fn default_pdf_image_dpi() -> u32 {
     150
+}
+
+fn default_max_image_edge() -> u32 {
+    2048
 }
 
 fn default_pdf_page_as_image_threshold() -> f64 {
@@ -1814,6 +1826,7 @@ mod tests {
                 pdf_min_chars_per_page: default_pdf_min_chars_per_page(),
                 pdf_max_vision_pages: default_pdf_max_vision_pages(),
                 pdf_image_dpi: default_pdf_image_dpi(),
+                max_image_edge: default_max_image_edge(),
                 pdf_page_as_image_threshold: default_pdf_page_as_image_threshold(),
                 pdf_min_image_size: default_pdf_min_image_size(),
                 pdf_max_images_per_page: default_pdf_max_images_per_page(),
