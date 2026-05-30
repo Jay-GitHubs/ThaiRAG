@@ -259,7 +259,8 @@ export interface IngestRequest {
 export interface IngestResponse {
   doc_id: string;
   chunks: number;
-  filename: string;
+  status: string;
+  filename: string | null;
   mime_type: string;
   size_bytes: number;
 }

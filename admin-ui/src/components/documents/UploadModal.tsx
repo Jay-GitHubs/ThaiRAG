@@ -27,7 +27,11 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
         file,
         title: title || undefined,
       });
-      message.success(`Uploaded: ${res.chunks} chunks indexed`);
+      if (res.status === 'processing') {
+        message.success('Upload accepted — processing in the background. The table will update when it finishes.');
+      } else {
+        message.success(`Uploaded: ${res.chunks} chunks indexed`);
+      }
       setFileList([]);
       setTitle('');
       onClose();

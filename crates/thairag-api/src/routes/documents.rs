@@ -99,17 +99,19 @@ fn require_doc(
 // ── Background processing helper ────────────────────────────────────
 
 /// Process document (convert → chunk → embed → index).
-/// Small documents (< 1MB) are processed inline for immediate response.
-/// Large documents are submitted to the job queue for background processing.
+/// Fast paths (small, text-only) are processed inline for immediate response.
+/// Slow paths (large, PDF/image vision, or AI preprocessing) are submitted to
+/// the job queue so the upload response returns immediately. See
+/// [`should_process_in_background`].
 async fn process_document(
     state: AppState,
     doc_id: DocId,
     workspace_id: WorkspaceId,
     bytes: Vec<u8>,
     mime_type: String,
-    is_large: bool,
+    background: bool,
 ) -> usize {
-    if is_large {
+    if background {
         // Large file: submit to job queue
         let job = Job {
             id: JobId(Uuid::new_v4()),
@@ -495,6 +497,34 @@ async fn process_document_inner_impl(
 
 const BACKGROUND_THRESHOLD: usize = 1024 * 1024; // 1MB
 
+/// Decide whether a document should be processed in the background.
+///
+/// Foreground processing blocks the upload HTTP response until the whole
+/// convert→chunk→embed→index pipeline finishes. That is fine for small,
+/// text-only documents, but smart-PDF/image vision and the AI-agent
+/// preprocessing pipeline can take a minute or more — long enough for the
+/// client connection to drop and the upload modal to appear frozen. Route
+/// any of those slow paths to the job queue so the POST returns immediately
+/// as `processing` and the table polls for completion.
+fn should_process_in_background(state: &AppState, mime_type: &str, size: usize) -> bool {
+    if size > BACKGROUND_THRESHOLD {
+        return true;
+    }
+    // PDFs (smart-PDF vision) and images (direct-image vision) are slow
+    // regardless of byte size.
+    if mime_type == "application/pdf" || mime_type.starts_with("image/") {
+        return true;
+    }
+    // AI-agent preprocessing adds analyzer/converter/quality/enricher LLM
+    // round-trips; effective value layers the km_store override over the
+    // file default, mirroring `build_effective_document_config`.
+    state
+        .km_store
+        .get_setting("ai_preprocessing.enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(state.config.document.ai_preprocessing.enabled)
+}
+
 // ── Handlers ────────────────────────────────────────────────────────
 
 pub async fn ingest_document(
@@ -530,11 +560,11 @@ pub async fn ingest_document(
 
     let doc_id = DocId::new();
     let size_bytes = body.content.len() as i64;
-    let is_large = body.content.len() > BACKGROUND_THRESHOLD;
+    let background = should_process_in_background(&state, &body.mime_type, body.content.len());
 
     info!(
         %doc_id, %workspace_id, title = %body.title, mime_type = %body.mime_type,
-        size = body.content.len(), background = is_large, "Ingesting document"
+        size = body.content.len(), background, "Ingesting document"
     );
 
     // Insert document metadata first (as processing or ready)
@@ -568,11 +598,11 @@ pub async fn ingest_document(
         workspace_id,
         body.content.into_bytes(),
         mime_type.clone(),
-        is_large,
+        background,
     )
     .await;
 
-    let resp_status = if is_large {
+    let resp_status = if background {
         StatusCode::ACCEPTED
     } else {
         StatusCode::CREATED
@@ -582,7 +612,7 @@ pub async fn ingest_document(
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
-            status: if is_large {
+            status: if background {
                 "processing".into()
             } else {
                 "ready".into()
@@ -675,11 +705,11 @@ pub async fn upload_document(
     let workspace_id = workspace_id_typed;
     let doc_id = DocId::new();
     let size_bytes = bytes.len() as i64;
-    let is_large = bytes.len() > BACKGROUND_THRESHOLD;
+    let background = should_process_in_background(&state, &mime_type, bytes.len());
 
     info!(
         %doc_id, %workspace_id, %title, %mime_type,
-        size = bytes.len(), background = is_large, "Uploading document"
+        size = bytes.len(), background, "Uploading document"
     );
 
     // Insert document metadata first
@@ -711,11 +741,11 @@ pub async fn upload_document(
         workspace_id,
         bytes,
         mime_type.clone(),
-        is_large,
+        background,
     )
     .await;
 
-    let resp_status = if is_large {
+    let resp_status = if background {
         StatusCode::ACCEPTED
     } else {
         StatusCode::CREATED
@@ -725,7 +755,7 @@ pub async fn upload_document(
         Json(IngestResponse {
             doc_id: doc_id.0,
             chunks: chunk_count,
-            status: if is_large {
+            status: if background {
                 "processing".into()
             } else {
                 "ready".into()
