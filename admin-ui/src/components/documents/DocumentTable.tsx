@@ -6,12 +6,17 @@ import {
   FileMarkdownOutlined, CheckCircleTwoTone, MinusCircleOutlined, CloseCircleTwoTone,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { useDocuments, useDeleteDocument } from '../../hooks/useDocuments';
+import {
+  useDocuments,
+  useDeleteDocument,
+  useReprocessDocument,
+  useReprocessAllDocuments,
+} from '../../hooks/useDocuments';
 import { UploadModal } from './UploadModal';
 import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
-import { downloadDocument, getDocumentContent, reprocessDocument, reprocessAllDocuments } from '../../api/documents';
+import { downloadDocument, getDocumentContent } from '../../api/documents';
 import type { Document, DocStatus, ProcessingProvenance } from '../../api/types';
 
 interface Props {
@@ -114,6 +119,8 @@ function ProvenanceCell({ doc }: { doc: Document }) {
 export function DocumentTable({ workspaceId }: Props) {
   const { data, isLoading } = useDocuments(workspaceId);
   const deleteDoc = useDeleteDocument();
+  const reprocessDoc = useReprocessDocument();
+  const reprocessAll = useReprocessAllDocuments();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [ingestOpen, setIngestOpen] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
@@ -166,7 +173,7 @@ export function DocumentTable({ workspaceId }: Props) {
 
   async function handleReprocess(doc: Document) {
     try {
-      await reprocessDocument(workspaceId, doc.id);
+      await reprocessDoc.mutateAsync({ wsId: workspaceId, docId: doc.id });
       message.success('Reprocessing started');
     } catch {
       message.error('Failed to reprocess document');
@@ -287,7 +294,7 @@ export function DocumentTable({ workspaceId }: Props) {
           description="This will reprocess all documents with the current embedding model. Use after switching embedding models."
           onConfirm={async () => {
             try {
-              const result = await reprocessAllDocuments(workspaceId);
+              const result = await reprocessAll.mutateAsync({ wsId: workspaceId });
               message.success(result.message);
             } catch {
               message.error('Failed to start reprocessing');
