@@ -1600,20 +1600,9 @@ fn is_vision_model(kind: &thairag_core::types::LlmKind, model: &str) -> bool {
                 || model.starts_with("o4")
         }
         LlmKind::Gemini => model.contains("gemini-1.5") || model.contains("gemini-2"),
-        LlmKind::Ollama => {
-            let m = model.to_lowercase();
-            m.contains("llava")
-                || m.contains("llama3.2-vision")
-                || m.contains("minicpm-v")
-                || m.contains("bakllava")
-                || m.contains("moondream")
-                || m.contains("cogvlm")
-                || m.contains("internvl")
-                || m.contains("qwen2.5vl")
-                || m.contains("qwen2-vl")
-                || m.contains("qwenvl")
-                || m.contains("gemma3")
-        }
+        // Shared with the provider's `supports_vision()` so the admin
+        // capability check and the runtime check never drift.
+        LlmKind::Ollama => thairag_provider_llm::ollama::is_ollama_vision_model(model),
     }
 }
 

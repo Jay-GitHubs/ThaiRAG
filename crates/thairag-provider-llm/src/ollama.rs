@@ -9,6 +9,32 @@ use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
 use tracing::{info, instrument};
 
+/// Heuristic: does this Ollama model id denote a vision-capable model?
+///
+/// Ollama doesn't expose model capabilities over its API, so we match on the
+/// model id. Kept broad and future-proof (the previous hardcoded list missed
+/// valid models like `qwen3-vl`): any `*-vision` tag, the whole Qwen-VL family
+/// (any generation), plus the known multimodal families. Shared by the
+/// provider's `supports_vision()` and the settings capability check so the two
+/// never drift.
+pub fn is_ollama_vision_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    // Any "*-vision" tag: llama3.2-vision, granite3.2-vision, …
+    m.contains("-vision")
+        // Qwen-VL, any generation: qwen2-vl, qwen2.5vl, qwen3-vl, qwenvl, …
+        || (m.contains("qwen") && m.contains("vl"))
+        // Known multimodal families.
+        || m.contains("llava")
+        || m.contains("bakllava")
+        || m.contains("minicpm-v")
+        || m.contains("moondream")
+        || m.contains("cogvlm")
+        || m.contains("internvl")
+        || m.contains("gemma3")
+        || m.contains("mistral-small3")
+        || m.contains("llama4")
+}
+
 pub struct OllamaProvider {
     client: reqwest::Client,
     /// Separate client for streaming — no overall timeout so long generations aren't killed.
@@ -240,19 +266,7 @@ impl LlmProvider for OllamaProvider {
     }
 
     fn supports_vision(&self) -> bool {
-        // Ollama vision models
-        let m = self.model.to_lowercase();
-        m.contains("llava")
-            || m.contains("llama3.2-vision")
-            || m.contains("minicpm-v")
-            || m.contains("bakllava")
-            || m.contains("moondream")
-            || m.contains("cogvlm")
-            || m.contains("internvl")
-            || m.contains("qwen2.5vl")
-            || m.contains("qwen2-vl")
-            || m.contains("qwenvl")
-            || m.contains("gemma3")
+        is_ollama_vision_model(&self.model)
     }
 
     async fn generate_vision(
