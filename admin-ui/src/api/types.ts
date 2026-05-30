@@ -309,6 +309,39 @@ export interface ModelsResponse {
   models: AvailableModel[];
 }
 
+// ── Model discovery / advisory recommendations (PR-D) ────────────────
+
+export interface ModelCapabilities {
+  vision: boolean;
+  recommended: boolean;
+  max_input_tokens?: number;
+  /** "catalog" | "builtin" */
+  source: string;
+}
+
+export interface RecommendationsStatus {
+  has_data: boolean;
+  model_count: number;
+  age_secs?: number;
+  stale: boolean;
+  last_error?: string;
+  enabled: boolean;
+  configured: boolean;
+}
+
+export interface ResolveRecommendationsResponse {
+  resolved: Record<string, ModelCapabilities>;
+  status: RecommendationsStatus;
+}
+
+export interface ModelDiscoveryConfig {
+  enabled: boolean;
+  catalog_url: string;
+  /** "catalog" | "mcp" | "http_catalog" (mcp/http reserved for PR-D2) */
+  mode: string;
+  endpoint: string;
+}
+
 export interface UpdateProviderConfigRequest {
   llm?: { kind?: string; model?: string; base_url?: string; api_key?: string };
   embedding?: { kind?: string; model?: string; dimension?: number; api_key?: string };

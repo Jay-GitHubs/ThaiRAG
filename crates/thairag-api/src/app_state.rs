@@ -964,6 +964,8 @@ pub struct AppState {
     providers: Arc<RwLock<ProviderBundle>>,
     pub scoped_pipeline_cache: ScopedPipelineCache,
     migration_status: crate::vector_migration::SharedMigrationStatus,
+    /// Cached, layered model-capability catalog driving advisory ⭐/vision badges.
+    pub model_catalog: Arc<crate::model_catalog::ModelCatalog>,
 }
 
 impl AppState {
@@ -1169,6 +1171,7 @@ impl AppState {
             migration_status: Arc::new(tokio::sync::RwLock::new(
                 crate::vector_migration::MigrationStatus::default(),
             )),
+            model_catalog: Arc::new(crate::model_catalog::ModelCatalog::new()),
         }
     }
 
@@ -1452,6 +1455,7 @@ impl AppState {
             migration_status: Arc::new(tokio::sync::RwLock::new(
                 crate::vector_migration::MigrationStatus::default(),
             )),
+            model_catalog: Arc::new(crate::model_catalog::ModelCatalog::new()),
         }
     }
 }

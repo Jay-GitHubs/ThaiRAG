@@ -12,6 +12,7 @@ pub mod job_queue;
 pub mod knowledge_graph;
 pub mod login_tracker;
 pub mod metrics;
+pub mod model_catalog;
 pub mod oidc;
 pub mod plugin_hooks;
 pub mod plugin_registry;
