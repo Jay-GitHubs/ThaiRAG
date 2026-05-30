@@ -337,9 +337,14 @@ export interface ResolveRecommendationsResponse {
 export interface ModelDiscoveryConfig {
   enabled: boolean;
   catalog_url: string;
-  /** "catalog" | "mcp" | "http_catalog" (mcp/http reserved for PR-D2) */
+  /** "catalog" (built-in LiteLLM) | "http_catalog" (custom URL) | "mcp" */
   mode: string;
+  /** URL for http_catalog/mcp modes. */
   endpoint: string;
+  /** MCP tool name to call (mcp mode). Empty → "list_models". */
+  tool: string;
+  /** Optional bearer token for the http_catalog endpoint / MCP server. */
+  auth: string;
 }
 
 export interface UpdateProviderConfigRequest {

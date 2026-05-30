@@ -1125,6 +1125,108 @@ fn load_model_discovery(state: &AppState) -> crate::model_catalog::ModelDiscover
         .unwrap_or_default()
 }
 
+/// Spawn a single-flight background refresh of the recommendation catalog from
+/// the configured discovery source (built-in LiteLLM, a custom HTTP catalog, or
+/// an MCP tool). Fire-and-forget; failures are recorded on the catalog.
+fn spawn_discovery_refresh(state: AppState, cfg: crate::model_catalog::ModelDiscoveryConfig) {
+    tokio::spawn(async move {
+        if !state.model_catalog.try_begin_refresh() {
+            return; // another refresh already running
+        }
+        let result = if cfg.mode == "mcp" {
+            fetch_models_via_mcp(&state, &cfg).await
+        } else {
+            crate::model_catalog::fetch_http(cfg.source_url(), &cfg.auth).await
+        };
+        match result {
+            Ok(models) => {
+                tracing::info!(count = models.len(), mode = %cfg.mode, "model discovery refreshed");
+                state.model_catalog.apply(models);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, mode = %cfg.mode, "model discovery refresh failed");
+                state.model_catalog.record_error(e);
+            }
+        }
+        state.model_catalog.end_refresh();
+    });
+}
+
+/// Resolve model capabilities by calling a configured MCP discovery tool. Best
+/// effort: connects over SSE/HTTP, calls the tool, and flexibly parses the
+/// result. Any failure degrades to the built-in floor (via `record_error`).
+async fn fetch_models_via_mcp(
+    state: &AppState,
+    cfg: &crate::model_catalog::ModelDiscoveryConfig,
+) -> Result<Vec<crate::model_catalog::DiscoveredModel>, String> {
+    use thairag_core::traits::McpClient;
+    use thairag_core::types as t;
+
+    if !state.config.mcp.enabled {
+        return Err("MCP is not enabled (set [mcp].enabled = true)".to_string());
+    }
+    let endpoint = cfg.endpoint.trim();
+    if endpoint.is_empty() {
+        return Err("MCP discovery requires an endpoint URL".to_string());
+    }
+
+    let mut headers = std::collections::HashMap::new();
+    if !cfg.auth.trim().is_empty() {
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", cfg.auth.trim()),
+        );
+    }
+
+    let now = chrono::Utc::now();
+    let conn = t::McpConnectorConfig {
+        id: t::ConnectorId::new(),
+        name: "model-discovery".to_string(),
+        description: "Ad-hoc model-capability discovery".to_string(),
+        transport: t::McpTransport::Sse,
+        command: None,
+        args: vec![],
+        env: std::collections::HashMap::new(),
+        url: Some(endpoint.to_string()),
+        headers,
+        workspace_id: t::WorkspaceId(uuid::Uuid::nil()),
+        sync_mode: t::SyncMode::OnDemand,
+        schedule_cron: None,
+        resource_filters: vec![],
+        max_items_per_sync: None,
+        tool_calls: vec![],
+        webhook_url: None,
+        webhook_secret: None,
+        status: t::ConnectorStatus::Active,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let mut client = thairag_mcp::RmcpClient::new(
+        conn,
+        std::time::Duration::from_secs(state.config.mcp.connect_timeout_secs),
+        std::time::Duration::from_secs(state.config.mcp.read_timeout_secs),
+    );
+    client
+        .connect()
+        .await
+        .map_err(|e| format!("MCP connect failed: {e}"))?;
+    let call = client
+        .call_tool(cfg.mcp_tool(), serde_json::json!({}))
+        .await;
+    let _ = client.disconnect().await;
+
+    let value = call.map_err(|e| format!("MCP tool '{}' failed: {e}", cfg.mcp_tool()))?;
+    let models = crate::model_catalog::parse_capability_json(&value);
+    if models.is_empty() {
+        return Err(format!(
+            "MCP tool '{}' returned no recognizable models",
+            cfg.mcp_tool()
+        ));
+    }
+    Ok(models)
+}
+
 /// GET /settings/model-discovery — current discovery settings.
 pub async fn get_model_discovery_config(
     State(state): State<AppState>,
@@ -1189,13 +1291,7 @@ pub async fn refresh_recommendations(
     require_super_admin(&claims, &state)?;
     let cfg = load_model_discovery(&state);
     if cfg.enabled && state.model_catalog.is_stale() {
-        let catalog = std::sync::Arc::clone(&state.model_catalog);
-        let url = cfg.effective_url().to_string();
-        tokio::spawn(async move {
-            if let Err(e) = catalog.refresh(&url).await {
-                tracing::warn!(error = %e, "model catalog refresh failed");
-            }
-        });
+        spawn_discovery_refresh(state.clone(), cfg);
     }
     Ok(Json(recommendations_status_for(&state)))
 }
@@ -1221,13 +1317,7 @@ pub async fn resolve_recommendations(
 
     let cfg = load_model_discovery(&state);
     if cfg.enabled && state.model_catalog.is_stale() {
-        let catalog = std::sync::Arc::clone(&state.model_catalog);
-        let url = cfg.effective_url().to_string();
-        tokio::spawn(async move {
-            if let Err(e) = catalog.refresh(&url).await {
-                tracing::warn!(error = %e, "model catalog refresh failed");
-            }
-        });
+        spawn_discovery_refresh(state.clone(), cfg);
     }
 
     let mut resolved = serde_json::Map::new();
