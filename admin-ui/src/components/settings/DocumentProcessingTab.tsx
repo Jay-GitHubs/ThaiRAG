@@ -653,6 +653,7 @@ export function DocumentProcessingTab() {
   const [maxChunkSize, setMaxChunkSize] = useState(512);
   const [chunkOverlap, setChunkOverlap] = useState(64);
   const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(50);
+  const [pdfImageDpi, setPdfImageDpi] = useState(150);
   const [savingPipeline, setSavingPipeline] = useState(false);
 
   // Cache of model sizes from Ollama sync (model_id → size_bytes)
@@ -690,6 +691,7 @@ export function DocumentProcessingTab() {
       setMaxChunkSize(data.max_chunk_size);
       setChunkOverlap(data.chunk_overlap);
       setMaxUploadSizeMb(data.max_upload_size_mb);
+      setPdfImageDpi(data.pdf_image_dpi);
 
       // Determine LLM mode from saved config
       const hasSharedLlm = !!data.ai_preprocessing.llm;
@@ -760,6 +762,7 @@ export function DocumentProcessingTab() {
         max_chunk_size: maxChunkSize,
         chunk_overlap: chunkOverlap,
         max_upload_size_mb: maxUploadSizeMb,
+        pdf_image_dpi: pdfImageDpi,
       });
       setConfig(resp);
       message.success('Pipeline settings saved');
@@ -950,9 +953,22 @@ export function DocumentProcessingTab() {
               style={{ width: 140 }}
             />
           </Space>
+          <Space direction="vertical" size={2}>
+            <Text type="secondary">PDF Render DPI (vision)</Text>
+            <InputNumber
+              min={72}
+              max={600}
+              step={10}
+              value={pdfImageDpi}
+              onChange={(v) => v && setPdfImageDpi(v)}
+              style={{ width: 140 }}
+            />
+          </Space>
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
-          Note: Max upload size change takes effect after server restart.
+          Note: Max upload size change takes effect after server restart. PDF Render DPI controls
+          the resolution of PDF pages sent to the vision model — lower it (e.g. 110) to cut vision
+          tokens and memory; raise it for sharper OCR on dense pages.
         </Paragraph>
       </Card>
           ),

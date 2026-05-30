@@ -937,7 +937,7 @@ impl DocumentPipeline {
                 // Two distinct stages: render the page to PNG (pdftoppm),
                 // then ask the vision model to describe it. Keep their
                 // failures apart so diagnostics point at the right layer.
-                match rasterize_pdf_page(raw, page_num).await {
+                match rasterize_pdf_page(raw, page_num, self.smart_pdf.image_dpi).await {
                     Err(e) => {
                         pages_rasterize_failed += 1;
                         tracing::warn!(
@@ -1211,13 +1211,14 @@ impl DocumentPipeline {
 /// Rasterize one PDF page to PNG on a blocking thread (subprocess I/O) so it
 /// does not stall the async runtime. Describing the PNG with the vision model
 /// is left to the caller, so rasterization and model failures stay distinct.
-async fn rasterize_pdf_page(pdf_bytes: &[u8], page: usize) -> Result<Vec<u8>> {
+async fn rasterize_pdf_page(pdf_bytes: &[u8], page: usize, dpi: u32) -> Result<Vec<u8>> {
     let pdf_owned = pdf_bytes.to_vec();
     tokio::task::spawn_blocking(move || {
         pdf_rasterizer::rasterize_page(
             &pdf_owned,
             &RasterizeOptions {
                 page,
+                dpi,
                 ..Default::default()
             },
         )

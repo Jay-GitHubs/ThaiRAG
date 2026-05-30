@@ -314,6 +314,14 @@ pub struct LlmConfig {
     /// are resolved at provider-build time via the Vault.
     #[serde(default)]
     pub profile_id: Option<String>,
+    /// Ollama only: adaptive context-window ceiling (`num_ctx`). The provider
+    /// sizes `num_ctx` to the actual prompt (bucketed to a power of two) and
+    /// clamps it to this cap, so a 128K-capable model doesn't pre-allocate a
+    /// 128K KV cache + compute buffers for a short prompt or a single page.
+    /// Vision calls request the full cap (image token counts aren't known
+    /// up front). `0` disables the override — inherit the model's default.
+    #[serde(default = "default_ollama_num_ctx_max")]
+    pub ollama_num_ctx_max: usize,
 }
 
 impl std::fmt::Debug for LlmConfig {
@@ -332,6 +340,7 @@ impl std::fmt::Debug for LlmConfig {
             )
             .field("max_tokens", &self.max_tokens)
             .field("profile_id", &self.profile_id)
+            .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
             .finish()
     }
 }
@@ -958,6 +967,9 @@ fn default_request_timeout_secs() -> u64 {
 }
 fn default_ollama_keep_alive() -> String {
     "5m".to_string()
+}
+fn default_ollama_num_ctx_max() -> usize {
+    16384
 }
 fn default_memory_max_summaries() -> usize {
     10
@@ -1752,6 +1764,7 @@ mod tests {
                     api_key: String::new(),
                     max_tokens: None,
                     profile_id: None,
+                    ollama_num_ctx_max: default_ollama_num_ctx_max(),
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,

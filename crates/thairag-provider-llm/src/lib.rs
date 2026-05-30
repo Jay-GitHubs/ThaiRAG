@@ -24,11 +24,12 @@ pub fn create_llm_provider_with_options(
     ollama_keep_alive: Option<&str>,
 ) -> Box<dyn LlmProvider> {
     match config.kind {
-        LlmKind::Ollama => Box::new(ollama::OllamaProvider::with_timeout_and_keep_alive(
+        LlmKind::Ollama => Box::new(ollama::OllamaProvider::with_options(
             &config.base_url,
             &config.model,
             timeout_secs,
             ollama_keep_alive,
+            config.ollama_num_ctx_max,
         )),
         LlmKind::Claude => Box::new(claude::ClaudeProvider::with_timeout(
             &config.api_key,
