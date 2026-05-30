@@ -29,13 +29,11 @@ client = ThaiRAGClient("http://localhost:8080")
 token = client.login("admin@example.com", "password")
 ```
 
-> **Write operations require JWT auth.** The server's CSRF protection rejects
-> any non-GET request (POST/PUT/DELETE) that carries neither a Bearer token nor
-> an `X-CSRF-Token` header. An `api_key`-only client sends `X-API-Key` but no
-> Bearer header, so it can perform read-only GETs (e.g. `list_orgs`,
-> `get_search_analytics_popular`) but write calls (`create_org`,
-> `upload_document`, `create_tenant`, etc.) are rejected with **403**. To do
-> writes, authenticate with `login()` so the client sends a Bearer token.
+> **Auth & writes.** Both an `api_key` and a `login()` JWT (Bearer token)
+> authenticate all operations, reads and writes alike — the server's CSRF
+> protection exempts Bearer- and API-key-authenticated requests (neither is
+> auto-attached by browsers). Only cookie-based browser sessions need to send an
+> `X-CSRF-Token` header on state-changing calls.
 
 ## Streaming
 

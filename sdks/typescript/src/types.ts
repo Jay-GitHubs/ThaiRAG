@@ -65,17 +65,37 @@ export interface Document {
   updated_at?: string;
 }
 
-export interface SearchResult {
-  query: string;
-  results: SearchHit[];
-  total?: number;
+/** A retrieved chunk in a {@link SearchResult}, matching the server's `RetrievedChunk`. */
+export interface RetrievedChunk {
+  chunk_id: string;
+  doc_id: string;
+  content: string;
+  score: number;
+  chunk_index: number;
+  page_numbers?: number[];
+  section_title?: string;
+  doc_title?: string;
 }
 
-export interface SearchHit {
-  doc_id: string;
-  title: string;
-  score: number;
-  content?: string;
+export interface TestQueryUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  chunks_retrieved: number;
+}
+
+/**
+ * Response from `POST /api/km/workspaces/{id}/test-query` (the RAG test query).
+ * Note: this is a RAG response (retrieved `chunks` + a generated `answer`), not a
+ * bare search hit list.
+ */
+export interface SearchResult {
+  response_id: string;
+  query: string;
+  chunks: RetrievedChunk[];
+  answer: string;
+  usage: TestQueryUsage;
+  timing?: Record<string, number>;
 }
 
 export interface FeedbackResponse {
