@@ -1700,6 +1700,8 @@ pub struct DocumentConfigResponse {
     pub max_upload_size_mb: usize,
     /// Render DPI for PDF pages sent to the vision model (smart-PDF + fallback).
     pub pdf_image_dpi: u32,
+    /// Longest-edge px cap for any image sent to vision (all formats; 0 = off).
+    pub max_image_edge: u32,
     pub ai_preprocessing: AiPreprocessingResponse,
 }
 
@@ -1752,6 +1754,7 @@ pub struct UpdateDocumentConfigRequest {
     pub chunk_overlap: Option<usize>,
     pub max_upload_size_mb: Option<usize>,
     pub pdf_image_dpi: Option<u32>,
+    pub max_image_edge: Option<u32>,
     pub ai_preprocessing: Option<UpdateAiPreprocessing>,
 }
 
@@ -2050,6 +2053,11 @@ pub async fn get_document_config(
             .get_setting("document.pdf_image_dpi")
             .and_then(|v| v.parse().ok())
             .unwrap_or(doc.pdf_image_dpi),
+        max_image_edge: state
+            .km_store
+            .get_setting("document.max_image_edge")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.max_image_edge),
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }
@@ -2101,6 +2109,16 @@ pub async fn update_document_config(
         state
             .km_store
             .set_setting("document.pdf_image_dpi", &v.to_string());
+    }
+    if let Some(v) = req.max_image_edge {
+        if v != 0 && !(256..=8192).contains(&v) {
+            return Err(ApiError(ThaiRagError::Validation(
+                "max_image_edge must be 0 (disabled) or between 256 and 8192".into(),
+            )));
+        }
+        state
+            .km_store
+            .set_setting("document.max_image_edge", &v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
@@ -2344,6 +2362,11 @@ pub async fn update_document_config(
         .get_setting("document.pdf_image_dpi")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.pdf_image_dpi);
+    let eff_max_image_edge = state
+        .km_store
+        .get_setting("document.max_image_edge")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_image_edge);
 
     // Hot-reload the document pipeline with updated config
     let mut effective_doc = doc.clone();
@@ -2351,6 +2374,7 @@ pub async fn update_document_config(
     effective_doc.chunk_overlap = eff_chunk_overlap;
     effective_doc.max_upload_size_mb = eff_max_upload_size_mb;
     effective_doc.pdf_image_dpi = eff_pdf_image_dpi;
+    effective_doc.max_image_edge = eff_max_image_edge;
     effective_doc.ai_preprocessing.enabled = effective_ai.enabled;
     effective_doc.ai_preprocessing.auto_params = effective_ai.auto_params;
     effective_doc.ai_preprocessing.quality_threshold = effective_ai.quality_threshold;
@@ -2410,6 +2434,7 @@ pub async fn update_document_config(
         chunk_overlap: eff_chunk_overlap,
         max_upload_size_mb: eff_max_upload_size_mb,
         pdf_image_dpi: eff_pdf_image_dpi,
+        max_image_edge: eff_max_image_edge,
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }

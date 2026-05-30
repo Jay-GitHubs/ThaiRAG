@@ -16,8 +16,9 @@ impl Default for MarkdownChunker {
     }
 }
 
-impl Chunker for MarkdownChunker {
-    fn chunk(&self, text: &str, max_size: usize, _overlap: usize) -> Vec<String> {
+impl MarkdownChunker {
+    /// Paragraph-based splitting on blank lines, ignoring table structure.
+    fn chunk_plain(&self, text: &str, max_size: usize, _overlap: usize) -> Vec<String> {
         let mut chunks = Vec::new();
         let mut current = String::new();
 
@@ -42,6 +43,14 @@ impl Chunker for MarkdownChunker {
         }
 
         chunks
+    }
+}
+
+impl Chunker for MarkdownChunker {
+    fn chunk(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String> {
+        crate::table_extractor::chunk_table_aware(text, max_size, overlap, |t, m, o| {
+            self.chunk_plain(t, m, o)
+        })
     }
 }
 

@@ -654,6 +654,7 @@ export function DocumentProcessingTab() {
   const [chunkOverlap, setChunkOverlap] = useState(64);
   const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(50);
   const [pdfImageDpi, setPdfImageDpi] = useState(150);
+  const [maxImageEdge, setMaxImageEdge] = useState(2048);
   const [savingPipeline, setSavingPipeline] = useState(false);
 
   // Cache of model sizes from Ollama sync (model_id → size_bytes)
@@ -692,6 +693,7 @@ export function DocumentProcessingTab() {
       setChunkOverlap(data.chunk_overlap);
       setMaxUploadSizeMb(data.max_upload_size_mb);
       setPdfImageDpi(data.pdf_image_dpi);
+      setMaxImageEdge(data.max_image_edge);
 
       // Determine LLM mode from saved config
       const hasSharedLlm = !!data.ai_preprocessing.llm;
@@ -763,6 +765,7 @@ export function DocumentProcessingTab() {
         chunk_overlap: chunkOverlap,
         max_upload_size_mb: maxUploadSizeMb,
         pdf_image_dpi: pdfImageDpi,
+        max_image_edge: maxImageEdge,
       });
       setConfig(resp);
       message.success('Pipeline settings saved');
@@ -964,11 +967,25 @@ export function DocumentProcessingTab() {
               style={{ width: 140 }}
             />
           </Space>
+          <Space direction="vertical" size={2}>
+            <Text type="secondary">Max Image Edge (px)</Text>
+            <InputNumber
+              min={0}
+              max={8192}
+              step={128}
+              value={maxImageEdge}
+              onChange={(v) => v != null && setMaxImageEdge(v)}
+              style={{ width: 140 }}
+            />
+          </Space>
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
           Note: Max upload size change takes effect after server restart. PDF Render DPI controls
           the resolution of PDF pages sent to the vision model — lower it (e.g. 110) to cut vision
-          tokens and memory; raise it for sharper OCR on dense pages.
+          tokens and memory; raise it for sharper OCR on dense pages. Max Image Edge caps the
+          longest side (px) of <em>every</em> image sent to vision — embedded DOCX/XLSX/HTML images
+          and direct uploads too, not just PDFs — downscaling larger ones to bound token cost and
+          RAM (0 disables).
         </Paragraph>
       </Card>
           ),

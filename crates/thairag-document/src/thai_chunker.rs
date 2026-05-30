@@ -292,13 +292,25 @@ impl Default for ThaiAwareChunker {
     }
 }
 
-impl Chunker for ThaiAwareChunker {
-    fn chunk(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String> {
+impl ThaiAwareChunker {
+    /// Chunk a free-text span, choosing the Thai or standard strategy by the
+    /// span's own language. Called per-segment by the table-aware wrapper so a
+    /// Thai paragraph and an English paragraph in the same document each get the
+    /// right treatment.
+    fn chunk_segment(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String> {
         if is_thai_text(text) {
             self.chunk_thai(text, max_size, overlap)
         } else {
             self.chunk_standard(text, max_size, overlap)
         }
+    }
+}
+
+impl Chunker for ThaiAwareChunker {
+    fn chunk(&self, text: &str, max_size: usize, overlap: usize) -> Vec<String> {
+        crate::table_extractor::chunk_table_aware(text, max_size, overlap, |t, m, o| {
+            self.chunk_segment(t, m, o)
+        })
     }
 }
 
