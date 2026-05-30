@@ -348,3 +348,25 @@ fn format_ollama_error(base_url: &str, err: reqwest::Error) -> String {
         format!("Ollama request failed ({base_url}): {err}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_ollama_vision_model as v;
+
+    #[test]
+    fn vision_model_recognition() {
+        // Recognized vision models (incl. the previously-missed qwen3-vl).
+        assert!(v("qwen3-vl:8b-instruct-bf16"));
+        assert!(v("qwen2.5vl:latest"));
+        assert!(v("qwen2-vl"));
+        assert!(v("llava:13b"));
+        assert!(v("llama3.2-vision:11b"));
+        assert!(v("granite3.2-vision"));
+        assert!(v("minicpm-v"));
+        assert!(v("gemma3:4b"));
+        // Not vision-capable.
+        assert!(!v("llama3.2"));
+        assert!(!v("nomic-embed-text"));
+        assert!(!v("qwen2.5-coder")); // qwen, but no "vl"
+    }
+}

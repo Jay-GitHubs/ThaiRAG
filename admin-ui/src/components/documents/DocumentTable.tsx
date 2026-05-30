@@ -3,6 +3,7 @@ import { Table, Button, Tag, Popconfirm, Space, message, Tooltip } from 'antd';
 import {
   UploadOutlined, PlusOutlined, DeleteOutlined, LoadingOutlined,
   SyncOutlined, EyeOutlined, DownloadOutlined, BlockOutlined, ReloadOutlined,
+  FileMarkdownOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useDocuments, useDeleteDocument } from '../../hooks/useDocuments';
@@ -10,7 +11,7 @@ import { UploadModal } from './UploadModal';
 import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
-import { downloadDocument, reprocessDocument, reprocessAllDocuments } from '../../api/documents';
+import { downloadDocument, getDocumentContent, reprocessDocument, reprocessAllDocuments } from '../../api/documents';
 import type { Document, DocStatus } from '../../api/types';
 
 interface Props {
@@ -77,6 +78,22 @@ export function DocumentTable({ workspaceId }: Props) {
       URL.revokeObjectURL(url);
     } catch {
       message.error('Failed to download document');
+    }
+  }
+
+  async function handleDownloadMarkdown(doc: Document) {
+    try {
+      const { converted_text } = await getDocumentContent(workspaceId, doc.id);
+      const blob = new Blob([converted_text ?? ''], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Swap the original extension (e.g. .pdf) for .md.
+      a.download = `${doc.title.replace(/\.[^/.]+$/, '')}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error('Failed to download markdown');
     }
   }
 
@@ -166,6 +183,9 @@ export function DocumentTable({ workspaceId }: Props) {
           </Tooltip>
           <Tooltip title="Download original">
             <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(record)} disabled={record.status === 'processing'} />
+          </Tooltip>
+          <Tooltip title="Download markdown">
+            <Button size="small" icon={<FileMarkdownOutlined />} onClick={() => handleDownloadMarkdown(record)} disabled={record.status === 'processing'} />
           </Tooltip>
           <Tooltip title="Reprocess">
             <Popconfirm title="Reprocess this document?" onConfirm={() => handleReprocess(record)}>
