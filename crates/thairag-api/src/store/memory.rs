@@ -302,6 +302,20 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
+    fn update_document_provenance(
+        &self,
+        id: DocId,
+        provenance: Option<thairag_core::models::ProcessingProvenance>,
+    ) -> Result<()> {
+        let mut docs = self.documents.write().unwrap();
+        let doc = docs
+            .get_mut(&id)
+            .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        doc.processing_provenance = provenance;
+        doc.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
     fn delete_document(&self, id: DocId) -> Result<()> {
         if self.documents.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
@@ -3136,6 +3150,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3164,6 +3179,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3209,6 +3225,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3245,6 +3262,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3386,6 +3404,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,

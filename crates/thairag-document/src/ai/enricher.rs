@@ -56,6 +56,11 @@ impl LlmChunkEnricher {
         }
     }
 
+    /// Name of the model backing this agent.
+    pub fn model_name(&self) -> &str {
+        self.llm.model_name()
+    }
+
     /// Enrich chunks with search-optimized metadata.
     /// Modifies chunks in-place, adding context_prefix, summary, keywords,
     /// hypothetical_queries, and prepending/appending content for better embeddings.

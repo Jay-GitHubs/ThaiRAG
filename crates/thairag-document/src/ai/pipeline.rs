@@ -5,7 +5,7 @@ use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::{Chunker, LlmProvider, QualityChecker, SmartChunker};
 use thairag_core::types::{
-    ChunkId, ChunkMetadata, ContentType, DocId, DocumentAnalysis, DocumentChunk,
+    ChunkId, ChunkMetadata, ContentType, ConvertedDocument, DocId, DocumentAnalysis, DocumentChunk,
     OrchestratorAction, PipelineSnapshot, StructureLevel, WorkspaceId,
 };
 use tracing::{info, warn};
@@ -51,6 +51,15 @@ pub struct AiDocumentPipeline {
     // Orchestrator config
     auto_orchestrator_budget: bool,
     max_orchestrator_calls: u32,
+}
+
+/// Result of [`AiDocumentPipeline::chunk_extracted`]: the chunks plus a record
+/// of which AI agents participated (and the model each used), so callers can
+/// assemble per-document processing provenance.
+pub struct AiChunkOutcome {
+    pub chunks: Vec<DocumentChunk>,
+    pub agents: Vec<thairag_core::models::AgentRun>,
+    pub mechanical_fallback: bool,
 }
 
 /// Mutable state tracked during a single pipeline run.
@@ -1253,6 +1262,198 @@ impl AiDocumentPipeline {
                 .convert_with_feedback(raw_text, analysis, previous_markdown, issues)
                 .await
         }
+    }
+
+    /// Compose path: the caller (smart-PDF / embedded-media) has already produced
+    /// high-quality extracted markdown via the vision pipeline. Run only the
+    /// intelligence layer that adds value here — analyzer → smart chunker →
+    /// enricher — and skip the converter and quality-checker agents (the vision
+    /// pipeline already did the conversion, and scoring that output against
+    /// itself is meaningless).
+    ///
+    /// `## Page N` markers in the markdown are understood by the smart chunker,
+    /// so each returned chunk carries the `page_numbers` it spans — callers use
+    /// that to re-attach page / image-blob metadata. Falls back to mechanical
+    /// chunking on any chunker failure so a flaky LLM never loses content.
+    pub async fn chunk_extracted(
+        &self,
+        markdown: &str,
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        on_step: &Option<StepCallback>,
+    ) -> Result<AiChunkOutcome> {
+        use thairag_core::models::AgentRun;
+        let mut agents: Vec<AgentRun> = Vec::new();
+
+        if markdown.trim().is_empty() {
+            return Ok(AiChunkOutcome {
+                chunks: vec![],
+                agents,
+                mechanical_fallback: false,
+            });
+        }
+
+        // Tiny extractions aren't worth an LLM round-trip — chunk mechanically.
+        let min_size = self.min_ai_size_override.unwrap_or(self.min_ai_size_bytes);
+        if markdown.len() < min_size {
+            info!(%doc_id, size = markdown.len(), min = min_size,
+                "Extracted text below min_ai_size — mechanical chunking");
+            let chunks = self.mechanical_fallback(markdown, doc_id, workspace_id)?;
+            return Ok(AiChunkOutcome {
+                chunks,
+                agents,
+                mechanical_fallback: true,
+            });
+        }
+
+        // ── Analyzer (best-effort): feeds chunk sizing + enrichment. ──
+        Self::report_step(on_step, "analyzing");
+        let excerpt_chars = self.analyzer.default_excerpt_chars();
+        let analyzer_model = Some(self.analyzer.model_name().to_string());
+        let analysis = match self
+            .analyzer
+            .analyze_with_excerpt_size(markdown, mime_type, markdown.len(), excerpt_chars)
+            .await
+        {
+            Ok(a) => {
+                agents.push(AgentRun {
+                    agent: "analyzer".into(),
+                    model: analyzer_model,
+                    status: "ran".into(),
+                    note: None,
+                });
+                a
+            }
+            Err(e) => {
+                warn!(%doc_id, error = %e, "Analyzer failed — using defaults");
+                agents.push(AgentRun {
+                    agent: "analyzer".into(),
+                    model: analyzer_model,
+                    status: "failed".into(),
+                    note: Some(e.to_string()),
+                });
+                DocumentAnalysis::default()
+            }
+        };
+
+        let max_chunk_size = self
+            .max_chunk_size_override
+            .or(analysis.recommended_max_chunk_size)
+            .unwrap_or(self.max_chunk_size);
+
+        let converted = ConvertedDocument {
+            markdown: markdown.to_string(),
+            analysis: analysis.clone(),
+        };
+
+        // ── Smart chunker (+ one feedback retry on validation issues). ──
+        Self::report_step(on_step, "chunking");
+        let chunker_model = Some(self.smart_chunker.model_name().to_string());
+        let mut enriched = match self.smart_chunker.chunk(&converted, max_chunk_size).await {
+            Ok(c) if !c.is_empty() => c,
+            Ok(_) => {
+                warn!(%doc_id, "Smart chunker returned empty on extracted text — mechanical fallback");
+                agents.push(AgentRun {
+                    agent: "chunker".into(),
+                    model: chunker_model,
+                    status: "failed".into(),
+                    note: Some("empty output, mechanical fallback".into()),
+                });
+                let chunks = self.mechanical_fallback(markdown, doc_id, workspace_id)?;
+                return Ok(AiChunkOutcome {
+                    chunks,
+                    agents,
+                    mechanical_fallback: true,
+                });
+            }
+            Err(e) => {
+                warn!(%doc_id, error = %e, "Smart chunking failed on extracted text — mechanical fallback");
+                agents.push(AgentRun {
+                    agent: "chunker".into(),
+                    model: chunker_model,
+                    status: "failed".into(),
+                    note: Some(e.to_string()),
+                });
+                let chunks = self.mechanical_fallback(markdown, doc_id, workspace_id)?;
+                return Ok(AiChunkOutcome {
+                    chunks,
+                    agents,
+                    mechanical_fallback: true,
+                });
+            }
+        };
+        agents.push(AgentRun {
+            agent: "chunker".into(),
+            model: chunker_model,
+            status: "ran".into(),
+            note: None,
+        });
+
+        let issues = validate_chunks(&enriched, &converted.markdown, max_chunk_size);
+        if !issues.is_empty() {
+            Self::report_step(on_step, "retrying_chunking");
+            match self
+                .smart_chunker
+                .chunk_with_feedback(&converted, max_chunk_size, &issues)
+                .await
+            {
+                Ok(c) if !c.is_empty() => enriched = c,
+                Ok(_) => warn!(%doc_id, "Chunker retry returned empty, keeping previous"),
+                Err(e) => warn!(%doc_id, error = %e, "Chunker retry failed, keeping previous"),
+            }
+        }
+
+        // ── EnrichedChunk → DocumentChunk ──
+        let mut doc_chunks: Vec<DocumentChunk> = enriched
+            .into_iter()
+            .enumerate()
+            .map(|(i, ec)| DocumentChunk {
+                chunk_id: ChunkId::new(),
+                doc_id,
+                workspace_id,
+                content: ec.content,
+                chunk_index: i,
+                embedding: None,
+                metadata: Some(ChunkMetadata {
+                    topic: ec.topic,
+                    section_title: ec.section_title,
+                    language: ec.language,
+                    chunk_type: ec.chunk_type,
+                    page_numbers: ec.page_numbers,
+                    ..Default::default()
+                }),
+            })
+            .collect();
+
+        // ── Enricher (best-effort): keywords, summary, context prefix. ──
+        if let Some(ref enricher) = self.enricher {
+            Self::report_step(on_step, "enriching");
+            let enricher_model = Some(enricher.model_name().to_string());
+            match enricher.enrich(&mut doc_chunks, &analysis, "").await {
+                Ok(()) => agents.push(AgentRun {
+                    agent: "enricher".into(),
+                    model: enricher_model,
+                    status: "ran".into(),
+                    note: None,
+                }),
+                Err(e) => {
+                    warn!(%doc_id, error = %e, "Chunk enrichment failed, continuing without enrichment");
+                    agents.push(AgentRun {
+                        agent: "enricher".into(),
+                        model: enricher_model,
+                        status: "failed".into(),
+                        note: Some(e.to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(AiChunkOutcome {
+            chunks: doc_chunks,
+            agents,
+            mechanical_fallback: false,
+        })
     }
 
     fn mechanical_fallback(

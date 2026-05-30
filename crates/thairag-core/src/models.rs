@@ -58,6 +58,38 @@ impl DocStatus {
     }
 }
 
+/// Record of a single AI agent's participation in processing a document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRun {
+    /// Agent identifier: "analyzer", "chunker", "enricher", "converter", "quality".
+    pub agent: String,
+    /// Model that backed this agent, when applicable (e.g. "qwen2.5:7b").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Outcome: "ran", "skipped", "failed".
+    pub status: String,
+    /// Optional human-readable reason (e.g. "skipped, vision").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Persistent, per-document summary of how a document was processed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessingProvenance {
+    /// Processing path label (e.g. "smart-PDF + AI agents", "embedded-media + AI agents",
+    /// "direct-image", "AI agents", "mechanical").
+    pub path: String,
+    /// Per-agent participation records.
+    #[serde(default)]
+    pub agents: Vec<AgentRun>,
+    /// Whether AI processing fell back to mechanical chunking.
+    #[serde(default)]
+    pub mechanical_fallback: bool,
+    /// Final chunk count produced.
+    #[serde(default)]
+    pub chunk_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub id: DocId,
@@ -74,6 +106,9 @@ pub struct Document {
     /// Current AI preprocessing step (analyzing, converting, checking_quality, chunking, indexing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing_step: Option<String>,
+    /// Persistent record of how this document was processed (path, agents, models, fallback).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processing_provenance: Option<ProcessingProvenance>,
     /// Current version number (1-indexed, increments on each update).
     #[serde(default = "default_version")]
     pub version: i32,

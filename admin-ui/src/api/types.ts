@@ -31,6 +31,22 @@ export interface Workspace {
 
 export type DocStatus = 'processing' | 'ready' | 'failed';
 
+/** One AI agent's participation in processing a document. */
+export interface AgentRun {
+  agent: string;
+  model?: string;
+  status: string;
+  note?: string;
+}
+
+/** Per-document record of how it was processed (path, agents, models, fallback). */
+export interface ProcessingProvenance {
+  path: string;
+  agents: AgentRun[];
+  mechanical_fallback: boolean;
+  chunk_count: number;
+}
+
 export interface Document {
   id: DocId;
   workspace_id: WorkspaceId;
@@ -41,6 +57,7 @@ export interface Document {
   chunk_count: number;
   error_message?: string;
   processing_step?: string;
+  processing_provenance?: ProcessingProvenance;
   created_at: string;
   updated_at: string;
 }

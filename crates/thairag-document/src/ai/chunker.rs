@@ -44,6 +44,11 @@ impl LlmSmartChunker {
         }
     }
 
+    /// Name of the model backing this agent.
+    pub fn model_name(&self) -> &str {
+        self.llm.model_name()
+    }
+
     /// Re-chunk with feedback about previous chunking issues.
     pub async fn chunk_with_feedback(
         &self,
