@@ -13,6 +13,7 @@ import {
   message,
   Divider,
   Select,
+  AutoComplete,
   Input,
   Collapse,
   Tag,
@@ -106,18 +107,31 @@ const TIER_ALLOWED: Record<string, Set<string>> = {
   Heavy: new Set(['light', 'medium', 'heavy']),
 };
 
-function filterSyncedModels(models: AvailableModel[], taskWeight: TaskWeight): AvailableModel[] {
-  if (!taskWeight) return models;
-  const limit = OLLAMA_SIZE_LIMITS[taskWeight];
-  if (!limit) return models; // Heavy = no limit
-  return models.filter((m) => !m.size || m.size <= limit);
+// Recommendation predicates. Models are never hidden — these only decide which
+// ones get the ★ marker and float to the top. A model is "recommended" when it
+// fits the agent's task weight (and vision requirement, if any); everything
+// else stays freely selectable.
+function syncedModelRecommended(
+  m: AvailableModel,
+  kind: string,
+  taskWeight: TaskWeight,
+  requireVision?: boolean,
+): boolean {
+  const limit = taskWeight ? OLLAMA_SIZE_LIMITS[taskWeight] : undefined;
+  const sizeOk = !limit || !m.size || m.size <= limit;
+  const visionOk = !requireVision || kind !== 'Ollama' || isOllamaVisionModel(m.id);
+  return sizeOk && visionOk;
 }
 
-function filterStaticModels(models: StaticModel[], taskWeight: TaskWeight): StaticModel[] {
-  if (!taskWeight) return models;
-  const allowed = TIER_ALLOWED[taskWeight];
-  if (!allowed) return models;
-  return models.filter((m) => allowed.has(m.tier));
+function staticModelRecommended(
+  m: StaticModel,
+  taskWeight: TaskWeight,
+  requireVision?: boolean,
+): boolean {
+  const allowed = taskWeight ? TIER_ALLOWED[taskWeight] : undefined;
+  const tierOk = !allowed || allowed.has(m.tier);
+  const visionOk = !requireVision || !!m.vision;
+  return tierOk && visionOk;
 }
 
 function formatBytes(bytes: number): string {
@@ -195,20 +209,19 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
         base_url: form.base_url || '',
         api_key: form.api_key || '',
       });
-      const filtered = filterSyncedModels(result.models, taskWeight);
       if (result.models.length === 0) {
         message.warning('No models found. Check your credentials and try again.');
-      } else if (filtered.length === 0) {
-        message.info(`Found ${result.models.length} model(s), but none match the "${taskWeight}" task weight. Showing all.`);
-        setSyncedModels(result.models);
-        setSyncing(false);
-        return;
-      } else if (filtered.length < result.models.length) {
-        message.success(`Showing ${filtered.length} of ${result.models.length} model(s) suitable for "${taskWeight}" tasks`);
       } else {
-        message.success(`Found ${filtered.length} model(s)`);
+        const recCount = result.models.filter((m) =>
+          syncedModelRecommended(m, form.kind, taskWeight, requireVision),
+        ).length;
+        message.success(
+          taskWeight && recCount
+            ? `Found ${result.models.length} model(s) — ${recCount} recommended for "${taskWeight}" tasks (★)`
+            : `Found ${result.models.length} model(s)`,
+        );
       }
-      setSyncedModels(filtered);
+      setSyncedModels(result.models);
       onModelsLoaded?.(result.models);
     } catch {
       message.error('Failed to sync models.');
@@ -217,35 +230,49 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
     }
   };
 
-  const toOptions = (models: AvailableModel[]) =>
-    models.map((m) => ({
-      label: m.size
-        ? `${m.name} (${formatBytes(m.size)})${requireVision && form.kind === 'Ollama' && isOllamaVisionModel(m.id) ? ' [vision]' : ''}`
-        : m.name,
-      value: m.id,
-    }));
+  // Build the full model list — nothing is hidden. Recommended models (those
+  // matching the agent's task weight + vision requirement) are marked with ★
+  // and sorted first; every other model stays selectable, and free-text entry
+  // is always allowed via AutoComplete.
+  type ModelChoice = { value: string; display: string; recommended: boolean };
 
-  const allStatic = staticModels[form.kind] || [];
-  let filteredStatic = filterStaticModels(allStatic, taskWeight);
-  if (requireVision) {
-    filteredStatic = filteredStatic.filter((m) => m.vision);
+  let choices: ModelChoice[];
+  if (syncedModels && syncedModels.length > 0) {
+    choices = syncedModels.map((m) => {
+      const visionTag =
+        form.kind === 'Ollama' && isOllamaVisionModel(m.id) ? ' [vision]' : '';
+      const sizeStr = m.size ? ` (${formatBytes(m.size)})` : '';
+      return {
+        value: m.id,
+        display: `${m.name}${sizeStr}${visionTag}`,
+        recommended: syncedModelRecommended(m, form.kind, taskWeight, requireVision),
+      };
+    });
+  } else {
+    choices = (staticModels[form.kind] || []).map((m) => ({
+      value: m.value,
+      display: m.label,
+      recommended: staticModelRecommended(m, taskWeight, requireVision),
+    }));
   }
 
-  // Filter synced Ollama models for vision if required
-  const displaySynced = syncedModels && syncedModels.length > 0
-    ? (requireVision && form.kind === 'Ollama'
-        ? syncedModels.filter((m) => isOllamaVisionModel(m.id))
-        : syncedModels)
-    : null;
+  choices.sort((a, b) =>
+    a.recommended === b.recommended
+      ? a.display.localeCompare(b.display)
+      : a.recommended
+        ? -1
+        : 1,
+  );
 
-  const modelOptions =
-    displaySynced && displaySynced.length > 0
-      ? toOptions(displaySynced)
-      : filteredStatic.map((m) => ({
-          label: `${m.label}${m.vision ? '' : ''}`,
-          value: m.value,
-        }));
-  const useModelSelect = modelOptions.length > 0;
+  const modelOptions = choices.map((c) => ({
+    value: c.value,
+    label: (
+      <span>
+        {c.recommended && <span style={{ color: '#faad14' }}>★ </span>}
+        {c.display}
+      </span>
+    ),
+  }));
 
   const needsBaseUrl = form.kind === 'Ollama' || form.kind === 'OpenAiCompatible';
   const needsApiKey = ['Claude', 'OpenAi', 'Gemini', 'OpenAiCompatible'].includes(form.kind);
@@ -320,33 +347,23 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
             <div style={{ flex: 1, minWidth: 200 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>Model</Text>
               <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
-                {useModelSelect ? (
-                  <Select
-                    size={compact ? 'small' : 'middle'}
-                    showSearch
-                    optionFilterProp="label"
-                    options={modelOptions}
-                    value={form.model || undefined}
-                    onChange={(v) => onChange({ ...form, model: v })}
-                    placeholder="Select a model"
-                    style={{ flex: 1 }}
-                    allowClear={false}
-                  />
-                ) : (
-                  <Input
-                    size={compact ? 'small' : 'middle'}
-                    value={form.model}
-                    onChange={(e) => onChange({ ...form, model: e.target.value })}
-                    placeholder={
-                      form.kind === 'Ollama'
-                        ? 'Sync to discover, or type e.g. llama3.2'
-                        : form.kind === 'OpenAiCompatible'
-                        ? 'e.g. deepseek-chat'
-                        : 'Enter model name'
-                    }
-                    style={{ flex: 1 }}
-                  />
-                )}
+                <AutoComplete
+                  size={compact ? 'small' : 'middle'}
+                  options={modelOptions}
+                  value={form.model || undefined}
+                  onChange={(v) => onChange({ ...form, model: v })}
+                  filterOption={(input, option) =>
+                    String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                  placeholder={
+                    form.kind === 'Ollama'
+                      ? 'Sync to discover, or type e.g. llama3.2'
+                      : form.kind === 'OpenAiCompatible'
+                      ? 'e.g. deepseek-chat'
+                      : 'Select or type any model'
+                  }
+                  style={{ flex: 1 }}
+                />
                 <Tooltip title="Fetch available models from provider">
                   <Button
                     size={compact ? 'small' : 'middle'}
