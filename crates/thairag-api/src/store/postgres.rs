@@ -1040,6 +1040,33 @@ impl KmStoreTrait for PostgresKmStore {
             .collect()
     }
 
+    fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk> {
+        use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
+        let rows: Vec<(Uuid, Uuid, Uuid, String, i32)> = block_on(
+            sqlx::query_as(
+                "SELECT chunk_id, doc_id, workspace_id, content, chunk_index
+                 FROM document_chunks WHERE doc_id = $1 ORDER BY chunk_index",
+            )
+            .bind(doc_id.0)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default();
+
+        rows.into_iter()
+            .map(
+                |(chunk_id, doc_id, workspace_id, content, chunk_index)| DocumentChunk {
+                    chunk_id: ChunkId(chunk_id),
+                    doc_id: DocId(doc_id),
+                    workspace_id: WorkspaceId(workspace_id),
+                    content,
+                    chunk_index: chunk_index as usize,
+                    embedding: None,
+                    metadata: None,
+                },
+            )
+            .collect()
+    }
+
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
         block_on(
             sqlx::query("DELETE FROM document_chunks WHERE doc_id = $1")

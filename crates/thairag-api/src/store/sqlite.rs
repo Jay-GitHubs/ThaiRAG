@@ -1085,6 +1085,38 @@ impl KmStoreTrait for SqliteKmStore {
         .collect()
     }
 
+    fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk> {
+        use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT chunk_id, doc_id, workspace_id, content, chunk_index
+             FROM document_chunks WHERE doc_id = ?1 ORDER BY chunk_index",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![doc_id.0.to_string()], |row| {
+            let chunk_id_str: String = row.get(0)?;
+            let doc_id_str: String = row.get(1)?;
+            let ws_id_str: String = row.get(2)?;
+            let content: String = row.get(3)?;
+            let chunk_index: i32 = row.get(4)?;
+            Ok(DocumentChunk {
+                chunk_id: ChunkId(chunk_id_str.parse().unwrap_or_default()),
+                doc_id: DocId(doc_id_str.parse().unwrap_or_default()),
+                workspace_id: WorkspaceId(ws_id_str.parse().unwrap_or_default()),
+                content,
+                chunk_index: chunk_index as usize,
+                embedding: None,
+                metadata: None,
+            })
+        });
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
