@@ -1390,6 +1390,11 @@ impl AppState {
             let eff_chat = crate::routes::settings::get_effective_chat_pipeline_with_store(
                 &config, &*km_store,
             );
+            // Re-apply km_store overrides to the document config too, so DB-stored
+            // ai_preprocessing.* settings (e.g. AI preprocessing enabled) survive a
+            // restart instead of reverting to the static file defaults.
+            let eff_doc =
+                crate::routes::settings::build_effective_document_config(&config, &*km_store);
             // Also read DB-overridden provider config
             let pc = if let Some(json) = km_store.get_setting("provider_config")
                 && let Ok(pc) = serde_json::from_str::<ProvidersConfig>(&json)
@@ -1401,7 +1406,7 @@ impl AppState {
             ProviderBundleBuilder::new(
                 &pc,
                 &config.search,
-                &config.document,
+                &eff_doc,
                 &eff_chat,
                 Arc::clone(&prompt_registry),
             )

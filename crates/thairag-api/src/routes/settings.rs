@@ -1982,6 +1982,113 @@ fn get_effective_ai_config(state: &AppState) -> EffectiveAiConfig {
     }
 }
 
+/// Build an effective `DocumentConfig` by layering km_store overrides on top of
+/// the static file config. Usable before `AppState` exists (e.g. at startup),
+/// mirroring `get_effective_chat_pipeline_with_store`. Keeping both the save path
+/// and the startup bundle build on this single function prevents them from drifting
+/// (the drift was the cause of AI preprocessing reverting to OFF after a restart).
+pub fn build_effective_document_config(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+) -> thairag_config::schema::DocumentConfig {
+    let doc = &config.document;
+    let ai = &doc.ai_preprocessing;
+    let s = |key: &str| store.get_setting(key);
+    let llm = |key: &str, fb: &Option<thairag_config::schema::LlmConfig>| {
+        s(key)
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .or_else(|| fb.clone())
+    };
+
+    let mut eff = doc.clone();
+
+    // ── document.* pipeline knobs ──
+    eff.max_chunk_size = s("document.max_chunk_size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_chunk_size);
+    eff.chunk_overlap = s("document.chunk_overlap")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.chunk_overlap);
+    eff.max_upload_size_mb = s("document.max_upload_size_mb")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_upload_size_mb);
+    eff.pdf_image_dpi = s("document.pdf_image_dpi")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_image_dpi);
+    eff.max_image_edge = s("document.max_image_edge")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_image_edge);
+
+    // ── ai_preprocessing scalars ──
+    eff.ai_preprocessing.enabled = s("ai_preprocessing.enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.enabled);
+    eff.ai_preprocessing.auto_params = s("ai_preprocessing.auto_params")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.auto_params);
+    eff.ai_preprocessing.quality_threshold = s("ai_preprocessing.quality_threshold")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.quality_threshold);
+    eff.ai_preprocessing.max_llm_input_chars = s("ai_preprocessing.max_llm_input_chars")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.max_llm_input_chars);
+    eff.ai_preprocessing.agent_max_tokens = s("ai_preprocessing.agent_max_tokens")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.agent_max_tokens);
+    eff.ai_preprocessing.min_ai_size_bytes = s("ai_preprocessing.min_ai_size_bytes")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.min_ai_size_bytes);
+
+    // ── ai_preprocessing LLMs (shared + per-agent) ──
+    eff.ai_preprocessing.llm = llm("ai_preprocessing.llm", &ai.llm);
+    eff.ai_preprocessing.analyzer_llm = llm("ai_preprocessing.analyzer_llm", &ai.analyzer_llm);
+    eff.ai_preprocessing.converter_llm = llm("ai_preprocessing.converter_llm", &ai.converter_llm);
+    eff.ai_preprocessing.quality_llm = llm("ai_preprocessing.quality_llm", &ai.quality_llm);
+    eff.ai_preprocessing.chunker_llm = llm("ai_preprocessing.chunker_llm", &ai.chunker_llm);
+    eff.ai_preprocessing.orchestrator_llm =
+        llm("ai_preprocessing.orchestrator_llm", &ai.orchestrator_llm);
+    eff.ai_preprocessing.enricher_llm = llm("ai_preprocessing.enricher_llm", &ai.enricher_llm);
+
+    // ── retry-with-feedback ──
+    eff.ai_preprocessing.retry.enabled = s("ai_preprocessing.retry.enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.retry.enabled);
+    eff.ai_preprocessing.retry.converter_max_retries =
+        s("ai_preprocessing.retry.converter_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.converter_max_retries);
+    eff.ai_preprocessing.retry.chunker_max_retries =
+        s("ai_preprocessing.retry.chunker_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.chunker_max_retries);
+    eff.ai_preprocessing.retry.analyzer_max_retries =
+        s("ai_preprocessing.retry.analyzer_max_retries")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.analyzer_max_retries);
+    eff.ai_preprocessing.retry.analyzer_retry_below_confidence =
+        s("ai_preprocessing.retry.analyzer_retry_below_confidence")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ai.retry.analyzer_retry_below_confidence);
+
+    // ── orchestrator ──
+    eff.ai_preprocessing.orchestrator_enabled = s("ai_preprocessing.orchestrator_enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.orchestrator_enabled);
+    eff.ai_preprocessing.auto_orchestrator_budget = s("ai_preprocessing.auto_orchestrator_budget")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.auto_orchestrator_budget);
+    eff.ai_preprocessing.max_orchestrator_calls = s("ai_preprocessing.max_orchestrator_calls")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.max_orchestrator_calls);
+
+    // ── enricher ──
+    eff.ai_preprocessing.enricher_enabled = s("ai_preprocessing.enricher_enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ai.enricher_enabled);
+
+    eff
+}
+
 fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse {
     let effective_ai = get_effective_ai_config(state);
     AiPreprocessingResponse {
@@ -2337,70 +2444,10 @@ pub async fn update_document_config(
         }
     }
 
-    // Read back effective config
-    let doc = &state.config.document;
-    let effective_ai = get_effective_ai_config(&state);
-
-    // Effective pipeline settings (overrides from KM store, fallback to config)
-    let eff_max_chunk_size = state
-        .km_store
-        .get_setting("document.max_chunk_size")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.max_chunk_size);
-    let eff_chunk_overlap = state
-        .km_store
-        .get_setting("document.chunk_overlap")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.chunk_overlap);
-    let eff_max_upload_size_mb = state
-        .km_store
-        .get_setting("document.max_upload_size_mb")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.max_upload_size_mb);
-    let eff_pdf_image_dpi = state
-        .km_store
-        .get_setting("document.pdf_image_dpi")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.pdf_image_dpi);
-    let eff_max_image_edge = state
-        .km_store
-        .get_setting("document.max_image_edge")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.max_image_edge);
-
-    // Hot-reload the document pipeline with updated config
-    let mut effective_doc = doc.clone();
-    effective_doc.max_chunk_size = eff_max_chunk_size;
-    effective_doc.chunk_overlap = eff_chunk_overlap;
-    effective_doc.max_upload_size_mb = eff_max_upload_size_mb;
-    effective_doc.pdf_image_dpi = eff_pdf_image_dpi;
-    effective_doc.max_image_edge = eff_max_image_edge;
-    effective_doc.ai_preprocessing.enabled = effective_ai.enabled;
-    effective_doc.ai_preprocessing.auto_params = effective_ai.auto_params;
-    effective_doc.ai_preprocessing.quality_threshold = effective_ai.quality_threshold;
-    effective_doc.ai_preprocessing.max_llm_input_chars = effective_ai.max_llm_input_chars;
-    effective_doc.ai_preprocessing.agent_max_tokens = effective_ai.agent_max_tokens;
-    effective_doc.ai_preprocessing.min_ai_size_bytes = effective_ai.min_ai_size_bytes;
-    effective_doc.ai_preprocessing.llm = get_effective_preprocessing_llm(&state);
-    effective_doc.ai_preprocessing.analyzer_llm = get_effective_agent_llm(&state, "analyzer");
-    effective_doc.ai_preprocessing.converter_llm = get_effective_agent_llm(&state, "converter");
-    effective_doc.ai_preprocessing.quality_llm = get_effective_agent_llm(&state, "quality");
-    effective_doc.ai_preprocessing.chunker_llm = get_effective_agent_llm(&state, "chunker");
-    effective_doc.ai_preprocessing.retry.enabled = effective_ai.retry_enabled;
-    effective_doc.ai_preprocessing.retry.converter_max_retries = effective_ai.converter_max_retries;
-    effective_doc.ai_preprocessing.retry.chunker_max_retries = effective_ai.chunker_max_retries;
-    effective_doc.ai_preprocessing.retry.analyzer_max_retries = effective_ai.analyzer_max_retries;
-    effective_doc
-        .ai_preprocessing
-        .retry
-        .analyzer_retry_below_confidence = effective_ai.analyzer_retry_below_confidence;
-    effective_doc.ai_preprocessing.orchestrator_enabled = effective_ai.orchestrator_enabled;
-    effective_doc.ai_preprocessing.auto_orchestrator_budget = effective_ai.auto_orchestrator_budget;
-    effective_doc.ai_preprocessing.max_orchestrator_calls = effective_ai.max_orchestrator_calls;
-    effective_doc.ai_preprocessing.orchestrator_llm =
-        get_effective_agent_llm(&state, "orchestrator");
-    effective_doc.ai_preprocessing.enricher_enabled = effective_ai.enricher_enabled;
-    effective_doc.ai_preprocessing.enricher_llm = get_effective_agent_llm(&state, "enricher");
+    // Read back effective config (km_store overrides layered over file config).
+    // Same builder the startup bundle uses, so the save path and restart path
+    // can't drift — that drift was what made AI preprocessing revert to OFF.
+    let effective_doc = build_effective_document_config(&state.config, &*state.km_store);
 
     // Try hot-reload; don't fail the save if provider creation has issues
     let eff_chat = get_effective_chat_pipeline(&state);
@@ -2430,11 +2477,11 @@ pub async fn update_document_config(
     );
 
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: eff_max_chunk_size,
-        chunk_overlap: eff_chunk_overlap,
-        max_upload_size_mb: eff_max_upload_size_mb,
-        pdf_image_dpi: eff_pdf_image_dpi,
-        max_image_edge: eff_max_image_edge,
+        max_chunk_size: effective_doc.max_chunk_size,
+        chunk_overlap: effective_doc.chunk_overlap,
+        max_upload_size_mb: effective_doc.max_upload_size_mb,
+        pdf_image_dpi: effective_doc.pdf_image_dpi,
+        max_image_edge: effective_doc.max_image_edge,
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }
