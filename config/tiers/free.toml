@@ -3,6 +3,10 @@
 kind = "ollama"
 model = "llama3.2"
 base_url = "http://localhost:11435"
+# Adaptive context-window ceiling for Ollama. The provider sizes num_ctx to the
+# actual prompt and clamps it here, so a 128K-capable model (e.g. qwen2.5vl)
+# doesn't pre-allocate a 128K KV cache. Set 0 to inherit the model's default.
+ollama_num_ctx_max = 16384
 
 [providers.embedding]
 kind = "fastembed"

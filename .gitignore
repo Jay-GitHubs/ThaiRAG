@@ -13,7 +13,7 @@ config/local.toml
 **/node_modules/
 admin-ui/dist/
 sdks/typescript/dist/
-sdks/typescript/*.tsbuildinfo
+*.tsbuildinfo
 
 # Python
 **/__pycache__/
