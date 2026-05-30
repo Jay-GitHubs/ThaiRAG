@@ -9,6 +9,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **OpenAI-Compatible API** — Drop-in replacement at `/v1/chat/completions` and `/v1/models`, works with Open WebUI and any OpenAI-compatible client
 - **Hierarchical Knowledge Management** — Organization → Department → Workspace → Documents with scoped permissions
 - **Multi-Format Documents** — PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text with automatic chunking
+- **Smart Document Extraction** — pdfium-based per-page PDF strategy (text / mixed / image-heavy / scanned / tabular) producing semantic markdown; image-only PDFs (PowerPoint exports, scans) routed to vision OCR; embedded images from PDF/DOCX/XLSX/HTML stored as retrievable KM content
 - **Multi-Agent Chat Pipeline** — Configurable LLM assignment per agent (Use Chat LLM / Shared / Per-Agent modes) with fallback chain
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
@@ -22,6 +23,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Qdrant Dimension Auto-Detection** — Automatically detects vector dimension from embeddings; recreates collections when dimensions change (e.g., after switching embedding models)
 - **Plugin System** — DocumentPlugin / SearchPlugin / ChunkPlugin interfaces with built-in plugins and runtime registration
 - **Multi-Modal RAG** — Image vision description and table extraction from PDFs via vision-capable LLMs
+- **Advisory Model Capabilities & Discovery** — Searchable, free-text model pickers (any model id stays selectable) with ⭐ recommended / vision badges; capability detection is advisory and never blocks a model. A layered resolver tags models from the built-in floor, an external catalog (LiteLLM), a custom HTTP catalog, or an MCP discovery tool
 - **API Versioning** — V1 OpenAI-compatible endpoint + V2 with metadata, sources, and intent in responses
 - **WebSocket Chat** — Real-time bidirectional chat at `/ws/chat` alongside SSE streaming
 - **Conversation Auto-Summarization** — Automatic context compaction when conversation history grows long

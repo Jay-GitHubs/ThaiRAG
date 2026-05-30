@@ -34,6 +34,10 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 24. [Multi-tenancy & RBAC v2](#24-multi-tenancy--rbac-v2) — tenant CRUD, quota management, custom role CRUD, role assignment
 25. [Prompt Marketplace & Fine-tuning](#25-prompt-marketplace--fine-tuning) — prompt template CRUD, rating, forking, finetune datasets, job listing
 26. [Automated E2E Testing (Phase 6)](#26-automated-e2e-testing-phase-6) — Phase 6 Playwright test suite, test files, running instructions
+27. [Model Capability & Discovery](#27-model-capability--discovery) — advisory resolve, catalog status/refresh, discovery modes (catalog/http_catalog/mcp), air-gapped floor
+28. [Model Pickers (Admin UI)](#28-model-pickers-admin-ui) — searchable free-text pickers, per-section sync, ⭐/vision badges, recommendations panel
+
+> Quick standalone runbook for §27–28: [`FEATURE_TESTING_GUIDE.md`](./FEATURE_TESTING_GUIDE.md).
 
 ---
 
@@ -3777,3 +3781,101 @@ npx playwright test --reporter=list 2>&1 | grep -E '(skipped|passed|failed)'
 **Current results:** 178 total e2e tests. 168 passed, 10 skipped (infrastructure-dependent). Zero unexpected failures.
 
 **Pass criteria:** All non-infrastructure tests pass. Infrastructure-dependent tests either pass (when services are available) or are marked as skipped (when services are absent). Zero unexpected failures.
+
+---
+
+## 27. Model Capability & Discovery
+
+### Purpose
+
+Verify the **advisory** model-capability resolver and the model-discovery sources. The guiding rule: capability detection informs the operator, it never gates which model can be selected. These endpoints drive the ⭐ recommended / vision badges in §28.
+
+> Full self-contained runbook with copy-paste blocks: [`FEATURE_TESTING_GUIDE.md`](./FEATURE_TESTING_GUIDE.md). This section is the SIT/UAT checklist.
+
+### Prerequisites
+
+- ThaiRAG API running the build that includes PR-D1/PR-D2 (model-discovery endpoints).
+- A super-admin Bearer token (these endpoints are super-admin gated).
+- `curl` + `jq`.
+
+```bash
+API_URL="http://localhost:8080"
+TOKEN=$(curl -fsS -X POST "$API_URL/api/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"<admin>","password":"<pw>"}' | jq -r .token)
+```
+
+### 27.1 Capability resolve (the original-bug regression)
+
+```bash
+curl -fsS -X POST "$API_URL/api/km/settings/recommendations/resolve" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"kind":"Ollama","models":["qwen3-vl:8b-instruct-bf16","llama3.2","llava:13b"]}' | jq .
+# Expected: resolved["qwen3-vl:8b-instruct-bf16"].vision == true   (was silently skipped before PR-A)
+#           resolved["llava:13b"].vision == true
+#           resolved["llama3.2"].vision == false
+#           each entry has source = "builtin" (offline) or "catalog" (warmed)
+```
+
+### 27.2 Catalog status & background refresh
+
+```bash
+curl -fsS "$API_URL/api/km/settings/recommendations/status" -H "Authorization: Bearer $TOKEN" | jq .
+# Expected: { has_data, model_count, age_secs?, stale, enabled, configured }
+
+curl -fsS -X POST "$API_URL/api/km/settings/recommendations/refresh" -H "Authorization: Bearer $TOKEN" >/dev/null
+sleep 3
+curl -fsS "$API_URL/api/km/settings/recommendations/status" -H "Authorization: Bearer $TOKEN" | jq '{has_data, model_count, last_error}'
+# Expected (internet): has_data true, model_count in the hundreds+, no last_error
+# Expected (air-gapped): has_data false, last_error populated — and 27.1 still returns correct "builtin" verdicts
+```
+
+### 27.3 Discovery config + air-gapped floor
+
+```bash
+curl -fsS "$API_URL/api/km/settings/model-discovery" -H "Authorization: Bearer $TOKEN" | jq .
+# Expected: { enabled, catalog_url, mode:"catalog", endpoint, tool, auth }
+
+# Disable → cache cleared → resolve must report source "builtin"
+curl -fsS -X PUT "$API_URL/api/km/settings/model-discovery" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":false,"catalog_url":"","mode":"catalog","endpoint":"","tool":"","auth":""}' >/dev/null
+curl -fsS -X POST "$API_URL/api/km/settings/recommendations/resolve" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"kind":"OpenAi","models":["gpt-4o"]}' | jq '.resolved["gpt-4o"].source'
+# Expected: "builtin"  — then re-enable when done.
+```
+
+### 27.4 Custom HTTP catalog & MCP (best-effort)
+
+- `mode:"http_catalog"` with `endpoint` → a JSON capability map (LiteLLM-style **or** `{ "<id>": { vision, recommended, max_input_tokens } }`). After refresh, `status.has_data == true`; an explicit `recommended`/`vision` overrides the floor.
+- `mode:"mcp"` with a bad `endpoint` → after refresh, `status.last_error` is populated and `resolve` still returns built-in verdicts (graceful degradation). A working MCP server calls `tool` (default `list_models`) with no args and returns a capability map/array.
+
+### Pass criteria
+
+`qwen3-vl` resolves vision-capable (27.1); the catalog warms when connected and degrades cleanly offline (27.2); disabling forces `source:"builtin"` (27.3); http_catalog/mcp behave as described (27.4). No endpoint returns 5xx for an unreachable source.
+
+---
+
+## 28. Model Pickers (Admin UI)
+
+### Purpose
+
+Verify the searchable, free-text model pickers and the advisory badges in **Settings → Providers**, and that an unrecognized-but-valid model stays selectable.
+
+### Prerequisites
+
+- Admin UI running (`docker compose up -d` or `cd admin-ui && npm run dev`), logged in as super-admin.
+- §27 endpoints reachable (the badges call `recommendations/resolve`).
+
+### Steps
+
+| # | Action | Expected |
+|---|--------|----------|
+| 28.1 | Settings → Providers → Edit. In the **Vision LLM** model box, type `qwen3-vl:8b-instruct-bf16`. | The typed id stays selectable and saves — not restricted to a dropdown list. |
+| 28.2 | Click **Sync** on the LLM / Vision / Reranker sections. | Each lists the provider's live models (Ollama `/api/tags`, OpenAI/compatible `/v1/models`). |
+| 28.3 | Open a model dropdown with recognized models. | Recognized models show **⭐ recommended** and/or **vision** tags; tooltips read "a recommendation, not a requirement." |
+| 28.4 | Open the **Model Recommendations** panel. | Shows source = *catalog* (model count + freshness) or *built-in*; has enable toggle, discovery-source selector (Built-in / Custom HTTP / MCP) with mode-specific fields, and **Refresh now**. |
+| 28.5 | Disable external discovery (or block network) and reopen a picker. | Badges still render (local heuristic fallback); panel shows *built-in* source + any error. No console errors break the form. |
+
+### Pass criteria
+
+Any model id is selectable via free text (28.1); per-section sync works (28.2); advisory badges render and are clearly framed as recommendations (28.3–28.4); the UI degrades gracefully when discovery is off/unreachable (28.5).

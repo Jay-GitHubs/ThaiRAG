@@ -833,6 +833,52 @@ Sync model list from embedding provider.
 #### `POST /api/km/settings/providers/reranker-models/sync`
 Sync model list from reranker provider.
 
+### Model Discovery & Recommendations
+
+Advisory model-capability resolution. These endpoints drive the ⭐ *recommended*
+and *vision* badges in the admin UI model pickers. They are **advisory only** —
+capability detection informs, it never gates model selection (an unrecognized
+model is always still usable). Resolution layers a discovery source over a
+built-in offline floor.
+
+#### `GET /api/km/settings/model-discovery`
+Get the model-discovery settings. Response:
+```json
+{ "enabled": true, "catalog_url": "", "mode": "catalog", "endpoint": "", "tool": "", "auth": "" }
+```
+- `mode`: `"catalog"` (built-in LiteLLM catalog) | `"http_catalog"` (custom HTTP
+  endpoint) | `"mcp"` (MCP discovery tool).
+- `enabled`: when `false`, the cache is cleared and only the built-in floor is
+  used (air-gapped deploys).
+
+#### `PUT /api/km/settings/model-discovery`
+Update the model-discovery settings (body = the object above). Disabling clears
+any cached catalog.
+
+#### `GET /api/km/settings/recommendations/status`
+Cache state for the admin-UI banner:
+```json
+{ "has_data": true, "model_count": 1100, "age_secs": 42, "stale": false,
+  "enabled": true, "configured": false }
+```
+
+#### `POST /api/km/settings/recommendations/refresh`
+Fire-and-forget background refresh of the discovery source when enabled and
+stale (single-flight). Returns the current status immediately.
+
+#### `POST /api/km/settings/recommendations/resolve`
+Resolve advisory capability flags for a set of model ids. Request:
+```json
+{ "kind": "Ollama", "models": ["qwen3-vl:8b-instruct-bf16", "llama3.2"] }
+```
+Response — each id maps to `{ vision, recommended, max_input_tokens?, source }`
+where `source` is `"catalog"` (a discovery hit) or `"builtin"` (the floor):
+```json
+{ "resolved": { "qwen3-vl:8b-instruct-bf16": { "vision": true, "recommended": true, "source": "builtin" } },
+  "status": { "has_data": false, "stale": true, "enabled": true, "configured": false } }
+```
+Opportunistically warms a stale catalog in the background.
+
 ### Document Configuration
 
 #### `GET /api/km/settings/document`
