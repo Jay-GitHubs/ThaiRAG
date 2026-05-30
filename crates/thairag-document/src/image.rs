@@ -2,7 +2,7 @@ use base64::Engine;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ImageContent, ImageMetadata, VisionMessage};
-use tracing::info;
+use tracing::{info, warn};
 
 /// MIME types recognized as images for multi-modal processing.
 pub const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
@@ -63,15 +63,6 @@ pub async fn describe_image_with_prompt(
 ) -> Result<String> {
     let metadata = extract_image_metadata(image_bytes, mime_type);
 
-    if !llm.supports_vision() {
-        info!(
-            format = %metadata.format,
-            size = metadata.size_bytes,
-            "LLM does not support vision; returning metadata-only description"
-        );
-        return Ok(format_placeholder_description(&metadata));
-    }
-
     let base64_data = base64::engine::general_purpose::STANDARD.encode(image_bytes);
 
     let vision_msg = VisionMessage {
@@ -83,16 +74,36 @@ pub async fn describe_image_with_prompt(
         }],
     };
 
-    let response = llm.generate_vision(&[vision_msg], Some(max_tokens)).await?;
-
-    info!(
-        format = %metadata.format,
-        size = metadata.size_bytes,
-        description_len = response.content.len(),
-        "Image described via vision LLM"
-    );
-
-    Ok(response.content)
+    // Advisory, never enforcing: attempt the vision call regardless of whether
+    // the model id is in our recommended-vision list — the admin's model may be
+    // vision-capable even if we don't recognize the name. Fall back to a
+    // metadata placeholder only when the call actually fails.
+    match llm.generate_vision(&[vision_msg], Some(max_tokens)).await {
+        Ok(response) => {
+            info!(
+                format = %metadata.format,
+                size = metadata.size_bytes,
+                description_len = response.content.len(),
+                "Image described via vision LLM"
+            );
+            Ok(response.content)
+        }
+        Err(e) => {
+            if llm.supports_vision() {
+                warn!(model = llm.model_name(), error = %e,
+                    "vision call failed — using metadata placeholder");
+            } else {
+                warn!(
+                    model = llm.model_name(),
+                    error = %e,
+                    "vision call failed and the model is not in the recommended-vision list \
+                     — using a metadata placeholder. If this model does support vision, this \
+                     is harmless; otherwise configure a vision-capable model."
+                );
+            }
+            Ok(format_placeholder_description(&metadata))
+        }
+    }
 }
 
 /// Format a placeholder description when vision is not available.
