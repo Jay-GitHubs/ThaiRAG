@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Table, Button, Tag, Popconfirm, Space, message, Tooltip } from 'antd';
+import { Table, Button, Tag, Popconfirm, Space, message, Tooltip, Popover } from 'antd';
 import {
   UploadOutlined, PlusOutlined, DeleteOutlined, LoadingOutlined,
   SyncOutlined, EyeOutlined, DownloadOutlined, BlockOutlined, ReloadOutlined,
-  FileMarkdownOutlined,
+  FileMarkdownOutlined, CheckCircleTwoTone, MinusCircleOutlined, CloseCircleTwoTone,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useDocuments, useDeleteDocument } from '../../hooks/useDocuments';
@@ -12,7 +12,7 @@ import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
 import { downloadDocument, getDocumentContent, reprocessDocument, reprocessAllDocuments } from '../../api/documents';
-import type { Document, DocStatus } from '../../api/types';
+import type { Document, DocStatus, ProcessingProvenance } from '../../api/types';
 
 interface Props {
   workspaceId: string;
@@ -42,6 +42,73 @@ function parseEmptyExtractionReason(msg: string | null | undefined): string | nu
   if (!msg) return null;
   const match = /^empty_extraction\[([a-z_]+)\]/.exec(msg);
   return match ? match[1] : null;
+}
+
+// Human-readable labels for the agent identifiers in ProcessingProvenance.
+const AGENT_LABELS: Record<string, string> = {
+  analyzer: 'Analyzer',
+  chunker: 'Chunker',
+  enricher: 'Enricher',
+  converter: 'Converter',
+  quality: 'Quality',
+};
+
+function agentStatusIcon(status: string) {
+  switch (status) {
+    case 'ran':
+      return <CheckCircleTwoTone twoToneColor="#52c41a" />;
+    case 'failed':
+      return <CloseCircleTwoTone twoToneColor="#ff4d4f" />;
+    case 'skipped':
+    default:
+      return <MinusCircleOutlined style={{ color: '#bfbfbf' }} />;
+  }
+}
+
+/// Detailed per-document processing breakdown shown in the Pipeline popover.
+function ProvenanceDetail({ prov }: { prov: ProcessingProvenance }) {
+  return (
+    <div style={{ maxWidth: 360, fontSize: 13 }}>
+      <div style={{ marginBottom: 8 }}>
+        <strong>Path:</strong> {prov.path}
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <strong>Agents</strong>
+        <div style={{ marginTop: 4 }}>
+          {prov.agents.length === 0 && <div style={{ color: '#999' }}>None (no AI agents)</div>}
+          {prov.agents.map((a) => (
+            <div key={a.agent} style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: '20px' }}>
+              {agentStatusIcon(a.status)}
+              <span style={{ minWidth: 72, display: 'inline-block' }}>{AGENT_LABELS[a.agent] ?? a.agent}</span>
+              <span style={{ color: '#555', fontFamily: 'monospace' }}>{a.model ?? '—'}</span>
+              {a.note && <span style={{ color: '#999' }}>({a.note})</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <strong>Fallback:</strong>{' '}
+        {prov.mechanical_fallback ? <Tag color="warning">mechanical</Tag> : 'none'}
+        <span style={{ marginLeft: 12 }}>
+          <strong>Chunks:</strong> {prov.chunk_count}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/// Compact Pipeline cell: a clickable tag showing the path, with the full
+/// breakdown (agents + models + fallback) in a popover.
+function ProvenanceCell({ doc }: { doc: Document }) {
+  const prov = doc.processing_provenance;
+  if (!prov) return <span style={{ color: '#bbb' }}>—</span>;
+  const usedAi = prov.agents.some((a) => a.status === 'ran' && a.model);
+  const color = prov.mechanical_fallback ? 'warning' : usedAi ? 'geekblue' : 'default';
+  return (
+    <Popover content={<ProvenanceDetail prov={prov} />} title="Processing details" trigger="hover">
+      <Tag color={color} style={{ cursor: 'help' }}>{prov.path}</Tag>
+    </Popover>
+  );
 }
 
 export function DocumentTable({ workspaceId }: Props) {
@@ -151,6 +218,12 @@ export function DocumentTable({ workspaceId }: Props) {
       key: 'chunk_count',
       render: (v: number, record: Document) =>
         record.status === 'processing' ? <LoadingOutlined /> : v,
+    },
+    {
+      title: 'Pipeline',
+      key: 'pipeline',
+      render: (_: unknown, record: Document) =>
+        record.status === 'processing' ? <LoadingOutlined /> : <ProvenanceCell doc={record} />,
     },
     {
       title: 'MIME Type',

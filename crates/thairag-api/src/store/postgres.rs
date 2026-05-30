@@ -21,6 +21,56 @@ use super::{KmStoreTrait, ORPHAN_RECONCILE_MESSAGE, UserRecord};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
+/// Row shape for the `documents` table. Used instead of a positional tuple
+/// because sqlx only derives `FromRow` for tuples up to 16 elements and the
+/// table now has 17 selectable columns.
+#[derive(sqlx::FromRow)]
+struct DocRow {
+    id: Uuid,
+    workspace_id: Uuid,
+    title: String,
+    mime_type: String,
+    size_bytes: i64,
+    status: String,
+    chunk_count: i32,
+    error_message: Option<String>,
+    processing_step: Option<String>,
+    version: i32,
+    content_hash: Option<String>,
+    source_url: Option<String>,
+    refresh_schedule: Option<String>,
+    last_refreshed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    processing_provenance: Option<String>,
+}
+
+impl From<DocRow> for Document {
+    fn from(r: DocRow) -> Self {
+        Document {
+            id: DocId(r.id),
+            workspace_id: WorkspaceId(r.workspace_id),
+            title: r.title,
+            mime_type: r.mime_type,
+            size_bytes: r.size_bytes,
+            status: DocStatus::from_str_lossy(&r.status),
+            chunk_count: r.chunk_count as i64,
+            error_message: r.error_message,
+            processing_step: r.processing_step,
+            processing_provenance: r
+                .processing_provenance
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            version: r.version,
+            content_hash: r.content_hash,
+            source_url: r.source_url,
+            refresh_schedule: r.refresh_schedule,
+            last_refreshed_at: r.last_refreshed_at,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
 /// Bridge async sqlx into the sync `KmStoreTrait` using `block_in_place`.
 fn block_on<F: Future>(f: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
@@ -51,6 +101,11 @@ impl PostgresKmStore {
         let _ = sqlx::query("ALTER TABLE finetune_jobs ADD COLUMN IF NOT EXISTS config TEXT")
             .execute(&pool)
             .await;
+        let _ = sqlx::query(
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS processing_provenance TEXT",
+        )
+        .execute(&pool)
+        .await;
 
         // Guardrails columns on inference_logs (PR1).
         for stmt in [
@@ -515,7 +570,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn insert_document(&self, doc: Document) -> Result<Document> {
         self.get_workspace(doc.workspace_id)?;
         block_on(sqlx::query(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         )
         .bind(doc.id.0)
         .bind(doc.workspace_id.0)
@@ -533,6 +588,7 @@ impl KmStoreTrait for PostgresKmStore {
         .bind(doc.last_refreshed_at)
         .bind(doc.created_at)
         .bind(doc.updated_at)
+        .bind(doc.processing_provenance.as_ref().and_then(|p| serde_json::to_string(p).ok()))
         .execute(&self.pool))
         .map_err(|e| ThaiRagError::Internal(format!("Postgres insert document: {e}")))?;
         Ok(doc)
@@ -540,61 +596,27 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn get_document(&self, id: DocId) -> Result<Document> {
         block_on(
-            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE id = $1",
+            sqlx::query_as::<_, DocRow>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE id = $1",
             )
             .bind(id.0)
             .fetch_one(&self.pool),
         )
-        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
-            id: DocId(id),
-            workspace_id: WorkspaceId(ws_id),
-            title,
-            mime_type: mime,
-            size_bytes: size,
-            status: DocStatus::from_str_lossy(&status),
-            chunk_count: chunks as i64,
-            error_message: err_msg,
-            processing_step,
-            version,
-            content_hash,
-            source_url,
-            refresh_schedule,
-            last_refreshed_at,
-            created_at: ca,
-            updated_at: ua,
-        })
+        .map(Document::from)
         .map_err(|_| ThaiRagError::NotFound(format!("Document {id} not found")))
     }
 
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         block_on(
-            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE workspace_id = $1",
+            sqlx::query_as::<_, DocRow>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE workspace_id = $1",
             )
             .bind(workspace_id.0)
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
-            id: DocId(id),
-            workspace_id: WorkspaceId(ws_id),
-            title,
-            mime_type: mime,
-            size_bytes: size,
-            status: DocStatus::from_str_lossy(&status),
-            chunk_count: chunks as i64,
-            error_message: err_msg,
-            processing_step,
-            version,
-            content_hash,
-            source_url,
-            refresh_schedule,
-            last_refreshed_at,
-            created_at: ca,
-            updated_at: ua,
-        })
+        .map(Document::from)
         .collect()
     }
 
@@ -630,6 +652,30 @@ impl KmStoreTrait for PostgresKmStore {
                 .execute(&self.pool),
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres update document step: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_document_provenance(
+        &self,
+        id: DocId,
+        provenance: Option<thairag_core::models::ProcessingProvenance>,
+    ) -> Result<()> {
+        let json = provenance
+            .as_ref()
+            .and_then(|p| serde_json::to_string(p).ok());
+        let result = block_on(
+            sqlx::query(
+                "UPDATE documents SET processing_provenance = $1, updated_at = $2 WHERE id = $3",
+            )
+            .bind(&json)
+            .bind(Utc::now())
+            .bind(id.0)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres update document provenance: {e}")))?;
         if result.rows_affected() == 0 {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
@@ -919,32 +965,15 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn list_documents_due_for_refresh(&self) -> Vec<Document> {
         let all: Vec<Document> = block_on(
-            sqlx::query_as::<_, (Uuid, Uuid, String, String, i64, String, i32, Option<String>, Option<String>, i32, Option<String>, Option<String>, Option<String>, Option<DateTime<Utc>>, DateTime<Utc>, DateTime<Utc>)>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1), content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at
+            sqlx::query_as::<_, DocRow>(
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance
                  FROM documents WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
             )
             .fetch_all(&self.pool),
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|(id, ws_id, title, mime, size, status, chunks, err_msg, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, ca, ua)| Document {
-            id: DocId(id),
-            workspace_id: WorkspaceId(ws_id),
-            title,
-            mime_type: mime,
-            size_bytes: size,
-            status: DocStatus::from_str_lossy(&status),
-            chunk_count: chunks as i64,
-            error_message: err_msg,
-            processing_step,
-            version,
-            content_hash,
-            source_url,
-            refresh_schedule,
-            last_refreshed_at,
-            created_at: ca,
-            updated_at: ua,
-        })
+        .map(Document::from)
         .collect();
         let now = Utc::now();
         all.into_iter()

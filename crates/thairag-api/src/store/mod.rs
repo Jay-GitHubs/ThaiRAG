@@ -746,6 +746,12 @@ pub trait KmStoreTrait: Send + Sync {
         error_message: Option<String>,
     ) -> Result<()>;
     fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()>;
+    /// Persist the processing provenance (path, agents, models, fallback) for a document.
+    fn update_document_provenance(
+        &self,
+        id: DocId,
+        provenance: Option<thairag_core::models::ProcessingProvenance>,
+    ) -> Result<()>;
     fn delete_document(&self, id: DocId) -> Result<()>;
     /// Sweep every document still in `DocStatus::Processing` and mark it
     /// `Failed` with reason `ingest_interrupted_by_restart`. The in-memory

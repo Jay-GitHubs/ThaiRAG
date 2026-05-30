@@ -52,6 +52,11 @@ impl LlmDocumentAnalyzer {
         self.llm.supports_vision()
     }
 
+    /// Name of the model backing this agent.
+    pub fn model_name(&self) -> &str {
+        self.llm.model_name()
+    }
+
     /// Vision-based analysis: sends the document image directly to the LLM.
     pub async fn analyze_with_vision(
         &self,

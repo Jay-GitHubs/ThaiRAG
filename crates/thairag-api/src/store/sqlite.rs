@@ -49,6 +49,7 @@ impl SqliteKmStore {
             "ALTER TABLE documents ADD COLUMN last_refreshed_at TEXT",
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE finetune_jobs ADD COLUMN config TEXT",
+            "ALTER TABLE documents ADD COLUMN processing_provenance TEXT",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -136,6 +137,7 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
     let last_refreshed_at_s: Option<String> = row.get(13)?;
     let ca: String = row.get(14)?;
     let ua: String = row.get(15)?;
+    let processing_provenance_s: Option<String> = row.get(16)?;
     Ok(Document {
         id: DocId(parse_uuid(&id_s)),
         workspace_id: WorkspaceId(parse_uuid(&ws_s)),
@@ -146,6 +148,7 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
         chunk_count,
         error_message,
         processing_step,
+        processing_provenance: processing_provenance_s.and_then(|s| serde_json::from_str(&s).ok()),
         version,
         content_hash,
         source_url,
@@ -611,7 +614,7 @@ impl KmStoreTrait for SqliteKmStore {
         self.get_workspace(doc.workspace_id)?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 doc.id.0.to_string(),
                 doc.workspace_id.0.to_string(),
@@ -629,6 +632,9 @@ impl KmStoreTrait for SqliteKmStore {
                 doc.last_refreshed_at.map(|dt| ts(&dt)),
                 ts(&doc.created_at),
                 ts(&doc.updated_at),
+                doc.processing_provenance
+                    .as_ref()
+                    .and_then(|p| serde_json::to_string(p).ok()),
             ],
         )
         .map_err(|e| ThaiRagError::Internal(format!("SQLite insert document: {e}")))?;
@@ -638,7 +644,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_document(&self, id: DocId) -> Result<Document> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE id = ?1",
+            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE id = ?1",
             params![id.0.to_string()],
             doc_from_row,
         )
@@ -648,7 +654,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at FROM documents WHERE workspace_id = ?1")
+            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE workspace_id = ?1")
             .unwrap();
         stmt.query_map(params![workspace_id.0.to_string()], doc_from_row)
             .unwrap()
@@ -690,6 +696,29 @@ impl KmStoreTrait for SqliteKmStore {
                 params![step, ts(&Utc::now()), id.0.to_string()],
             )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite update document step: {e}")))?;
+        if affected == 0 {
+            return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_document_provenance(
+        &self,
+        id: DocId,
+        provenance: Option<thairag_core::models::ProcessingProvenance>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = provenance
+            .as_ref()
+            .and_then(|p| serde_json::to_string(p).ok());
+        let affected = conn
+            .execute(
+                "UPDATE documents SET processing_provenance = ?1, updated_at = ?2 WHERE id = ?3",
+                params![json, ts(&Utc::now()), id.0.to_string()],
+            )
+            .map_err(|e| {
+                ThaiRagError::Internal(format!("SQLite update document provenance: {e}"))
+            })?;
         if affected == 0 {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
@@ -979,7 +1008,7 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance
                  FROM documents
                  WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
             )
@@ -5100,6 +5129,7 @@ mod tests {
                 chunk_count: 0,
                 error_message: None,
                 processing_step: None,
+                processing_provenance: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5179,6 +5209,7 @@ mod tests {
                 chunk_count: 0,
                 error_message: None,
                 processing_step: None,
+                processing_provenance: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5233,6 +5264,7 @@ mod tests {
                 chunk_count: 0,
                 error_message: None,
                 processing_step: None,
+                processing_provenance: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5317,6 +5349,7 @@ mod tests {
                 chunk_count: 0,
                 error_message: None,
                 processing_step: Some("chunking".into()),
+                processing_provenance: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5379,6 +5412,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -5583,6 +5617,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -5694,6 +5729,7 @@ mod tests {
             chunk_count: 0,
             error_message: None,
             processing_step: None,
+            processing_provenance: None,
             version: 1,
             content_hash: None,
             source_url: None,

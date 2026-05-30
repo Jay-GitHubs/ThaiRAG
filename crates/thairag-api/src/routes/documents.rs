@@ -382,6 +382,14 @@ async fn process_document_inner_impl(
         );
     }
 
+    // Persist processing provenance (path, agents, models, fallback) so the
+    // admin UI can show a per-document transparency summary.
+    if let Some(provenance) = processed.provenance.clone() {
+        let _ = state
+            .km_store
+            .update_document_provenance(doc_id, Some(provenance));
+    }
+
     let chunks = processed.chunks;
 
     // Apply chunk plugins (e.g., summary headers) after splitting
@@ -543,6 +551,7 @@ pub async fn ingest_document(
         chunk_count: 0,
         error_message: None,
         processing_step: None,
+        processing_provenance: None,
         version: 1,
         content_hash: None,
         source_url: body.source_url,
@@ -685,6 +694,7 @@ pub async fn upload_document(
         chunk_count: 0,
         error_message: None,
         processing_step: None,
+        processing_provenance: None,
         version: 1,
         content_hash: None,
         source_url: None,
@@ -1400,6 +1410,7 @@ pub async fn batch_upload_documents(
                 chunk_count: 0,
                 error_message: None,
                 processing_step: None,
+                processing_provenance: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,

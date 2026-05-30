@@ -59,6 +59,7 @@ async fn main() {
         chunk_count: 0,
         error_message: None,
         processing_step: None,
+        processing_provenance: None,
         version: 1,
         content_hash: None,
         source_url: None,

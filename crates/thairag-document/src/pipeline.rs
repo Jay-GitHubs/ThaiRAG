@@ -50,6 +50,41 @@ pub struct ProcessedDocument {
     pub chunks: Vec<DocumentChunk>,
     pub images: Vec<crate::smart_pdf::ExtractedImageBlob>,
     pub markdown: Option<String>,
+    /// How this document was processed (path, agents, models, fallback) — for
+    /// the per-document transparency view in the admin UI.
+    pub provenance: Option<thairag_core::models::ProcessingProvenance>,
+}
+
+/// Assemble a [`ProcessingProvenance`] for an AI-compose path (smart-PDF /
+/// embedded-media). The analyzer/chunker/enricher records come from
+/// [`AiChunkOutcome`]; the converter and quality-checker are deliberately
+/// skipped on these paths (vision already produced clean semantic markdown), so
+/// we record them as skipped to make the omission visible rather than silent.
+fn build_ai_provenance(
+    path: &str,
+    mut agents: Vec<thairag_core::models::AgentRun>,
+    mechanical_fallback: bool,
+    chunk_count: usize,
+) -> thairag_core::models::ProcessingProvenance {
+    use thairag_core::models::AgentRun;
+    agents.push(AgentRun {
+        agent: "converter".into(),
+        model: None,
+        status: "skipped".into(),
+        note: Some("vision-extracted markdown".into()),
+    });
+    agents.push(AgentRun {
+        agent: "quality".into(),
+        model: None,
+        status: "skipped".into(),
+        note: Some("not applicable to vision output".into()),
+    });
+    thairag_core::models::ProcessingProvenance {
+        path: path.to_string(),
+        agents,
+        mechanical_fallback,
+        chunk_count: chunk_count as i64,
+    }
 }
 
 /// Orchestrates: convert raw bytes → chunk text → produce DocumentChunks.
@@ -423,13 +458,14 @@ impl DocumentPipeline {
                 .await;
         }
 
-        let chunks = self
+        let (chunks, provenance) = self
             .process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
             .await?;
         Ok(ProcessedDocument {
             chunks,
             images: Vec::new(),
             markdown: None,
+            provenance: Some(provenance),
         })
     }
 
@@ -469,12 +505,24 @@ impl DocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
-    ) -> Result<Vec<DocumentChunk>> {
+    ) -> Result<(
+        Vec<DocumentChunk>,
+        thairag_core::models::ProcessingProvenance,
+    )> {
+        use thairag_core::models::ProcessingProvenance;
+
         // Route image files to the image description pipeline
         if image::is_image_mime(mime_type) {
-            return self
+            let chunks = self
                 .process_image(raw, mime_type, doc_id, workspace_id)
-                .await;
+                .await?;
+            let prov = ProcessingProvenance {
+                path: "image (no vision)".to_string(),
+                agents: Vec::new(),
+                mechanical_fallback: false,
+                chunk_count: chunks.len() as i64,
+            };
+            return Ok((chunks, prov));
         }
 
         // Legacy page-aware vision fallback for PowerPoint→PDF exports and
@@ -484,28 +532,44 @@ impl DocumentPipeline {
             && self.image_description_enabled
             && self.vision_llm.is_some()
         {
-            return self
+            let chunks = self
                 .process_pdf_with_vision(raw, doc_id, workspace_id)
-                .await;
+                .await?;
+            let prov = ProcessingProvenance {
+                path: "PDF vision (legacy)".to_string(),
+                agents: Vec::new(),
+                mechanical_fallback: false,
+                chunk_count: chunks.len() as i64,
+            };
+            return Ok((chunks, prov));
         }
 
         // A non-Standard chunking strategy bypasses the AI pipeline: the
         // window/parent splitters are an alternative chunking philosophy.
-        let mut chunks = if self.chunking_strategy != ChunkingStrategy::Standard {
-            if self.ai_pipeline.is_some() {
-                info!(
-                    %doc_id,
-                    strategy = ?self.chunking_strategy,
-                    "Non-standard chunking strategy — bypassing AI preprocessing for chunking"
-                );
-            }
-            self.process_mechanical(raw, mime_type, doc_id, workspace_id)?
-        } else if let Some(ai) = &self.ai_pipeline {
-            ai.process(raw, mime_type, doc_id, workspace_id, on_step)
-                .await?
-        } else {
-            self.process_mechanical(raw, mime_type, doc_id, workspace_id)?
-        };
+        let (mut chunks, path, mechanical_fallback) =
+            if self.chunking_strategy != ChunkingStrategy::Standard {
+                if self.ai_pipeline.is_some() {
+                    info!(
+                        %doc_id,
+                        strategy = ?self.chunking_strategy,
+                        "Non-standard chunking strategy — bypassing AI preprocessing for chunking"
+                    );
+                }
+                let chunks = self.process_mechanical(raw, mime_type, doc_id, workspace_id)?;
+                (
+                    chunks,
+                    "mechanical (non-standard chunking)".to_string(),
+                    false,
+                )
+            } else if let Some(ai) = &self.ai_pipeline {
+                let chunks = ai
+                    .process(raw, mime_type, doc_id, workspace_id, on_step)
+                    .await?;
+                (chunks, "AI agents".to_string(), false)
+            } else {
+                let chunks = self.process_mechanical(raw, mime_type, doc_id, workspace_id)?;
+                (chunks, "mechanical".to_string(), false)
+            };
 
         // Run table extraction on text-based content and append table chunks
         if self.table_extraction_enabled {
@@ -529,7 +593,13 @@ impl DocumentPipeline {
             return Err(self.empty_extraction_error(mime_type));
         }
 
-        Ok(chunks)
+        let prov = ProcessingProvenance {
+            path,
+            agents: Vec::new(),
+            mechanical_fallback,
+            chunk_count: chunks.len() as i64,
+        };
+        Ok((chunks, prov))
     }
 
     /// Build a structured [`ThaiRagError::EmptyExtraction`] tailored to the
@@ -683,57 +753,120 @@ impl DocumentPipeline {
             "Smart PDF (pdfium) processing complete"
         );
 
-        // Chunk each page's markdown separately so chunks carry page number,
-        // strategy, and content-type metadata.
-        let mut chunks = Vec::new();
-        let mut chunk_index = 0usize;
-        for page in &doc.pages {
-            let body = page.markdown.trim();
-            if body.is_empty() {
-                continue;
+        // Chunk the assembled markdown. With the AI agent pipeline enabled, run
+        // the intelligence layer (analyzer → smart chunker → enricher) over the
+        // whole document once — the `## Page N` markers let the chunker tag each
+        // chunk with the pages it spans, which we use to re-attach page strategy
+        // / content-type / image-blob metadata below. Otherwise chunk each page
+        // mechanically.
+        let (chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
+            let outcome = ai
+                .chunk_extracted(&doc.markdown, PDF_MIME, doc_id, workspace_id, &None)
+                .await?;
+            let crate::ai::pipeline::AiChunkOutcome {
+                mut chunks,
+                agents,
+                mechanical_fallback,
+            } = outcome;
+            for chunk in &mut chunks {
+                let first_page = chunk
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.page_numbers.as_ref())
+                    .and_then(|p| p.first().copied());
+                let page = first_page.and_then(|pn| doc.pages.iter().find(|p| p.page_num == pn));
+                let meta = chunk.metadata.get_or_insert_with(Default::default);
+                meta.mime_type = Some(PDF_MIME.to_string());
+                if let Some(page) = page {
+                    let content_type = match page.strategy {
+                        PageStrategy::Tabular => DocumentContentType::Table,
+                        PageStrategy::ImageHeavy | PageStrategy::Scanned => {
+                            DocumentContentType::Image
+                        }
+                        PageStrategy::Mixed => DocumentContentType::Mixed,
+                        PageStrategy::TextOnly => DocumentContentType::Text,
+                    };
+                    let strategy = page.strategy.as_str().to_string();
+                    meta.content_type = Some(content_type);
+                    meta.page_strategy = Some(strategy.clone());
+                    if meta.chunk_type.is_none() {
+                        meta.chunk_type = Some(strategy);
+                    }
+                    meta.image_blob_id = doc
+                        .images
+                        .iter()
+                        .find(|b| b.page_num == Some(page.page_num as u32))
+                        .map(|b| b.image_id);
+                }
             }
-            let content_type = match page.strategy {
-                PageStrategy::Tabular => DocumentContentType::Table,
-                PageStrategy::ImageHeavy | PageStrategy::Scanned => DocumentContentType::Image,
-                PageStrategy::Mixed => DocumentContentType::Mixed,
-                PageStrategy::TextOnly => DocumentContentType::Text,
+            let prov = build_ai_provenance(
+                "smart-PDF + AI agents",
+                agents,
+                mechanical_fallback,
+                chunks.len(),
+            );
+            (chunks, Some(prov))
+        } else {
+            // Chunk each page's markdown separately so chunks carry page number,
+            // strategy, and content-type metadata.
+            let mut chunks = Vec::new();
+            let mut chunk_index = 0usize;
+            for page in &doc.pages {
+                let body = page.markdown.trim();
+                if body.is_empty() {
+                    continue;
+                }
+                let content_type = match page.strategy {
+                    PageStrategy::Tabular => DocumentContentType::Table,
+                    PageStrategy::ImageHeavy | PageStrategy::Scanned => DocumentContentType::Image,
+                    PageStrategy::Mixed => DocumentContentType::Mixed,
+                    PageStrategy::TextOnly => DocumentContentType::Text,
+                };
+                let strategy = page.strategy.as_str().to_string();
+                // Link every chunk of this page to the page's persisted image
+                // blob (if one was rendered), so retrieval can surface the image.
+                let image_blob_id = doc
+                    .images
+                    .iter()
+                    .find(|b| b.page_num == Some(page.page_num as u32))
+                    .map(|b| b.image_id);
+                for content in self
+                    .chunker
+                    .chunk(body, self.max_chunk_size, self.chunk_overlap)
+                {
+                    chunks.push(DocumentChunk {
+                        chunk_id: ChunkId::new(),
+                        doc_id,
+                        workspace_id,
+                        content,
+                        chunk_index,
+                        embedding: None,
+                        metadata: Some(ChunkMetadata {
+                            content_type: Some(content_type.clone()),
+                            chunk_type: Some(strategy.clone()),
+                            mime_type: Some(PDF_MIME.to_string()),
+                            page_numbers: Some(vec![page.page_num]),
+                            page_strategy: Some(strategy.clone()),
+                            image_blob_id,
+                            ..Default::default()
+                        }),
+                    });
+                    chunk_index += 1;
+                }
+            }
+            let prov = thairag_core::models::ProcessingProvenance {
+                path: "smart-PDF (mechanical)".to_string(),
+                agents: Vec::new(),
+                mechanical_fallback: false,
+                chunk_count: chunks.len() as i64,
             };
-            let strategy = page.strategy.as_str().to_string();
-            // Link every chunk of this page to the page's persisted image blob
-            // (if one was rendered), so retrieval can surface the page image.
-            let image_blob_id = doc
-                .images
-                .iter()
-                .find(|b| b.page_num == Some(page.page_num as u32))
-                .map(|b| b.image_id);
-            for content in self
-                .chunker
-                .chunk(body, self.max_chunk_size, self.chunk_overlap)
-            {
-                chunks.push(DocumentChunk {
-                    chunk_id: ChunkId::new(),
-                    doc_id,
-                    workspace_id,
-                    content,
-                    chunk_index,
-                    embedding: None,
-                    metadata: Some(ChunkMetadata {
-                        content_type: Some(content_type.clone()),
-                        chunk_type: Some(strategy.clone()),
-                        mime_type: Some(PDF_MIME.to_string()),
-                        page_numbers: Some(vec![page.page_num]),
-                        page_strategy: Some(strategy.clone()),
-                        image_blob_id,
-                        ..Default::default()
-                    }),
-                });
-                chunk_index += 1;
-            }
-        }
+            (chunks, Some(prov))
+        };
         Ok(ProcessedDocument {
             chunks,
             images: doc.images,
             markdown: Some(doc.markdown),
+            provenance,
         })
     }
 
@@ -768,7 +901,35 @@ impl DocumentPipeline {
                 _ => (Vec::new(), "direct_upload"),
             };
 
-        let mut chunks = self.chunk_with_strategy(&text, doc_id, workspace_id);
+        // With the AI agent pipeline enabled, run the extracted text through the
+        // intelligence layer (analyzer → smart chunker → enricher); otherwise
+        // chunk mechanically. Embedded images are appended as image chunks below.
+        let (mut chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
+            let outcome = ai
+                .chunk_extracted(&text, mime_type, doc_id, workspace_id, &None)
+                .await?;
+            let crate::ai::pipeline::AiChunkOutcome {
+                chunks,
+                agents,
+                mechanical_fallback,
+            } = outcome;
+            let prov = build_ai_provenance(
+                "embedded-media + AI agents",
+                agents,
+                mechanical_fallback,
+                chunks.len(),
+            );
+            (chunks, Some(prov))
+        } else {
+            let chunks = self.chunk_with_strategy(&text, doc_id, workspace_id);
+            let prov = thairag_core::models::ProcessingProvenance {
+                path: "embedded-media (mechanical)".to_string(),
+                agents: Vec::new(),
+                mechanical_fallback: false,
+                chunk_count: chunks.len() as i64,
+            };
+            (chunks, Some(prov))
+        };
         let mut markdown = text;
         let mut images = Vec::new();
         let mut chunk_index = chunks.len();
@@ -837,10 +998,15 @@ impl DocumentPipeline {
         if chunks.is_empty() {
             return Err(self.empty_extraction_error(mime_type));
         }
+        let provenance = provenance.map(|mut p| {
+            p.chunk_count = chunks.len() as i64;
+            p
+        });
         Ok(ProcessedDocument {
             chunks,
             images,
             markdown: Some(markdown),
+            provenance,
         })
     }
 
@@ -903,10 +1069,22 @@ impl DocumentPipeline {
             page_num: None,
             source: "direct_upload",
         };
+        let provenance = thairag_core::models::ProcessingProvenance {
+            path: "direct-image".to_string(),
+            agents: vec![thairag_core::models::AgentRun {
+                agent: "converter".into(),
+                model: Some(llm.model_name().to_string()),
+                status: "ran".into(),
+                note: Some("vision image description".into()),
+            }],
+            mechanical_fallback: false,
+            chunk_count: 1,
+        };
         Ok(ProcessedDocument {
             chunks: vec![chunk],
             images: vec![blob],
             markdown: Some(content),
+            provenance: Some(provenance),
         })
     }
 
