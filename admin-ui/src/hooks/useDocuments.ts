@@ -3,6 +3,8 @@ import {
   deleteDocument,
   ingestDocument,
   listDocuments,
+  reprocessAllDocuments,
+  reprocessDocument,
   uploadDocument,
 } from '../api/documents';
 import type { IngestRequest } from '../api/types';
@@ -46,6 +48,23 @@ export function useDeleteDocument() {
   return useMutation({
     mutationFn: ({ wsId, docId }: { wsId: string; docId: string }) =>
       deleteDocument(wsId, docId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+export function useReprocessDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ wsId, docId }: { wsId: string; docId: string }) =>
+      reprocessDocument(wsId, docId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
+  });
+}
+
+export function useReprocessAllDocuments() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ wsId }: { wsId: string }) => reprocessAllDocuments(wsId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   });
 }
