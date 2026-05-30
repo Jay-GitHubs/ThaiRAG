@@ -100,10 +100,23 @@ async fn main() {
         } else {
             &config.providers
         };
+        // Use the EFFECTIVE document config (km_store overrides layered over the
+        // file defaults), not the raw `config.document`. Otherwise this rebuild
+        // clobbers the pipeline that AppState::build() correctly constructed with
+        // persisted settings — silently reverting e.g. ai_preprocessing.enabled
+        // to its file default (false), so AI agents never run until the operator
+        // re-toggles the setting (which rebuilds via the effective config).
+        let effective_doc = thairag_api::routes::settings::build_effective_document_config(
+            &config,
+            &*state.km_store,
+        );
         let bundle =
-            state.build_provider_bundle(pc, &config.search, &config.document, &effective_chat);
+            state.build_provider_bundle(pc, &config.search, &effective_doc, &effective_chat);
         state.reload_providers(bundle);
-        tracing::info!("Loaded saved config from database");
+        tracing::info!(
+            ai_preprocessing_enabled = effective_doc.ai_preprocessing.enabled,
+            "Loaded saved config from database"
+        );
     }
 
     // Reconcile any documents stuck in DocStatus::Processing after the
