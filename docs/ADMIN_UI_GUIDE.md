@@ -337,11 +337,41 @@ Manage external authentication providers:
 
 ### Provider Configuration Tab
 Configure the AI provider stack at runtime:
-- **LLM** — Provider type (Claude/OpenAI/Ollama), model selection, API key
+- **LLM** — Provider type (Claude/OpenAI/Ollama/Gemini/OpenAI-compatible), model selection, API key
+- **Vision LLM** — Optional dedicated provider for image description / PDF OCR; falls back to the primary LLM when disabled
 - **Embeddings** — Provider type, model, dimension
 - **Reranker** — Provider type, model
 - **Model Sync** — Fetch available models from configured providers
 - **Presets** — Quick-apply preset configurations (free, standard, premium)
+
+#### Model pickers (search + free text)
+The LLM, Vision LLM, and Reranker model fields are **searchable comboboxes** (antd
+`AutoComplete`): type to filter the synced/known list, **or type any model id** —
+unrecognized models stay selectable (so e.g. `qwen3-vl:8b-instruct-bf16` is usable
+even when it isn't in any built-in list). Each section has a **Sync** button that
+fetches the live model list from the provider (Ollama `/api/tags`, OpenAI/compatible
+`/v1/models`, etc.).
+
+Recognized models show advisory badges in the dropdown:
+- **⭐ recommended** — on the recommended shortlist.
+- **vision** — recognized as vision-capable.
+
+Both are **recommendations, not requirements** (tooltips say so): you can always
+pick any model. The flags are resolved server-side (see *Model Recommendations*),
+falling back to a local heuristic if the server is unreachable.
+
+#### Model Recommendations panel
+Shows where the ⭐/vision badges come from and lets you tune it:
+- **Source** — *catalog* (an external/discovery source is loaded, with model count
+  + freshness) or *built-in* (the offline floor).
+- **Enable external discovery** — master toggle; off ⇒ built-in floor only (air-gapped).
+- **Discovery source** — *Built-in catalog (LiteLLM)* | *Custom HTTP catalog* (your
+  own URL returning a capability JSON) | *MCP discovery tool* (best-effort; requires
+  MCP enabled). Each mode exposes the fields it needs (endpoint / tool name / bearer token).
+- **Refresh now** — warms the cache from the configured source in the background.
+
+All discovery fetches are GETs of a public catalog or an admin-configured tool — no
+KM data leaves the deployment.
 
 ### Document Processing Tab
 Configure document ingestion parameters:

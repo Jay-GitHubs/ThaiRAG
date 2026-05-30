@@ -165,12 +165,14 @@ PDFs exported from PowerPoint, scanned documents, and image-uploaded files canno
 
 2. **Single primary LLM that supports vision** — switch `[providers.llm]` to a vision-capable model. The pipeline then reuses it for both chat and OCR. Downside: chat answer quality may regress if the vision model is weaker at conversation.
 
-**Recognised vision models** (`pipeline.rs::process_image` checks `llm.supports_vision()`):
+**Recognised vision models** — these are a *recommendation list*, **not a gate**. Capability detection is advisory: when a vision LLM is configured the pipeline **attempts** the vision call regardless of the model name (`pipeline.rs::vision_capable()` checks only that `image_description_enabled` is on and a `vision_llm` is configured). Whether a model is *recognised* below only drives the ⭐/vision badges and a soft WARN — it never pre-skips the call. So an unlisted-but-valid model (e.g. `qwen3-vl:8b-instruct-bf16`) is attempted and works.
 
 - **Cloud**: Claude 3+ (any Opus/Sonnet/Haiku), GPT-4o/4V, Gemini 1.5+
-- **Ollama**: `llava`, `llava-llama3`, `qwen2.5vl`, `llama3.2-vision`, `minicpm-v`, `bakllava`, `moondream`, `cogvlm`, `internvl`
+- **Ollama**: `llava`, `llava-llama3`, `qwen2.5vl`, `qwen2-vl`, `qwen3-vl`, `llama3.2-vision`, `gemma3`, `minicpm-v`, `bakllava`, `moondream`, `cogvlm`, `internvl`
 
-**What happens when vision is misconfigured**: an image-only PDF upload fails with structured `empty_extraction[no_text_vision_unavailable]: ...` and the admin UI shows a **"Vision OCR Required"** warning badge with the remediation hint. Upload never produces zero-chunk Ready documents (the historic silent failure mode is now impossible — see `docs/INGEST_REVIEW_2026-05-28.md`).
+> The built-in list is the offline floor. The **Model Discovery** feature (§2.6.8) can extend it from an external catalog so newly-released vision models are recognised without a code change.
+
+**What happens when vision can't run**: the pipeline only reaches the hard "Vision OCR Required" outcome when there is **no configured vision path at all** (`image_description_enabled` off, or no vision LLM and a non-vision primary). In that case an image-only PDF fails with structured `empty_extraction[no_text_vision_unavailable]: ...` and the admin UI shows the warning badge + remediation hint. When a vision LLM *is* configured but the call itself fails (a genuinely text-only model, a network error), the per-image path degrades to a metadata placeholder + WARN rather than failing the whole document. Upload never produces zero-chunk Ready documents (the historic silent failure mode is impossible — see `docs/INGEST_REVIEW_2026-05-28.md`).
 
 ### 2.6.6 Tuning the pdftoppm vmem limit
 
@@ -219,6 +221,28 @@ When libpdfium can't be loaded, the engine reports unavailable and ingestion **f
 | `pdf_image_enhance` | `false` | Sharpen/contrast before OCR (helps Thai diacritics). |
 
 `pdf_min_chars_per_page` and `pdf_max_vision_pages` (above) also apply to the smart engine. Embedded images from DOCX/XLSX (`*/media/`) and HTML (`data:` URLs) and direct image uploads are described and stored the same way; the originals are retrievable via `GET /workspaces/{ws}/documents/{doc}/images`.
+
+### 2.6.8 Model capability & discovery (advisory recommendations)
+
+The admin-UI model pickers tag models with **⭐ recommended** and **vision** badges. These are resolved by a layered, **advisory-only** capability resolver (`thairag-api::model_catalog`) — it informs the operator, it never gates which model you can select. Resolution per model id:
+
+1. **Discovery source** (admin-chosen) — see modes below.
+2. **Built-in floor** — known vision families + a curated recommended shortlist, baked into the binary. Always available offline; this is what an air-gapped deploy uses.
+
+Settings live under the KM-store `model_discovery` key and are editable in **Admin UI → Settings → Providers → Model Recommendations**, or via `PUT /api/km/settings/model-discovery`:
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Master toggle. `false` ⇒ clears the cache and uses **only** the built-in floor (air-gapped). |
+| `mode` | `catalog` (built-in LiteLLM catalog, default) · `http_catalog` (your own URL) · `mcp` (an MCP discovery tool, best-effort). |
+| `catalog_url` | Override the LiteLLM catalog URL (`mode = catalog`). Blank → the public default. |
+| `endpoint` | The URL for `http_catalog` (a JSON capability map) or the MCP server (`mcp`). |
+| `tool` | MCP tool name to call (`mode = mcp`). Blank → `list_models`. |
+| `auth` | Optional bearer token sent to the `http_catalog` endpoint / MCP server. |
+
+The catalog is fetched lazily (on Settings open / a `recommendations/refresh` call), cached with a **24h TTL**, and refreshed in the background (single-flight). All fetches are GETs of a public catalog or an admin-configured tool — **no KM data leaves the deployment**. `http_catalog` accepts either LiteLLM-style JSON or a simple `{ "<model-id>": { "vision": bool, "recommended": bool, "max_input_tokens": n } }` map. The `mcp` mode is best-effort: it calls the configured tool and parses whatever capability JSON it returns, degrading to the built-in floor on any error.
+
+> **Privacy / air-gapped**: set `enabled = false` (or `mode = catalog` with no outbound network) to run purely on the built-in floor. Capability badges still work; they just won't pick up brand-new models until the binary is updated.
 
 ### 2.6 Bulk ingest
 
