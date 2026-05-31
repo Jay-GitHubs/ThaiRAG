@@ -49,6 +49,8 @@ pub struct OllamaProvider {
     /// Adaptive `num_ctx` ceiling. `0` = inherit the model's default context
     /// (don't send `num_ctx`).
     num_ctx_max: usize,
+    /// Sampling temperature. `None` inherits the model's built-in default.
+    temperature: Option<f32>,
 }
 
 impl OllamaProvider {
@@ -66,7 +68,7 @@ impl OllamaProvider {
         timeout_secs: u64,
         keep_alive: Option<&str>,
     ) -> Self {
-        Self::with_options(base_url, model, timeout_secs, keep_alive, 0)
+        Self::with_options(base_url, model, timeout_secs, keep_alive, 0, None)
     }
 
     pub fn with_options(
@@ -75,6 +77,7 @@ impl OllamaProvider {
         timeout_secs: u64,
         keep_alive: Option<&str>,
         num_ctx_max: usize,
+        temperature: Option<f32>,
     ) -> Self {
         // Non-streaming client: overall timeout covers the full request lifecycle
         let client = reqwest::Client::builder()
@@ -106,6 +109,7 @@ impl OllamaProvider {
             timeout_secs,
             ?keep_alive,
             num_ctx_max,
+            ?temperature,
             "Initialized Ollama provider"
         );
 
@@ -116,6 +120,7 @@ impl OllamaProvider {
             model: model.to_string(),
             keep_alive: keep_alive_val,
             num_ctx_max,
+            temperature,
         }
     }
 
@@ -133,6 +138,9 @@ impl OllamaProvider {
         }
         if let Some(ctx) = num_ctx {
             opts.insert("num_ctx".into(), serde_json::json!(ctx));
+        }
+        if let Some(temp) = self.temperature {
+            opts.insert("temperature".into(), serde_json::json!(temp));
         }
         if opts.is_empty() {
             None
@@ -463,7 +471,25 @@ mod tests {
     }
 
     fn provider(num_ctx_max: usize) -> OllamaProvider {
-        OllamaProvider::with_options("http://localhost:11434", "qwen2.5vl", 5, None, num_ctx_max)
+        OllamaProvider::with_options(
+            "http://localhost:11434",
+            "qwen2.5vl",
+            5,
+            None,
+            num_ctx_max,
+            None,
+        )
+    }
+
+    fn provider_with_temp(temperature: Option<f32>) -> OllamaProvider {
+        OllamaProvider::with_options(
+            "http://localhost:11434",
+            "qwen2.5vl",
+            5,
+            None,
+            0,
+            temperature,
+        )
     }
 
     #[test]
@@ -511,6 +537,27 @@ mod tests {
     #[test]
     fn vision_requests_full_cap() {
         assert_eq!(provider(16384).vision_num_ctx(), Some(16384));
+    }
+
+    #[test]
+    fn temperature_emitted_when_set() {
+        let p = provider_with_temp(Some(0.2));
+        let opts = p.build_options(Some(256), None).unwrap();
+        // f32 0.2 widens to f64 in JSON; compare with tolerance.
+        let temp = opts["temperature"].as_f64().unwrap();
+        assert!((temp - 0.2).abs() < 1e-6);
+        assert_eq!(opts["num_predict"], 256);
+    }
+
+    #[test]
+    fn temperature_omitted_when_none() {
+        let p = provider_with_temp(None);
+        // Only temperature is unset here; num_ctx disabled and no max_tokens →
+        // options omitted entirely, preserving model defaults.
+        assert!(p.build_options(None, None).is_none());
+        // When other options exist, temperature key is still absent.
+        let opts = p.build_options(Some(256), None).unwrap();
+        assert!(opts.get("temperature").is_none());
     }
 
     #[test]

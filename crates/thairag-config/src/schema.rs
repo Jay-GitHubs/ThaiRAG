@@ -322,6 +322,12 @@ pub struct LlmConfig {
     /// up front). `0` disables the override — inherit the model's default.
     #[serde(default = "default_ollama_num_ctx_max")]
     pub ollama_num_ctx_max: usize,
+    /// Sampling temperature. `None` inherits the model's built-in default
+    /// (Ollama Modelfile / API default). Lower values (e.g. 0.2) make grounded
+    /// RAG answers more deterministic and reduce hallucination; higher values
+    /// add variety. Currently honored by the Ollama provider only.
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 impl std::fmt::Debug for LlmConfig {
@@ -341,6 +347,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("max_tokens", &self.max_tokens)
             .field("profile_id", &self.profile_id)
             .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
+            .field("temperature", &self.temperature)
             .finish()
     }
 }
@@ -1777,6 +1784,7 @@ mod tests {
                     max_tokens: None,
                     profile_id: None,
                     ollama_num_ctx_max: default_ollama_num_ctx_max(),
+                    temperature: None,
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,

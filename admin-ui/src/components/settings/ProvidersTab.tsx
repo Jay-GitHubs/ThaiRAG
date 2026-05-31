@@ -354,6 +354,7 @@ function EditForm({
       llm_base_url: config.llm.base_url || '',
       llm_api_key: '',
       llm_num_ctx_max: config.llm.ollama_num_ctx_max ?? 16384,
+      llm_temperature: config.llm.temperature ?? null,
       rr_kind: config.reranker.kind,
       rr_model: config.reranker.model || '',
       rr_api_key: '',
@@ -378,6 +379,16 @@ function EditForm({
     if (values.llm_api_key) llm.api_key = values.llm_api_key;
     if (values.llm_kind === 'Ollama' && values.llm_num_ctx_max !== config.llm.ollama_num_ctx_max)
       llm.ollama_num_ctx_max = values.llm_num_ctx_max;
+    if (values.llm_kind === 'Ollama') {
+      // null/undefined/'' = inherit model default → clear_temperature.
+      const t = values.llm_temperature;
+      const newTemp = t === null || t === undefined || t === '' ? null : Number(t);
+      const curTemp = config.llm.temperature ?? null;
+      if (newTemp !== curTemp) {
+        if (newTemp === null) llm.clear_temperature = true;
+        else llm.temperature = newTemp;
+      }
+    }
     if (Object.keys(llm).length > 0) req.llm = llm;
 
     const rr: Record<string, unknown> = {};
@@ -703,6 +714,15 @@ function EditForm({
               extra="Adaptive ceiling — sized to the prompt, capped here. 0 = inherit the model default (can blow up memory on 128K models)."
             >
               <InputNumber min={0} max={131072} step={1024} style={{ width: 200 }} />
+            </Form.Item>
+          )}
+          {llmKind === 'Ollama' && (
+            <Form.Item
+              name="llm_temperature"
+              label="Temperature"
+              extra="Sampling temperature. Lower (e.g. 0.2) = more deterministic, grounded RAG answers. Leave blank to inherit the model default."
+            >
+              <InputNumber min={0} max={2} step={0.1} placeholder="model default" style={{ width: 200 }} />
             </Form.Item>
           )}
           {llmKind === 'OpenAiCompatible' && (

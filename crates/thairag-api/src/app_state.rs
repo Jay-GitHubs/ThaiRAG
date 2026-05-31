@@ -80,6 +80,7 @@ fn resolve_profile(
             max_tokens: profile.max_tokens.or(config.max_tokens),
             profile_id: Some(pid.clone()),
             ollama_num_ctx_max: config.ollama_num_ctx_max,
+            temperature: config.temperature,
         };
     }
     config.clone()
