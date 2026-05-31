@@ -38,7 +38,7 @@ export function SettingsPage() {
             { key: 'presets', label: 'Quick Setup', children: <div data-tour="settings-presets"><PresetsCard /></div> },
             { key: 'vault', label: 'API Keys & Profiles', children: <VaultTab /> },
             { key: 'providers', label: 'Chat & Response Pipeline', children: <ProvidersTab scope={scope} /> },
-            { key: 'documents', label: 'Document Processing', children: <DocumentProcessingTab /> },
+            { key: 'documents', label: 'Document Processing', children: <DocumentProcessingTab scope={scope} /> },
             { key: 'vectordb', label: 'Vector Database', children: <VectorDbTab /> },
             { key: 'prompts', label: 'Agent Prompts', children: <PromptsTab /> },
             { key: 'idp', label: 'Identity Providers', children: <IdpTab /> },

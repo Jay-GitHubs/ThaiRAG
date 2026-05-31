@@ -125,7 +125,25 @@ pub struct DocumentPipeline {
     smart_pdf: crate::smart_pdf::SmartPdfConfig,
 }
 
+/// Per-ingest overrides for chunk sizing, resolved from a workspace's scoped
+/// settings. `None` fields fall back to the pipeline's built-in values, so a
+/// `default()` value is a transparent no-op (used by callers that don't scope).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChunkOverrides {
+    pub max_chunk_size: Option<usize>,
+    pub chunk_overlap: Option<usize>,
+}
+
 impl DocumentPipeline {
+    /// Resolve the effective `(max_chunk_size, chunk_overlap)` for this ingest,
+    /// preferring per-workspace overrides over the pipeline's built-in values.
+    fn eff_chunk(&self, ov: ChunkOverrides) -> (usize, usize) {
+        (
+            ov.max_chunk_size.unwrap_or(self.max_chunk_size),
+            ov.chunk_overlap.unwrap_or(self.chunk_overlap),
+        )
+    }
+
     /// Create a mechanical-only pipeline (no AI).
     pub fn new(max_chunk_size: usize, chunk_overlap: usize) -> Self {
         Self::new_with_language_aware(max_chunk_size, chunk_overlap, true)
@@ -352,12 +370,12 @@ impl DocumentPipeline {
         text: &str,
         doc_id: DocId,
         workspace_id: WorkspaceId,
+        overrides: ChunkOverrides,
     ) -> Vec<DocumentChunk> {
         match self.chunking_strategy {
             ChunkingStrategy::Standard => {
-                let chunks = self
-                    .chunker
-                    .chunk(text, self.max_chunk_size, self.chunk_overlap);
+                let (max_chunk_size, chunk_overlap) = self.eff_chunk(overrides);
+                let chunks = self.chunker.chunk(text, max_chunk_size, chunk_overlap);
                 chunks
                     .into_iter()
                     .enumerate()
@@ -413,7 +431,14 @@ impl DocumentPipeline {
         on_step: Option<StepCallback>,
     ) -> Result<Vec<DocumentChunk>> {
         Ok(self
-            .process_to_document(raw, mime_type, doc_id, workspace_id, on_step)
+            .process_to_document(
+                raw,
+                mime_type,
+                doc_id,
+                workspace_id,
+                on_step,
+                ChunkOverrides::default(),
+            )
             .await?
             .chunks)
     }
@@ -429,9 +454,13 @@ impl DocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
+        overrides: ChunkOverrides,
     ) -> Result<ProcessedDocument> {
         if self.smart_pdf_eligible(mime_type) && crate::pdfium_engine::is_available() {
-            match self.process_pdf_smart(raw, doc_id, workspace_id).await {
+            match self
+                .process_pdf_smart(raw, doc_id, workspace_id, overrides)
+                .await
+            {
                 Ok(doc) if !doc.chunks.is_empty() => return Ok(doc),
                 Ok(_) => tracing::warn!(
                     %doc_id,
@@ -447,7 +476,7 @@ impl DocumentPipeline {
         // persist embedded images as image chunks + blobs (vision available).
         if self.media_eligible(mime_type) {
             return self
-                .process_embedded_media(raw, mime_type, doc_id, workspace_id)
+                .process_embedded_media(raw, mime_type, doc_id, workspace_id, overrides)
                 .await;
         }
 
@@ -459,7 +488,7 @@ impl DocumentPipeline {
         }
 
         let (chunks, provenance) = self
-            .process_non_smart(raw, mime_type, doc_id, workspace_id, on_step)
+            .process_non_smart(raw, mime_type, doc_id, workspace_id, on_step, overrides)
             .await?;
         Ok(ProcessedDocument {
             chunks,
@@ -505,6 +534,7 @@ impl DocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
+        overrides: ChunkOverrides,
     ) -> Result<(
         Vec<DocumentChunk>,
         thairag_core::models::ProcessingProvenance,
@@ -533,7 +563,7 @@ impl DocumentPipeline {
             && self.vision_llm.is_some()
         {
             let chunks = self
-                .process_pdf_with_vision(raw, doc_id, workspace_id)
+                .process_pdf_with_vision(raw, doc_id, workspace_id, overrides)
                 .await?;
             let prov = ProcessingProvenance {
                 path: "PDF vision (legacy)".to_string(),
@@ -555,7 +585,8 @@ impl DocumentPipeline {
                         "Non-standard chunking strategy — bypassing AI preprocessing for chunking"
                     );
                 }
-                let chunks = self.process_mechanical(raw, mime_type, doc_id, workspace_id)?;
+                let chunks =
+                    self.process_mechanical_with(raw, mime_type, doc_id, workspace_id, overrides)?;
                 (
                     chunks,
                     "mechanical (non-standard chunking)".to_string(),
@@ -563,11 +594,19 @@ impl DocumentPipeline {
                 )
             } else if let Some(ai) = &self.ai_pipeline {
                 let chunks = ai
-                    .process(raw, mime_type, doc_id, workspace_id, on_step)
+                    .process(
+                        raw,
+                        mime_type,
+                        doc_id,
+                        workspace_id,
+                        on_step,
+                        overrides.max_chunk_size,
+                    )
                     .await?;
                 (chunks, "AI agents".to_string(), false)
             } else {
-                let chunks = self.process_mechanical(raw, mime_type, doc_id, workspace_id)?;
+                let chunks =
+                    self.process_mechanical_with(raw, mime_type, doc_id, workspace_id, overrides)?;
                 (chunks, "mechanical".to_string(), false)
             };
 
@@ -671,6 +710,25 @@ impl DocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
     ) -> Result<Vec<DocumentChunk>> {
+        self.process_mechanical_with(
+            raw,
+            mime_type,
+            doc_id,
+            workspace_id,
+            ChunkOverrides::default(),
+        )
+    }
+
+    /// Like [`process_mechanical`](Self::process_mechanical) but honours
+    /// per-workspace chunk-size overrides.
+    pub fn process_mechanical_with(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        overrides: ChunkOverrides,
+    ) -> Result<Vec<DocumentChunk>> {
         let text = self.converter.convert(raw, mime_type)?;
 
         // Image MIME types are routed through process_image() upstream and
@@ -681,7 +739,7 @@ impl DocumentPipeline {
             return Err(self.empty_extraction_error(mime_type));
         }
 
-        Ok(self.chunk_with_strategy(&text, doc_id, workspace_id))
+        Ok(self.chunk_with_strategy(&text, doc_id, workspace_id, overrides))
     }
 
     /// Smart PDF path: extract text per page, fall back to vision-LLM
@@ -700,6 +758,7 @@ impl DocumentPipeline {
         raw: &[u8],
         doc_id: DocId,
         workspace_id: WorkspaceId,
+        overrides: ChunkOverrides,
     ) -> Result<ProcessedDocument> {
         use crate::semantic::PageStrategy;
         use crate::smart_pdf::SmartPdfConfig;
@@ -761,7 +820,14 @@ impl DocumentPipeline {
         // mechanically.
         let (chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
             let outcome = ai
-                .chunk_extracted(&doc.markdown, PDF_MIME, doc_id, workspace_id, &None)
+                .chunk_extracted(
+                    &doc.markdown,
+                    PDF_MIME,
+                    doc_id,
+                    workspace_id,
+                    &None,
+                    overrides.max_chunk_size,
+                )
                 .await?;
             let crate::ai::pipeline::AiChunkOutcome {
                 mut chunks,
@@ -830,10 +896,8 @@ impl DocumentPipeline {
                     .iter()
                     .find(|b| b.page_num == Some(page.page_num as u32))
                     .map(|b| b.image_id);
-                for content in self
-                    .chunker
-                    .chunk(body, self.max_chunk_size, self.chunk_overlap)
-                {
+                let (max_chunk_size, chunk_overlap) = self.eff_chunk(overrides);
+                for content in self.chunker.chunk(body, max_chunk_size, chunk_overlap) {
                     chunks.push(DocumentChunk {
                         chunk_id: ChunkId::new(),
                         doc_id,
@@ -880,6 +944,7 @@ impl DocumentPipeline {
         mime_type: &str,
         doc_id: DocId,
         workspace_id: WorkspaceId,
+        overrides: ChunkOverrides,
     ) -> Result<ProcessedDocument> {
         use thairag_core::types::ImageId;
 
@@ -906,7 +971,14 @@ impl DocumentPipeline {
         // chunk mechanically. Embedded images are appended as image chunks below.
         let (mut chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
             let outcome = ai
-                .chunk_extracted(&text, mime_type, doc_id, workspace_id, &None)
+                .chunk_extracted(
+                    &text,
+                    mime_type,
+                    doc_id,
+                    workspace_id,
+                    &None,
+                    overrides.max_chunk_size,
+                )
                 .await?;
             let crate::ai::pipeline::AiChunkOutcome {
                 chunks,
@@ -921,7 +993,7 @@ impl DocumentPipeline {
             );
             (chunks, Some(prov))
         } else {
-            let chunks = self.chunk_with_strategy(&text, doc_id, workspace_id);
+            let chunks = self.chunk_with_strategy(&text, doc_id, workspace_id, overrides);
             let prov = thairag_core::models::ProcessingProvenance {
                 path: "embedded-media (mechanical)".to_string(),
                 agents: Vec::new(),
@@ -1093,6 +1165,7 @@ impl DocumentPipeline {
         raw: &[u8],
         doc_id: DocId,
         workspace_id: WorkspaceId,
+        overrides: ChunkOverrides,
     ) -> Result<Vec<DocumentChunk>> {
         let pages = extract_pdf_pages_unfiltered(raw)?;
         let total_pages = pages.len();
@@ -1192,9 +1265,10 @@ impl DocumentPipeline {
             }
 
             // Chunk the page text and tag each produced chunk with its page number.
-            let page_chunks =
-                self.chunker
-                    .chunk(&page_content, self.max_chunk_size, self.chunk_overlap);
+            let (max_chunk_size, chunk_overlap) = self.eff_chunk(overrides);
+            let page_chunks = self
+                .chunker
+                .chunk(&page_content, max_chunk_size, chunk_overlap);
             for content in page_chunks {
                 chunks.push(DocumentChunk {
                     chunk_id: ChunkId::new(),

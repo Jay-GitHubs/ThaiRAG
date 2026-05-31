@@ -144,13 +144,20 @@ export async function resolveRecommendations(data: { kind: string; models: strin
   return res.data;
 }
 
-export async function getDocumentConfig() {
-  const res = await client.get<DocumentConfigResponse>('/api/km/settings/document');
+export async function getDocumentConfig(scope?: SettingsScopeParam) {
+  const res = await client.get<DocumentConfigResponse>('/api/km/settings/document', {
+    params: scopeParams(scope),
+  });
   return res.data;
 }
 
-export async function updateDocumentConfig(data: UpdateDocumentConfigRequest) {
-  const res = await client.put<DocumentConfigResponse>('/api/km/settings/document', data);
+export async function updateDocumentConfig(
+  data: UpdateDocumentConfigRequest,
+  scope?: SettingsScopeParam,
+) {
+  const res = await client.put<DocumentConfigResponse>('/api/km/settings/document', data, {
+    params: scopeParams(scope),
+  });
   return res.data;
 }
 

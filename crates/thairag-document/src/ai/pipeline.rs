@@ -230,6 +230,7 @@ impl AiDocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: Option<StepCallback>,
+        call_override: Option<usize>,
     ) -> Result<Vec<DocumentChunk>> {
         // Step 0: Extract text
         let pages = self.mechanical_converter.convert_by_pages(raw, mime_type)?;
@@ -272,6 +273,7 @@ impl AiDocumentPipeline {
                 doc_id,
                 workspace_id,
                 &on_step,
+                call_override,
             )
             .await
         } else {
@@ -285,6 +287,7 @@ impl AiDocumentPipeline {
                 doc_id,
                 workspace_id,
                 &on_step,
+                call_override,
             )
             .await
         }
@@ -304,11 +307,15 @@ impl AiDocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: &Option<StepCallback>,
+        call_override: Option<usize>,
     ) -> Result<Vec<DocumentChunk>> {
         let orchestrator = self.orchestrator.as_ref().unwrap();
 
+        // A per-ingest (per-workspace) override takes precedence over the
+        // pipeline-level field; either suppresses the analyzer's auto-shrink.
+        let mcs_override = call_override.or(self.max_chunk_size_override);
         let effective_quality_threshold = self.quality_threshold_override.unwrap_or(0.7);
-        let effective_max_chunk_size = self.max_chunk_size_override.unwrap_or(self.max_chunk_size);
+        let effective_max_chunk_size = mcs_override.unwrap_or(self.max_chunk_size);
 
         let mut state = PipelineState {
             orchestrator_calls: 0,
@@ -433,7 +440,7 @@ impl AiDocumentPipeline {
                         state.effective_quality_threshold = qt;
                     }
                     if let Some(mcs) = a.recommended_max_chunk_size
-                        && self.max_chunk_size_override.is_none()
+                        && mcs_override.is_none()
                     {
                         state.effective_max_chunk_size = mcs;
                     }
@@ -801,6 +808,7 @@ impl AiDocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: &Option<StepCallback>,
+        call_override: Option<usize>,
     ) -> Result<Vec<DocumentChunk>> {
         // ── Step 1: Analyze (with confidence retry) ──────────────────────
         Self::report_step(on_step, "analyzing");
@@ -907,8 +915,8 @@ impl AiDocumentPipeline {
             .quality_threshold_override
             .or(analysis.recommended_quality_threshold)
             .unwrap_or(0.7);
-        let effective_max_chunk_size = self
-            .max_chunk_size_override
+        let mcs_override = call_override.or(self.max_chunk_size_override);
+        let effective_max_chunk_size = mcs_override
             .or(analysis.recommended_max_chunk_size)
             .unwrap_or(self.max_chunk_size);
 
@@ -1282,6 +1290,7 @@ impl AiDocumentPipeline {
         doc_id: DocId,
         workspace_id: WorkspaceId,
         on_step: &Option<StepCallback>,
+        call_override: Option<usize>,
     ) -> Result<AiChunkOutcome> {
         use thairag_core::models::AgentRun;
         let mut agents: Vec<AgentRun> = Vec::new();
@@ -1337,8 +1346,8 @@ impl AiDocumentPipeline {
             }
         };
 
-        let max_chunk_size = self
-            .max_chunk_size_override
+        let max_chunk_size = call_override
+            .or(self.max_chunk_size_override)
             .or(analysis.recommended_max_chunk_size)
             .unwrap_or(self.max_chunk_size);
 
