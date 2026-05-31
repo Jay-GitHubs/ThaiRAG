@@ -2136,20 +2136,29 @@ fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse 
 pub async fn get_document_config(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ScopeQuery>,
 ) -> Result<Json<DocumentConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
     let doc = &state.config.document;
+    // The two chunk knobs are scope-aware (Tier 1): resolve them through the
+    // workspace → dept → org → global inheritance chain. Everything else is
+    // still global-only.
+    let scope = parse_scope_query(&sq, &*state.km_store)?;
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: state
-            .km_store
-            .get_setting("document.max_chunk_size")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.max_chunk_size),
-        chunk_overlap: state
-            .km_store
-            .get_setting("document.chunk_overlap")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.chunk_overlap),
+        max_chunk_size: crate::store::resolve_setting(
+            &*state.km_store,
+            "document.max_chunk_size",
+            &scope,
+        )
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.max_chunk_size),
+        chunk_overlap: crate::store::resolve_setting(
+            &*state.km_store,
+            "document.chunk_overlap",
+            &scope,
+        )
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.chunk_overlap),
         max_upload_size_mb: state
             .km_store
             .get_setting("document.max_upload_size_mb")
@@ -2172,9 +2181,16 @@ pub async fn get_document_config(
 pub async fn update_document_config(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    Query(sq): Query<ScopeQuery>,
     AppJson(req): AppJson<UpdateDocumentConfigRequest>,
 ) -> Result<Json<DocumentConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
+
+    // Tier-1 chunk knobs are scope-aware; write them to the requested scope.
+    // Everything else below is global-only.
+    let scope = parse_scope_query(&sq, &*state.km_store)?;
+    let (scope_type, scope_id) = scope.as_pair();
+    let is_global = matches!(scope, SettingsScope::Global);
 
     // Persist pipeline settings
     if let Some(v) = req.max_chunk_size {
@@ -2183,9 +2199,12 @@ pub async fn update_document_config(
                 "max_chunk_size must be between 64 and 100000".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.max_chunk_size", &v.to_string());
+        state.km_store.set_scoped_setting(
+            "document.max_chunk_size",
+            scope_type,
+            &scope_id,
+            &v.to_string(),
+        );
     }
     if let Some(v) = req.chunk_overlap {
         if v > 10_000 {
@@ -2193,9 +2212,12 @@ pub async fn update_document_config(
                 "chunk_overlap must be at most 10000".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.chunk_overlap", &v.to_string());
+        state.km_store.set_scoped_setting(
+            "document.chunk_overlap",
+            scope_type,
+            &scope_id,
+            &v.to_string(),
+        );
     }
     if let Some(v) = req.max_upload_size_mb {
         if !(1..=1024).contains(&v) {
@@ -2476,9 +2498,25 @@ pub async fn update_document_config(
         serde_json::json!({ "section": "document" }),
     );
 
+    // For the scoped chunk knobs, echo back the value resolved through the
+    // requested scope's inheritance chain — not the global effective config —
+    // so a workspace-scoped save reflects the override the caller just set.
+    let (resp_max_chunk_size, resp_chunk_overlap) = if is_global {
+        (effective_doc.max_chunk_size, effective_doc.chunk_overlap)
+    } else {
+        (
+            crate::store::resolve_setting(&*state.km_store, "document.max_chunk_size", &scope)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(effective_doc.max_chunk_size),
+            crate::store::resolve_setting(&*state.km_store, "document.chunk_overlap", &scope)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(effective_doc.chunk_overlap),
+        )
+    };
+
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: effective_doc.max_chunk_size,
-        chunk_overlap: effective_doc.chunk_overlap,
+        max_chunk_size: resp_max_chunk_size,
+        chunk_overlap: resp_chunk_overlap,
         max_upload_size_mb: effective_doc.max_upload_size_mb,
         pdf_image_dpi: effective_doc.pdf_image_dpi,
         max_image_edge: effective_doc.max_image_edge,

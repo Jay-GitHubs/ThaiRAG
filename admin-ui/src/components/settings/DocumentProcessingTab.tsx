@@ -40,6 +40,7 @@ import type {
   LlmConfigUpdate,
   LlmProviderInfo,
   ProviderConfigResponse,
+  SettingsScopeParam,
   UpdateDocumentConfigRequest,
 } from '../../api/types';
 
@@ -628,8 +629,12 @@ function MemoryEstimate({ llmMode, sharedForm, agentLlms, orchestratorEnabled, e
 
 const AGENTS = ['analyzer', 'converter', 'quality', 'chunker', 'enricher', 'orchestrator'] as const;
 
-export function DocumentProcessingTab() {
+export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam }) {
   const { token } = theme.useToken();
+  // Tier-1 per-scope override: when a non-global scope is selected, only the
+  // chunk-size knobs are editable; AI preprocessing + the other knobs stay
+  // global-only and are hidden to avoid implying they're scope-aware.
+  const isScoped = !!scope && scope.scope_type !== 'global';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<DocumentConfigResponse | null>(null);
@@ -699,11 +704,12 @@ export function DocumentProcessingTab() {
 
   useEffect(() => {
     loadConfig();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope?.scope_type, scope?.scope_id]);
 
   async function loadConfig() {
     try {
-      const data = await getDocumentConfig();
+      const data = await getDocumentConfig(scope);
       setConfig(data);
       setAiConfig(data.ai_preprocessing);
       setMaxChunkSize(data.max_chunk_size);
@@ -777,13 +783,18 @@ export function DocumentProcessingTab() {
   async function handleSavePipeline() {
     setSavingPipeline(true);
     try {
-      const resp = await updateDocumentConfig({
-        max_chunk_size: maxChunkSize,
-        chunk_overlap: chunkOverlap,
-        max_upload_size_mb: maxUploadSizeMb,
-        pdf_image_dpi: pdfImageDpi,
-        max_image_edge: maxImageEdge,
-      });
+      // In a non-global scope only the two chunk knobs are scope-aware; don't
+      // send the global-only fields so a workspace save can't clobber them.
+      const req: UpdateDocumentConfigRequest = isScoped
+        ? { max_chunk_size: maxChunkSize, chunk_overlap: chunkOverlap }
+        : {
+            max_chunk_size: maxChunkSize,
+            chunk_overlap: chunkOverlap,
+            max_upload_size_mb: maxUploadSizeMb,
+            pdf_image_dpi: pdfImageDpi,
+            max_image_edge: maxImageEdge,
+          };
+      const resp = await updateDocumentConfig(req, scope);
       setConfig(resp);
       message.success('Pipeline settings saved');
     } catch {
@@ -963,52 +974,66 @@ export function DocumentProcessingTab() {
               style={{ width: 140 }}
             />
           </Space>
-          <Space direction="vertical" size={2}>
-            <Text type="secondary">Max Upload Size (MB)</Text>
-            <InputNumber
-              min={1}
-              max={1024}
-              value={maxUploadSizeMb}
-              onChange={(v) => v && setMaxUploadSizeMb(v)}
-              style={{ width: 140 }}
-            />
-          </Space>
-          <Space direction="vertical" size={2}>
-            <Text type="secondary">PDF Render DPI (vision)</Text>
-            <InputNumber
-              min={72}
-              max={600}
-              step={10}
-              value={pdfImageDpi}
-              onChange={(v) => v && setPdfImageDpi(v)}
-              style={{ width: 140 }}
-            />
-          </Space>
-          <Space direction="vertical" size={2}>
-            <Text type="secondary">Max Image Edge (px)</Text>
-            <InputNumber
-              min={0}
-              max={8192}
-              step={128}
-              value={maxImageEdge}
-              onChange={(v) => v != null && setMaxImageEdge(v)}
-              style={{ width: 140 }}
-            />
-          </Space>
+          {!isScoped && (
+            <>
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">Max Upload Size (MB)</Text>
+                <InputNumber
+                  min={1}
+                  max={1024}
+                  value={maxUploadSizeMb}
+                  onChange={(v) => v && setMaxUploadSizeMb(v)}
+                  style={{ width: 140 }}
+                />
+              </Space>
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">PDF Render DPI (vision)</Text>
+                <InputNumber
+                  min={72}
+                  max={600}
+                  step={10}
+                  value={pdfImageDpi}
+                  onChange={(v) => v && setPdfImageDpi(v)}
+                  style={{ width: 140 }}
+                />
+              </Space>
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">Max Image Edge (px)</Text>
+                <InputNumber
+                  min={0}
+                  max={8192}
+                  step={128}
+                  value={maxImageEdge}
+                  onChange={(v) => v != null && setMaxImageEdge(v)}
+                  style={{ width: 140 }}
+                />
+              </Space>
+            </>
+          )}
         </Space>
-        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
-          Note: Max upload size change takes effect after server restart. PDF Render DPI controls
-          the resolution of PDF pages sent to the vision model — lower it (e.g. 110) to cut vision
-          tokens and memory; raise it for sharper OCR on dense pages. Max Image Edge caps the
-          longest side (px) of <em>every</em> image sent to vision — embedded DOCX/XLSX/HTML images
-          and direct uploads too, not just PDFs — downscaling larger ones to bound token cost and
-          RAM (0 disables).
-        </Paragraph>
+        {isScoped ? (
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+            Editing <strong>{scope?.scope_type}</strong> scope. Only chunk size and overlap can be
+            overridden per scope — they fall back to the global default when unset and apply at the
+            next document upload/reprocess. Upload size, DPI, image edge, and AI preprocessing are
+            global-only (switch the scope selector to Global to edit them).
+          </Paragraph>
+        ) : (
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+            Note: Max upload size change takes effect after server restart. PDF Render DPI controls
+            the resolution of PDF pages sent to the vision model — lower it (e.g. 110) to cut vision
+            tokens and memory; raise it for sharper OCR on dense pages. Max Image Edge caps the
+            longest side (px) of <em>every</em> image sent to vision — embedded DOCX/XLSX/HTML images
+            and direct uploads too, not just PDFs — downscaling larger ones to bound token cost and
+            RAM (0 disables).
+          </Paragraph>
+        )}
       </Card>
           ),
         }]}
       />
 
+      {!isScoped && (<>
       {/* AI Preprocessing */}
       <Collapse
         defaultActiveKey={['ai-preprocessing']}
@@ -1676,6 +1701,7 @@ export function DocumentProcessingTab() {
           children: <EmbeddingVectorSection />,
         }]}
       />
+      </>)}
     </Space>
   );
 }

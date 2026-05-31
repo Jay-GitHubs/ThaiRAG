@@ -308,13 +308,34 @@ async fn process_document_inner_impl(
         }
     }
 
+    // Resolve per-workspace chunk overrides (max_chunk_size / chunk_overlap)
+    // from scoped settings, walking workspace → dept → org → global. Unset
+    // keys leave the override `None`, so the pipeline falls back to config.
+    let chunk_overrides = {
+        let scope = state.resolve_scope_for_workspace(workspace_id);
+        let store = state.km_store.as_ref();
+        thairag_document::pipeline::ChunkOverrides {
+            max_chunk_size: crate::store::resolve_setting(store, "document.max_chunk_size", &scope)
+                .and_then(|v| v.parse().ok()),
+            chunk_overlap: crate::store::resolve_setting(store, "document.chunk_overlap", &scope)
+                .and_then(|v| v.parse().ok()),
+        }
+    };
+
     // Convert + chunk (AI or mechanical depending on config). The pipeline
     // returns `EmptyExtraction` when no meaningful content was produced —
     // surface its structured reason/hint instead of swallowing it into a
     // generic failure message so the admin UI can act on it.
     let processed = match p
         .document_pipeline
-        .process_to_document(&bytes, &mime_type, doc_id, workspace_id, on_step)
+        .process_to_document(
+            &bytes,
+            &mime_type,
+            doc_id,
+            workspace_id,
+            on_step,
+            chunk_overrides,
+        )
         .await
     {
         Ok(d) => d,
