@@ -163,6 +163,9 @@ pub struct LlmProviderInfo {
     /// Ollama-only adaptive context-window ceiling. `0` = inherit the model
     /// default. Ignored for non-Ollama providers.
     pub ollama_num_ctx_max: usize,
+    /// Sampling temperature. `None` = inherit the model default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -395,6 +398,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             max_tokens: None,
             profile_id: p.llm.profile_id.clone(),
             ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
+            temperature: p.llm.temperature,
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -428,6 +432,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             max_tokens: v.max_tokens,
             profile_id: v.profile_id.clone(),
             ollama_num_ctx_max: v.ollama_num_ctx_max,
+            temperature: v.temperature,
         }),
     }
 }
@@ -473,6 +478,11 @@ pub struct UpdateLlmConfig {
     /// Ollama-only adaptive context-window ceiling. `0` = inherit the model
     /// default (don't send `num_ctx`).
     pub ollama_num_ctx_max: Option<usize>,
+    /// Sampling temperature. Send a value to override; `null`/omitted leaves it
+    /// unchanged. Use `clear_temperature` to reset to the model default.
+    pub temperature: Option<f32>,
+    /// When true, clear the temperature override (inherit the model default).
+    pub clear_temperature: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -529,6 +539,11 @@ pub async fn update_provider_config(
         }
         if let Some(v) = llm.ollama_num_ctx_max {
             pc.llm.ollama_num_ctx_max = v;
+        }
+        if llm.clear_temperature.unwrap_or(false) {
+            pc.llm.temperature = None;
+        } else if let Some(t) = llm.temperature {
+            pc.llm.temperature = Some(t);
         }
         // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
         // clear base_url so it doesn't keep the old Ollama URL
@@ -615,6 +630,7 @@ pub async fn update_provider_config(
                 max_tokens: None,
                 profile_id: None,
                 ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
+                temperature: pc.llm.temperature,
             }
         });
         if let Some(kind) = vis.kind {
@@ -635,6 +651,11 @@ pub async fn update_provider_config(
         }
         if let Some(v) = vis.ollama_num_ctx_max {
             current.ollama_num_ctx_max = v;
+        }
+        if vis.clear_temperature.unwrap_or(false) {
+            current.temperature = None;
+        } else if let Some(t) = vis.temperature {
+            current.temperature = Some(t);
         }
         if vis.clear_profile.unwrap_or(false) {
             current.profile_id = None;
@@ -1822,6 +1843,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         max_tokens: llm.max_tokens,
         profile_id: llm.profile_id.clone(),
         ollama_num_ctx_max: llm.ollama_num_ctx_max,
+        temperature: llm.temperature,
     }
 }
 
@@ -3557,6 +3579,15 @@ pub async fn update_chat_pipeline_config(
         }
         if let Some(max_tokens) = update.max_tokens {
             cfg.max_tokens = Some(max_tokens);
+        }
+        if let Some(v) = update.ollama_num_ctx_max {
+            cfg.ollama_num_ctx_max = v;
+        }
+        // Temperature management
+        if update.clear_temperature == Some(true) {
+            cfg.temperature = None;
+        } else if let Some(t) = update.temperature {
+            cfg.temperature = Some(t);
         }
         // Profile ID management
         if update.clear_profile == Some(true) {
