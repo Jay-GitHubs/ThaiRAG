@@ -169,6 +169,8 @@ interface LlmFormState {
   base_url: string;
   api_key: string;
   profile_id?: string;
+  temperature?: number;
+  max_tokens?: number;
 }
 
 const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '' };
@@ -180,6 +182,8 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     base_url: info.base_url || '',
     api_key: '',
     profile_id: info.profile_id,
+    temperature: info.temperature,
+    max_tokens: info.max_tokens,
   };
 }
 
@@ -201,6 +205,16 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean, hadProfileBef
     update.base_url = form.base_url;
   }
   if (form.api_key || !hasExistingKey) update.api_key = form.api_key;
+  // Sampling: a defined temperature is sent; clearing it falls back to the model default.
+  if (form.temperature != null) {
+    update.temperature = form.temperature;
+  } else {
+    update.clear_temperature = true;
+  }
+  // max_tokens is set-only — the API has no clear flag, so leaving it blank keeps the existing value.
+  if (form.max_tokens != null) {
+    update.max_tokens = form.max_tokens;
+  }
   return update;
 }
 
@@ -559,6 +573,65 @@ function LlmConfigForm({
             />
           )}
         </>
+      )}
+
+      {!isProfileMode && (
+      <Collapse
+        ghost
+        size="small"
+        items={[{
+          key: 'advanced',
+          label: <Text type="secondary" style={{ fontSize: 12 }}>Advanced sampling</Text>,
+          children: (
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Space align="center" wrap>
+                <Tooltip title="Lower = more deterministic, higher = more creative. Leave empty to use the model's default.">
+                  <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
+                    Temperature <QuestionCircleOutlined />
+                  </Text>
+                </Tooltip>
+                <Slider
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={form.temperature ?? 0}
+                  onChange={(v) => onChange({ ...form, temperature: v })}
+                  style={{ width: 180 }}
+                />
+                <InputNumber
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={form.temperature ?? null}
+                  onChange={(v) => onChange({ ...form, temperature: v ?? undefined })}
+                  placeholder="default"
+                  style={{ width: 100 }}
+                />
+                {form.temperature != null && (
+                  <Button size="small" type="link" onClick={() => onChange({ ...form, temperature: undefined })}>
+                    Reset
+                  </Button>
+                )}
+              </Space>
+              <Space align="center" wrap>
+                <Tooltip title="Max tokens this agent may generate per call. Leave empty to keep the current value.">
+                  <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
+                    Max tokens <QuestionCircleOutlined />
+                  </Text>
+                </Tooltip>
+                <InputNumber
+                  min={1}
+                  step={128}
+                  value={form.max_tokens ?? null}
+                  onChange={(v) => onChange({ ...form, max_tokens: v ?? undefined })}
+                  placeholder="inherit"
+                  style={{ width: 120 }}
+                />
+              </Space>
+            </Space>
+          ),
+        }]}
+      />
       )}
     </Space>
   );
