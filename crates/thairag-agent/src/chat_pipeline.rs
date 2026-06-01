@@ -8,9 +8,9 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::{GuardrailMetricsRecorder, LlmProvider, SearchPluginEngine};
 use thairag_core::types::{
-    ChatMessage, DocId, GuardrailViolationMeta, LlmResponse, LlmStreamResponse, LlmUsage,
-    MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender, QueryIntent, SearchQuery,
-    SessionAttachment, StageStatus,
+    ChatMessage, DocId, GuardrailViolationMeta, ImageContent, ImageId, LlmResponse,
+    LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender,
+    QueryIntent, SearchQuery, SessionAttachment, StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -46,6 +46,10 @@ use crate::tool_router::{SearchableScope, ToolRouter};
 /// Closure that resolves MCP connector configs for a given access scope.
 type ConnectorProvider =
     Arc<dyn Fn(&AccessScope) -> Vec<thairag_core::types::McpConnectorConfig> + Send + Sync>;
+
+/// PR-δ: upper bound on source images hydrated into a single answer-LLM request.
+/// Vision blobs are large (base64 page renders) — cap to bound payload/latency.
+const MAX_VISION_IMAGES_PER_ANSWER: usize = 4;
 
 /// Per-request LLM call budget. Shared across pipeline stages to enforce
 /// `max_llm_calls_per_request` and skip optional agents when budget runs low.
@@ -129,6 +133,10 @@ pub struct ChatPipeline {
     prompts: Arc<PromptRegistry>,
     /// Optional resolver: DocId → document title (for richer LLM context).
     doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
+    /// Optional resolver: ImageId → image bytes (PR-δ multimodal retrieval).
+    /// When set AND the answer LLM `supports_vision()`, retrieved chunks that
+    /// carry an `image_blob_id` get their source image fed to the answer LLM.
+    image_resolver: Option<Arc<dyn Fn(ImageId) -> Option<ImageContent> + Send + Sync>>,
     /// Optional plugin engine; when set, every search call applies the
     /// registered SearchPlugins' pre/post hooks.
     search_plugin_engine: Option<Arc<dyn SearchPluginEngine>>,
@@ -170,6 +178,7 @@ impl ChatPipeline {
         config: ChatPipelineConfig,
         prompts: Arc<PromptRegistry>,
         doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
+        image_resolver: Option<Arc<dyn Fn(ImageId) -> Option<ImageContent> + Send + Sync>>,
     ) -> Self {
         let threshold_bits = config.quality_guard_threshold.to_bits();
         Self {
@@ -205,6 +214,7 @@ impl ChatPipeline {
             adaptive_threshold: Arc::new(AtomicU32::new(threshold_bits)),
             prompts,
             doc_title_resolver,
+            image_resolver,
             search_plugin_engine: None,
             guardrail_metrics: None,
         }
@@ -2338,6 +2348,16 @@ impl ChatPipeline {
             ctx.resolve_doc_titles(resolver.as_ref());
         }
 
+        // PR-δ multimodal retrieval: when the answer LLM can see images, hydrate
+        // the source image bytes for chunks derived from images (PDF page renders,
+        // scanned pages, embedded/uploaded images) so the model reads the original
+        // pixels — not just the ingest-time text caption. No-op for text-only LLMs.
+        if self.main_llm.supports_vision()
+            && let Some(ref resolver) = self.image_resolver
+        {
+            ctx.hydrate_images(resolver.as_ref(), MAX_VISION_IMAGES_PER_ANSWER);
+        }
+
         Ok(ctx)
     }
 
@@ -2387,6 +2407,8 @@ impl ChatPipeline {
                     source_doc_id: Default::default(),
                     source_chunk_id: Default::default(),
                     source_doc_title: Some("Web Search".to_string()),
+                    image_blob_id: None,
+                    images: Vec::new(),
                 });
                 info!(
                     web_results = web_results.len(),
