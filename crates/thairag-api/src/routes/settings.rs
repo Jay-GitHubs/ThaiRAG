@@ -2661,6 +2661,8 @@ pub struct ChatPipelineConfigResponse {
     // Source Citation Footer
     pub source_footer_enabled: bool,
     pub source_footer_max: usize,
+    // Structured Extraction (Thai answer-quality experiment)
+    pub structured_extraction_enabled: bool,
     // Guardrails (PR1)
     pub input_guardrails_enabled: bool,
     pub output_guardrails_enabled: bool,
@@ -2798,6 +2800,8 @@ pub struct UpdateChatPipelineRequest {
     // Source Citation Footer
     pub source_footer_enabled: Option<bool>,
     pub source_footer_max: Option<usize>,
+    // Structured Extraction (Thai answer-quality experiment)
+    pub structured_extraction_enabled: Option<bool>,
     // Guardrails (PR1)
     pub input_guardrails_enabled: Option<bool>,
     pub output_guardrails_enabled: Option<bool>,
@@ -3273,6 +3277,7 @@ fn build_chat_pipeline_response_from_config(
         live_retrieval_llm: eff.live_retrieval_llm.as_ref().map(llm_config_to_info),
         source_footer_enabled: eff.source_footer_enabled,
         source_footer_max: eff.source_footer_max,
+        structured_extraction_enabled: eff.structured_extraction_enabled,
         input_guardrails_enabled: eff.input_guardrails_enabled,
         output_guardrails_enabled: eff.output_guardrails_enabled,
         guardrails: eff.guardrails.clone(),
@@ -3526,6 +3531,11 @@ pub async fn update_chat_pipeline_config(
     // Source Citation Footer
     persist_bool!(source_footer_enabled, "chat_pipeline.source_footer_enabled");
     persist_num!(source_footer_max, "chat_pipeline.source_footer_max");
+    // Structured Extraction (Thai answer-quality experiment)
+    persist_bool!(
+        structured_extraction_enabled,
+        "chat_pipeline.structured_extraction_enabled"
+    );
     // Guardrails (PR1)
     persist_bool!(
         input_guardrails_enabled,
