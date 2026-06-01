@@ -698,10 +698,12 @@ Content type: {{content_type}}
 
 For each chunk, return:
 - chunk_index: the chunk number
-- context_prefix: short context like "From: [Document Title], [Section]" (under 100 chars)
-- summary: one clear sentence summarizing what this chunk is about (in the document's language)
-- keywords: 3-8 important search terms. Include BOTH Thai and English terms where relevant (e.g., for a Thai tax document: ["ภาษีเงินได้", "income tax", "อัตราภาษี", "tax rate"])
-- hypothetical_queries: 2-3 questions a user might ask that this chunk answers. Write them naturally, as a real person would type into a search box.
+- context_prefix: short context like "From: [Document Title], [Section]" (MAX 100 characters)
+- summary: ONE short sentence summarizing the chunk, in the document's language (MAX 160 characters)
+- keywords: exactly 4 important search terms. Include BOTH Thai and English terms where relevant (e.g., for a Thai tax document: ["ภาษีเงินได้", "income tax", "อัตราภาษี", "tax rate"])
+- hypothetical_queries: exactly 2 short questions a user might ask that this chunk answers. Write them naturally, as a real person would type into a search box.
+
+Keep every field within its limit. Be terse — do not exceed the stated maximums, and never add commentary outside the JSON.
 
 Chunks:
 ---
