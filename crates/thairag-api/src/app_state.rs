@@ -31,11 +31,15 @@ use thairag_auth::JwtService;
 use thairag_config::AppConfig;
 use thairag_config::schema::{ChatPipelineConfig, DocumentConfig, ProvidersConfig, SearchConfig};
 use thairag_core::PromptRegistry;
-use thairag_core::traits::{EmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore};
+use thairag_core::traits::{
+    EmbeddingModel, ImageEmbeddingModel, LlmProvider, Reranker, TextSearch, VectorStore,
+};
 use thairag_document::DocumentPipeline;
 use thairag_search::HybridSearchEngine;
 
-use thairag_provider_embedding::create_embedding_provider_with_options;
+use thairag_provider_embedding::{
+    create_embedding_provider_with_options, create_image_embedding_provider,
+};
 use thairag_provider_llm::{create_llm_provider, create_llm_provider_with_options};
 use thairag_provider_reranker::create_reranker;
 use thairag_provider_search::create_text_search;
@@ -97,6 +101,9 @@ pub struct ProviderBundle {
     pub document_pipeline: Arc<DocumentPipeline>,
     pub search_engine: Arc<HybridSearchEngine>,
     pub embedding: Arc<dyn EmbeddingModel>,
+    /// CLIP image-embedding model, present only when `image_embedding.enabled`.
+    /// Used at ingest to compute per-image vectors; `None` = visual search off.
+    pub image_embedding: Option<Arc<dyn ImageEmbeddingModel>>,
     pub reranker: Arc<dyn Reranker>,
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub personal_memory_manager: Option<Arc<PersonalMemoryManager>>,
@@ -243,13 +250,34 @@ impl ProviderBundle {
             Arc::from(create_text_search(&providers.text_search));
         let reranker: Arc<dyn Reranker> = Arc::from(create_reranker(&providers.reranker));
 
-        let search_engine = Arc::new(HybridSearchEngine::new(
+        let mut engine = HybridSearchEngine::new(
             Arc::clone(&embedding),
             vector_store,
             text_search,
             Arc::clone(&reranker),
             search.clone(),
-        ));
+        );
+
+        // Optional CLIP visual search. When enabled, build the image-embedding
+        // model and a sibling `{collection}_clip` vector store (same isolation
+        // routing as the text store) and attach both to the engine. The image
+        // model is also kept on the bundle so ingest can precompute vectors.
+        let image_embedding: Option<Arc<dyn ImageEmbeddingModel>> = match &providers.image_embedding
+        {
+            Some(img_cfg) if img_cfg.enabled => {
+                let img_provider: Arc<dyn ImageEmbeddingModel> =
+                    Arc::from(create_image_embedding_provider(img_cfg));
+                let mut clip_vs_cfg = providers.vector_store.clone();
+                clip_vs_cfg.collection = format!("{}_clip", clip_vs_cfg.collection);
+                let clip_store: Arc<dyn VectorStore> = Arc::from(create_vector_store(&clip_vs_cfg));
+                engine =
+                    engine.with_image_search(Arc::clone(&img_provider), clip_store, img_cfg.weight);
+                Some(img_provider)
+            }
+            _ => None,
+        };
+
+        let search_engine = Arc::new(engine);
 
         let rag_engine = Arc::new(RagEngine::new_with_prompts(
             Arc::clone(&llm),
@@ -881,6 +909,7 @@ impl ProviderBundle {
             document_pipeline,
             search_engine,
             embedding,
+            image_embedding,
             reranker,
             context_compactor,
             personal_memory_manager,

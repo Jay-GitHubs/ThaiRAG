@@ -146,6 +146,17 @@ pub struct ProviderConfigResponse {
     /// `llm` when unset (only works if primary supports vision).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vision_llm: Option<LlmProviderInfo>,
+    /// Optional CLIP visual-search config. `None`/`enabled=false` = text-only
+    /// retrieval (today's behaviour).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_embedding: Option<ImageEmbeddingInfo>,
+}
+
+#[derive(Serialize)]
+pub struct ImageEmbeddingInfo {
+    pub enabled: bool,
+    pub model: String,
+    pub weight: f32,
 }
 
 #[derive(Serialize)]
@@ -434,6 +445,11 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             ollama_num_ctx_max: v.ollama_num_ctx_max,
             temperature: v.temperature,
         }),
+        image_embedding: p.image_embedding.as_ref().map(|ie| ImageEmbeddingInfo {
+            enabled: ie.enabled,
+            model: ie.model.clone(),
+            weight: ie.weight,
+        }),
     }
 }
 
@@ -462,6 +478,16 @@ pub struct UpdateProviderConfigRequest {
     /// using the primary LLM for vision). Takes precedence over
     /// `vision_llm` field updates.
     pub clear_vision_llm: Option<bool>,
+    /// Optional CLIP visual-search toggle/config. Enabling it rebuilds the
+    /// bundle with the image-embedding provider + `{collection}_clip` store.
+    pub image_embedding: Option<UpdateImageEmbeddingConfig>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateImageEmbeddingConfig {
+    pub enabled: Option<bool>,
+    pub model: Option<String>,
+    pub weight: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -610,6 +636,20 @@ pub async fn update_provider_config(
         if let Some(api_key) = rr.api_key {
             pc.reranker.api_key = api_key;
         }
+    }
+
+    if let Some(ie) = body.image_embedding {
+        let mut current = pc.image_embedding.clone().unwrap_or_default();
+        if let Some(enabled) = ie.enabled {
+            current.enabled = enabled;
+        }
+        if let Some(model) = ie.model {
+            current.model = model;
+        }
+        if let Some(weight) = ie.weight {
+            current.weight = weight;
+        }
+        pc.image_embedding = Some(current);
     }
 
     // Vision LLM is optional. A `clear_vision_llm = true` flag removes it
