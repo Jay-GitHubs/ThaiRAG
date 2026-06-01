@@ -2877,6 +2877,12 @@ where
         structured_citations_enabled: s("chat_pipeline.structured_citations_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.structured_citations_enabled),
+        structured_extraction_enabled: s("chat_pipeline.structured_extraction_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.structured_extraction_enabled),
+        structured_extraction_llm: s("chat_pipeline.structured_extraction_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.structured_extraction_llm.clone()),
         context_curator_enabled: s("chat_pipeline.context_curator_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.context_curator_enabled),

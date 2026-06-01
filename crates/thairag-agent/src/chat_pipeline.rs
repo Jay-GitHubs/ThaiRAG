@@ -40,6 +40,7 @@ use crate::raptor::Raptor;
 use crate::response_generator::ResponseGenerator;
 use crate::self_rag::{RetrievalDecision, SelfRag};
 use crate::speculative_rag::SpeculativeRag;
+use crate::structured_extraction::StructuredExtractor;
 use crate::tool_router::{SearchableScope, ToolRouter};
 
 /// Closure that resolves MCP connector configs for a given access scope.
@@ -86,6 +87,10 @@ pub struct ChatPipeline {
     query_rewriter: Option<QueryRewriter>,
     context_curator: Option<ContextCurator>,
     response_generator: ResponseGenerator,
+    /// Extract-then-answer post-step (Thai answer-quality experiment). When
+    /// present, the SimpleRetrieval route tries it before the response
+    /// generator, falling back when no answer-bearing span is found.
+    structured_extraction: Option<StructuredExtractor>,
     quality_guard: Option<Arc<QualityGuard>>,
     language_adapter: Option<LanguageAdapter>,
     pipeline_orchestrator: Option<PipelineOrchestrator>,
@@ -141,6 +146,7 @@ impl ChatPipeline {
         query_rewriter: Option<QueryRewriter>,
         context_curator: Option<ContextCurator>,
         response_generator: ResponseGenerator,
+        structured_extraction: Option<StructuredExtractor>,
         quality_guard: Option<Arc<QualityGuard>>,
         language_adapter: Option<LanguageAdapter>,
         pipeline_orchestrator: Option<PipelineOrchestrator>,
@@ -171,6 +177,7 @@ impl ChatPipeline {
             query_rewriter,
             context_curator,
             response_generator,
+            structured_extraction,
             quality_guard,
             language_adapter,
             pipeline_orchestrator,
@@ -797,10 +804,25 @@ impl ChatPipeline {
                 self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
                 let t = Instant::now();
                 budget.try_spend();
-                let response = self
-                    .response_generator
-                    .generate(&analysis, &context, messages, None)
-                    .await?;
+                let response = if let Some(extractor) = &self.structured_extraction {
+                    // Extract-then-answer: one extra LLM call for the extract step.
+                    budget.try_spend();
+                    match extractor
+                        .answer(&analysis, user_query, &context, None)
+                        .await?
+                    {
+                        Some(resp) => resp,
+                        None => {
+                            self.response_generator
+                                .generate(&analysis, &context, messages, None)
+                                .await?
+                        }
+                    }
+                } else {
+                    self.response_generator
+                        .generate(&analysis, &context, messages, None)
+                        .await?
+                };
                 let gen_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     &progress,
