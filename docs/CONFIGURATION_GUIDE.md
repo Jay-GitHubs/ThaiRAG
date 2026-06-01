@@ -91,8 +91,15 @@ Practical guidance:
   adding query-analysis/curation stages in front of retrieval can't fix the extraction gap.
 - Other levers we tried did **not** close the gap either: an extraction-grounded system
   prompt and row-level chunking both moved scores only within run-to-run noise. The
-  bottleneck is the model writing generic Thai prose instead of quoting the retrieved fact,
-  which none of these config knobs touch.
+  bottleneck is generation, not config — and we confirmed it by **reading all 30 Thai
+  answers** rather than trusting the judge alone. The judge is roughly calibrated (on the
+  loanshark question it gives credit only to answers that name the legal-rate fact, so low
+  scores are genuine misses, not a scoring artifact). The failures fall into two modes:
+  (1) *generic-essay drift* — the model writes a plausible Thai essay that omits the
+  specific retrieved fact; and (2) *refusal-despite-context* — the model claims
+  "ไม่มีข้อมูลเพียงพอ" (insufficient information) though the full table was retrieved
+  (typhoon2.5-4b did this and twice replied in **English** asking for more detail). None of
+  these config knobs touch either mode.
 - Validate on your own Thai questions before rollout — this gap is the thing most likely
   to disappoint Thai-speaking users. The most promising lever in our probes was the **model
   choice itself**, so test candidate models on your real questions rather than relying on

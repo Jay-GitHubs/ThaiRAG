@@ -391,6 +391,13 @@ row-level chunking, the full agent pipeline (orchestrator on), or swapping in ot
 models (including Thai-specialized ones). Scores are also noisy run-to-run; treat
 differences under ~0.10 as noise.
 
+We cross-checked the LLM-judge by **reading all 30 Thai answers directly**: the judge
+rewards answers that name the reference fact, so the low scores are real generation misses
+rather than a scoring artifact. The misses take two forms — *generic-essay drift* (a
+fluent Thai answer that omits the retrieved fact) and *refusal-despite-context* (the model
+claims it lacks information though the full passage was retrieved; one Thai-specialized
+model even replied in English).
+
 Practical guidance:
 - Validate Thai answer quality on **your own** questions before relying on it in
   production — this is the limitation most likely to disappoint Thai-speaking users.
