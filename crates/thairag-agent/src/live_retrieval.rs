@@ -113,6 +113,8 @@ impl LiveRetrieval {
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: Some(fetched.title),
+                image_blob_id: None,
+                images: Vec::new(),
             });
         }
 

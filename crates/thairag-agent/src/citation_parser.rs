@@ -212,6 +212,8 @@ mod tests {
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: Some(format!("Doc {i}")),
+                image_blob_id: None,
+                images: Vec::new(),
             })
             .collect();
         CuratedContext {

@@ -729,6 +729,39 @@ impl ProviderBundle {
                     as Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>
             });
 
+            // PR-δ multimodal retrieval: resolve a chunk's image_blob_id to the
+            // stored image bytes (base64) for the answer LLM's vision input. The
+            // pipeline only invokes this when the answer LLM supports_vision().
+            let image_resolver: Option<
+                Arc<
+                    dyn Fn(
+                            thairag_core::types::ImageId,
+                        ) -> Option<thairag_core::types::ImageContent>
+                        + Send
+                        + Sync,
+                >,
+            > = km_store.as_ref().map(|store| {
+                let store = Arc::clone(store);
+                Arc::new(move |img_id: thairag_core::types::ImageId| {
+                    use base64::Engine;
+                    store.get_image_blob(img_id).ok().flatten().map(|rec| {
+                        thairag_core::types::ImageContent {
+                            base64_data: base64::engine::general_purpose::STANDARD
+                                .encode(&rec.bytes),
+                            media_type: rec.mime,
+                        }
+                    })
+                })
+                    as Arc<
+                        dyn Fn(
+                                thairag_core::types::ImageId,
+                            )
+                                -> Option<thairag_core::types::ImageContent>
+                            + Send
+                            + Sync,
+                    >
+            });
+
             // ── Guardrails (PR1): build only when respective master switch is on ──
             let input_guardrails = if chat.input_guardrails_enabled {
                 Some(Arc::new(thairag_agent::guardrails::InputGuardrails::new(
@@ -775,6 +808,7 @@ impl ProviderBundle {
                 chat.clone(),
                 Arc::clone(&prompts),
                 doc_resolver,
+                image_resolver,
             );
             let pipeline = match &plugin_engine {
                 Some(engine) => pipeline.with_search_plugin_engine(Arc::clone(engine)),

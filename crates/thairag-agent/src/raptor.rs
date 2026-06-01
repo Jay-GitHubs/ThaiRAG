@@ -109,6 +109,8 @@ impl Raptor {
                             source_doc_id: Default::default(),
                             source_chunk_id: Default::default(),
                             source_doc_title: None,
+                            image_blob_id: None,
+                            images: Vec::new(),
                         });
                     }
                     Ok(Err(e)) => {
