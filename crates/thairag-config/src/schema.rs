@@ -934,6 +934,18 @@ pub struct ChatPipelineConfig {
     #[serde(default = "default_true_val")]
     pub structured_citations_enabled: bool,
 
+    // ── Feature: Structured Extraction (Thai answer-quality experiment) ──
+    /// Extract-then-answer: before generating, prompt the model to copy the
+    /// verbatim answer-bearing span(s) from the retrieved context, then compose
+    /// the answer using ONLY that span. Directly targets the Thai "generic-essay
+    /// drift" failure mode. Opt-in (one extra LLM call); falls back to the normal
+    /// response generator when no span is found.
+    #[serde(default)]
+    pub structured_extraction_enabled: bool,
+    /// Separate LLM for the extraction step (uses main LLM if not set).
+    #[serde(default)]
+    pub structured_extraction_llm: Option<LlmConfig>,
+
     // ── Feature: Live Source Retrieval ──
     /// Enable live retrieval from MCP connectors when vector DB has no results.
     #[serde(default)]
@@ -1203,6 +1215,9 @@ impl Default for ChatPipelineConfig {
             source_footer_enabled: true,
             source_footer_max: default_source_footer_max(),
             structured_citations_enabled: true,
+            // Structured Extraction (opt-in experiment)
+            structured_extraction_enabled: false,
+            structured_extraction_llm: None,
             // Live Source Retrieval
             live_retrieval_enabled: false,
             live_retrieval_timeout_secs: default_live_retrieval_timeout_secs(),

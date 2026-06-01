@@ -25,6 +25,7 @@ pub mod raptor;
 pub mod response_generator;
 pub mod self_rag;
 pub mod speculative_rag;
+pub mod structured_extraction;
 pub mod tool_router;
 
 pub use chat_pipeline::ChatPipeline;

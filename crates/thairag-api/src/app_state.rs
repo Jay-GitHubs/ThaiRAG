@@ -24,6 +24,7 @@ use thairag_agent::raptor::Raptor;
 use thairag_agent::response_generator::ResponseGenerator;
 use thairag_agent::self_rag::SelfRag;
 use thairag_agent::speculative_rag::SpeculativeRag;
+use thairag_agent::structured_extraction::StructuredExtractor;
 use thairag_agent::tool_router::ToolRouter;
 use thairag_agent::{ChatPipeline, PipelineOrchestrator, QueryOrchestrator, RagEngine};
 use thairag_auth::JwtService;
@@ -458,6 +459,19 @@ impl ProviderBundle {
                 Arc::clone(&prompts),
             );
 
+            let se = if chat.structured_extraction_enabled {
+                Some(StructuredExtractor::new_with_prompts(
+                    resolve_chat_agent_llm(
+                        "structured_extraction",
+                        &chat.structured_extraction_llm,
+                    ),
+                    chat.agent_max_tokens,
+                    Arc::clone(&prompts),
+                ))
+            } else {
+                None
+            };
+
             let qg = if chat.quality_guard_enabled {
                 Some(Arc::new(QualityGuard::new_with_prompts(
                     resolve_chat_agent_llm("quality_guard", &chat.quality_guard_llm),
@@ -785,6 +799,7 @@ impl ProviderBundle {
                 qr,
                 cc,
                 rg,
+                se,
                 qg,
                 la,
                 po,
