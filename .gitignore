@@ -40,6 +40,7 @@ test-results/
 
 # Benchmark harness output (generated)
 scripts/bench/results*.json
+scripts/bench/*_results.json
 scripts/bench/__pycache__/
 
 # OS
