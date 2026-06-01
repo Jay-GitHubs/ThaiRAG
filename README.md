@@ -376,6 +376,31 @@ cd admin-ui && npx playwright test
 cd tests/load && k6 run k6-smoke.js
 ```
 
+## Known Limitations
+
+### Thai answer quality lags English
+
+In controlled benchmarking, **Thai questions score substantially lower than English**
+(LLM-judge correctness ≈ 0.04–0.32 for Thai vs ≈ 0.61–0.79 for English on the same
+fixture). The cause is **model extraction, not retrieval**: the correct source passage is
+reliably retrieved (often the top result), but smaller LLMs tend to respond with generic
+Thai advice instead of quoting the specific fact from the context.
+
+This gap was **not closed** by the levers we tested — extraction-grounded prompting,
+row-level chunking, the full agent pipeline (orchestrator on), or swapping in other
+models (including Thai-specialized ones). Scores are also noisy run-to-run; treat
+differences under ~0.10 as noise.
+
+Practical guidance:
+- Validate Thai answer quality on **your own** questions before relying on it in
+  production — this is the limitation most likely to disappoint Thai-speaking users.
+- See [Configuration Guide → "If your users ask in Thai"](docs/CONFIGURATION_GUIDE.md#if-your-users-ask-in-thai--read-this)
+  and [Benchmark Results](docs/BENCHMARK_RESULTS.md) for the data, methodology, and caveats.
+
+> Note: grounding itself is robust — across all benchmarked configurations ThaiRAG
+> produced zero hallucinations and scored a perfect 1.00 on the anti-hallucination probe.
+> The Thai limitation is one of *extraction completeness*, not invented facts.
+
 ## License
 
 Copyright (C) 2026 Anuwat Yodngoen <jdevspecialist@gmail.com>
