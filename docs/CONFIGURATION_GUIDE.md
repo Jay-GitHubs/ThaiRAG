@@ -84,12 +84,19 @@ was always retrieved; the models simply tended to write generic Thai advice inst
 extracting the specific facts from the table.
 
 Practical guidance:
-- Prefer **`gemma4:e4b-it-bf16`** (best Thai score, 0.22) and run the **full pipeline**.
-- Enable **`+query_rewriter`** to tighten the retrieved context to the question.
-- Consider an **extraction-oriented system prompt** ("answer only from the provided
-  context; quote the specific row/values; do not give general advice").
+- Prefer **`gemma4:e4b-it-bf16`** (best Thai score, though only 0.22 and noisy across runs).
+- The **full pipeline** (orchestrator on) does **not** reliably help here. A targeted
+  follow-up — lean vs full on the Thai questions, both models — showed full matching gemma
+  exactly and *hurting* chinda (0.24 → 0.12). Because the correct row is already retrieved,
+  adding query-analysis/curation stages in front of retrieval can't fix the extraction gap.
+- Other levers we tried did **not** close the gap either: an extraction-grounded system
+  prompt and row-level chunking both moved scores only within run-to-run noise. The
+  bottleneck is the model writing generic Thai prose instead of quoting the retrieved fact,
+  which none of these config knobs touch.
 - Validate on your own Thai questions before rollout — this gap is the thing most likely
-  to disappoint Thai-speaking users, and it is config-sensitive.
+  to disappoint Thai-speaking users. The most promising lever in our probes was the **model
+  choice itself**, so test candidate models on your real questions rather than relying on
+  pipeline tuning.
 
 ---
 
