@@ -31,6 +31,21 @@ pub trait LlmProvider: Send + Sync {
         })
     }
 
+    /// Generate a response constrained to a JSON schema. Providers that support
+    /// grammar/schema-enforced decoding (e.g. Ollama's `format` field) override
+    /// this to guarantee syntactically valid, schema-conforming output — which
+    /// stops a model from emitting unbounded prose that overruns the token cap
+    /// and truncates mid-JSON. The default ignores the schema and falls back to
+    /// plain `generate`, so providers without native support degrade gracefully.
+    async fn generate_structured(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+        _json_schema: &serde_json::Value,
+    ) -> Result<LlmResponse> {
+        self.generate(messages, max_tokens).await
+    }
+
     fn model_name(&self) -> &str;
 
     /// Whether this provider's current model supports vision (image) input.

@@ -164,7 +164,7 @@ impl LlmChunkEnricher {
             .max(batch.len() as u32 * PER_CHUNK_TOKEN_BUDGET);
         let response = self
             .llm
-            .generate(&messages, Some(effective_max_tokens))
+            .generate_structured(&messages, Some(effective_max_tokens), &enrichment_schema())
             .await?;
         let json_str = strip_json_fences(response.content.trim());
 
@@ -224,6 +224,38 @@ impl LlmChunkEnricher {
         metadata.hypothetical_queries = result.hypothetical_queries;
         metadata.original_content = Some(original_content);
     }
+}
+
+/// JSON schema for one enrichment batch: an array of result objects with hard
+/// per-field bounds. Passed to the LLM provider's schema-enforced decoding
+/// (Ollama `format`) so the model can only emit conforming JSON — it cannot
+/// ramble into unbounded prose that overruns the token cap and truncates the
+/// array mid-string. The `maxLength`/`maxItems` bounds mirror the prompt's
+/// stated limits, turning "please be terse" into a decoder-level guarantee.
+/// Providers without schema support ignore this and fall back to plain text.
+fn enrichment_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "chunk_index": { "type": "integer" },
+                "context_prefix": { "type": "string", "maxLength": 120 },
+                "summary": { "type": "string", "maxLength": 220 },
+                "keywords": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": 40 },
+                    "maxItems": 5
+                },
+                "hypothetical_queries": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": 140 },
+                    "maxItems": 2
+                }
+            },
+            "required": ["chunk_index", "summary"]
+        }
+    })
 }
 
 /// Recover complete leading objects from a (possibly truncated) JSON array of
