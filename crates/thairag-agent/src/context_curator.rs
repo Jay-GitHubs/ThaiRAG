@@ -4,7 +4,7 @@ use serde::Deserialize;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, ChunkId, DocId, SearchResult};
+use thairag_core::types::{ChatMessage, ChunkId, DocId, ImageContent, ImageId, SearchResult};
 use tracing::{debug, warn};
 
 /// A curated chunk with relevance scoring and optional trimming.
@@ -17,6 +17,14 @@ pub struct CuratedChunk {
     pub source_chunk_id: ChunkId,
     /// Document title (resolved after curation for richer LLM context).
     pub source_doc_title: Option<String>,
+    /// Source image blob (set when this chunk was derived from an image:
+    /// PDF page render, embedded image, scanned page, or direct upload).
+    /// Carried through from `ChunkMetadata.image_blob_id`.
+    pub image_blob_id: Option<ImageId>,
+    /// Hydrated image bytes for vision-capable answer LLMs. Empty until
+    /// `hydrate_images` resolves `image_blob_id` against the store. Only
+    /// populated when the answer LLM supports vision (PR-δ multimodal retrieval).
+    pub images: Vec<ImageContent>,
 }
 
 /// Result of context curation.
@@ -32,6 +40,31 @@ impl CuratedContext {
         for chunk in &mut self.chunks {
             if chunk.source_doc_title.is_none() {
                 chunk.source_doc_title = resolver(chunk.source_doc_id);
+            }
+        }
+    }
+
+    /// PR-δ multimodal retrieval: resolve each chunk's `image_blob_id` to image
+    /// bytes via `resolver` and stash them on the chunk for the answer LLM's
+    /// vision input. Stops after `max_images` total images to bound the request
+    /// payload (vision blobs are large). Callers MUST gate on the answer LLM's
+    /// `supports_vision()` — this method does not check.
+    pub fn hydrate_images(
+        &mut self,
+        resolver: &dyn Fn(ImageId) -> Option<ImageContent>,
+        max_images: usize,
+    ) {
+        let mut budget = max_images;
+        for chunk in &mut self.chunks {
+            if budget == 0 {
+                break;
+            }
+            if let Some(img_id) = chunk.image_blob_id
+                && chunk.images.is_empty()
+                && let Some(img) = resolver(img_id)
+            {
+                chunk.images.push(img);
+                budget -= 1;
             }
         }
     }
@@ -187,6 +220,8 @@ fn build_curated_context(
             source_doc_id: r.chunk.doc_id,
             source_chunk_id: r.chunk.chunk_id,
             source_doc_title: None,
+            image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
+            images: Vec::new(),
         });
         total_tokens += tokens;
     }
@@ -204,4 +239,82 @@ pub fn fallback_curate(results: &[SearchResult], max_tokens: usize) -> CuratedCo
         chunks: vec![],
         total_tokens_est: 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::types::{ChunkMetadata, DocumentChunk, WorkspaceId};
+
+    fn result_with_image(content: &str, image_blob_id: Option<ImageId>) -> SearchResult {
+        SearchResult {
+            chunk: DocumentChunk {
+                chunk_id: ChunkId::new(),
+                doc_id: DocId::new(),
+                workspace_id: WorkspaceId::new(),
+                content: content.into(),
+                chunk_index: 0,
+                embedding: None,
+                metadata: image_blob_id.map(|id| ChunkMetadata {
+                    image_blob_id: Some(id),
+                    ..Default::default()
+                }),
+            },
+            score: 0.9,
+        }
+    }
+
+    fn dummy_image() -> ImageContent {
+        ImageContent {
+            base64_data: "AAAA".into(),
+            media_type: "image/png".into(),
+        }
+    }
+
+    #[test]
+    fn build_curated_context_carries_image_blob_id() {
+        let img = ImageId::new();
+        let results = [
+            result_with_image("text chunk", None),
+            result_with_image("image chunk", Some(img)),
+        ];
+        let ctx = fallback_curate(&results, 10_000);
+        assert_eq!(ctx.chunks.len(), 2);
+        assert_eq!(ctx.chunks[0].image_blob_id, None);
+        assert_eq!(ctx.chunks[1].image_blob_id, Some(img));
+        // Nothing is hydrated until hydrate_images runs.
+        assert!(ctx.chunks.iter().all(|c| c.images.is_empty()));
+    }
+
+    #[test]
+    fn hydrate_images_resolves_only_image_chunks() {
+        let img = ImageId::new();
+        let results = [
+            result_with_image("text chunk", None),
+            result_with_image("image chunk", Some(img)),
+        ];
+        let mut ctx = fallback_curate(&results, 10_000);
+        ctx.hydrate_images(&|_id| Some(dummy_image()), 10);
+        assert!(ctx.chunks[0].images.is_empty(), "text chunk stays empty");
+        assert_eq!(ctx.chunks[1].images.len(), 1, "image chunk hydrated");
+    }
+
+    #[test]
+    fn hydrate_images_honors_max_cap() {
+        let results: Vec<SearchResult> = (0..5)
+            .map(|i| result_with_image(&format!("img {i}"), Some(ImageId::new())))
+            .collect();
+        let mut ctx = fallback_curate(&results, 100_000);
+        ctx.hydrate_images(&|_id| Some(dummy_image()), 2);
+        let hydrated = ctx.chunks.iter().filter(|c| !c.images.is_empty()).count();
+        assert_eq!(hydrated, 2, "cap limits total hydrated images");
+    }
+
+    #[test]
+    fn hydrate_images_skips_when_resolver_returns_none() {
+        let results = [result_with_image("image chunk", Some(ImageId::new()))];
+        let mut ctx = fallback_curate(&results, 10_000);
+        ctx.hydrate_images(&|_id| None, 10);
+        assert!(ctx.chunks[0].images.is_empty());
+    }
 }
