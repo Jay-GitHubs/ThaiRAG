@@ -1,10 +1,11 @@
+pub mod clip_provider;
 pub mod cohere_embedding;
 pub mod fastembed_provider;
 pub mod ollama_embedding;
 pub mod openai_embedding;
 
-use thairag_config::schema::EmbeddingConfig;
-use thairag_core::traits::EmbeddingModel;
+use thairag_config::schema::{EmbeddingConfig, ImageEmbeddingConfig};
+use thairag_core::traits::{EmbeddingModel, ImageEmbeddingModel};
 use thairag_core::types::EmbeddingKind;
 
 pub fn create_embedding_provider(config: &EmbeddingConfig) -> Box<dyn EmbeddingModel> {
@@ -40,4 +41,12 @@ pub fn create_embedding_provider_with_options(
             config.dimension,
         )),
     }
+}
+
+/// Build the CLIP image-embedding provider from config. Currently only the
+/// local fastembed CLIP backend is wired; `config.model` selects the variant.
+pub fn create_image_embedding_provider(
+    config: &ImageEmbeddingConfig,
+) -> Box<dyn ImageEmbeddingModel> {
+    Box::new(clip_provider::FastEmbedClipProvider::new(&config.model))
 }
