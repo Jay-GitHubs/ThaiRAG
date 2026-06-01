@@ -16,7 +16,12 @@ use super::prompts;
 /// `agent_max_tokens` cap (often 1024) is sized for a single agent reply, not a
 /// 5-chunk array, so it truncates the array mid-string and the whole batch is
 /// lost. Scale the budget by batch size so the array can actually complete.
-const PER_CHUNK_TOKEN_BUDGET: u32 = 400;
+///
+/// 400/chunk (2000 for a 5-batch) still truncated the trailing object on verbose
+/// batches; 600 gives ~50% more headroom so the full array completes. Since this
+/// is a cap, not a target, raising it costs nothing on batches that already fit —
+/// the model stops when its JSON is done.
+const PER_CHUNK_TOKEN_BUDGET: u32 = 600;
 
 /// LLM-powered chunk enricher.
 ///
