@@ -297,6 +297,13 @@ pub struct ProvidersConfig {
     /// vision model only when needed.
     #[serde(default)]
     pub vision_llm: Option<LlmConfig>,
+    /// Optional CLIP-style multimodal image-embedding provider. When set and
+    /// `enabled`, images are embedded into a shared text-image vector space at
+    /// ingest (own collection) and fused into retrieval, enabling text→image
+    /// and image→image visual search. `None`/disabled = the text-caption-only
+    /// behaviour (no image vectors, no extra collection).
+    #[serde(default)]
+    pub image_embedding: Option<ImageEmbeddingConfig>,
 }
 
 #[derive(Clone, Deserialize, serde::Serialize)]
@@ -361,6 +368,39 @@ pub struct EmbeddingConfig {
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
+}
+
+/// CLIP-style multimodal image-embedding provider config. Default-off: an
+/// absent block (or `enabled = false`) leaves retrieval byte-identical to the
+/// text-caption-only path. Currently only the local fastembed CLIP backend is
+/// wired (`model = "clip-vit-b-32"`, 512-dim).
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct ImageEmbeddingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_clip_model")]
+    pub model: String,
+    /// RRF fusion weight for image-vector hits relative to text/BM25 hits.
+    #[serde(default = "default_image_weight")]
+    pub weight: f32,
+}
+
+impl Default for ImageEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_clip_model(),
+            weight: default_image_weight(),
+        }
+    }
+}
+
+fn default_clip_model() -> String {
+    "clip-vit-b-32".to_string()
+}
+
+fn default_image_weight() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -1764,6 +1804,30 @@ mod tests {
         EmbeddingKind, LlmKind, RerankerKind, TextSearchKind, VectorIsolation, VectorStoreKind,
     };
 
+    #[test]
+    fn image_embedding_defaults_off() {
+        let cfg = ImageEmbeddingConfig::default();
+        assert!(!cfg.enabled, "image embedding must default off");
+        assert_eq!(cfg.model, "clip-vit-b-32");
+        assert_eq!(cfg.weight, 1.0);
+    }
+
+    #[test]
+    fn image_embedding_config_fills_defaults_from_empty_object() {
+        // An empty object fills enabled/model/weight defaults (default-off).
+        let cfg: ImageEmbeddingConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.model, "clip-vit-b-32");
+        assert_eq!(cfg.weight, 1.0);
+
+        // An explicit enable round-trips and keeps remaining defaults.
+        let cfg: ImageEmbeddingConfig =
+            serde_json::from_str(r#"{"enabled": true, "weight": 0.5}"#).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.model, "clip-vit-b-32");
+        assert_eq!(cfg.weight, 0.5);
+    }
+
     fn free_tier_config() -> AppConfig {
         AppConfig {
             server: ServerConfig {
@@ -1825,6 +1889,7 @@ mod tests {
                     api_key: String::new(),
                 },
                 vision_llm: None,
+                image_embedding: None,
             },
             search: SearchConfig {
                 top_k: 5,

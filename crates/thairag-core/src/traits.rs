@@ -79,6 +79,22 @@ pub trait EmbeddingModel: Send + Sync {
     fn dimension(&self) -> usize;
 }
 
+/// CLIP-style multimodal embedding provider. Bundles the image encoder and the
+/// matching text encoder behind one trait because they must come from the same
+/// CLIP model to share a vector space: a text query embedded by `embed_query_text`
+/// is only comparable to image vectors from `embed_images` if both encoders were
+/// trained together. This space is distinct from the main [`EmbeddingModel`]
+/// text space, so image vectors live in their own collection and are fused into
+/// results at the rank level, not by raw score.
+#[async_trait]
+pub trait ImageEmbeddingModel: Send + Sync {
+    /// Embed raw image bytes (PNG/JPEG/...) into the shared CLIP space.
+    async fn embed_images(&self, images: &[Vec<u8>]) -> Result<Vec<Vec<f32>>>;
+    /// Embed query text into the same CLIP space for text→image retrieval.
+    async fn embed_query_text(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    fn dimension(&self) -> usize;
+}
+
 #[async_trait]
 pub trait VectorStore: Send + Sync {
     async fn upsert(&self, chunks: &[DocumentChunk]) -> Result<()>;
