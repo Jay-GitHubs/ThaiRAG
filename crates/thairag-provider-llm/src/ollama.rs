@@ -192,13 +192,15 @@ fn bucket_num_ctx(tokens: usize) -> usize {
     tokens.max(MIN_NUM_CTX).next_power_of_two()
 }
 
-#[async_trait]
-impl LlmProvider for OllamaProvider {
-    #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
-    async fn generate(
+impl OllamaProvider {
+    /// Shared non-streaming `/api/chat` call. When `format` is `Some`, it is sent
+    /// as Ollama's `format` field — a JSON schema enables grammar-constrained
+    /// decoding so the model can only emit conforming JSON.
+    async fn chat(
         &self,
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
+        format: Option<&serde_json::Value>,
     ) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
@@ -212,6 +214,9 @@ impl LlmProvider for OllamaProvider {
         }
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
+        }
+        if let Some(fmt) = format {
+            body["format"] = fmt.clone();
         }
 
         let url = format!("{}/api/chat", self.base_url);
@@ -248,6 +253,28 @@ impl LlmProvider for OllamaProvider {
         };
 
         Ok(LlmResponse { content, usage })
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OllamaProvider {
+    #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+    ) -> Result<LlmResponse> {
+        self.chat(messages, max_tokens, None).await
+    }
+
+    #[instrument(skip(self, messages, json_schema), fields(model = %self.model, msg_count = messages.len()))]
+    async fn generate_structured(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+        json_schema: &serde_json::Value,
+    ) -> Result<LlmResponse> {
+        self.chat(messages, max_tokens, Some(json_schema)).await
     }
 
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
