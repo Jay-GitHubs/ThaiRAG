@@ -14,14 +14,19 @@ use super::prompts;
 /// JSON object with a context prefix, summary, bilingual keywords, and 2-3
 /// hypothetical queries (~500-700 chars; more in token-heavy Thai). The flat
 /// `agent_max_tokens` cap (often 1024) is sized for a single agent reply, not a
-/// 5-chunk array, so it truncates the array mid-string and the whole batch is
-/// lost. Scale the budget by batch size so the array can actually complete.
+/// multi-chunk array, so it truncates the array mid-string and the whole batch
+/// is lost. Scale the budget by batch size so the array can actually complete.
 ///
-/// 400/chunk (2000 for a 5-batch) still truncated the trailing object on verbose
-/// batches; 600 gives ~50% more headroom so the full array completes. Since this
-/// is a cap, not a target, raising it costs nothing on batches that already fit —
-/// the model stops when its JSON is done.
+/// At 400/chunk a 5-chunk array still truncated its trailing object; 600 plus a
+/// smaller [`BATCH_SIZE`] gives enough headroom for the array to complete. Since
+/// this is a cap, not a target, raising it costs nothing on batches that already
+/// fit — the model stops when its JSON is done.
 const PER_CHUNK_TOKEN_BUDGET: u32 = 600;
+
+/// Chunks per enrichment LLM call. Smaller arrays complete more reliably (a
+/// verbose object is far less likely to overrun the token budget mid-array), at
+/// the cost of more calls. Dropped from 5 → 3 to reach full chunk coverage.
+const BATCH_SIZE: usize = 3;
 
 /// LLM-powered chunk enricher.
 ///
@@ -51,7 +56,7 @@ impl LlmChunkEnricher {
         Self {
             llm,
             max_tokens,
-            batch_size: 5,
+            batch_size: BATCH_SIZE,
             prompts: Arc::new(PromptRegistry::new()),
         }
     }
@@ -64,7 +69,7 @@ impl LlmChunkEnricher {
         Self {
             llm,
             max_tokens,
-            batch_size: 5,
+            batch_size: BATCH_SIZE,
             prompts,
         }
     }
