@@ -3,7 +3,9 @@ use std::sync::Arc;
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
-use thairag_core::types::{ChatMessage, LlmResponse, LlmStreamResponse, VisionMessage};
+use thairag_core::types::{
+    ChatMessage, ImageContent, LlmResponse, LlmStreamResponse, VisionMessage,
+};
 
 use crate::context_curator::CuratedContext;
 use crate::query_analyzer::{QueryAnalysis, QueryLanguage};
@@ -206,6 +208,28 @@ impl ResponseGenerator {
             images: vec![],
         }];
         augmented.extend_from_slice(messages);
+
+        // PR-δ multimodal retrieval: when the answer LLM is vision-capable,
+        // attach the hydrated source images from retrieved chunks to the latest
+        // message so the model reads the original pixels — not just the
+        // ingest-time caption text already inlined as chunk content. For
+        // text-only LLMs (default `supports_vision() == false`) this is a no-op,
+        // and the chunks won't carry images anyway (chat_pipeline gates hydration
+        // on the same check). Streaming uses the text path (no vision stream),
+        // so attached images are simply ignored there.
+        if self.llm.supports_vision() {
+            let context_images: Vec<ImageContent> = context
+                .chunks
+                .iter()
+                .flat_map(|c| c.images.iter().cloned())
+                .collect();
+            if !context_images.is_empty()
+                && let Some(last) = augmented.last_mut()
+            {
+                last.images.extend(context_images);
+            }
+        }
+
         augmented
     }
 }
