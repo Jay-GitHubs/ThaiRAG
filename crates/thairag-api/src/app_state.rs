@@ -86,6 +86,7 @@ fn resolve_profile(
             profile_id: Some(pid.clone()),
             ollama_num_ctx_max: config.ollama_num_ctx_max,
             temperature: config.temperature,
+            thinking_enabled: config.thinking_enabled,
         };
     }
     config.clone()

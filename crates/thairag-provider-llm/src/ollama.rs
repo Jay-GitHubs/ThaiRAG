@@ -51,6 +51,11 @@ pub struct OllamaProvider {
     num_ctx_max: usize,
     /// Sampling temperature. `None` inherits the model's built-in default.
     temperature: Option<f32>,
+    /// When `false`, send Ollama `think: false` so a thinking-capable model
+    /// writes its answer into `content` instead of the reasoning channel
+    /// (otherwise the answer can come back empty). When `true`, the field is
+    /// omitted and the model's default thinking behavior is preserved.
+    thinking_enabled: bool,
 }
 
 impl OllamaProvider {
@@ -68,7 +73,7 @@ impl OllamaProvider {
         timeout_secs: u64,
         keep_alive: Option<&str>,
     ) -> Self {
-        Self::with_options(base_url, model, timeout_secs, keep_alive, 0, None)
+        Self::with_options(base_url, model, timeout_secs, keep_alive, 0, None, false)
     }
 
     pub fn with_options(
@@ -78,6 +83,7 @@ impl OllamaProvider {
         keep_alive: Option<&str>,
         num_ctx_max: usize,
         temperature: Option<f32>,
+        thinking_enabled: bool,
     ) -> Self {
         // Non-streaming client: overall timeout covers the full request lifecycle
         let client = reqwest::Client::builder()
@@ -110,6 +116,7 @@ impl OllamaProvider {
             ?keep_alive,
             num_ctx_max,
             ?temperature,
+            thinking_enabled,
             "Initialized Ollama provider"
         );
 
@@ -121,6 +128,7 @@ impl OllamaProvider {
             keep_alive: keep_alive_val,
             num_ctx_max,
             temperature,
+            thinking_enabled,
         }
     }
 
@@ -146,6 +154,16 @@ impl OllamaProvider {
             None
         } else {
             Some(serde_json::Value::Object(opts))
+        }
+    }
+
+    /// Add Ollama's top-level `think: false` when thinking is disabled, so a
+    /// thinking-capable model writes its answer into `content` rather than the
+    /// reasoning channel. A no-op when thinking is enabled (preserves the
+    /// model's default behavior).
+    fn apply_thinking(&self, body: &mut serde_json::Value) {
+        if !self.thinking_enabled {
+            body["think"] = serde_json::json!(false);
         }
     }
 
@@ -215,6 +233,7 @@ impl OllamaProvider {
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
         }
+        self.apply_thinking(&mut body);
         if let Some(fmt) = format {
             body["format"] = fmt.clone();
         }
@@ -296,6 +315,7 @@ impl LlmProvider for OllamaProvider {
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
         }
+        self.apply_thinking(&mut body);
 
         let url = format!("{}/api/chat", self.base_url);
         let resp = self
@@ -426,6 +446,7 @@ impl LlmProvider for OllamaProvider {
         if let Some(ref ka) = self.keep_alive {
             body["keep_alive"] = ka.clone();
         }
+        self.apply_thinking(&mut body);
 
         let url = format!("{}/api/chat", self.base_url);
         let resp = self
@@ -505,6 +526,7 @@ mod tests {
             None,
             num_ctx_max,
             None,
+            false,
         )
     }
 
@@ -516,6 +538,7 @@ mod tests {
             None,
             0,
             temperature,
+            false,
         )
     }
 
@@ -585,6 +608,34 @@ mod tests {
         // When other options exist, temperature key is still absent.
         let opts = p.build_options(Some(256), None).unwrap();
         assert!(opts.get("temperature").is_none());
+    }
+
+    fn provider_with_thinking(thinking_enabled: bool) -> OllamaProvider {
+        OllamaProvider::with_options(
+            "http://localhost:11434",
+            "gemma3:e4b",
+            5,
+            None,
+            0,
+            None,
+            thinking_enabled,
+        )
+    }
+
+    #[test]
+    fn think_false_sent_when_thinking_disabled() {
+        let p = provider_with_thinking(false);
+        let mut body = serde_json::json!({"model": "x"});
+        p.apply_thinking(&mut body);
+        assert_eq!(body["think"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn think_omitted_when_thinking_enabled() {
+        let p = provider_with_thinking(true);
+        let mut body = serde_json::json!({"model": "x"});
+        p.apply_thinking(&mut body);
+        assert!(body.get("think").is_none());
     }
 
     #[test]
