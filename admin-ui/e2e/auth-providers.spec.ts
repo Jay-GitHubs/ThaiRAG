@@ -147,18 +147,27 @@ test.describe('Identity Provider API CRUD', () => {
     expect(createRes.status()).toBe(201);
     const created = await createRes.json();
 
-    // Public endpoint — no auth required
-    const publicRes = await request.get(`${API_BASE}/api/auth/providers`);
-    expect(publicRes.ok()).toBeTruthy();
-    const publicProviders = await publicRes.json();
-    expect(publicProviders).toBeInstanceOf(Array);
+    // Public endpoint — no auth required. Poll: the provider list may be served
+    // from a cache that lags the write by a moment.
+    let found: { id: string; name?: string; provider_type?: string; config?: unknown } | undefined;
+    await expect
+      .poll(
+        async () => {
+          const publicRes = await request.get(`${API_BASE}/api/auth/providers`);
+          if (!publicRes.ok()) return false;
+          const publicProviders = await publicRes.json();
+          if (!Array.isArray(publicProviders)) return false;
+          found = publicProviders.find((p: { id: string }) => p.id === created.id);
+          return !!found;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
 
-    const found = publicProviders.find((p: { id: string }) => p.id === created.id);
-    expect(found).toBeTruthy();
-    expect(found.name).toBeTruthy();
-    expect(found.provider_type).toBe('oidc');
+    expect(found!.name).toBeTruthy();
+    expect(found!.provider_type).toBe('oidc');
     // Public endpoint should NOT expose config
-    expect(found.config).toBeUndefined();
+    expect(found!.config).toBeUndefined();
 
     // Cleanup
     await request.delete(`${API_BASE}/api/km/settings/identity-providers/${created.id}`, {

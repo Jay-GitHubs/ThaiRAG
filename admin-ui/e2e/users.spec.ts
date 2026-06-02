@@ -14,6 +14,10 @@ test.describe('Users page', () => {
   });
 
   test('test user is visible in table', async ({ page }) => {
+    // The table paginates at 20/page; with many accumulated users the test user
+    // may be on a later page. Filter via the search box so the assertion is
+    // independent of how many other users exist.
+    await page.locator('[data-tour="users-search"] input').fill('playwright@test.com');
     await expect(page.getByRole('cell', { name: 'playwright@test.com' })).toBeVisible({
       timeout: 5000,
     });
