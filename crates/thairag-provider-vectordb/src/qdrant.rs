@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use qdrant_client::qdrant::{
     Condition, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct,
-    QueryPointsBuilder, ScrollPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
-    point_id::PointIdOptions,
+    QueryPointsBuilder, ScrollPointsBuilder, UpsertPointsBuilder, Value, VectorParamsBuilder,
+    point_id::PointIdOptions, value::Kind,
 };
 use qdrant_client::{Payload, Qdrant};
 use thairag_core::ThaiRagError;
@@ -12,6 +12,27 @@ use thairag_core::error::Result;
 use thairag_core::traits::{VectorStore, VectorStoreExport};
 use thairag_core::types::{DocId, DocumentChunk, ExportedVector, SearchQuery, SearchResult};
 use tracing::{info, instrument, warn};
+
+/// Borrow a payload value as a `&str`. Returns `None` for non-string values.
+/// Avoids `Value`'s `Display`, which debug-escapes strings (`{:?}`) and would
+/// mangle multi-byte text such as Thai combining marks into `\u{...}` escapes.
+fn value_as_str(value: &Value) -> Option<&str> {
+    match value.kind.as_ref()? {
+        Kind::StringValue(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// Render a payload value as a clean owned `String` (no debug escaping).
+fn value_to_string(value: &Value) -> String {
+    match value.kind.as_ref() {
+        Some(Kind::StringValue(s)) => s.clone(),
+        Some(Kind::IntegerValue(i)) => i.to_string(),
+        Some(Kind::DoubleValue(d)) => d.to_string(),
+        Some(Kind::BoolValue(b)) => b.to_string(),
+        _ => String::new(),
+    }
+}
 
 pub struct QdrantVectorStore {
     client: Qdrant,
@@ -168,9 +189,21 @@ impl VectorStore for QdrantVectorStore {
             return Ok(vec![]);
         }
 
-        // Collection has never been initialised — nothing has been indexed yet.
+        // The readiness flag is only primed by `ensure_collection` during
+        // indexing. On a fresh process the collection may already exist in
+        // Qdrant (e.g. after a restart/rebuild with persisted data), so probe
+        // before giving up — otherwise vector search stays silently dead until
+        // the next ingest, and queries fall back to BM25 only.
         if !self.collection_ready.load(Ordering::Relaxed) {
-            return Ok(vec![]);
+            match self.client.collection_exists(&self.collection).await {
+                Ok(true) => self.collection_ready.store(true, Ordering::Relaxed),
+                Ok(false) => return Ok(vec![]),
+                Err(e) => {
+                    return Err(ThaiRagError::VectorStore(format!(
+                        "Failed to check collection: {e}"
+                    )));
+                }
+            }
         }
 
         let mut request = QueryPointsBuilder::new(&self.collection)
@@ -204,18 +237,17 @@ impl VectorStore for QdrantVectorStore {
                 let score = point.score;
 
                 let payload = &point.payload;
-                let doc_id_str = payload.get("doc_id")?.to_string();
-                let workspace_id_str = payload.get("workspace_id")?.to_string();
-                let content = payload.get("content")?.to_string();
+                let doc_id_str = payload.get("doc_id").and_then(value_as_str)?;
+                let workspace_id_str = payload.get("workspace_id").and_then(value_as_str)?;
+                let content = payload
+                    .get("content")
+                    .and_then(value_as_str)
+                    .unwrap_or_default();
                 let chunk_index = payload
                     .get("chunk_index")
-                    .and_then(|v| v.to_string().parse::<usize>().ok())
+                    .map(value_to_string)
+                    .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
-
-                // Parse UUIDs from the string representation (qdrant payload values are quoted)
-                let doc_id_str = doc_id_str.trim_matches('"');
-                let workspace_id_str = workspace_id_str.trim_matches('"');
-                let content = content.trim_matches('"');
 
                 let chunk_id_str = match point.id.as_ref()?.point_id_options.as_ref()? {
                     PointIdOptions::Uuid(uuid) => uuid.clone(),
@@ -354,7 +386,7 @@ impl VectorStoreExport for QdrantVectorStore {
 
                 let mut metadata = std::collections::HashMap::new();
                 for (key, value) in &point.payload {
-                    metadata.insert(key.clone(), value.to_string().trim_matches('"').to_string());
+                    metadata.insert(key.clone(), value_to_string(value));
                 }
 
                 all_vectors.push(ExportedVector {
@@ -377,5 +409,38 @@ impl VectorStoreExport for QdrantVectorStore {
     async fn count(&self) -> Result<usize> {
         let stats = self.collection_stats().await?;
         Ok(stats.vector_count as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn str_value(s: &str) -> Value {
+        Value {
+            kind: Some(Kind::StringValue(s.to_string())),
+        }
+    }
+
+    #[test]
+    fn value_as_str_preserves_thai_combining_marks() {
+        // Regression: Value's Display impl escapes strings with `{:?}`, turning
+        // Thai vowels/tone marks into `\u{...}`. Reading payload via the helper
+        // must return the raw UTF-8 text untouched.
+        let thai = "เกษตรพื้นฐาน ธุรกิจต้องห้าม";
+        let value = str_value(thai);
+        assert_eq!(value_as_str(&value), Some(thai));
+        assert_eq!(value_to_string(&value), thai);
+        // The buggy path (Display) would have escaped the combining marks.
+        assert!(value.to_string().contains("\\u{"));
+    }
+
+    #[test]
+    fn value_helpers_handle_non_string_kinds() {
+        let int_val = Value {
+            kind: Some(Kind::IntegerValue(7)),
+        };
+        assert_eq!(value_as_str(&int_val), None);
+        assert_eq!(value_to_string(&int_val), "7");
     }
 }
