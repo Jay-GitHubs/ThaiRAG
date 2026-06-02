@@ -649,7 +649,7 @@ function LlmConfigForm({
                 />
               </Space>
               <Space align="center" wrap>
-                <Tooltip title="Let a thinking-capable model (e.g. gemma3:e4b, qwen3) emit its reasoning channel. OFF (recommended) sends Ollama think:false so the answer lands in the reply — thinking models otherwise sometimes return a blank answer. Ollama-only.">
+                <Tooltip title="Let a thinking-capable model (e.g. gemma4:e4b-it-bf16, qwen3) emit its reasoning channel. OFF (recommended) sends Ollama think:false so the answer lands in the reply — thinking models otherwise sometimes return a blank answer. Ollama-only.">
                   <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
                     Thinking <QuestionCircleOutlined />
                   </Text>
