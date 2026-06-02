@@ -178,29 +178,29 @@ export function SnapshotsCard() {
   ];
 
   return (
-    <Collapse
-      style={{ marginBottom: 16 }}
-      items={[{
-        key: 'snapshots',
-        label: (
-          <Space>
-            <CameraOutlined />
-            <span>Config Snapshots</span>
-            {snapshots.length > 0 && <Tag>{snapshots.length}</Tag>}
-          </Space>
-        ),
-        extra: (
-          <Button
-            size="small"
-            icon={<SaveOutlined />}
-            onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
-          >
-            Save Current Config
-          </Button>
-        ),
-        children: (
-          <>
-            {snapshots.length === 0 && !loading ? (
+    <>
+      <Collapse
+        style={{ marginBottom: 16 }}
+        items={[{
+          key: 'snapshots',
+          label: (
+            <Space>
+              <CameraOutlined />
+              <span>Config Snapshots</span>
+              {snapshots.length > 0 && <Tag>{snapshots.length}</Tag>}
+            </Space>
+          ),
+          extra: (
+            <Button
+              size="small"
+              icon={<SaveOutlined />}
+              onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
+            >
+              Save Current Config
+            </Button>
+          ),
+          children:
+            snapshots.length === 0 && !loading ? (
               <Empty description="No snapshots yet. Save your current configuration to create a restore point." />
             ) : (
               <Table<SnapshotListItem>
@@ -211,44 +211,43 @@ export function SnapshotsCard() {
                 pagination={false}
                 size="small"
               />
-            )}
-            <Modal
-              title="Save Configuration Snapshot"
-              open={modalOpen}
-              onOk={handleCreate}
-              onCancel={() => { setModalOpen(false); setName(''); setDescription(''); }}
-              okText="Save Snapshot"
-              confirmLoading={creating}
-            >
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <div>
-                  <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
-                    Name *
-                  </Typography.Text>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Before switching to Claude"
-                    maxLength={100}
-                  />
-                </div>
-                <div>
-                  <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
-                    Description
-                  </Typography.Text>
-                  <Input.TextArea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Optional notes about this configuration..."
-                    rows={3}
-                    maxLength={500}
-                  />
-                </div>
-              </Space>
-            </Modal>
-          </>
-        ),
-      }]}
-    />
+            ),
+        }]}
+      />
+      <Modal
+        title="Save Configuration Snapshot"
+        open={modalOpen}
+        onOk={handleCreate}
+        onCancel={() => { setModalOpen(false); setName(''); setDescription(''); }}
+        okText="Save Snapshot"
+        confirmLoading={creating}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <div>
+            <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
+              Name *
+            </Typography.Text>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Before switching to Claude"
+              maxLength={100}
+            />
+          </div>
+          <div>
+            <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
+              Description
+            </Typography.Text>
+            <Input.TextArea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional notes about this configuration..."
+              rows={3}
+              maxLength={500}
+            />
+          </div>
+        </Space>
+      </Modal>
+    </>
   );
 }
