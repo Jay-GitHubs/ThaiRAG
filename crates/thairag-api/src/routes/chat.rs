@@ -219,10 +219,6 @@ pub async fn chat_completions(
     // ── Build available scopes for tool router (Feature 3) ─────────
     let available_scopes = build_searchable_scopes(&state, &scope);
 
-    // Open WebUI forwards a per-user email header; its presence is how we detect
-    // an OWUI client and gate OWUI-specific (non-standard) citation source events.
-    let is_openwebui = headers.contains_key("x-openwebui-user-email");
-
     if req.stream {
         handle_stream(
             state,
@@ -236,7 +232,6 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
-            is_openwebui,
         )
         .await
     } else {
@@ -454,9 +449,7 @@ pub(crate) fn build_source_footer(
 /// or ranked by relevance when the answer carries no markers.
 struct CitationSource {
     title: String,
-    preview: String,
     doc_id: String,
-    score: f32,
 }
 
 /// Resolve a human-readable document title for native citations: prefer a title
@@ -492,12 +485,6 @@ fn build_citation_sources(
 ) -> Vec<CitationSource> {
     use std::collections::HashMap;
 
-    let preview_by_chunk: HashMap<&str, &str> = meta
-        .retrieved_chunks
-        .iter()
-        .map(|c| (c.chunk_id.as_str(), c.content_preview.as_str()))
-        .collect();
-
     if !meta.citations.is_empty() {
         let max_marker = meta.citations.iter().map(|c| c.marker).max().unwrap_or(0);
         let mut by_marker: HashMap<u32, &thairag_core::types::Citation> = HashMap::new();
@@ -507,32 +494,21 @@ fn build_citation_sources(
         let mut out = Vec::with_capacity(max_marker as usize);
         for n in 1..=max_marker {
             if let Some(c) = by_marker.get(&n) {
-                let preview = preview_by_chunk
-                    .get(c.chunk_id.as_str())
-                    .copied()
-                    .unwrap_or("")
-                    .to_string();
                 out.push(CitationSource {
                     title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
-                    preview,
                     doc_id: c.doc_id.clone(),
-                    score: c.score,
                 });
             } else if let Some(rc) = meta.retrieved_chunks.iter().find(|r| r.rank == n - 1) {
                 // Marker gap: fill positionally from the ranked retrieval so the
                 // client's `[N]` → source index mapping stays correct.
                 out.push(CitationSource {
                     title: resolve_title(&rc.doc_id, rc.doc_title.as_deref()),
-                    preview: rc.content_preview.clone(),
                     doc_id: rc.doc_id.clone(),
-                    score: rc.score,
                 });
             } else {
                 out.push(CitationSource {
                     title: format!("Source {n}"),
-                    preview: String::new(),
                     doc_id: String::new(),
-                    score: 0.0,
                 });
             }
         }
@@ -553,9 +529,7 @@ fn build_citation_sources(
             .into_iter()
             .map(|c| CitationSource {
                 title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
-                preview: c.content_preview.clone(),
                 doc_id: c.doc_id.clone(),
-                score: c.score,
             })
             .collect()
     }
@@ -1161,7 +1135,6 @@ async fn handle_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
-    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -1374,85 +1347,65 @@ async fn handle_stream(
         let footer_meta = metadata_cell.lock().unwrap().clone();
 
         // ── Native, clickable citations ──────────────────────────────────
-        // Emit the resolved sources two complementary ways: (A) OpenAI-standard
-        // `delta.annotations[].url_citation` (portable to any compatible client)
-        // and (B) Open WebUI native `source` events (richer realtime references,
-        // sent only to detected OWUI clients). When OWUI sources are emitted we
-        // skip the redundant plain-text footer for that client.
+        // Emit the resolved sources as OpenAI-standard
+        // `delta.annotations[].url_citation` — a valid chat.completion.chunk that
+        // compatible clients can render as clickable references and others safely
+        // ignore. (We previously also emitted Open WebUI's `data:{"event":...}`
+        // source passthrough, but that line is not a chat.completion.chunk; OWUI's
+        // OpenAI HTTP connector chokes on it and drops the following chunk —
+        // swallowing the plain-text footer. It never rendered as citations either,
+        // so it was removed.)
         let cite_cfg = &state.config.chat_pipeline;
-        let mut native_owui_emitted = false;
-        if cite_cfg.citation_annotations_enabled
-            || (is_openwebui && cite_cfg.citation_source_events_enabled)
-        {
+        if cite_cfg.citation_annotations_enabled {
             let sources = build_citation_sources(
                 &footer_meta,
                 cite_cfg.source_footer_max.max(1),
                 |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
             );
             if !sources.is_empty() {
-                if cite_cfg.citation_annotations_enabled {
-                    let annotations: Vec<ChatAnnotation> = sources
-                        .iter()
-                        .map(|s| ChatAnnotation {
-                            annotation_type: "url_citation".to_string(),
-                            url_citation: UrlCitation {
-                                url: format!("thairag:///doc/{}", s.doc_id),
-                                title: s.title.clone(),
-                            },
-                        })
-                        .collect();
-                    let ann_chunk = ChatCompletionChunk {
-                        id: id_clone.clone(),
-                        object: "chat.completion.chunk".to_string(),
-                        created,
-                        model: model_clone.clone(),
-                        choices: vec![ChatChunkChoice {
-                            index: 0,
-                            delta: ChatChunkDelta {
-                                role: None,
-                                content: None,
-                                annotations: Some(annotations),
-                            },
-                            finish_reason: None,
-                        }],
-                        usage: None,
-                    };
-                    yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
-                }
-
-                if is_openwebui && cite_cfg.citation_source_events_enabled {
-                    let event = serde_json::json!({
-                        "event": {
-                            "type": "source",
-                            "data": {
-                                "source": { "name": "ThaiRAG Knowledge Base" },
-                                "document": sources.iter().map(|s| s.preview.clone()).collect::<Vec<_>>(),
-                                "metadata": sources.iter().map(|s| serde_json::json!({
-                                    "source": s.title,
-                                    "doc_id": s.doc_id,
-                                })).collect::<Vec<_>>(),
-                                "distances": sources.iter().map(|s| s.score).collect::<Vec<_>>(),
-                            }
-                        }
-                    });
-                    yield Ok(Event::default().data(serde_json::to_string(&event).unwrap()));
-                    native_owui_emitted = true;
-                }
+                let annotations: Vec<ChatAnnotation> = sources
+                    .iter()
+                    .map(|s| ChatAnnotation {
+                        annotation_type: "url_citation".to_string(),
+                        url_citation: UrlCitation {
+                            url: format!("thairag:///doc/{}", s.doc_id),
+                            title: s.title.clone(),
+                        },
+                    })
+                    .collect();
+                let ann_chunk = ChatCompletionChunk {
+                    id: id_clone.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created,
+                    model: model_clone.clone(),
+                    choices: vec![ChatChunkChoice {
+                        index: 0,
+                        delta: ChatChunkDelta {
+                            role: None,
+                            content: None,
+                            annotations: Some(annotations),
+                        },
+                        finish_reason: None,
+                    }],
+                    usage: None,
+                };
+                yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
             }
         }
 
         // Append the plain-text source footer for transparency / fallback.
         // Emitted as a final content chunk so clients without native citation
-        // support still render it inline. Skipped for OWUI when we already sent
-        // native source events (avoids a redundant duplicate list).
-        if !native_owui_emitted
-            && let Some(footer) = build_source_footer(
-                &footer_meta,
-                state.config.chat_pipeline.source_footer_enabled,
-                state.config.chat_pipeline.source_footer_max,
-                &id,
-            )
-        {
+        // support still render it inline. This is always emitted: Open WebUI's
+        // OpenAI HTTP connector does not render the SSE `event:source`
+        // passthrough or `delta.annotations` inline (verified empirically on
+        // v0.8.10 and v0.9.6), so the footer is the only citation surface OWUI
+        // users actually see.
+        if let Some(footer) = build_source_footer(
+            &footer_meta,
+            state.config.chat_pipeline.source_footer_enabled,
+            state.config.chat_pipeline.source_footer_max,
+            &id,
+        ) {
             accumulated_content.push_str(&footer);
             let footer_chunk = ChatCompletionChunk {
                 id: id_clone.clone(),
@@ -1845,7 +1798,7 @@ mod citation_tests {
     }
 
     #[test]
-    fn markers_drive_order_and_pull_preview_from_chunks() {
+    fn markers_drive_order_regardless_of_insertion_order() {
         let meta = PipelineMetadata {
             retrieved_chunks: vec![
                 chunk("a", "preview A", 0.9, 0),
@@ -1864,9 +1817,9 @@ mod citation_tests {
         assert_eq!(sources.len(), 2);
         // Index 0 is marker [1] regardless of citation insertion order.
         assert_eq!(sources[0].title, "Title A");
-        assert_eq!(sources[0].preview, "preview A");
+        assert_eq!(sources[0].doc_id, "doc-a");
         assert_eq!(sources[1].title, "Title B");
-        assert_eq!(sources[1].preview, "preview B");
+        assert_eq!(sources[1].doc_id, "doc-b");
     }
 
     #[test]
@@ -1886,7 +1839,6 @@ mod citation_tests {
         assert_eq!(sources.len(), 2);
         // Slot [1] filled from the rank-0 retrieved chunk.
         assert_eq!(sources[0].doc_id, "doc-a");
-        assert_eq!(sources[0].preview, "preview A");
         assert_eq!(sources[1].title, "Title B");
     }
 
