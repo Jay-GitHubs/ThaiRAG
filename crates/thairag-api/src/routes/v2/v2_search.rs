@@ -165,6 +165,7 @@ pub async fn v2_search(
         top_k: req.top_k.min(retrieval_params.top_k.max(req.top_k)),
         workspace_ids: search_ws_ids,
         unrestricted,
+        query_images: Vec::new(),
     };
 
     let mut search_results = p

@@ -181,6 +181,7 @@ pub async fn test_query(
             top_k: retrieval_params.top_k,
             workspace_ids: vec![ws_id],
             unrestricted: false,
+            query_images: Vec::new(),
         };
         let mut search_results = p
             .search_engine
@@ -295,6 +296,7 @@ pub async fn test_query(
                     &messages,
                     &attachments,
                     &[],
+                    &scope,
                     Some(progress_tx),
                     Some(metadata_cell.clone()),
                 )
@@ -592,6 +594,7 @@ pub async fn test_query_stream(
                 top_k: retrieval_params.top_k,
                 workspace_ids: vec![ws_id],
                 unrestricted: false,
+                query_images: Vec::new(),
             };
             let search_result = p.search_engine.search(&search_query).await;
             search_ms = search_start.elapsed().as_millis() as u64;
@@ -725,7 +728,7 @@ pub async fn test_query_stream(
                     pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), Some(meta_cell_task)).await
                 } else {
                     pipeline
-                        .process_with_attachments(&messages, &attachments, &[], Some(progress_tx), Some(meta_cell_task))
+                        .process_with_attachments(&messages, &attachments, &[], &scope, Some(progress_tx), Some(meta_cell_task))
                         .await
                 }
             })
@@ -1037,6 +1040,7 @@ pub async fn search_stream(
             top_k: retrieval_params.top_k,
             workspace_ids: vec![ws_id],
             unrestricted: false,
+            query_images: Vec::new(),
         };
         let search_result = p.search_engine.search(&search_query).await;
         let search_ms = search_start.elapsed().as_millis() as u64;

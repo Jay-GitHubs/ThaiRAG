@@ -329,6 +329,7 @@ mod tests {
             workspace_ids: vec![],
             top_k: 10,
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = search.search(&query).await.unwrap();
         assert!(
@@ -349,6 +350,7 @@ mod tests {
             workspace_ids: vec![],
             top_k: 10,
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = search.search(&query).await.unwrap();
         assert!(

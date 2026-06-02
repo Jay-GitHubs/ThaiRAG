@@ -61,6 +61,7 @@ impl RagEngine {
             top_k: 5,
             workspace_ids: scope.workspace_ids.clone(),
             unrestricted: scope.is_unrestricted(),
+            query_images: Vec::new(),
         };
 
         let results = self.search.search(&search_query).await?;
@@ -106,6 +107,7 @@ impl RagEngine {
             top_k: 5,
             workspace_ids: scope.workspace_ids.clone(),
             unrestricted: scope.is_unrestricted(),
+            query_images: Vec::new(),
         };
 
         let results = self.search.search(&search_query).await?;
