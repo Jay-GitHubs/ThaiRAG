@@ -247,7 +247,9 @@ test.describe('Users Page', () => {
     await expect(page.getByRole('columnheader', { name: 'User ID' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Created' })).toBeVisible();
 
-    // Current user should be in the list
+    // Current user should be in the list. Filter first — the table paginates at
+    // 20/page, so on a busy DB the user may otherwise be on a later page.
+    await page.locator('[data-tour="users-search"] input').fill(TEST_EMAIL);
     await expect(page.getByRole('cell', { name: TEST_EMAIL })).toBeVisible();
   });
 });
@@ -272,7 +274,9 @@ test.describe('Health Page', () => {
     await navigateTo(page, 'Health');
 
     await page.getByRole('button', { name: 'Run Deep Check' }).click();
-    await expect(page.getByText('ok')).toBeVisible({ timeout: 10000 });
+    // Deep check probes the embedding provider, which can be slow (cold model)
+    // — allow generous headroom.
+    await expect(page.getByText('ok').first()).toBeVisible({ timeout: 30_000 });
   });
 });
 

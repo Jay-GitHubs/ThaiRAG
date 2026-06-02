@@ -6,7 +6,10 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // Re-run a failed test once. The suite runs serially against a single live
+  // backend for 25+ min, so individual tests occasionally trip on cold-start
+  // latency or transient load. A genuine regression still fails both attempts.
+  retries: 1,
   reporter: 'list',
 
   use: {

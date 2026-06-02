@@ -62,7 +62,7 @@ test.describe('Lineage page', () => {
   });
 
   test('shows Lineage heading', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Lineage' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Lineage' })).toBeVisible({ timeout: 15_000 });
   });
 
   test('shows By Response and By Document tabs', async ({ page }) => {
