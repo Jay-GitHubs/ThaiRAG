@@ -25,6 +25,7 @@ import {
   QuestionCircleOutlined,
   ThunderboltOutlined,
   InfoCircleOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import { getChatPipelineConfig, updateChatPipelineConfig, syncModels, getFeedbackStats } from '../../api/settings';
 import { useLlmProfiles } from '../../hooks/useSettings';
@@ -39,6 +40,20 @@ import type {
 } from '../../api/types';
 
 const { Text, Paragraph } = Typography;
+
+// Compact marker for experimental, unproven pipeline features. These are
+// additive and default-off; enabling several at once can degrade answer
+// quality (e.g. terse one-word replies) and slow responses, so they should
+// be turned on one at a time and measured rather than all-on by default.
+function ExperimentalTag() {
+  return (
+    <Tooltip title="Experimental — unproven, adds latency/cost, and can change or shorten answers. Enable one at a time and measure; do not turn on everything at once.">
+      <Tag color="orange" icon={<ExperimentOutlined />} style={{ fontSize: 11 }}>
+        Experimental
+      </Tag>
+    </Tooltip>
+  );
+}
 
 // ── Agent descriptions with hints ────────────────────────────────────
 
@@ -1670,6 +1685,14 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
 
           {/* ── Next-Gen RAG Features ─────────────────── */}
           <Text strong>Next-Gen RAG</Text>
+          <Alert
+            type="warning"
+            showIcon
+            icon={<ExperimentOutlined />}
+            message="Experimental features — don't enable everything"
+            description="These are additive, unproven research features. Each adds LLM calls (latency + cost), and several change how answers are written — enabling many at once commonly produces terse, one-word, or degraded responses. Turn them on one at a time and measure quality before adding the next. For a reliable baseline, leave this whole section off."
+            style={{ fontSize: 12 }}
+          />
           <Collapse
             size="small"
             items={[
@@ -1680,6 +1703,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Self-RAG</span>
                     <Switch size="small" checked={selfRagEnabled} onChange={setSelfRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={selfRagEnabled ? 'green' : 'default'}>{selfRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('self_rag', selfRagEnabled)}
                   </Space>
                 ),
@@ -1708,6 +1732,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Graph RAG</span>
                     <Switch size="small" checked={graphRagEnabled} onChange={setGraphRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={graphRagEnabled ? 'green' : 'default'}>{graphRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('graph_rag', graphRagEnabled)}
                   </Space>
                 ),
@@ -1745,6 +1770,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Corrective RAG (CRAG)</span>
                     <Switch size="small" checked={cragEnabled} onChange={setCragEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={cragEnabled ? 'green' : 'default'}>{cragEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                   </Space>
                 ),
                 children: (
@@ -1792,6 +1818,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Speculative RAG</span>
                     <Switch size="small" checked={speculativeRagEnabled} onChange={setSpeculativeRagEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={speculativeRagEnabled ? 'green' : 'default'}>{speculativeRagEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('speculative_rag', speculativeRagEnabled)}
                   </Space>
                 ),
@@ -1823,6 +1850,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Map-Reduce RAG</span>
                     <Switch size="small" checked={mapReduceEnabled} onChange={setMapReduceEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={mapReduceEnabled ? 'green' : 'default'}>{mapReduceEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('map_reduce', mapReduceEnabled)}
                   </Space>
                 ),
@@ -1852,6 +1880,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>RAGAS Evaluation</span>
                     <Switch size="small" checked={ragasEnabled} onChange={setRagasEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={ragasEnabled ? 'green' : 'default'}>{ragasEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('ragas', ragasEnabled)}
                   </Space>
                 ),
@@ -1881,6 +1910,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Contextual Compression</span>
                     <Switch size="small" checked={compressionEnabled} onChange={setCompressionEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={compressionEnabled ? 'green' : 'default'}>{compressionEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('compression', compressionEnabled)}
                   </Space>
                 ),
@@ -1910,6 +1940,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Multi-modal RAG</span>
                     <Switch size="small" checked={multimodalEnabled} onChange={setMultimodalEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={multimodalEnabled ? 'green' : 'default'}>{multimodalEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('multimodal', multimodalEnabled)}
                   </Space>
                 ),
@@ -1939,6 +1970,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>RAPTOR Hierarchical Summaries</span>
                     <Switch size="small" checked={raptorEnabled} onChange={setRaptorEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={raptorEnabled ? 'green' : 'default'}>{raptorEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('raptor', raptorEnabled)}
                   </Space>
                 ),
@@ -1976,6 +2008,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>ColBERT Late Interaction Reranking</span>
                     <Switch size="small" checked={colbertEnabled} onChange={setColbertEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={colbertEnabled ? 'green' : 'default'}>{colbertEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('colbert', colbertEnabled)}
                   </Space>
                 ),
@@ -2006,6 +2039,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Active Learning</span>
                     <Switch size="small" checked={activeLearningEnabled} onChange={setActiveLearningEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={activeLearningEnabled ? 'green' : 'default'}>{activeLearningEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                   </Space>
                 ),
                 children: (
@@ -2041,6 +2075,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Context Compaction</span>
                     <Switch size="small" checked={contextCompactionEnabled} onChange={setContextCompactionEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={contextCompactionEnabled ? 'green' : 'default'}>{contextCompactionEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                   </Space>
                 ),
                 children: (
@@ -2081,6 +2116,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Personal Memory</span>
                     <Switch size="small" checked={personalMemoryEnabled} onChange={setPersonalMemoryEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={personalMemoryEnabled ? 'green' : 'default'}>{personalMemoryEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('personal_memory', personalMemoryEnabled)}
                   </Space>
                 ),
@@ -2130,6 +2166,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     <span>Live Source Retrieval</span>
                     <Switch size="small" checked={liveRetrievalEnabled} onChange={setLiveRetrievalEnabled} onClick={(_, e) => e.stopPropagation()} />
                     <Tag color={liveRetrievalEnabled ? 'green' : 'default'}>{liveRetrievalEnabled ? 'ON' : 'OFF'}</Tag>
+                    <ExperimentalTag />
                     {featureModelTag('live_retrieval', liveRetrievalEnabled)}
                   </Space>
                 ),

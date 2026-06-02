@@ -121,6 +121,89 @@ Practical guidance:
 
 ---
 
+## Full flag reference
+
+Every chat-pipeline flag, its default, and what it costs. Defaults are the
+`ChatPipelineConfig` defaults in `crates/thairag-config/src/schema.rs`.
+
+> ### ⚠️ Do not "enable everything"
+> The Advanced and Next-Gen RAG features are **additive, default-off, and mostly
+> unproven**. Each one adds LLM calls (latency + cost), and several of them **change
+> how the answer is written**. Turning them all on at once is the most common cause of
+> the *"the server replies with one word instead of a paragraph"* symptom — features
+> like `structured_extraction`, `map_reduce`, and `compression` deliberately strip the
+> answer down to extracted spans. **Enable one feature at a time and measure.** For a
+> reliable baseline, leave the entire Experimental section off (this is the recommended
+> default above). In the Admin UI these are marked with an **Experimental** tag.
+
+### Core pipeline (safe to tune)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Master switch for the agentic pipeline. Off = plain retrieve-then-answer. |
+| `orchestrator_enabled` | `false` | **Lean vs Full.** On = full pipeline (analysis + curation + any enabled agents). |
+| `llm_mode` | `chat` | `chat` (agents share the main chat LLM), `shared` (one dedicated agent LLM), or `per-agent`. |
+| `query_analyzer_enabled` | `true` | Classifies/normalizes the query. Core agent. |
+| `query_rewriter_enabled` | `true` | Reformulates the query for better recall. Best single quality lever when wording differs from source. |
+| `context_curator_enabled` | `true` | Trims/orders retrieved context before generation. Core agent. |
+| `language_adapter_enabled` | `true` | Aligns response language. Skipped in streaming mode. |
+| `quality_guard_enabled` | `false` | Post-generation safety/format check. **Inert in lean mode** — needs `orchestrator_enabled`. |
+| `max_context_tokens` | `4096` | Token budget for the context passed to the generator. |
+| `agent_max_tokens` | `2048` | Max output tokens per agent LLM call. |
+| `max_llm_calls_per_request` | `12` | Hard ceiling on LLM calls per request (1–50). A budget guard, not a feature. |
+
+### Output-shaping flags (these change the answer text)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `auto_summarize` | `true` | Summarizes long conversation history once it exceeds the threshold. |
+| `source_footer_enabled` | `true` | Appends a markdown "Sources" footer. Cheap (no extra LLM call). |
+| `structured_citations_enabled` | `true` | Parses `[N]` markers into per-claim attributions. Cheap (no extra LLM call). |
+| `structured_extraction_enabled` | `false` | **⚠️ Experimental Thai lever — config-only, not in the UI.** Extract-then-answer: copies the verbatim answer span, then composes using *only* that span. **This is the most likely cause of terse, one-word answers.** The benchmark showed it *hurt* (0.22→0.08). Leave off. |
+
+### Advanced features (off by default — enable selectively)
+
+| Flag | Default | Cost | What it does |
+|---|---|---|---|
+| `conversation_memory_enabled` | `false` | +1 LLM call | Per-user cross-session conversation summaries. |
+| `retrieval_refinement_enabled` | `false` | +retries | Retries search with reformulated queries when recall is weak. |
+| `tool_use_enabled` | `false` | +N LLM calls | LLM picks which workspaces/strategies to search (multi-KB reasoning). |
+| `adaptive_threshold_enabled` | `false` | low | Adjusts the quality-guard threshold from thumbs up/down feedback. |
+
+### Next-Gen RAG (⚠️ experimental — unproven, costly, can degrade answers)
+
+All default `false`. Each adds LLM calls; several rewrite or shorten the answer. Enable
+**one at a time** and measure. These carry an **Experimental** tag in the Admin UI.
+
+| Flag | What it does | Why it can hurt |
+|---|---|---|
+| `self_rag_enabled` | Decides whether to retrieve at all; skips search for greetings/general-knowledge. | A wrong skip answers from general knowledge instead of your docs. |
+| `graph_rag_enabled` | Extracts entities → knowledge graph → traverses relationships at retrieval. | Heavy ingest + query cost; noisy on small corpora. |
+| `crag_enabled` | Falls back to web search when local context is weak. Needs a web-search URL. | External dependency; off-corpus answers. |
+| `speculative_rag_enabled` | Generates several candidate answers in parallel, ranks, picks best. | Several × the LLM calls per request. |
+| `map_reduce_enabled` | Extracts per-chunk (MAP) then synthesizes (REDUCE) for many-doc queries. | Extraction step can produce terse, list-like answers. |
+| `ragas_enabled` | Samples responses and scores faithfulness/relevancy for monitoring. | Pure overhead — eval only, no answer benefit. |
+| `compression_enabled` | LLMLingua-style: drops low-importance content from context. | Aggressive compression strips facts → shorter/wrong answers. |
+| `multimodal_enabled` | Generates text descriptions of embedded images so they're searchable. | Heavy; vision-LLM latency on image-bearing docs. |
+| `raptor_enabled` | Builds a tree of recursive summaries over retrieved chunks. | Many extra summary calls; unproven gain. |
+| `colbert_enabled` | Fine-grained LLM reranking of top results (late-interaction style). | One LLM call per reranked result. |
+| `active_learning_enabled` | Boosts/penalizes chunks from feedback over time. | Slow-acting; needs feedback volume to matter. |
+| `context_compaction_enabled` | Summarizes old turns near the context-window limit (like Claude Code). | Summarization can lose earlier detail. |
+| `personal_memory_enabled` | Stores/retrieves per-user memories from the vector DB. | Extra retrieval + injection per query. |
+| `live_retrieval_enabled` | Fetches from MCP connectors in real time when the KB is empty. | Needs active connectors; network latency. |
+
+### Guardrails (off by default — security/compliance, not quality)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `input_guardrails_enabled` | `false` | Runs deterministic detectors (Thai ID, phone, email, cards, secrets, prompt-injection) before query analysis. |
+| `output_guardrails_enabled` | `false` | Runs the same detectors after generation; can block/redact/regenerate. |
+
+These are deterministic (no LLM cost) and don't affect answer quality — enable them for
+PDPA/PII compliance, not for accuracy.
+
+---
+
 ## Grounding / hallucination
 
 Across all 9 configurations, ThaiRAG produced **zero hallucinations**, and the
