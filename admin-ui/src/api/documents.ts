@@ -82,12 +82,25 @@ export async function listDocumentImages(workspaceId: string, docId: string) {
 }
 
 /**
- * Build the URL for an extracted image blob. The endpoint streams the bytes
- * with the correct content-type, so we can drop this into an `<img src>`.
- * ACL is enforced at the API; unauthorized requests return 404.
+ * Build the URL path for an extracted image blob. ACL is enforced at the API.
+ * Note: the endpoint is JWT-gated, so a bare `<img src>` won't authenticate —
+ * fetch the bytes with `fetchDocumentImageBlob` (which sends the Bearer header)
+ * and render an object URL instead.
  */
 export function documentImageUrl(workspaceId: string, docId: string, imageId: string) {
   return `/api/km/workspaces/${workspaceId}/documents/${docId}/images/${imageId}`;
+}
+
+/** Fetch an extracted image's bytes through the authed client for use as an object URL. */
+export async function fetchDocumentImageBlob(
+  workspaceId: string,
+  docId: string,
+  imageId: string,
+) {
+  const res = await client.get(documentImageUrl(workspaceId, docId, imageId), {
+    responseType: 'blob',
+  });
+  return res.data as Blob;
 }
 
 export async function reprocessDocument(workspaceId: string, docId: string) {
