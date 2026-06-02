@@ -385,6 +385,25 @@ pub struct ChatChunkDelta {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// OpenAI-standard citation annotations. When present, compatible clients
+    /// (e.g. Open WebUI) render native, clickable source references.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Vec<ChatAnnotation>>,
+}
+
+/// An OpenAI-standard message annotation. Currently only `url_citation` is used.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatAnnotation {
+    #[serde(rename = "type")]
+    pub annotation_type: String,
+    pub url_citation: UrlCitation,
+}
+
+/// A single source reference inside a `url_citation` annotation.
+#[derive(Debug, Clone, Serialize)]
+pub struct UrlCitation {
+    pub url: String,
+    pub title: String,
 }
 
 // ── Multi-Modal Document Types ───────────────────────────────────────
