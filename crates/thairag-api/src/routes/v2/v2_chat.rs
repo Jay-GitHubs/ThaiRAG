@@ -367,6 +367,7 @@ async fn handle_v2_non_stream(
                     &augmented_messages,
                     &attachments,
                     &memories,
+                    &scope,
                     Some(progress_tx),
                     Some(metadata_cell.clone()),
                 )
@@ -580,6 +581,7 @@ async fn handle_v2_stream(
                     &augmented_messages,
                     &attachments,
                     &memories,
+                    &scope,
                     None,
                     Some(metadata_cell.clone()),
                 )

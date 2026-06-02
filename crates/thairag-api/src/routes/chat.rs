@@ -354,12 +354,22 @@ pub(crate) fn process_request_attachments(
         state
             .metrics
             .record_attachment(&a.mime_type, "success", extraction_secs);
+        // Retain raw image bytes only for image uploads when CLIP visual search
+        // is enabled, so the attachment can drive image→image KB retrieval.
+        let image_bytes =
+            if a.mime_type.starts_with("image/") && state.providers().image_embedding.is_some() {
+                Some(bytes.clone())
+            } else {
+                None
+            };
+
         out.push(SessionAttachment {
             name: a.name.clone(),
             mime_type: a.mime_type.clone(),
             text,
             size_bytes: bytes.len(),
             content_hash,
+            image_bytes,
         });
     }
 
@@ -767,6 +777,7 @@ async fn handle_non_stream(
                     &augmented_messages,
                     &attachments,
                     &memories,
+                    &scope,
                     Some(progress_tx),
                     Some(metadata_cell.clone()),
                 )
@@ -1103,6 +1114,7 @@ async fn handle_stream(
                         &augmented_messages_clone,
                         &attachments,
                         &memories_clone,
+                        &scope_clone,
                         Some(progress_tx),
                         Some(metadata_cell_clone),
                     )

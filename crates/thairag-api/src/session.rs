@@ -284,6 +284,7 @@ mod tests {
             text: text.to_string(),
             size_bytes: text.len(),
             content_hash: "deadbeef".to_string(),
+            image_bytes: None,
         }
     }
 
