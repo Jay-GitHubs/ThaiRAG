@@ -31,6 +31,7 @@ pub fn create_llm_provider_with_options(
             ollama_keep_alive,
             config.ollama_num_ctx_max,
             config.temperature,
+            config.thinking_enabled,
         )),
         LlmKind::Claude => Box::new(claude::ClaudeProvider::with_timeout(
             &config.api_key,

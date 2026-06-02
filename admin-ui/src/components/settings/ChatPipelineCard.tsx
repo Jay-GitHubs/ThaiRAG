@@ -187,9 +187,10 @@ interface LlmFormState {
   profile_id?: string;
   temperature?: number;
   max_tokens?: number;
+  thinking_enabled?: boolean;
 }
 
-const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '' };
+const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '', thinking_enabled: false };
 
 function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
   return {
@@ -200,6 +201,7 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     profile_id: info.profile_id,
     temperature: info.temperature,
     max_tokens: info.max_tokens,
+    thinking_enabled: info.thinking_enabled,
   };
 }
 
@@ -227,6 +229,8 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean, hadProfileBef
   } else {
     update.clear_temperature = true;
   }
+  // Thinking channel: always send the explicit bool (defaults to off).
+  update.thinking_enabled = form.thinking_enabled ?? false;
   // max_tokens is set-only — the API has no clear flag, so leaving it blank keeps the existing value.
   if (form.max_tokens != null) {
     update.max_tokens = form.max_tokens;
@@ -643,6 +647,21 @@ function LlmConfigForm({
                   placeholder="inherit"
                   style={{ width: 120 }}
                 />
+              </Space>
+              <Space align="center" wrap>
+                <Tooltip title="Let a thinking-capable model (e.g. gemma3:e4b, qwen3) emit its reasoning channel. OFF (recommended) sends Ollama think:false so the answer lands in the reply — thinking models otherwise sometimes return a blank answer. Ollama-only.">
+                  <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
+                    Thinking <QuestionCircleOutlined />
+                  </Text>
+                </Tooltip>
+                <Switch
+                  size="small"
+                  checked={form.thinking_enabled ?? false}
+                  onChange={(checked) => onChange({ ...form, thinking_enabled: checked })}
+                />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {form.thinking_enabled ? 'On (model default reasoning)' : 'Off (think:false)'}
+                </Text>
               </Space>
             </Space>
           ),

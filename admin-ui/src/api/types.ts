@@ -279,6 +279,8 @@ export interface LlmProviderInfo {
   ollama_num_ctx_max?: number;
   /** Sampling temperature. Omitted/undefined = inherit model default. Lower = more deterministic. */
   temperature?: number;
+  /** Allow the model to emit its thinking channel. false (default) sends Ollama `think: false`. Ollama-only. */
+  thinking_enabled: boolean;
 }
 
 export interface EmbeddingProviderInfo {
@@ -420,7 +422,7 @@ export interface DocumentConfigResponse {
   ai_preprocessing: AiPreprocessingConfig;
 }
 
-export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean; ollama_num_ctx_max?: number; temperature?: number; clear_temperature?: boolean };
+export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean; ollama_num_ctx_max?: number; temperature?: number; clear_temperature?: boolean; thinking_enabled?: boolean };
 
 // ── API Key Vault ──────────────────────────────────────────────────
 export interface VaultKeyInfo {

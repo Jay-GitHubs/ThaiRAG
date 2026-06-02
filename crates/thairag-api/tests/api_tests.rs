@@ -181,6 +181,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
                 profile_id: None,
                 ollama_num_ctx_max: 0,
                 temperature: None,
+                thinking_enabled: false,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
@@ -1633,6 +1634,7 @@ fn build_streaming_test_app() -> Router {
                 profile_id: None,
                 ollama_num_ctx_max: 0,
                 temperature: None,
+                thinking_enabled: false,
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,

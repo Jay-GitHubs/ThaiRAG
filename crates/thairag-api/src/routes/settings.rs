@@ -177,6 +177,9 @@ pub struct LlmProviderInfo {
     /// Sampling temperature. `None` = inherit the model default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Whether the model is allowed to emit its thinking channel. `false`
+    /// (default) sends Ollama `think: false`. Ollama-only.
+    pub thinking_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -410,6 +413,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             profile_id: p.llm.profile_id.clone(),
             ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
             temperature: p.llm.temperature,
+            thinking_enabled: p.llm.thinking_enabled,
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -444,6 +448,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             profile_id: v.profile_id.clone(),
             ollama_num_ctx_max: v.ollama_num_ctx_max,
             temperature: v.temperature,
+            thinking_enabled: v.thinking_enabled,
         }),
         image_embedding: p.image_embedding.as_ref().map(|ie| ImageEmbeddingInfo {
             enabled: ie.enabled,
@@ -509,6 +514,11 @@ pub struct UpdateLlmConfig {
     pub temperature: Option<f32>,
     /// When true, clear the temperature override (inherit the model default).
     pub clear_temperature: Option<bool>,
+    /// Allow the model to emit its thinking channel. `Some(false)` (the default
+    /// behavior) sends Ollama `think: false` so the answer lands in `content`;
+    /// `Some(true)` preserves the model's native thinking. `None` leaves the
+    /// current setting unchanged. Ollama-only.
+    pub thinking_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -570,6 +580,9 @@ pub async fn update_provider_config(
             pc.llm.temperature = None;
         } else if let Some(t) = llm.temperature {
             pc.llm.temperature = Some(t);
+        }
+        if let Some(te) = llm.thinking_enabled {
+            pc.llm.thinking_enabled = te;
         }
         // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
         // clear base_url so it doesn't keep the old Ollama URL
@@ -671,6 +684,7 @@ pub async fn update_provider_config(
                 profile_id: None,
                 ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
                 temperature: pc.llm.temperature,
+                thinking_enabled: pc.llm.thinking_enabled,
             }
         });
         if let Some(kind) = vis.kind {
@@ -696,6 +710,9 @@ pub async fn update_provider_config(
             current.temperature = None;
         } else if let Some(t) = vis.temperature {
             current.temperature = Some(t);
+        }
+        if let Some(te) = vis.thinking_enabled {
+            current.thinking_enabled = te;
         }
         if vis.clear_profile.unwrap_or(false) {
             current.profile_id = None;
@@ -1884,6 +1901,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         profile_id: llm.profile_id.clone(),
         ollama_num_ctx_max: llm.ollama_num_ctx_max,
         temperature: llm.temperature,
+        thinking_enabled: llm.thinking_enabled,
     }
 }
 
@@ -3644,6 +3662,10 @@ pub async fn update_chat_pipeline_config(
             cfg.temperature = None;
         } else if let Some(t) = update.temperature {
             cfg.temperature = Some(t);
+        }
+        // Thinking-channel management (Ollama-only)
+        if let Some(te) = update.thinking_enabled {
+            cfg.thinking_enabled = te;
         }
         // Profile ID management
         if update.clear_profile == Some(true) {
