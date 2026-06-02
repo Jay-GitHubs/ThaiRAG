@@ -17,6 +17,7 @@ import {
   Tooltip,
   Segmented,
   Alert,
+  Popconfirm,
 } from 'antd';
 import {
   RobotOutlined,
@@ -1128,6 +1129,43 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
     }
   }
 
+  // One-click return to the recommended "Balanced" baseline: lean + shared mode
+  // with every optional/experimental feature off. Core agents are left as-is
+  // (they're default-on and benign), and the chat model is not touched. This is
+  // the antidote to "I enabled everything and now answers are one word".
+  function resetToBalanced() {
+    setLlmMode('shared');
+    setAgentToggles((prev) => ({
+      ...prev,
+      pipeline_orchestrator: false,
+      quality_guard: false,
+    }));
+    // Advanced Features
+    setConversationMemoryEnabled(false);
+    setRetrievalRefinementEnabled(false);
+    setToolUseEnabled(false);
+    setAdaptiveThresholdEnabled(false);
+    // Next-Gen RAG
+    setSelfRagEnabled(false);
+    setGraphRagEnabled(false);
+    setCragEnabled(false);
+    setSpeculativeRagEnabled(false);
+    setMapReduceEnabled(false);
+    setRagasEnabled(false);
+    setCompressionEnabled(false);
+    setMultimodalEnabled(false);
+    setRaptorEnabled(false);
+    setColbertEnabled(false);
+    setActiveLearningEnabled(false);
+    setContextCompactionEnabled(false);
+    setPersonalMemoryEnabled(false);
+    setLiveRetrievalEnabled(false);
+    // Guardrails
+    setInputGuardrailsEnabled(false);
+    setOutputGuardrailsEnabled(false);
+    message.info('Reset to Balanced — review the switches and click Save to apply.');
+  }
+
   if (loading) return <Spin tip="Loading chat pipeline config..." />;
 
   const agentKeys = Object.keys(chatAgents);
@@ -1148,14 +1186,25 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         </Space>
       }
       extra={
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={saving}
-          onClick={handleSave}
-        >
-          Save
-        </Button>
+        <Space>
+          <Popconfirm
+            title="Reset to Balanced (recommended)"
+            description="Turns off the Orchestrator, Quality Guard, and every Advanced / Next-Gen / Guardrail feature, and sets LLM mode to Shared. Core agents and the chat model are left unchanged. You'll still need to click Save."
+            okText="Reset"
+            cancelText="Cancel"
+            onConfirm={resetToBalanced}
+          >
+            <Button icon={<ExperimentOutlined />}>Reset to Balanced</Button>
+          </Popconfirm>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            onClick={handleSave}
+          >
+            Save
+          </Button>
+        </Space>
       }
     >
       {!enabled ? (
