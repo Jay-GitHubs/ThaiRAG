@@ -982,6 +982,16 @@ pub struct ChatPipelineConfig {
     /// API response. Cheap (no extra LLM call) — default on.
     #[serde(default = "default_true_val")]
     pub structured_citations_enabled: bool,
+    /// Emit OpenAI-standard `delta.annotations[].url_citation` entries in the
+    /// streaming response so any compatible client renders native, clickable
+    /// citations instead of the plain-text footer. Portable across clients.
+    #[serde(default = "default_true_val")]
+    pub citation_annotations_enabled: bool,
+    /// Emit Open WebUI native `source` events (`data: {"event": ...}`) in the
+    /// stream so OWUI shows realtime citation references with document previews.
+    /// Only sent to detected Open WebUI clients (forwarded-user-email header).
+    #[serde(default = "default_true_val")]
+    pub citation_source_events_enabled: bool,
 
     // ── Feature: Structured Extraction (Thai answer-quality experiment) ──
     /// Extract-then-answer: before generating, prompt the model to copy the
@@ -1264,6 +1274,8 @@ impl Default for ChatPipelineConfig {
             source_footer_enabled: true,
             source_footer_max: default_source_footer_max(),
             structured_citations_enabled: true,
+            citation_annotations_enabled: true,
+            citation_source_events_enabled: true,
             // Structured Extraction (opt-in experiment)
             structured_extraction_enabled: false,
             structured_extraction_llm: None,

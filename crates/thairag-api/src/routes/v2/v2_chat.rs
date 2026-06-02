@@ -612,6 +612,7 @@ async fn handle_v2_stream(
                 delta: ChatChunkDelta {
                     role: Some("assistant".to_string()),
                     content: None,
+                    annotations: None,
                 },
                 finish_reason: None,
             }],
@@ -637,6 +638,7 @@ async fn handle_v2_stream(
                             delta: ChatChunkDelta {
                                 role: None,
                                 content: Some(text),
+                                annotations: None,
                             },
                             finish_reason: None,
                         }],
@@ -679,6 +681,7 @@ async fn handle_v2_stream(
                 delta: ChatChunkDelta {
                     role: None,
                     content: None,
+                    annotations: None,
                 },
                 finish_reason: Some("stop".to_string()),
             }],
