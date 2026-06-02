@@ -335,6 +335,14 @@ pub struct LlmConfig {
     /// add variety. Currently honored by the Ollama provider only.
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Whether to let a thinking-capable model emit its reasoning channel.
+    /// Defaults to `false` (thinking OFF) so the provider sends Ollama
+    /// `think: false`, forcing the model to write its answer into `content`.
+    /// Native thinking models (e.g. gemma3:e4b) otherwise sometimes spend their
+    /// whole output in the reasoning channel, leaving `content` empty → a blank
+    /// chat answer. Ollama-only; ignored by other providers.
+    #[serde(default)]
+    pub thinking_enabled: bool,
 }
 
 impl std::fmt::Debug for LlmConfig {
@@ -355,6 +363,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("profile_id", &self.profile_id)
             .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
             .field("temperature", &self.temperature)
+            .field("thinking_enabled", &self.thinking_enabled)
             .finish()
     }
 }
@@ -1864,6 +1873,7 @@ mod tests {
                     profile_id: None,
                     ollama_num_ctx_max: default_ollama_num_ctx_max(),
                     temperature: None,
+                    thinking_enabled: false,
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,
