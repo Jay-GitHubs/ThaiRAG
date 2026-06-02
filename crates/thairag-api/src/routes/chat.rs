@@ -19,9 +19,10 @@ use thairag_core::ThaiRagError;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::DocumentProcessor;
 use thairag_core::types::{
-    Attachment, ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk,
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatUsage, LlmStreamResponse,
-    MetadataCell, PersonalMemory, PipelineMetadata, SessionAttachment, SessionId, UserId,
+    Attachment, ChatAnnotation, ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatUsage, DocId,
+    LlmStreamResponse, MetadataCell, PersonalMemory, PipelineMetadata, SessionAttachment,
+    SessionId, UrlCitation, UserId,
 };
 
 use crate::app_state::AppState;
@@ -218,6 +219,10 @@ pub async fn chat_completions(
     // ── Build available scopes for tool router (Feature 3) ─────────
     let available_scopes = build_searchable_scopes(&state, &scope);
 
+    // Open WebUI forwards a per-user email header; its presence is how we detect
+    // an OWUI client and gate OWUI-specific (non-standard) citation source events.
+    let is_openwebui = headers.contains_key("x-openwebui-user-email");
+
     if req.stream {
         handle_stream(
             state,
@@ -231,6 +236,7 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
+            is_openwebui,
         )
         .await
     } else {
@@ -441,6 +447,118 @@ pub(crate) fn build_source_footer(
     }
     out.push_str(&format!("\n_Response ID: `{response_id}`_"));
     Some(out)
+}
+
+/// A single resolved citation source, positionally aligned to the answer's
+/// inline `[N]` markers (index 0 → marker `[1]`) when citations are present,
+/// or ranked by relevance when the answer carries no markers.
+struct CitationSource {
+    title: String,
+    preview: String,
+    doc_id: String,
+    score: f32,
+}
+
+/// Resolve a human-readable document title for native citations: prefer a title
+/// already on the chunk, otherwise look the document up by id, finally fall back
+/// to the raw id.
+fn resolve_doc_title(state: &AppState, doc_id: &str, fallback: Option<&str>) -> String {
+    if let Some(t) = fallback
+        && !t.is_empty()
+    {
+        return t.to_string();
+    }
+    if let Ok(uuid) = doc_id.parse::<Uuid>()
+        && let Ok(doc) = state.km_store.get_document(DocId(uuid))
+        && !doc.title.is_empty()
+    {
+        return doc.title;
+    }
+    doc_id.to_string()
+}
+
+/// Resolve the per-source citation list used to drive native (clickable)
+/// citations in compatible clients. Prefers the deterministically-parsed
+/// `[N]` markers (so marker order is preserved); falls back to the
+/// contributed retrieved chunks ranked by score when the answer has none.
+///
+/// `resolve_title` maps a `(doc_id, chunk_fallback_title)` pair to a display
+/// title — injected so the ordering logic can be unit-tested without an
+/// `AppState`/document store.
+fn build_citation_sources(
+    meta: &PipelineMetadata,
+    max: usize,
+    resolve_title: impl Fn(&str, Option<&str>) -> String,
+) -> Vec<CitationSource> {
+    use std::collections::HashMap;
+
+    let preview_by_chunk: HashMap<&str, &str> = meta
+        .retrieved_chunks
+        .iter()
+        .map(|c| (c.chunk_id.as_str(), c.content_preview.as_str()))
+        .collect();
+
+    if !meta.citations.is_empty() {
+        let max_marker = meta.citations.iter().map(|c| c.marker).max().unwrap_or(0);
+        let mut by_marker: HashMap<u32, &thairag_core::types::Citation> = HashMap::new();
+        for c in &meta.citations {
+            by_marker.entry(c.marker).or_insert(c);
+        }
+        let mut out = Vec::with_capacity(max_marker as usize);
+        for n in 1..=max_marker {
+            if let Some(c) = by_marker.get(&n) {
+                let preview = preview_by_chunk
+                    .get(c.chunk_id.as_str())
+                    .copied()
+                    .unwrap_or("")
+                    .to_string();
+                out.push(CitationSource {
+                    title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
+                    preview,
+                    doc_id: c.doc_id.clone(),
+                    score: c.score,
+                });
+            } else if let Some(rc) = meta.retrieved_chunks.iter().find(|r| r.rank == n - 1) {
+                // Marker gap: fill positionally from the ranked retrieval so the
+                // client's `[N]` → source index mapping stays correct.
+                out.push(CitationSource {
+                    title: resolve_title(&rc.doc_id, rc.doc_title.as_deref()),
+                    preview: rc.content_preview.clone(),
+                    doc_id: rc.doc_id.clone(),
+                    score: rc.score,
+                });
+            } else {
+                out.push(CitationSource {
+                    title: format!("Source {n}"),
+                    preview: String::new(),
+                    doc_id: String::new(),
+                    score: 0.0,
+                });
+            }
+        }
+        out
+    } else {
+        let mut sources: Vec<&thairag_core::types::RetrievedChunkMeta> = meta
+            .retrieved_chunks
+            .iter()
+            .filter(|c| c.contributed)
+            .collect();
+        sources.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sources.truncate(max);
+        sources
+            .into_iter()
+            .map(|c| CitationSource {
+                title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
+                preview: c.content_preview.clone(),
+                doc_id: c.doc_id.clone(),
+                score: c.score,
+            })
+            .collect()
+    }
 }
 
 /// Load conversation memory entries for a user from the KV store.
@@ -1043,6 +1161,7 @@ async fn handle_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
+    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -1204,6 +1323,7 @@ async fn handle_stream(
                 delta: ChatChunkDelta {
                     role: Some("assistant".to_string()),
                     content: None,
+                    annotations: None,
                 },
                 finish_reason: None,
             }],
@@ -1230,6 +1350,7 @@ async fn handle_stream(
                             delta: ChatChunkDelta {
                                 role: None,
                                 content: Some(token),
+                                annotations: None,
                             },
                             finish_reason: None,
                         }],
@@ -1247,17 +1368,91 @@ async fn handle_stream(
             }
         }
 
-        // Append source footer for end-user transparency (e.g. Open WebUI).
-        // Emitted as a final content chunk so the client renders it inline.
-        // Snapshot the metadata before any further await so the MutexGuard
-        // never crosses an await point (it isn't Send).
+        // Snapshot the pipeline metadata once — it drives both the native
+        // citations and the plain-text footer. Take the lock before any await
+        // so the MutexGuard never crosses an await point (it isn't Send).
         let footer_meta = metadata_cell.lock().unwrap().clone();
-        if let Some(footer) = build_source_footer(
-            &footer_meta,
-            state.config.chat_pipeline.source_footer_enabled,
-            state.config.chat_pipeline.source_footer_max,
-            &id,
-        ) {
+
+        // ── Native, clickable citations ──────────────────────────────────
+        // Emit the resolved sources two complementary ways: (A) OpenAI-standard
+        // `delta.annotations[].url_citation` (portable to any compatible client)
+        // and (B) Open WebUI native `source` events (richer realtime references,
+        // sent only to detected OWUI clients). When OWUI sources are emitted we
+        // skip the redundant plain-text footer for that client.
+        let cite_cfg = &state.config.chat_pipeline;
+        let mut native_owui_emitted = false;
+        if cite_cfg.citation_annotations_enabled
+            || (is_openwebui && cite_cfg.citation_source_events_enabled)
+        {
+            let sources = build_citation_sources(
+                &footer_meta,
+                cite_cfg.source_footer_max.max(1),
+                |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
+            );
+            if !sources.is_empty() {
+                if cite_cfg.citation_annotations_enabled {
+                    let annotations: Vec<ChatAnnotation> = sources
+                        .iter()
+                        .map(|s| ChatAnnotation {
+                            annotation_type: "url_citation".to_string(),
+                            url_citation: UrlCitation {
+                                url: format!("thairag:///doc/{}", s.doc_id),
+                                title: s.title.clone(),
+                            },
+                        })
+                        .collect();
+                    let ann_chunk = ChatCompletionChunk {
+                        id: id_clone.clone(),
+                        object: "chat.completion.chunk".to_string(),
+                        created,
+                        model: model_clone.clone(),
+                        choices: vec![ChatChunkChoice {
+                            index: 0,
+                            delta: ChatChunkDelta {
+                                role: None,
+                                content: None,
+                                annotations: Some(annotations),
+                            },
+                            finish_reason: None,
+                        }],
+                        usage: None,
+                    };
+                    yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
+                }
+
+                if is_openwebui && cite_cfg.citation_source_events_enabled {
+                    let event = serde_json::json!({
+                        "event": {
+                            "type": "source",
+                            "data": {
+                                "source": { "name": "ThaiRAG Knowledge Base" },
+                                "document": sources.iter().map(|s| s.preview.clone()).collect::<Vec<_>>(),
+                                "metadata": sources.iter().map(|s| serde_json::json!({
+                                    "source": s.title,
+                                    "doc_id": s.doc_id,
+                                })).collect::<Vec<_>>(),
+                                "distances": sources.iter().map(|s| s.score).collect::<Vec<_>>(),
+                            }
+                        }
+                    });
+                    yield Ok(Event::default().data(serde_json::to_string(&event).unwrap()));
+                    native_owui_emitted = true;
+                }
+            }
+        }
+
+        // Append the plain-text source footer for transparency / fallback.
+        // Emitted as a final content chunk so clients without native citation
+        // support still render it inline. Skipped for OWUI when we already sent
+        // native source events (avoids a redundant duplicate list).
+        if !native_owui_emitted
+            && let Some(footer) = build_source_footer(
+                &footer_meta,
+                state.config.chat_pipeline.source_footer_enabled,
+                state.config.chat_pipeline.source_footer_max,
+                &id,
+            )
+        {
             accumulated_content.push_str(&footer);
             let footer_chunk = ChatCompletionChunk {
                 id: id_clone.clone(),
@@ -1269,6 +1464,7 @@ async fn handle_stream(
                     delta: ChatChunkDelta {
                         role: None,
                         content: Some(footer),
+                        annotations: None,
                     },
                     finish_reason: None,
                 }],
@@ -1310,6 +1506,7 @@ async fn handle_stream(
                 delta: ChatChunkDelta {
                     role: None,
                     content: None,
+                    annotations: None,
                 },
                 finish_reason: Some("stop".to_string()),
             }],
@@ -1609,4 +1806,125 @@ pub async fn summarize_session(
         "compacted": did_compact,
     }))
     .into_response())
+}
+
+#[cfg(test)]
+mod citation_tests {
+    use super::*;
+    use thairag_core::types::{Citation, RetrievedChunkMeta};
+
+    fn chunk(id: &str, preview: &str, score: f32, rank: u32) -> RetrievedChunkMeta {
+        RetrievedChunkMeta {
+            chunk_id: id.to_string(),
+            doc_id: format!("doc-{id}"),
+            doc_title: None,
+            content_preview: preview.to_string(),
+            score,
+            rank,
+            contributed: true,
+        }
+    }
+
+    fn cite(marker: u32, chunk_id: &str, title: &str, score: f32) -> Citation {
+        Citation {
+            claim: "claim".to_string(),
+            marker,
+            chunk_id: chunk_id.to_string(),
+            doc_id: format!("doc-{chunk_id}"),
+            doc_title: Some(title.to_string()),
+            score,
+        }
+    }
+
+    // Title resolver that just echoes the chunk fallback (or the doc id).
+    fn echo_title(doc_id: &str, fallback: Option<&str>) -> String {
+        fallback
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| doc_id.to_string())
+    }
+
+    #[test]
+    fn markers_drive_order_and_pull_preview_from_chunks() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![
+                chunk("a", "preview A", 0.9, 0),
+                chunk("b", "preview B", 0.8, 1),
+            ],
+            citations: vec![
+                // Deliberately out of order: marker 2 first, marker 1 second.
+                cite(2, "b", "Title B", 0.8),
+                cite(1, "a", "Title A", 0.9),
+            ],
+            ..Default::default()
+        };
+
+        let sources = build_citation_sources(&meta, 10, echo_title);
+
+        assert_eq!(sources.len(), 2);
+        // Index 0 is marker [1] regardless of citation insertion order.
+        assert_eq!(sources[0].title, "Title A");
+        assert_eq!(sources[0].preview, "preview A");
+        assert_eq!(sources[1].title, "Title B");
+        assert_eq!(sources[1].preview, "preview B");
+    }
+
+    #[test]
+    fn marker_gap_is_filled_positionally_from_ranked_chunks() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![
+                chunk("a", "preview A", 0.9, 0),
+                chunk("b", "preview B", 0.8, 1),
+            ],
+            // Answer cited only [2]; slot [1] must still be present and aligned.
+            citations: vec![cite(2, "b", "Title B", 0.8)],
+            ..Default::default()
+        };
+
+        let sources = build_citation_sources(&meta, 10, echo_title);
+
+        assert_eq!(sources.len(), 2);
+        // Slot [1] filled from the rank-0 retrieved chunk.
+        assert_eq!(sources[0].doc_id, "doc-a");
+        assert_eq!(sources[0].preview, "preview A");
+        assert_eq!(sources[1].title, "Title B");
+    }
+
+    #[test]
+    fn no_markers_falls_back_to_score_ranked_contributed_chunks() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![
+                chunk("a", "preview A", 0.5, 0),
+                chunk("b", "preview B", 0.9, 1),
+            ],
+            citations: vec![],
+            ..Default::default()
+        };
+
+        let sources = build_citation_sources(&meta, 10, echo_title);
+
+        assert_eq!(sources.len(), 2);
+        // Sorted by score descending: B (0.9) before A (0.5).
+        assert_eq!(sources[0].doc_id, "doc-b");
+        assert_eq!(sources[1].doc_id, "doc-a");
+    }
+
+    #[test]
+    fn no_markers_respects_max_truncation() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![
+                chunk("a", "preview A", 0.5, 0),
+                chunk("b", "preview B", 0.9, 1),
+                chunk("c", "preview C", 0.7, 2),
+            ],
+            citations: vec![],
+            ..Default::default()
+        };
+
+        let sources = build_citation_sources(&meta, 2, echo_title);
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].doc_id, "doc-b");
+        assert_eq!(sources[1].doc_id, "doc-c");
+    }
 }

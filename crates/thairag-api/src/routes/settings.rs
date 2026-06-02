@@ -2719,6 +2719,9 @@ pub struct ChatPipelineConfigResponse {
     // Source Citation Footer
     pub source_footer_enabled: bool,
     pub source_footer_max: usize,
+    // Native citations (OpenAI annotations + Open WebUI source events)
+    pub citation_annotations_enabled: bool,
+    pub citation_source_events_enabled: bool,
     // Structured Extraction (Thai answer-quality experiment)
     pub structured_extraction_enabled: bool,
     // Guardrails (PR1)
@@ -2858,6 +2861,9 @@ pub struct UpdateChatPipelineRequest {
     // Source Citation Footer
     pub source_footer_enabled: Option<bool>,
     pub source_footer_max: Option<usize>,
+    // Native citations (OpenAI annotations + Open WebUI source events)
+    pub citation_annotations_enabled: Option<bool>,
+    pub citation_source_events_enabled: Option<bool>,
     // Structured Extraction (Thai answer-quality experiment)
     pub structured_extraction_enabled: Option<bool>,
     // Guardrails (PR1)
@@ -3224,6 +3230,12 @@ where
         source_footer_max: s("chat_pipeline.source_footer_max")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.source_footer_max),
+        citation_annotations_enabled: s("chat_pipeline.citation_annotations_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.citation_annotations_enabled),
+        citation_source_events_enabled: s("chat_pipeline.citation_source_events_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.citation_source_events_enabled),
         // Guardrails (PR1)
         input_guardrails_enabled: s("chat_pipeline.input_guardrails_enabled")
             .and_then(|v| v.parse().ok())
@@ -3335,6 +3347,8 @@ fn build_chat_pipeline_response_from_config(
         live_retrieval_llm: eff.live_retrieval_llm.as_ref().map(llm_config_to_info),
         source_footer_enabled: eff.source_footer_enabled,
         source_footer_max: eff.source_footer_max,
+        citation_annotations_enabled: eff.citation_annotations_enabled,
+        citation_source_events_enabled: eff.citation_source_events_enabled,
         structured_extraction_enabled: eff.structured_extraction_enabled,
         input_guardrails_enabled: eff.input_guardrails_enabled,
         output_guardrails_enabled: eff.output_guardrails_enabled,
@@ -3589,6 +3603,15 @@ pub async fn update_chat_pipeline_config(
     // Source Citation Footer
     persist_bool!(source_footer_enabled, "chat_pipeline.source_footer_enabled");
     persist_num!(source_footer_max, "chat_pipeline.source_footer_max");
+    // Native citations (OpenAI annotations + Open WebUI source events)
+    persist_bool!(
+        citation_annotations_enabled,
+        "chat_pipeline.citation_annotations_enabled"
+    );
+    persist_bool!(
+        citation_source_events_enabled,
+        "chat_pipeline.citation_source_events_enabled"
+    );
     // Structured Extraction (Thai answer-quality experiment)
     persist_bool!(
         structured_extraction_enabled,
