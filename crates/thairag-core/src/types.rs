@@ -487,6 +487,12 @@ pub struct ChunkMetadata {
     /// the original image alongside the chunk text. `None` for pure-text chunks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_blob_id: Option<ImageId>,
+    /// CLIP image embedding for visual-similarity retrieval. Transient: computed
+    /// at ingest and consumed by the search engine to upsert into the image
+    /// vector collection. Never persisted (the vector lives in that collection,
+    /// not in `document_chunks`), hence `#[serde(skip)]`.
+    #[serde(skip)]
+    pub image_embedding: Option<Vec<f32>>,
     /// Pixel width of the source image. Diagnostic only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_width: Option<u32>,

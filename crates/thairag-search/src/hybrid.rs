@@ -3,8 +3,21 @@ use std::sync::Arc;
 
 use thairag_config::schema::SearchConfig;
 use thairag_core::error::Result;
-use thairag_core::traits::{EmbeddingModel, Reranker, SearchPlugin, TextSearch, VectorStore};
+use thairag_core::traits::{
+    EmbeddingModel, ImageEmbeddingModel, Reranker, SearchPlugin, TextSearch, VectorStore,
+};
 use thairag_core::types::{DocId, DocumentChunk, SearchQuery, SearchResult};
+
+/// Optional CLIP visual-search side-channel: a multimodal embedding model paired
+/// with a dedicated vector collection. When present, image chunks are embedded
+/// into the shared CLIP space at index time and a text query is also matched
+/// against image vectors, fusing visual hits into the result set.
+struct ImageSearch {
+    embedding: Arc<dyn ImageEmbeddingModel>,
+    store: Arc<dyn VectorStore>,
+    /// RRF fusion weight for image-vector hits relative to text/vector hits.
+    weight: f32,
+}
 
 /// Hybrid search engine combining vector similarity and BM25 text search.
 /// Uses Reciprocal Rank Fusion (RRF) for merging, then reranking.
@@ -16,6 +29,8 @@ pub struct HybridSearchEngine {
     config: SearchConfig,
     /// Optional search plugins applied pre/post search.
     search_plugins: Vec<Arc<dyn SearchPlugin>>,
+    /// Optional CLIP image-vector search (None = text-caption-only behaviour).
+    image_search: Option<ImageSearch>,
 }
 
 impl HybridSearchEngine {
@@ -33,6 +48,7 @@ impl HybridSearchEngine {
             reranker,
             config,
             search_plugins: Vec::new(),
+            image_search: None,
         }
     }
 
@@ -52,12 +68,30 @@ impl HybridSearchEngine {
             reranker,
             config,
             search_plugins,
+            image_search: None,
         }
     }
 
     /// Set search plugins to be applied during search.
     pub fn set_search_plugins(&mut self, plugins: Vec<Arc<dyn SearchPlugin>>) {
         self.search_plugins = plugins;
+    }
+
+    /// Enable CLIP visual search by attaching an image-embedding model and a
+    /// dedicated image-vector store. Builder-style so existing constructor call
+    /// sites are untouched; left unset, the engine is text-caption-only.
+    pub fn with_image_search(
+        mut self,
+        embedding: Arc<dyn ImageEmbeddingModel>,
+        store: Arc<dyn VectorStore>,
+        weight: f32,
+    ) -> Self {
+        self.image_search = Some(ImageSearch {
+            embedding,
+            store,
+            weight,
+        });
+        self
     }
 
     /// Number of documents in the text search index.
@@ -87,6 +121,26 @@ impl HybridSearchEngine {
         let (v_res, t_res) = tokio::join!(vector_fut, text_fut);
         v_res?;
         t_res?;
+
+        // Upsert precomputed CLIP image vectors into the image collection. Each
+        // image chunk carries its vector in `metadata.image_embedding` (set at
+        // ingest). We reuse the VectorStore contract by cloning the chunk with
+        // its embedding swapped to the image vector, so the image collection is
+        // keyed by the same chunk_id and retrieval maps straight back to chunks.
+        if let Some(img) = &self.image_search {
+            let image_chunks: Vec<DocumentChunk> = embedded_chunks
+                .iter()
+                .filter_map(|c| {
+                    let vec = c.metadata.as_ref()?.image_embedding.clone()?;
+                    let mut clone = c.clone();
+                    clone.embedding = Some(vec);
+                    Some(clone)
+                })
+                .collect();
+            if !image_chunks.is_empty() {
+                img.store.upsert(&image_chunks).await?;
+            }
+        }
 
         Ok(())
     }
@@ -185,8 +239,24 @@ impl HybridSearchEngine {
         let vector_results = vector_results?;
         let text_results = text_results?;
 
-        // RRF merge
-        let merged = self.rrf_merge(&vector_results, &text_results);
+        // Text→image: embed the query with the CLIP text encoder and match it
+        // against the image-vector collection. CLIP space differs from the main
+        // text space, but RRF merges by rank, so the rankings fuse cleanly.
+        let image_results = if let Some(img) = &self.image_search {
+            let clip_q = img
+                .embedding
+                .embed_query_text(std::slice::from_ref(&effective_query_text))
+                .await?;
+            match clip_q.first() {
+                Some(vec) => img.store.search(vec, &vector_query).await?,
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        // RRF merge (image_results empty when visual search is disabled)
+        let merged = self.rrf_merge(&vector_results, &text_results, &image_results);
 
         // Rerank
         let top = merged.into_iter().take(self.config.rerank_top_k).collect();
@@ -227,27 +297,33 @@ impl HybridSearchEngine {
         &self,
         vector_results: &[SearchResult],
         text_results: &[SearchResult],
+        image_results: &[SearchResult],
     ) -> Vec<SearchResult> {
         let k = self.config.rrf_k as f32;
         let mut scores: HashMap<String, (f32, SearchResult)> = HashMap::new();
 
-        for (rank, result) in vector_results.iter().enumerate() {
-            let rrf_score = self.config.vector_weight / (k + rank as f32 + 1.0);
-            let key = result.chunk.chunk_id.to_string();
-            scores
-                .entry(key)
-                .and_modify(|(s, _)| *s += rrf_score)
-                .or_insert((rrf_score, result.clone()));
-        }
+        let mut fold = |results: &[SearchResult], weight: f32| {
+            // A zero weight contributes nothing; skip so a disabled source never
+            // injects zero-score entries into the merged set.
+            if weight == 0.0 {
+                return;
+            }
+            for (rank, result) in results.iter().enumerate() {
+                let rrf_score = weight / (k + rank as f32 + 1.0);
+                let key = result.chunk.chunk_id.to_string();
+                scores
+                    .entry(key)
+                    .and_modify(|(s, _)| *s += rrf_score)
+                    .or_insert((rrf_score, result.clone()));
+            }
+        };
 
-        for (rank, result) in text_results.iter().enumerate() {
-            let rrf_score = self.config.text_weight / (k + rank as f32 + 1.0);
-            let key = result.chunk.chunk_id.to_string();
-            scores
-                .entry(key)
-                .and_modify(|(s, _)| *s += rrf_score)
-                .or_insert((rrf_score, result.clone()));
-        }
+        fold(vector_results, self.config.vector_weight);
+        fold(text_results, self.config.text_weight);
+        // Image-vector hits fuse with their own configurable weight; the slice
+        // is empty (no-op) whenever CLIP visual search is disabled.
+        let image_weight = self.image_search.as_ref().map_or(0.0, |i| i.weight);
+        fold(image_results, image_weight);
 
         let mut merged: Vec<SearchResult> = scores
             .into_values()
@@ -332,6 +408,20 @@ mod tests {
         }
     }
 
+    struct MockImageEmbedding;
+    #[async_trait]
+    impl ImageEmbeddingModel for MockImageEmbedding {
+        async fn embed_images(&self, images: &[Vec<u8>]) -> Result<Vec<Vec<f32>>> {
+            Ok(images.iter().map(|_| vec![0.0; 4]).collect())
+        }
+        async fn embed_query_text(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![0.0; 4]).collect())
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+    }
+
     struct MockReranker;
     #[async_trait]
     impl Reranker for MockReranker {
@@ -375,12 +465,25 @@ mod tests {
         )
     }
 
+    fn build_engine_with_image(
+        rrf_k: usize,
+        vw: f32,
+        tw: f32,
+        image_weight: f32,
+    ) -> HybridSearchEngine {
+        build_engine(rrf_k, vw, tw).with_image_search(
+            Arc::new(MockImageEmbedding),
+            Arc::new(MockVectorStore),
+            image_weight,
+        )
+    }
+
     // ── RRF Merge Tests ──────────────────────────────────────────────
 
     #[test]
     fn rrf_both_empty() {
         let engine = build_engine(60, 0.5, 0.5);
-        let merged = engine.rrf_merge(&[], &[]);
+        let merged = engine.rrf_merge(&[], &[], &[]);
         assert!(merged.is_empty());
     }
 
@@ -389,7 +492,7 @@ mod tests {
         let engine = build_engine(60, 1.0, 0.0);
         let id = "00000000-0000-0000-0000-000000000001";
         let vec_results = vec![make_result(id, 0.9)];
-        let merged = engine.rrf_merge(&vec_results, &[]);
+        let merged = engine.rrf_merge(&vec_results, &[], &[]);
         assert_eq!(merged.len(), 1);
         // Single result is normalized to 1.0
         assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
@@ -400,7 +503,7 @@ mod tests {
         let engine = build_engine(60, 0.0, 1.0);
         let id = "00000000-0000-0000-0000-000000000002";
         let text_results = vec![make_result(id, 0.8)];
-        let merged = engine.rrf_merge(&[], &text_results);
+        let merged = engine.rrf_merge(&[], &text_results, &[]);
         assert_eq!(merged.len(), 1);
         assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
     }
@@ -414,7 +517,7 @@ mod tests {
         let vec_results = vec![make_result(shared_id, 0.9), make_result(unique_id, 0.7)];
         let text_results = vec![make_result(shared_id, 0.8)];
 
-        let merged = engine.rrf_merge(&vec_results, &text_results);
+        let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
         assert_eq!(merged.len(), 2);
         // The shared doc should be ranked first (higher combined RRF score)
         assert_eq!(merged[0].chunk.chunk_id.0.to_string(), shared_id);
@@ -430,7 +533,7 @@ mod tests {
         let vec_results = vec![make_result(id_a, 0.9), make_result(id_b, 0.7)];
         let text_results = vec![make_result(id_a, 0.9), make_result(id_b, 0.7)];
 
-        let merged = engine.rrf_merge(&vec_results, &text_results);
+        let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
         assert!(merged[0].score >= merged[1].score);
     }
 
@@ -447,11 +550,42 @@ mod tests {
         let vec_results = vec![make_result(id_a, 0.9)];
         let text_results = vec![make_result(id_a, 0.8), make_result(id_b, 0.7)];
 
-        let merged = engine.rrf_merge(&vec_results, &text_results);
+        let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
         assert_eq!(merged.len(), 2);
         // a (in both) should have a higher normalized score than b (text only)
         assert_eq!(merged[0].chunk.chunk_id.0.to_string(), id_a);
         assert!(merged[0].score > merged[1].score);
+    }
+
+    #[test]
+    fn rrf_image_results_fuse_when_enabled() {
+        // Image weight high; an image-only hit should still surface, and a
+        // chunk appearing in image + vector lists should outrank an image-only
+        // chunk — proving image_results actually fold into the merge.
+        let engine = build_engine_with_image(60, 1.0, 0.0, 1.0);
+        let shared_id = "00000000-0000-0000-0000-000000000007";
+        let image_only_id = "00000000-0000-0000-0000-000000000008";
+
+        let vec_results = vec![make_result(shared_id, 0.9)];
+        let image_results = vec![make_result(shared_id, 0.8), make_result(image_only_id, 0.7)];
+
+        let merged = engine.rrf_merge(&vec_results, &[], &image_results);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].chunk.chunk_id.0.to_string(), shared_id);
+        assert!(merged[0].score > merged[1].score);
+    }
+
+    #[test]
+    fn rrf_image_weight_zero_when_disabled() {
+        // No image_search attached → image_weight resolves to 0.0, so passing
+        // image_results is a strict no-op (guarantee-or-drop: flag off = today's
+        // behaviour, byte-for-byte).
+        let engine = build_engine(60, 1.0, 0.0);
+        let id = "00000000-0000-0000-0000-000000000009";
+        let image_results = vec![make_result(id, 0.9)];
+
+        let merged = engine.rrf_merge(&[], &[], &image_results);
+        assert!(merged.is_empty());
     }
 
     #[test]
@@ -465,7 +599,7 @@ mod tests {
         let text_results: Vec<SearchResult> =
             ids[0..3].iter().map(|id| make_result(id, 0.8)).collect();
 
-        let merged = engine.rrf_merge(&vec_results, &text_results);
+        let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
 
         // Top result should be 1.0, all others in (0, 1]
         assert!((merged[0].score - 1.0).abs() < f32::EPSILON);
