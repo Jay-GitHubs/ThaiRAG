@@ -338,7 +338,7 @@ pub struct LlmConfig {
     /// Whether to let a thinking-capable model emit its reasoning channel.
     /// Defaults to `false` (thinking OFF) so the provider sends Ollama
     /// `think: false`, forcing the model to write its answer into `content`.
-    /// Native thinking models (e.g. gemma3:e4b) otherwise sometimes spend their
+    /// Native thinking models (e.g. gemma4:e4b-it-bf16) otherwise sometimes spend their
     /// whole output in the reasoning channel, leaving `content` empty → a blank
     /// chat answer. Ollama-only; ignored by other providers.
     #[serde(default)]
