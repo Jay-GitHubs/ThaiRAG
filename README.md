@@ -23,6 +23,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Qdrant Dimension Auto-Detection** — Automatically detects vector dimension from embeddings; recreates collections when dimensions change (e.g., after switching embedding models)
 - **Plugin System** — DocumentPlugin / SearchPlugin / ChunkPlugin interfaces with built-in plugins and runtime registration
 - **Multi-Modal RAG** — Image vision description and table extraction from PDFs via vision-capable LLMs
+- **CLIP Visual Search** *(default-off)* — Local FastEmbed CLIP ViT-B-32 adds visual-similarity retrieval: text→image and image→image (attach an image to a chat request to find visually similar KB content). Separate 512-dim vector collection, rank-fused with text/BM25. English-centric text encoder; requires the vision ingest path to populate. See OPERATOR_GUIDE §3.6
 - **Advisory Model Capabilities & Discovery** — Searchable, free-text model pickers (any model id stays selectable) with ⭐ recommended / vision badges; capability detection is advisory and never blocks a model. A layered resolver tags models from the built-in floor, an external catalog (LiteLLM), a custom HTTP catalog, or an MCP discovery tool
 - **API Versioning** — V1 OpenAI-compatible endpoint + V2 with metadata, sources, and intent in responses
 - **WebSocket Chat** — Real-time bidirectional chat at `/ws/chat` alongside SSE streaming

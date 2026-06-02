@@ -322,6 +322,43 @@ Budget: typical 4 KB text chunk × `text-embedding-3-large` ≈ $0.0001 per chun
 
 The Backup & Restore admin page exports the whole system as a ZIP with a manifest. **Backup before any Docker rebuild** — the volume recreation defaults bite hard.
 
+### 3.6 CLIP visual search (image→image and text→image retrieval)
+
+A **default-off**, additive retrieval feature that finds documents by what their images *look like*, not just by the caption text the vision LLM wrote at ingest. It rides local **FastEmbed CLIP ViT-B-32** (512-dim, no API cost) and supports two query modes:
+
+- **text→image** — a text query retrieves image chunks whose visual content matches, beyond what the ingest caption captured.
+- **image→image** — a user attaches an image to a chat request; visually-similar KB image chunks are retrieved and injected as extra context. The attachment remains the primary answer context (see `docs/ATTACHMENTS_DESIGN.md`); CLIP retrieval *augments* it.
+
+> **This is not the same feature as §2.6.5.** §2.6.5 (vision OCR / image description) is about *ingesting* and *answering* — a vision LLM describes images into searchable text. §3.6 is about *retrieval* — CLIP embeddings rank images by visual similarity. They are independent and can be on or off separately.
+
+**Enable it** — `[providers.image_embedding]`, default off:
+
+| Setting | Default | What it controls |
+|---|---|---|
+| `enabled` | **`false`** | Master switch. When off, no CLIP provider is constructed, no `_clip` collection is created, and no extra embedding calls happen — a strict no-op. |
+| `model` | `clip-vit-b-32` | The FastEmbed CLIP variant (text + image encoders share one 512-dim space). |
+| `weight` | `1.0` | RRF fusion weight for image-vector hits relative to the text/BM25 rankings. |
+
+```toml
+[providers.image_embedding]
+enabled = true
+model = "clip-vit-b-32"
+weight = 1.0
+```
+
+Or in the **Admin UI** → Settings → Providers (persists in the DB, hot-reloads the provider bundle).
+
+> **Enable via TOML or the Admin UI, not bare env vars.** Because `image_embedding` is an *optional* config table, setting only nested env keys (e.g. `THAIRAG__PROVIDERS__IMAGE_EMBEDDING__ENABLED=true`) does **not** instantiate the absent table — the feature stays off. Use a `[providers.image_embedding]` block in TOML or the Admin UI PUT (`/api/km/settings/providers`), both of which create the table.
+
+**Critical dependency — populating the `_clip` collection requires the vision ingest path.** Only documents ingested through the **vision path** carry an `image_blob_id`, and *only those chunks* get a CLIP image vector at ingest. That path requires §2.6.5 to be configured (`image_description_enabled` **on** + a vision LLM). If vision is off, image uploads take the "no vision" path, save **no** image blob, and never receive a CLIP vector — so the `_clip` collection stays empty and visual search returns nothing even with `image_embedding.enabled = true`. **To use §3.6, turn on §2.6.5 first.**
+
+**Operational notes**:
+- **Separate collection.** Image vectors live in `{base}_clip` (e.g. `thairag_chunks_clip`), 512-dim, created lazily on the first image vector and wrapped in the same per-org/per-workspace isolation as the text collection. Plan for a second collection per isolation scope (extra disk).
+- **Different vector space, fused by rank.** The CLIP space is **not** the same as your main text-embedding space, so the two are never compared directly — they are combined by Reciprocal Rank Fusion (rank-based), which makes cross-space fusion sound. `weight` tunes the image side's influence.
+- **First-use model download.** The CLIP ONNX model downloads on first construction (first ingest/query after enabling), a one-time latency. Pre-pull it into your image or expect a delay on the first image operation.
+- **Thai caveat.** CLIP's text encoder is **English-centric**, so *text→image* quality on Thai queries is weak (consistent with the known Thai gap). *image→image* is language-agnostic. This is one reason the flag ships off by default.
+- **Re-embedding existing images.** Enabling §3.6 does not retroactively embed already-ingested images. Reprocess image-bearing documents (admin **Reprocess** button or the reprocess API, see §3.4) to populate `_clip` for the existing corpus.
+
 ---
 
 ## 4. Live retrieval, clarified

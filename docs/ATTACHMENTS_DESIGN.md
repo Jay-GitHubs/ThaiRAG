@@ -141,6 +141,8 @@ Request arrives with attachments
    Response → client
 ```
 
+> **Later addition — CLIP visual augmentation (default-off).** When `providers.image_embedding` is enabled, an **image** attachment is additionally used as a visual query: its bytes are CLIP-embedded and run against the `_clip` image-vector collection (image→image), and visually-similar KB chunks are injected as one extra system context block. The attachment itself stays the primary context; the "SKIP hybrid search" rule above still holds for *text* attachments and when the flag is off. See OPERATOR_GUIDE §3.6.
+
 On **follow-up turns in the same session** without re-sent attachments:
 - The pipeline checks `SessionStore::get_attachments(session_id)` at the start of processing.
 - If non-empty, attachments are injected into the system context the same way, KB / live paths are still skipped.
