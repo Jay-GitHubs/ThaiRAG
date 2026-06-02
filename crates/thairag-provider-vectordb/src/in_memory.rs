@@ -162,6 +162,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -193,6 +194,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -225,6 +227,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![ws_a],
             unrestricted: false,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -248,6 +251,7 @@ mod tests {
             top_k: 2,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -281,6 +285,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -295,6 +300,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[1.0, 0.0, 0.0], &query).await.unwrap();
         assert!(results.is_empty());
@@ -319,6 +325,7 @@ mod tests {
             top_k: 10,
             workspace_ids: vec![],
             unrestricted: true,
+            query_images: Vec::new(),
         };
         let results = store.search(&[0.0, 1.0, 0.0], &query).await.unwrap();
         assert_eq!(results.len(), 1);

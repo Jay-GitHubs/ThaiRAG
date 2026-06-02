@@ -225,6 +225,7 @@ Output ONLY valid JSON array.";
                         top_k: call.top_k,
                         workspace_ids: vec![WorkspaceId(ws_uuid)],
                         unrestricted: false,
+                        query_images: Vec::new(),
                     };
                     self.search_engine.search(&sq).await
                 } else {
@@ -241,6 +242,7 @@ Output ONLY valid JSON array.";
                     top_k: call.top_k,
                     workspace_ids: ws_ids,
                     unrestricted,
+                    query_images: Vec::new(),
                 };
                 self.search_engine.search(&sq).await
             }

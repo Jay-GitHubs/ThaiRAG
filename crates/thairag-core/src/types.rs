@@ -308,6 +308,11 @@ pub struct SessionAttachment {
     /// SHA-256 hex digest of the raw bytes — recorded in inference logs as
     /// metadata so the extracted text itself is never persisted there.
     pub content_hash: String,
+    /// Raw image bytes, retained only for `image/*` uploads when CLIP visual
+    /// search is enabled, so the attachment can drive image→image KB retrieval
+    /// on the turn it is sent. Never serialized into the session store.
+    #[serde(skip)]
+    pub image_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -675,7 +680,7 @@ pub struct PipelineSnapshot {
     pub needs_ocr_correction: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchQuery {
     pub text: String,
     pub top_k: usize,
@@ -683,6 +688,10 @@ pub struct SearchQuery {
     /// When true and workspace_ids is empty, search returns all results (no filter).
     /// When false and workspace_ids is empty, search returns no results (no access).
     pub unrestricted: bool,
+    /// Raw image bytes attached to the query, used as a visual (image→image)
+    /// query against the CLIP image-vector collection. Empty for text-only
+    /// queries; only consulted when CLIP visual search is enabled.
+    pub query_images: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
