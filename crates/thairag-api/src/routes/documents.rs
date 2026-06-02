@@ -443,6 +443,42 @@ async fn process_document_inner_impl(
         warn!(%doc_id, error = %e, "Failed to save chunks to DB (non-fatal)");
     }
 
+    // Compute CLIP image vectors for image-bearing chunks so the search engine
+    // can populate the visual-similarity collection. Only runs when visual
+    // search is enabled; vectors ride along in `metadata.image_embedding`
+    // (transient, never persisted) and are consumed by `index_chunks`.
+    if let Some(img_model) = p.image_embedding.as_ref() {
+        let blob_bytes: std::collections::HashMap<_, _> = processed
+            .images
+            .iter()
+            .map(|b| (b.image_id, b.bytes.as_slice()))
+            .collect();
+        let mut targets: Vec<usize> = Vec::new();
+        let mut batch: Vec<Vec<u8>> = Vec::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            if let Some(id) = chunk.metadata.as_ref().and_then(|m| m.image_blob_id)
+                && let Some(bytes) = blob_bytes.get(&id)
+            {
+                targets.push(i);
+                batch.push(bytes.to_vec());
+            }
+        }
+        if !batch.is_empty() {
+            match img_model.embed_images(&batch).await {
+                Ok(vecs) => {
+                    for (idx, vec) in targets.into_iter().zip(vecs) {
+                        if let Some(meta) = chunks[idx].metadata.as_mut() {
+                            meta.image_embedding = Some(vec);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(%doc_id, error = %e, "CLIP image embedding failed (non-fatal)")
+                }
+            }
+        }
+    }
+
     // Embed + index
     let _ = state
         .km_store
