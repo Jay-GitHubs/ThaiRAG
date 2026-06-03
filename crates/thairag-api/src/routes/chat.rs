@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use axum::extract::State;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::{Extension, Json};
 use chrono::Utc;
 use tokio_stream::StreamExt;
@@ -539,6 +540,96 @@ fn build_citation_sources(
             })
             .collect()
     }
+}
+
+/// Build the `url` for a citation annotation. When a public base URL is
+/// configured and we can mint a signed token, return a browser-openable link to
+/// the citation viewer; otherwise fall back to the opaque `thairag:///doc/<id>`
+/// identifier (carries the id but is not openable).
+fn citation_url(state: &AppState, base: &str, doc_id: &str) -> String {
+    if !base.is_empty()
+        && let Some(jwt) = state.jwt.as_ref()
+        && let Ok(token) = jwt.encode_citation(doc_id, 24)
+    {
+        return format!("{base}/v1/citation/{doc_id}?token={token}");
+    }
+    format!("thairag:///doc/{doc_id}")
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+#[derive(serde::Deserialize)]
+pub struct CitationViewQuery {
+    token: String,
+}
+
+/// Public, token-gated viewer for a cited source. The signed `token` (minted at
+/// chat time, scoped to a single doc, 24h TTL) authorizes the request — no auth
+/// header needed, so a citation link clicked in a chat client (e.g. Open WebUI)
+/// opens the source directly in the browser. Returns a minimal HTML page with
+/// the document title and its converted text.
+pub async fn view_citation(
+    State(state): State<AppState>,
+    Path(doc_id): Path<Uuid>,
+    Query(params): Query<CitationViewQuery>,
+) -> Response {
+    let unauthorized = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Html("<h1>401</h1><p>Invalid or expired citation link.</p>".to_string()),
+        )
+            .into_response()
+    };
+
+    let Some(jwt) = state.jwt.as_ref() else {
+        return unauthorized();
+    };
+    let Ok(granted_doc) = jwt.decode_citation(&params.token) else {
+        return unauthorized();
+    };
+    // The token must grant exactly the doc in the path.
+    if granted_doc != doc_id.to_string() {
+        return unauthorized();
+    }
+
+    let doc_id_typed = DocId(doc_id);
+    let Ok(doc) = state.km_store.get_document(doc_id_typed) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<h1>404</h1><p>Document not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+
+    let content = state
+        .km_store
+        .get_document_content(doc_id_typed)
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    let page = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>{title}</title>\
+<style>body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;\
+max-width:820px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}}\
+h1{{font-size:1.4rem;border-bottom:1px solid #e0e0e0;padding-bottom:.5rem}}\
+.src{{white-space:pre-wrap;word-wrap:break-word;background:#fafafa;\
+border:1px solid #eee;border-radius:8px;padding:1rem;font-size:.95rem}}\
+.meta{{color:#888;font-size:.8rem;margin-bottom:1rem}}</style></head>\
+<body><h1>{title}</h1><div class=\"meta\">Cited source · {doc_id}</div>\
+<div class=\"src\">{content}</div></body></html>",
+        title = escape_html(&doc.title),
+        doc_id = escape_html(&doc.id.0.to_string()),
+        content = escape_html(&content),
+    );
+
+    Html(page).into_response()
 }
 
 /// Load conversation memory entries for a user from the KV store.
@@ -1372,12 +1463,13 @@ async fn handle_stream(
                 |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
             );
             if !sources.is_empty() {
+                let cite_base = cite_cfg.citation_base_url.trim_end_matches('/');
                 let annotations: Vec<ChatAnnotation> = sources
                     .iter()
                     .map(|s| ChatAnnotation {
                         annotation_type: "url_citation".to_string(),
                         url_citation: UrlCitation {
-                            url: format!("thairag:///doc/{}", s.doc_id),
+                            url: citation_url(&state, cite_base, &s.doc_id),
                             title: s.title.clone(),
                         },
                     })

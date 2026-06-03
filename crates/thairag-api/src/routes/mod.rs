@@ -102,6 +102,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
     // ── Public routes (rate-limited) ────────────────────────────────
     let public = Router::new()
         .route("/v1/models", get(models::list_models))
+        .route("/v1/citation/{doc_id}", get(chat::view_citation))
         .route("/v2/models", get(v2::v2_models::list_models_v2))
         .route("/api/version", get(v2::version_info::api_version_info))
         .route("/api/auth/register", post(auth::register))

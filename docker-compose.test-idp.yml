@@ -39,6 +39,8 @@ services:
       THAIRAG__ADMIN__EMAIL: admin@thairag.local
       THAIRAG__ADMIN__PASSWORD: admin123
       THAIRAG__AUTH__API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
+      # Browser-reachable base URL for clickable citation links (host-mapped 8080).
+      THAIRAG__CHAT_PIPELINE__CITATION_BASE_URL: "http://localhost:8080"
     depends_on:
       keycloak:
         condition: service_healthy
