@@ -547,6 +547,24 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
+    fn get_chunk_metadata(
+        &self,
+        chunk_ids: &[String],
+    ) -> std::collections::HashMap<String, thairag_core::types::ChunkMetadata> {
+        let store = self.chunks.read().unwrap();
+        store
+            .iter()
+            .filter_map(|c| {
+                let id = c.chunk_id.0.to_string();
+                if chunk_ids.contains(&id) {
+                    c.metadata.clone().map(|m| (id, m))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     // ── Image blob storage ────────────────────────────────────────────
 
     fn save_image_blob(&self, record: super::ImageBlobRecord) -> Result<()> {
@@ -3533,6 +3551,41 @@ mod tests {
             store
                 .update_finetune_job_full("nonexistent", "failed", None, None)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn chunk_metadata_round_trips_through_get_chunk_metadata() {
+        use thairag_core::types::{ChunkId, ChunkMetadata, DocId, DocumentChunk, WorkspaceId};
+
+        let store = MemoryKmStore::new();
+        let chunk_id = ChunkId(uuid::Uuid::new_v4());
+        let chunk = DocumentChunk {
+            chunk_id,
+            doc_id: DocId(uuid::Uuid::new_v4()),
+            workspace_id: WorkspaceId(uuid::Uuid::new_v4()),
+            content: "body".into(),
+            chunk_index: 0,
+            embedding: None,
+            metadata: Some(ChunkMetadata {
+                section_title: Some("Chapter 2".into()),
+                page_numbers: Some(vec![7, 8]),
+                ..Default::default()
+            }),
+        };
+        store.save_chunks(&[chunk]).unwrap();
+
+        let id_str = chunk_id.0.to_string();
+        let resolved = store.get_chunk_metadata(std::slice::from_ref(&id_str));
+        let meta = resolved.get(&id_str).expect("metadata present");
+        assert_eq!(meta.section_title.as_deref(), Some("Chapter 2"));
+        assert_eq!(meta.page_numbers.as_deref(), Some(&[7usize, 8][..]));
+
+        // Unknown ids resolve to nothing.
+        assert!(
+            store
+                .get_chunk_metadata(&[uuid::Uuid::new_v4().to_string()])
+                .is_empty()
         );
     }
 }

@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     doc_id         TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     workspace_id   TEXT NOT NULL,
     content        TEXT NOT NULL,
-    chunk_index    INTEGER NOT NULL
+    chunk_index    INTEGER NOT NULL,
+    metadata       TEXT
 );
 
 -- MCP Connectors
