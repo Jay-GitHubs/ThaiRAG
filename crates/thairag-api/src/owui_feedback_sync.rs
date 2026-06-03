@@ -168,13 +168,21 @@ fn build_feedback_request(fb: &Value) -> Option<FeedbackRequest> {
 }
 
 /// Resolve the ThaiRAG `chatcmpl-…` id from an OWUI feedback row by walking
-/// `snapshot.chat.history.messages[meta.message_id].usage.thairag_response_id`.
+/// `snapshot.chat.(chat.)history.messages[meta.message_id].usage.thairag_response_id`.
+///
+/// OWUI's admin export serializes the whole ChatModel, whose actual chat content
+/// lives in a nested `chat` column — so the real v0.9.6 shape is
+/// `snapshot.chat.chat.history…`. We try that first and fall back to a flat
+/// `snapshot.chat.history…` so a raw chat object (or a future shape change) still
+/// resolves. The fallback is why we tolerate both rather than hard-coding one.
 fn resolve_response_id(fb: &Value) -> Option<String> {
     let message_id = fb.get("meta")?.get("message_id")?.as_str()?;
-    let id = fb
-        .get("snapshot")?
-        .get("chat")?
-        .get("history")?
+    let chat = fb.get("snapshot")?.get("chat")?;
+    let history = chat
+        .get("chat")
+        .and_then(|c| c.get("history"))
+        .or_else(|| chat.get("history"))?;
+    let id = history
         .get("messages")?
         .get(message_id)?
         .get("usage")?
@@ -188,6 +196,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Mirrors the REAL OWUI v0.9.6 admin-export shape: the exported `snapshot.
+    /// chat` is the serialized ChatModel, whose content lives in a nested `chat`
+    /// column — so messages live at `snapshot.chat.chat.history.messages`.
     fn row(message_id: &str, rating: Value, response_id: Option<&str>) -> Value {
         let usage = match response_id {
             Some(id) => json!({ "thairag_response_id": id, "total_tokens": 42 }),
@@ -199,7 +210,9 @@ mod tests {
             "data": { "rating": rating, "comment": "nice" },
             "meta": { "message_id": message_id },
             "snapshot": {
-                "chat": { "history": { "messages": { message_id: { "usage": usage } } } }
+                "chat": {
+                    "chat": { "history": { "messages": { message_id: { "usage": usage } } } }
+                }
             }
         })
     }
@@ -208,6 +221,22 @@ mod tests {
     fn resolves_response_id_from_snapshot() {
         let fb = row("m1", json!(1), Some("chatcmpl-abc"));
         assert_eq!(resolve_response_id(&fb).as_deref(), Some("chatcmpl-abc"));
+    }
+
+    #[test]
+    fn resolves_response_id_from_flat_snapshot_fallback() {
+        // A raw/flat chat object (no ChatModel wrapper) must still resolve.
+        let fb = json!({
+            "meta": { "message_id": "m1" },
+            "snapshot": {
+                "chat": {
+                    "history": { "messages": { "m1": {
+                        "usage": { "thairag_response_id": "chatcmpl-flat" }
+                    } } }
+                }
+            }
+        });
+        assert_eq!(resolve_response_id(&fb).as_deref(), Some("chatcmpl-flat"));
     }
 
     #[test]
