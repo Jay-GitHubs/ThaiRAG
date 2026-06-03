@@ -2,14 +2,19 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
 /**
- * OBSERVATION spec (not a pass/fail regression gate).
+ * INLINE-CITATION verification spec.
  *
  * Drives the real Open WebUI chat surface (localhost:3000) end-to-end via
- * Keycloak SSO and captures how ThaiRAG citations currently render. Today the
- * backend appends a markdown "**Sources:**" footer as ordinary message content
- * (chat.rs build_source_footer), so OWUI shows it as plain text rather than its
- * native clickable citation references. These screenshots are the "before" half
- * of the citation-improvement work.
+ * Keycloak SSO and asserts that ThaiRAG citations render as OWUI's native,
+ * one-click INLINE source modals (snippet text shown in-app), NOT as
+ * title-only links that open a new tab.
+ *
+ * Backend mechanism (chat.rs, PR #130): when the request carries the OWUI
+ * user header, the stream emits content-bearing
+ * `{"event":{"type":"source",...}}` chunks whose `document` array holds the
+ * real retrieved snippets and whose `metadata.source` is a non-URL doc id.
+ * OWUI v0.9.6 renders these as a "{N} Sources" toggle → numbered source
+ * entries (`#source-...`) → CitationModal showing the snippet text.
  *
  * Run headed:
  *   npx playwright test e2e/owui-citations.spec.ts --headed --project=e2e
@@ -156,32 +161,78 @@ test.describe('Open WebUI citation rendering (observation)', () => {
       prev = cur;
     }
 
-    // Give OWUI a moment to render any post-completion citation panel.
+    // Give OWUI a moment to render the post-completion citation panel.
     await page.waitForTimeout(2000);
     await shot(page, '06-answer-with-citations');
 
-    // --- 6. Report what we actually got ------------------------------------
+    // --- 6. Verify NATIVE inline citations rendered ------------------------
     const lastMsg = page
       .locator('[class*="message"], [data-message-role="assistant"], .chat-assistant')
       .last();
     const bodyText = await lastMsg.innerText().catch(() => '');
+    expect(bodyText.trim().length, 'expected a non-empty assistant answer').toBeGreaterThan(20);
 
-    const hasPlainTextSources = /\*\*?Sources:?\*\*?|Sources:|Response ID:/i.test(bodyText);
-    // OWUI native citations render as small numbered reference buttons/links.
-    const nativeCitationCount = await page
-      .locator('button:has-text("[1]"), .citation, [id^="source-"], [data-citation], a[href^="#citation"]')
-      .count()
-      .catch(() => 0);
+    // The OWUI source events should NOT surface as a plain-text "Sources:"
+    // footer in the message body (that footer is suppressed for OWUI).
+    const hasPlainTextSources = /\*\*?Sources:?\*\*?|Response ID:/i.test(bodyText);
+    console.log(`plain-text "Sources:" footer in body=${hasPlainTextSources}`);
 
-    console.log('===== OWUI CITATION OBSERVATION =====');
+    // (a) The "{N} Sources" toggle button proves the source events were
+    // received and rendered as native citations (Citations.svelte).
+    const sourcesToggle = page
+      .getByRole('button', { name: /toggle \d+ sources?|toggle 1 source/i })
+      .or(page.getByRole('button', { name: /^\s*\d+ sources?\s*$|^\s*1 source\s*$/i }))
+      .first();
+    await expect(sourcesToggle, 'expected an OWUI "{N} Sources" citation toggle').toBeVisible({
+      timeout: 30_000,
+    });
+    await shot(page, '07-sources-toggle');
+
+    // (b) Expand it → numbered per-source entries (id="source-...").
+    await sourcesToggle.click();
+    const sourceEntry = page.locator('[id^="source-"]').first();
+    await expect(sourceEntry, 'expected numbered source entries after expanding').toBeVisible({
+      timeout: 10_000,
+    });
+    await shot(page, '08-sources-expanded');
+
+    // (c) Click a source → CitationModal opens INLINE (same tab) with the
+    // snippet text. Capture any popup to assert no new tab opens.
+    const pagesBefore = page.context().pages().length;
+    let popupOpened = false;
+    page.context().once('page', () => {
+      popupOpened = true;
+    });
+
+    await sourceEntry.click();
+
+    // The modal is an in-app dialog rendering the snippet via <Markdown>.
+    const modal = page
+      .locator('[role="dialog"], dialog, [id^="citation-"]')
+      .filter({ hasText: /.+/ })
+      .first();
+    await expect(modal, 'expected an in-app citation modal (inline, not a new tab)').toBeVisible({
+      timeout: 10_000,
+    });
+    await page.waitForTimeout(800);
+    await shot(page, '09-citation-modal');
+
+    const modalText = await modal.innerText().catch(() => '');
+    const pagesAfter = page.context().pages().length;
+
+    console.log('===== OWUI INLINE CITATION VERIFICATION =====');
     console.log(`model=${MODEL} question="${QUESTION}"`);
     console.log(`answer length=${bodyText.trim().length}`);
-    console.log(`plain-text "Sources:" footer present=${hasPlainTextSources}`);
-    console.log(`OWUI native citation elements found=${nativeCitationCount}`);
-    console.log('answer tail:', JSON.stringify(bodyText.slice(-400)));
-    console.log('=====================================');
+    console.log(`Sources toggle visible=true`);
+    console.log(`modal opened inline=true; modal text length=${modalText.trim().length}`);
+    console.log(`new tab opened=${popupOpened} (pages ${pagesBefore} -> ${pagesAfter})`);
+    console.log('modal head:', JSON.stringify(modalText.slice(0, 300)));
+    console.log('=============================================');
 
-    // This is an observation test: assert only that we got an answer at all.
-    expect(bodyText.trim().length).toBeGreaterThan(20);
+    // (d) The modal must show real snippet content, and clicking the citation
+    // must NOT have opened a new browser tab.
+    expect(modalText.trim().length, 'citation modal should show snippet text').toBeGreaterThan(20);
+    expect(popupOpened, 'clicking a citation must not open a new tab').toBe(false);
+    expect(pagesAfter, 'no extra browser tab should be created').toBe(pagesBefore);
   });
 });
