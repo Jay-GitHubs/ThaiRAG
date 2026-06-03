@@ -987,6 +987,13 @@ pub struct ChatPipelineConfig {
     /// citations instead of the plain-text footer. Portable across clients.
     #[serde(default = "default_true_val")]
     pub citation_annotations_enabled: bool,
+    /// Externally-reachable base URL (scheme + host[:port], no trailing slash),
+    /// e.g. `https://rag.example.com`. When set, citation annotations link to
+    /// `{base}/v1/citation/{doc_id}?token=...` — a signed, time-limited page a
+    /// browser can open to view the cited source. When empty, citations fall
+    /// back to the opaque `thairag:///doc/{id}` identifier (not openable).
+    #[serde(default)]
+    pub citation_base_url: String,
 
     // ── Feature: Structured Extraction (Thai answer-quality experiment) ──
     /// Extract-then-answer: before generating, prompt the model to copy the
@@ -1270,6 +1277,7 @@ impl Default for ChatPipelineConfig {
             source_footer_max: default_source_footer_max(),
             structured_citations_enabled: true,
             citation_annotations_enabled: true,
+            citation_base_url: String::new(),
             // Structured Extraction (opt-in experiment)
             structured_extraction_enabled: false,
             structured_extraction_llm: None,
