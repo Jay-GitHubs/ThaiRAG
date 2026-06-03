@@ -507,6 +507,7 @@ async fn handle_v2_non_stream(
             prompt_tokens: llm_resp.usage.prompt_tokens,
             completion_tokens: llm_resp.usage.completion_tokens,
             total_tokens: llm_resp.usage.prompt_tokens + llm_resp.usage.completion_tokens,
+            thairag_response_id: None,
         },
         metadata: v2_metadata,
         session_id: session_id.map(|s| s.to_string()),
@@ -689,6 +690,7 @@ async fn handle_v2_stream(
                 prompt_tokens: usage.prompt_tokens,
                 completion_tokens: usage.completion_tokens,
                 total_tokens: usage.prompt_tokens + usage.completion_tokens,
+                thairag_response_id: None,
             }),
         };
         let json = serde_json::to_string(&usage_chunk).unwrap();

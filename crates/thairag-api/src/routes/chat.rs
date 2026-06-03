@@ -1339,6 +1339,7 @@ async fn handle_non_stream(
             prompt_tokens: llm_resp.usage.prompt_tokens,
             completion_tokens: llm_resp.usage.completion_tokens,
             total_tokens: llm_resp.usage.prompt_tokens + llm_resp.usage.completion_tokens,
+            thairag_response_id: None,
         },
     })
     .unwrap();
@@ -1792,6 +1793,12 @@ async fn handle_stream(
                 prompt_tokens: llm_usage.prompt_tokens,
                 completion_tokens: llm_usage.completion_tokens,
                 total_tokens: llm_usage.prompt_tokens + llm_usage.completion_tokens,
+                // OWUI persists the usage object verbatim into its feedback
+                // snapshot; stamp the response id here so the feedback bridge
+                // can correlate a thumbs rating back to this request. OWUI
+                // discards the chunk-level `id`, so usage is the only carrier
+                // that survives invisibly (never rendered/copied/spoken).
+                thairag_response_id: is_openwebui.then(|| id_clone.clone()),
             }),
         };
         yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap()));
