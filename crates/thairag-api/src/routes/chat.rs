@@ -219,6 +219,10 @@ pub async fn chat_completions(
     // ── Build available scopes for tool router (Feature 3) ─────────
     let available_scopes = build_searchable_scopes(&state, &scope);
 
+    // Open WebUI forwards a per-user email header; its presence lets us skip the
+    // redundant plain-text footer there, since OWUI renders native annotations.
+    let is_openwebui = headers.contains_key("x-openwebui-user-email");
+
     if req.stream {
         handle_stream(
             state,
@@ -232,6 +236,7 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
+            is_openwebui,
         )
         .await
     } else {
@@ -1137,6 +1142,7 @@ async fn handle_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
+    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -1358,6 +1364,7 @@ async fn handle_stream(
         // swallowing the plain-text footer. It never rendered as citations either,
         // so it was removed.)
         let cite_cfg = &state.config.chat_pipeline;
+        let mut annotations_emitted = false;
         if cite_cfg.citation_annotations_enabled {
             let sources = build_citation_sources(
                 &footer_meta,
@@ -1392,16 +1399,18 @@ async fn handle_stream(
                     usage: None,
                 };
                 yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
+                annotations_emitted = true;
             }
         }
 
         // Append the plain-text source footer for transparency / fallback.
         // Emitted as a final content chunk so clients without native citation
-        // support still render it inline. Always emitted as the universal
-        // fallback: clients that render `delta.annotations` (e.g. Open WebUI
-        // v0.9.6) show native citations on top of this; clients that don't still
-        // get the footer.
-        if let Some(footer) = build_source_footer(
+        // support still render it inline. Skipped for Open WebUI when we already
+        // emitted native `delta.annotations` (OWUI v0.9.6 renders those as
+        // clickable references, so the footer would be a redundant duplicate);
+        // every other client still gets the footer.
+        if !(is_openwebui && annotations_emitted)
+            && let Some(footer) = build_source_footer(
             &footer_meta,
             state.config.chat_pipeline.source_footer_enabled,
             state.config.chat_pipeline.source_footer_max,
