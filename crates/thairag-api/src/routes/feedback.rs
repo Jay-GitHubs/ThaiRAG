@@ -71,24 +71,86 @@ pub struct FeedbackResponse {
     pub ok: bool,
 }
 
+/// Rich feedback context resolved for a response. Parallel arrays
+/// (`doc_ids[i]` ↔ `chunk_ids[i]` ↔ `chunk_scores[i]`) match the Test Chat
+/// payload shape.
+#[derive(Default)]
+struct FeedbackContext {
+    query: Option<String>,
+    workspace_id: Option<String>,
+    doc_ids: Vec<String>,
+    chunk_scores: Vec<f32>,
+    chunk_ids: Vec<String>,
+}
+
+/// Backfill rich feedback context from server-side logs when the caller didn't
+/// supply it. The Test Chat sends full context inline, but minimal callers (the
+/// OWUI feedback bridge) send only `{response_id, thumbs_up, comment}`. The
+/// inference log supplies query/workspace and the per-response lineage table
+/// supplies doc_ids/chunk_ids/scores — both keyed by `response_id` — which is
+/// what `recompute_document_boosts` needs to learn from a rating. Only empty
+/// fields are filled, so an explicit caller always wins.
+fn enrich_feedback_context(
+    km_store: &dyn crate::store::KmStoreTrait,
+    req: &FeedbackRequest,
+) -> FeedbackContext {
+    let mut ctx = FeedbackContext {
+        query: req.query.clone(),
+        workspace_id: req.workspace_id.clone(),
+        doc_ids: req.doc_ids.clone(),
+        chunk_scores: req.chunk_scores.clone(),
+        chunk_ids: req.chunk_ids.clone(),
+    };
+
+    if ctx.query.is_none() || ctx.workspace_id.is_none() {
+        let filter = crate::store::InferenceLogFilter {
+            response_id: Some(req.response_id.clone()),
+            limit: 1,
+            ..Default::default()
+        };
+        if let Some(log) = km_store.list_inference_logs(&filter).into_iter().next() {
+            if ctx.query.is_none() && !log.query_text.is_empty() {
+                ctx.query = Some(log.query_text);
+            }
+            if ctx.workspace_id.is_none() {
+                ctx.workspace_id = log.workspace_id;
+            }
+        }
+    }
+
+    // Lineage rows are one-per-retrieved-chunk; keep them parallel to match the
+    // Test Chat payload shape.
+    if ctx.doc_ids.is_empty() && ctx.chunk_ids.is_empty() {
+        for rec in km_store.get_lineage_for_response(&req.response_id) {
+            ctx.doc_ids.push(rec.doc_id);
+            ctx.chunk_ids.push(rec.chunk_id);
+            ctx.chunk_scores.push(rec.score);
+        }
+    }
+
+    ctx
+}
+
 /// POST /v1/chat/feedback — submit feedback for a response.
 pub async fn submit_feedback(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     AppJson(req): AppJson<FeedbackRequest>,
 ) -> Result<Json<FeedbackResponse>, ApiError> {
+    let ctx = enrich_feedback_context(state.km_store.as_ref(), &req);
+
     let entry = FeedbackEntry {
         response_id: req.response_id.clone(),
         user_id: claims.sub.clone(),
         thumbs_up: req.thumbs_up,
         comment: req.comment,
         timestamp: Utc::now().timestamp(),
-        query: req.query,
+        query: ctx.query,
         answer: req.answer,
-        workspace_id: req.workspace_id,
-        doc_ids: req.doc_ids,
-        chunk_scores: req.chunk_scores,
-        chunk_ids: req.chunk_ids,
+        workspace_id: ctx.workspace_id,
+        doc_ids: ctx.doc_ids,
+        chunk_scores: ctx.chunk_scores,
+        chunk_ids: ctx.chunk_ids,
     };
 
     // Append to the feedback log
@@ -710,4 +772,163 @@ fn compute_adaptive_threshold(entries: &[FeedbackEntry]) -> f32 {
     };
 
     threshold.clamp(0.3, 0.9)
+}
+
+#[cfg(test)]
+mod feedback_bridge_tests {
+    use super::*;
+    use crate::store::memory::MemoryKmStore;
+    use crate::store::{InferenceLogEntry, KmStoreTrait, LineageRecord};
+
+    fn log_entry(response_id: &str, query: &str, ws: &str) -> InferenceLogEntry {
+        InferenceLogEntry {
+            id: "log1".into(),
+            timestamp: "2026-06-03T00:00:00Z".into(),
+            user_id: None,
+            workspace_id: Some(ws.into()),
+            org_id: None,
+            dept_id: None,
+            session_id: None,
+            response_id: response_id.into(),
+            query_text: query.into(),
+            detected_language: None,
+            intent: None,
+            complexity: None,
+            llm_kind: "ollama".into(),
+            llm_model: "qwen3:14b".into(),
+            settings_scope: "Global".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_ms: 0,
+            search_ms: None,
+            generation_ms: None,
+            chunks_retrieved: None,
+            avg_chunk_score: None,
+            self_rag_decision: None,
+            self_rag_confidence: None,
+            quality_guard_pass: None,
+            relevance_score: None,
+            hallucination_score: None,
+            completeness_score: None,
+            pipeline_route: None,
+            agents_used: "[]".into(),
+            status: "success".into(),
+            error_message: None,
+            response_length: 0,
+            feedback_score: None,
+            input_guardrails_pass: None,
+            output_guardrails_pass: None,
+            guardrail_violation_codes: String::new(),
+        }
+    }
+
+    fn lineage(response_id: &str, doc: &str, chunk: &str, score: f32) -> LineageRecord {
+        LineageRecord {
+            id: format!("{doc}-{chunk}"),
+            response_id: response_id.into(),
+            timestamp: "2026-06-03T00:00:00Z".into(),
+            query_text: "q".into(),
+            chunk_id: chunk.into(),
+            doc_id: doc.into(),
+            doc_title: None,
+            chunk_text_preview: "preview".into(),
+            score,
+            rank: 1,
+            contributed: true,
+        }
+    }
+
+    fn minimal_req(response_id: &str) -> FeedbackRequest {
+        FeedbackRequest {
+            response_id: response_id.into(),
+            thumbs_up: true,
+            comment: None,
+            query: None,
+            answer: None,
+            workspace_id: None,
+            doc_ids: vec![],
+            chunk_scores: vec![],
+            chunk_ids: vec![],
+        }
+    }
+
+    #[test]
+    fn enriches_minimal_feedback_from_logs_and_lineage() {
+        let store = MemoryKmStore::new();
+        let rid = "chatcmpl-abc";
+        store.insert_inference_log(&log_entry(rid, "what is the policy?", "ws-1"));
+        store.insert_lineage_record(&lineage(rid, "doc-a", "chunk-1", 0.9));
+        store.insert_lineage_record(&lineage(rid, "doc-a", "chunk-2", 0.7));
+        store.insert_lineage_record(&lineage(rid, "doc-b", "chunk-3", 0.5));
+
+        let ctx = enrich_feedback_context(&store, &minimal_req(rid));
+
+        assert_eq!(ctx.query.as_deref(), Some("what is the policy?"));
+        assert_eq!(ctx.workspace_id.as_deref(), Some("ws-1"));
+        // Parallel arrays, one entry per retrieved chunk (duplicates preserved).
+        assert_eq!(ctx.doc_ids, vec!["doc-a", "doc-a", "doc-b"]);
+        assert_eq!(ctx.chunk_ids, vec!["chunk-1", "chunk-2", "chunk-3"]);
+        assert_eq!(ctx.chunk_scores, vec![0.9, 0.7, 0.5]);
+    }
+
+    #[test]
+    fn explicit_context_is_not_overwritten() {
+        let store = MemoryKmStore::new();
+        let rid = "chatcmpl-xyz";
+        store.insert_inference_log(&log_entry(rid, "log query", "log-ws"));
+        store.insert_lineage_record(&lineage(rid, "log-doc", "log-chunk", 0.1));
+
+        let mut req = minimal_req(rid);
+        req.query = Some("caller query".into());
+        req.workspace_id = Some("caller-ws".into());
+        req.doc_ids = vec!["caller-doc".into()];
+        req.chunk_ids = vec!["caller-chunk".into()];
+        req.chunk_scores = vec![0.42];
+
+        let ctx = enrich_feedback_context(&store, &req);
+
+        assert_eq!(ctx.query.as_deref(), Some("caller query"));
+        assert_eq!(ctx.workspace_id.as_deref(), Some("caller-ws"));
+        assert_eq!(ctx.doc_ids, vec!["caller-doc"]);
+        assert_eq!(ctx.chunk_ids, vec!["caller-chunk"]);
+        assert_eq!(ctx.chunk_scores, vec![0.42]);
+    }
+
+    #[test]
+    fn missing_logs_yield_empty_context() {
+        let store = MemoryKmStore::new();
+        let ctx = enrich_feedback_context(&store, &minimal_req("chatcmpl-none"));
+        assert!(ctx.query.is_none());
+        assert!(ctx.workspace_id.is_none());
+        assert!(ctx.doc_ids.is_empty());
+        assert!(ctx.chunk_ids.is_empty());
+        assert!(ctx.chunk_scores.is_empty());
+    }
+
+    #[test]
+    fn usage_response_id_omitted_when_none() {
+        let usage = thairag_core::types::ChatUsage {
+            prompt_tokens: 1,
+            completion_tokens: 2,
+            total_tokens: 3,
+            thairag_response_id: None,
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        assert!(!json.contains("thairag_response_id"), "got: {json}");
+    }
+
+    #[test]
+    fn usage_response_id_present_when_set() {
+        let usage = thairag_core::types::ChatUsage {
+            prompt_tokens: 1,
+            completion_tokens: 2,
+            total_tokens: 3,
+            thairag_response_id: Some("chatcmpl-abc".into()),
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        assert!(
+            json.contains("\"thairag_response_id\":\"chatcmpl-abc\""),
+            "got: {json}"
+        );
+    }
 }
