@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     workspace_id   UUID NOT NULL,
     content        TEXT NOT NULL,
     chunk_index    INTEGER NOT NULL,
+    metadata       TEXT,
     PRIMARY KEY (chunk_id)
 );
 CREATE INDEX IF NOT EXISTS idx_document_chunks_doc_id ON document_chunks(doc_id);

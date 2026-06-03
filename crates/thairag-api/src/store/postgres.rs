@@ -106,6 +106,9 @@ impl PostgresKmStore {
         )
         .execute(&pool)
         .await;
+        let _ = sqlx::query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS metadata TEXT")
+            .execute(&pool)
+            .await;
 
         // Guardrails columns on inference_logs (PR1).
         for stmt in [
@@ -996,18 +999,23 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
         for chunk in chunks {
+            let metadata_json = chunk
+                .metadata
+                .as_ref()
+                .and_then(|m| serde_json::to_string(m).ok());
             block_on(
                 sqlx::query(
-                    "INSERT INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index)
-                     VALUES ($1, $2, $3, $4, $5)
+                    "INSERT INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index, metadata)
+                     VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT (chunk_id) DO UPDATE SET
-                       content = $4, chunk_index = $5",
+                       content = $4, chunk_index = $5, metadata = $6",
                 )
                 .bind(chunk.chunk_id.0)
                 .bind(chunk.doc_id.0)
                 .bind(chunk.workspace_id.0)
                 .bind(&chunk.content)
                 .bind(chunk.chunk_index as i32)
+                .bind(metadata_json)
                 .execute(&self.pool),
             )
             .map_err(|e| ThaiRagError::Internal(format!("Postgres save chunk: {e}")))?;
@@ -1075,6 +1083,33 @@ impl KmStoreTrait for PostgresKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete chunks: {e}")))?;
         Ok(())
+    }
+
+    fn get_chunk_metadata(
+        &self,
+        chunk_ids: &[String],
+    ) -> std::collections::HashMap<String, thairag_core::types::ChunkMetadata> {
+        let uuids: Vec<Uuid> = chunk_ids.iter().filter_map(|s| s.parse().ok()).collect();
+        if uuids.is_empty() {
+            return std::collections::HashMap::new();
+        }
+        let rows: Vec<(Uuid, Option<String>)> = block_on(
+            sqlx::query_as(
+                "SELECT chunk_id, metadata FROM document_chunks WHERE chunk_id = ANY($1)",
+            )
+            .bind(&uuids)
+            .fetch_all(&self.pool),
+        )
+        .unwrap_or_default();
+
+        rows.into_iter()
+            .filter_map(|(id, meta)| {
+                let json = meta?;
+                let parsed: thairag_core::types::ChunkMetadata =
+                    serde_json::from_str(&json).ok()?;
+                Some((id.to_string(), parsed))
+            })
+            .collect()
     }
 
     // ── Image blob storage ────────────────────────────────────────────

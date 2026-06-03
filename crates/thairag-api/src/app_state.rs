@@ -805,6 +805,16 @@ impl ProviderBundle {
                     >
             });
 
+            // Citation provenance: hydrate dropped ChunkMetadata (page numbers,
+            // section title) from the store onto retrieval results, since the
+            // vector/BM25 providers do not round-trip chunk metadata.
+            let metadata_resolver: Option<thairag_agent::MetadataResolver> =
+                km_store.as_ref().map(|store| {
+                    let store = Arc::clone(store);
+                    Arc::new(move |ids: &[String]| store.get_chunk_metadata(ids))
+                        as thairag_agent::MetadataResolver
+                });
+
             // ── Guardrails (PR1): build only when respective master switch is on ──
             let input_guardrails = if chat.input_guardrails_enabled {
                 Some(Arc::new(thairag_agent::guardrails::InputGuardrails::new(
@@ -860,6 +870,10 @@ impl ProviderBundle {
             };
             let pipeline = match &guardrail_metrics {
                 Some(rec) => pipeline.with_guardrail_metrics(Arc::clone(rec)),
+                None => pipeline,
+            };
+            let pipeline = match metadata_resolver {
+                Some(resolver) => pipeline.with_metadata_resolver(resolver),
                 None => pipeline,
             };
             Some(Arc::new(pipeline))
