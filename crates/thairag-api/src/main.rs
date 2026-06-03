@@ -275,6 +275,9 @@ async fn main() {
     // Start document refresh scheduler (checks every 5 minutes for documents due for refresh)
     thairag_api::routes::documents::spawn_document_refresh_scheduler(state.clone());
 
+    // Start OWUI → ThaiRAG feedback sync (no-op unless enabled in config)
+    thairag_api::owui_feedback_sync::spawn_owui_feedback_sync(state.clone());
+
     // Store IP rate limiter in AppState so dashboard route can access stats
     state.ip_rate_limiter = rate_limiter.clone();
 

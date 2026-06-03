@@ -131,17 +131,16 @@ fn enrich_feedback_context(
     ctx
 }
 
-/// POST /v1/chat/feedback — submit feedback for a response.
-pub async fn submit_feedback(
-    State(state): State<AppState>,
-    Extension(claims): Extension<AuthClaims>,
-    AppJson(req): AppJson<FeedbackRequest>,
-) -> Result<Json<FeedbackResponse>, ApiError> {
+/// Apply a single feedback record: enrich context, append to the feedback log,
+/// and drive the downstream learners (adaptive threshold, document boosts,
+/// inference-log correlation). Shared by the HTTP handler and the OWUI feedback
+/// sync so both paths learn identically.
+pub fn apply_feedback(state: &AppState, req: FeedbackRequest, user_id: String) {
     let ctx = enrich_feedback_context(state.km_store.as_ref(), &req);
 
     let entry = FeedbackEntry {
         response_id: req.response_id.clone(),
-        user_id: claims.sub.clone(),
+        user_id,
         thumbs_up: req.thumbs_up,
         comment: req.comment,
         timestamp: Utc::now().timestamp(),
@@ -175,17 +174,25 @@ pub async fn submit_feedback(
     debug!(response_id = %req.response_id, thumbs_up = req.thumbs_up, "Feedback received");
 
     // Recompute adaptive threshold if we have enough samples
-    maybe_recompute_threshold(&state, &entries);
+    maybe_recompute_threshold(state, &entries);
 
     // Recompute document boost scores
-    recompute_document_boosts(&state, &entries);
+    recompute_document_boosts(state, &entries);
 
     // Correlate feedback with inference log
     let feedback_score = if req.thumbs_up { 1i8 } else { -1i8 };
     state
         .km_store
         .update_inference_log_feedback(&req.response_id, feedback_score);
+}
 
+/// POST /v1/chat/feedback — submit feedback for a response.
+pub async fn submit_feedback(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(req): AppJson<FeedbackRequest>,
+) -> Result<Json<FeedbackResponse>, ApiError> {
+    apply_feedback(&state, req, claims.sub.clone());
     Ok(Json(FeedbackResponse { ok: true }))
 }
 
