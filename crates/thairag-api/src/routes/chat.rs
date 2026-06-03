@@ -411,6 +411,7 @@ pub(crate) fn build_source_footer(
     enabled: bool,
     max: usize,
     response_id: &str,
+    resolve_title: impl Fn(&str, Option<&str>) -> String,
 ) -> Option<String> {
     if !enabled || max == 0 || meta.retrieved_chunks.is_empty() {
         return None;
@@ -432,7 +433,7 @@ pub(crate) fn build_source_footer(
 
     let mut out = String::from("\n\n---\n**Sources:**\n");
     for (i, c) in sources.iter().enumerate() {
-        let title = c.doc_title.as_deref().unwrap_or(&c.doc_id);
+        let title = resolve_title(&c.doc_id, c.doc_title.as_deref());
         out.push_str(&format!(
             "{}. *{}* — relevance {:.2}\n",
             i + 1,
@@ -908,6 +909,7 @@ async fn handle_non_stream(
         state.config.chat_pipeline.source_footer_enabled,
         state.config.chat_pipeline.source_footer_max,
         &response_id,
+        |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
     ) {
         llm_resp.content.push_str(&footer);
     }
@@ -1395,16 +1397,16 @@ async fn handle_stream(
 
         // Append the plain-text source footer for transparency / fallback.
         // Emitted as a final content chunk so clients without native citation
-        // support still render it inline. This is always emitted: Open WebUI's
-        // OpenAI HTTP connector does not render the SSE `event:source`
-        // passthrough or `delta.annotations` inline (verified empirically on
-        // v0.8.10 and v0.9.6), so the footer is the only citation surface OWUI
-        // users actually see.
+        // support still render it inline. Always emitted as the universal
+        // fallback: clients that render `delta.annotations` (e.g. Open WebUI
+        // v0.9.6) show native citations on top of this; clients that don't still
+        // get the footer.
         if let Some(footer) = build_source_footer(
             &footer_meta,
             state.config.chat_pipeline.source_footer_enabled,
             state.config.chat_pipeline.source_footer_max,
             &id,
+            |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
         ) {
             accumulated_content.push_str(&footer);
             let footer_chunk = ChatCompletionChunk {
