@@ -3576,7 +3576,7 @@ mod tests {
         store.save_chunks(&[chunk]).unwrap();
 
         let id_str = chunk_id.0.to_string();
-        let resolved = store.get_chunk_metadata(&[id_str.clone()]);
+        let resolved = store.get_chunk_metadata(std::slice::from_ref(&id_str));
         let meta = resolved.get(&id_str).expect("metadata present");
         assert_eq!(meta.section_title.as_deref(), Some("Chapter 2"));
         assert_eq!(meta.page_numbers.as_deref(), Some(&[7usize, 8][..]));
