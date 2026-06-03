@@ -191,6 +191,14 @@ pub struct RetrievedChunkMeta {
     pub score: f32,
     pub rank: u32,
     pub contributed: bool,
+    /// 1-indexed source page numbers this chunk spans (PDFs; empty for
+    /// page-less formats). Surfaced in citations so users can locate the
+    /// passage in the original document.
+    #[serde(default)]
+    pub page_numbers: Option<Vec<usize>>,
+    /// Section/heading the chunk belongs to, when known (set by the AI chunker).
+    #[serde(default)]
+    pub section_title: Option<String>,
 }
 
 /// Metadata collected during pipeline execution for inference logging.

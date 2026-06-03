@@ -838,6 +838,13 @@ pub trait KmStoreTrait: Send + Sync {
     /// chunks without re-running the (possibly AI-driven) pipeline.
     fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk>;
     fn delete_chunks_by_doc(&self, doc_id: DocId) -> Result<()>;
+    /// Fetch persisted [`ChunkMetadata`] (page numbers, section title, etc.) for
+    /// the given chunk ids. Used to hydrate retrieval results, since the vector
+    /// and BM25 providers do not round-trip chunk metadata.
+    fn get_chunk_metadata(
+        &self,
+        chunk_ids: &[String],
+    ) -> std::collections::HashMap<String, thairag_core::types::ChunkMetadata>;
 
     // ── User ────────────────────────────────────────────────────────
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User>;

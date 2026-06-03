@@ -8,9 +8,9 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::{GuardrailMetricsRecorder, LlmProvider, SearchPluginEngine};
 use thairag_core::types::{
-    ChatMessage, DocId, GuardrailViolationMeta, ImageContent, ImageId, LlmResponse,
+    ChatMessage, ChunkMetadata, DocId, GuardrailViolationMeta, ImageContent, ImageId, LlmResponse,
     LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender,
-    QueryIntent, SearchQuery, SessionAttachment, StageStatus,
+    QueryIntent, SearchQuery, SearchResult, SessionAttachment, StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -46,6 +46,12 @@ use crate::tool_router::{SearchableScope, ToolRouter};
 /// Closure that resolves MCP connector configs for a given access scope.
 type ConnectorProvider =
     Arc<dyn Fn(&AccessScope) -> Vec<thairag_core::types::McpConnectorConfig> + Send + Sync>;
+
+/// Closure that hydrates dropped [`ChunkMetadata`] (page numbers, section title)
+/// for a batch of chunk-id strings — used to restore citation provenance that
+/// the vector/BM25 providers strip on read.
+pub type MetadataResolver =
+    Arc<dyn Fn(&[String]) -> std::collections::HashMap<String, ChunkMetadata> + Send + Sync>;
 
 /// PR-δ: upper bound on source images hydrated into a single answer-LLM request.
 /// Vision blobs are large (base64 page renders) — cap to bound payload/latency.
@@ -143,6 +149,11 @@ pub struct ChatPipeline {
     /// Optional metrics recorder; when set, streaming-output redactions
     /// increment the `guardrail_streaming_redactions_total` counter.
     guardrail_metrics: Option<Arc<dyn GuardrailMetricsRecorder>>,
+    /// Optional resolver: chunk-id strings → persisted [`ChunkMetadata`]. When
+    /// set, retrieval results whose chunk metadata was dropped by the vector/BM25
+    /// providers get it hydrated from the store, so citation provenance (page
+    /// numbers, section title) survives to the answer surface.
+    metadata_resolver: Option<MetadataResolver>,
 }
 
 impl ChatPipeline {
@@ -217,6 +228,7 @@ impl ChatPipeline {
             image_resolver,
             search_plugin_engine: None,
             guardrail_metrics: None,
+            metadata_resolver: None,
         }
     }
 
@@ -234,6 +246,42 @@ impl ChatPipeline {
     pub fn with_guardrail_metrics(mut self, recorder: Arc<dyn GuardrailMetricsRecorder>) -> Self {
         self.guardrail_metrics = Some(recorder);
         self
+    }
+
+    /// Builder: install a resolver that hydrates dropped [`ChunkMetadata`]
+    /// (page numbers, section title) onto retrieval results from the store.
+    /// Omit to leave results as the search providers returned them.
+    pub fn with_metadata_resolver(mut self, resolver: MetadataResolver) -> Self {
+        self.metadata_resolver = Some(resolver);
+        self
+    }
+
+    /// Fill in `chunk.metadata` for results that lost it during retrieval,
+    /// using the installed metadata resolver. No-op when the resolver is unset
+    /// or every result already carries metadata.
+    fn hydrate_chunk_metadata(&self, results: &mut [SearchResult]) {
+        let Some(resolver) = self.metadata_resolver.as_ref() else {
+            return;
+        };
+        let missing: Vec<String> = results
+            .iter()
+            .filter(|r| r.chunk.metadata.is_none())
+            .map(|r| r.chunk.chunk_id.0.to_string())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let resolved = resolver(&missing);
+        if resolved.is_empty() {
+            return;
+        }
+        for r in results.iter_mut() {
+            if r.chunk.metadata.is_none()
+                && let Some(meta) = resolved.get(&r.chunk.chunk_id.0.to_string())
+            {
+                r.chunk.metadata = Some(meta.clone());
+            }
+        }
     }
 
     /// Get the shared adaptive threshold handle (for external updates from feedback system).
@@ -861,6 +909,16 @@ impl ChatPipeline {
                             score: r.score,
                             rank: i as u32,
                             contributed: true,
+                            page_numbers: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.page_numbers.clone()),
+                            section_title: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.section_title.clone()),
                         })
                         .collect();
                 });
@@ -1041,6 +1099,16 @@ impl ChatPipeline {
                     score: r.score,
                     rank: i as u32,
                     contributed: true,
+                    page_numbers: r
+                        .chunk
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.page_numbers.clone()),
+                    section_title: r
+                        .chunk
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.section_title.clone()),
                 })
                 .collect();
         });
@@ -1803,6 +1871,16 @@ impl ChatPipeline {
                             score: r.score,
                             rank: i as u32,
                             contributed: true,
+                            page_numbers: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.page_numbers.clone()),
+                            section_title: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.section_title.clone()),
                         })
                         .collect();
                 });
@@ -1916,6 +1994,16 @@ impl ChatPipeline {
                             score: r.score,
                             rank: i as u32,
                             contributed: true,
+                            page_numbers: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.page_numbers.clone()),
+                            section_title: r
+                                .chunk
+                                .metadata
+                                .as_ref()
+                                .and_then(|m| m.section_title.clone()),
                         })
                         .collect();
                 });
@@ -2320,16 +2408,20 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
     ) -> Result<Vec<thairag_core::types::SearchResult>> {
         // Feature 3: Agentic Tool Use
-        if self.config.tool_use_enabled
+        let mut results = if self.config.tool_use_enabled
             && let Some(ref router) = self.tool_router
         {
-            return router
+            router
                 .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
-                .await;
-        }
-
-        // Standard search path
-        self.run_search(rewritten, scope).await
+                .await?
+        } else {
+            // Standard search path
+            self.run_search(rewritten, scope).await?
+        };
+        // Restore citation provenance (page/section) that the vector/BM25
+        // providers drop on read; no-op when no resolver is installed.
+        self.hydrate_chunk_metadata(&mut results);
+        Ok(results)
     }
 
     async fn run_search(

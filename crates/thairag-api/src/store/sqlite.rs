@@ -50,6 +50,7 @@ impl SqliteKmStore {
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE finetune_jobs ADD COLUMN config TEXT",
             "ALTER TABLE documents ADD COLUMN processing_provenance TEXT",
+            "ALTER TABLE document_chunks ADD COLUMN metadata TEXT",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -1040,15 +1041,20 @@ impl KmStoreTrait for SqliteKmStore {
     fn save_chunks(&self, chunks: &[thairag_core::types::DocumentChunk]) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         for chunk in chunks {
+            let metadata_json = chunk
+                .metadata
+                .as_ref()
+                .and_then(|m| serde_json::to_string(m).ok());
             conn.execute(
-                "INSERT OR REPLACE INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO document_chunks (chunk_id, doc_id, workspace_id, content, chunk_index, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     chunk.chunk_id.0.to_string(),
                     chunk.doc_id.0.to_string(),
                     chunk.workspace_id.0.to_string(),
                     chunk.content,
                     chunk.chunk_index as i32,
+                    metadata_json,
                 ],
             )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite save chunk: {e}")))?;
@@ -1125,6 +1131,32 @@ impl KmStoreTrait for SqliteKmStore {
         )
         .map_err(|e| ThaiRagError::Internal(format!("SQLite delete chunks: {e}")))?;
         Ok(())
+    }
+
+    fn get_chunk_metadata(
+        &self,
+        chunk_ids: &[String],
+    ) -> std::collections::HashMap<String, thairag_core::types::ChunkMetadata> {
+        let mut out = std::collections::HashMap::new();
+        if chunk_ids.is_empty() {
+            return out;
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            match conn.prepare("SELECT metadata FROM document_chunks WHERE chunk_id = ?1") {
+                Ok(s) => s,
+                Err(_) => return out,
+            };
+        for id in chunk_ids {
+            let meta: Option<String> = stmt.query_row(params![id], |row| row.get(0)).ok().flatten();
+            if let Some(json) = meta
+                && let Ok(parsed) =
+                    serde_json::from_str::<thairag_core::types::ChunkMetadata>(&json)
+            {
+                out.insert(id.clone(), parsed);
+            }
+        }
+        out
     }
 
     // ── Image blob storage ────────────────────────────────────────────

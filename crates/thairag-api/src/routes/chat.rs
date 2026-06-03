@@ -457,6 +457,12 @@ pub(crate) fn build_source_footer(
 struct CitationSource {
     title: String,
     doc_id: String,
+    /// 1-indexed primary page of the cited passage (first page the chunk spans),
+    /// when the source format carries pages. Surfaced so users can locate and
+    /// trust the citation in the original document.
+    page: Option<usize>,
+    /// Section/heading the cited passage belongs to, when known.
+    section: Option<String>,
 }
 
 /// Resolve a human-readable document title for native citations: prefer a title
@@ -475,6 +481,12 @@ fn resolve_doc_title(state: &AppState, doc_id: &str, fallback: Option<&str>) -> 
         return doc.title;
     }
     doc_id.to_string()
+}
+
+/// The 1-indexed primary page a retrieved chunk starts on, when its source
+/// format carries page numbers.
+fn primary_page(rc: &thairag_core::types::RetrievedChunkMeta) -> Option<usize> {
+    rc.page_numbers.as_ref().and_then(|p| p.first().copied())
 }
 
 /// Resolve the per-source citation list used to drive native (clickable)
@@ -501,9 +513,17 @@ fn build_citation_sources(
         let mut out = Vec::with_capacity(max_marker as usize);
         for n in 1..=max_marker {
             if let Some(c) = by_marker.get(&n) {
+                // The marker carries no page/section locator, so look the cited
+                // chunk up by id in the retrieval to recover its provenance.
+                let loc = meta
+                    .retrieved_chunks
+                    .iter()
+                    .find(|r| r.chunk_id == c.chunk_id);
                 out.push(CitationSource {
                     title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
                     doc_id: c.doc_id.clone(),
+                    page: loc.and_then(primary_page),
+                    section: loc.and_then(|r| r.section_title.clone()),
                 });
             } else if let Some(rc) = meta.retrieved_chunks.iter().find(|r| r.rank == n - 1) {
                 // Marker gap: fill positionally from the ranked retrieval so the
@@ -511,11 +531,15 @@ fn build_citation_sources(
                 out.push(CitationSource {
                     title: resolve_title(&rc.doc_id, rc.doc_title.as_deref()),
                     doc_id: rc.doc_id.clone(),
+                    page: primary_page(rc),
+                    section: rc.section_title.clone(),
                 });
             } else {
                 out.push(CitationSource {
                     title: format!("Source {n}"),
                     doc_id: String::new(),
+                    page: None,
+                    section: None,
                 });
             }
         }
@@ -537,6 +561,8 @@ fn build_citation_sources(
             .map(|c| CitationSource {
                 title: resolve_title(&c.doc_id, c.doc_title.as_deref()),
                 doc_id: c.doc_id.clone(),
+                page: primary_page(c),
+                section: c.section_title.clone(),
             })
             .collect()
     }
@@ -561,28 +587,53 @@ fn build_owui_source_events(
         if s.doc_id.is_empty() {
             continue;
         }
-        let mut documents: Vec<String> = meta
+        // Keep the chunk alongside its snippet so each citation entry can carry
+        // its own page/section provenance (OWUI renders these parallel arrays).
+        let chunks: Vec<&thairag_core::types::RetrievedChunkMeta> = meta
             .retrieved_chunks
             .iter()
             .filter(|c| c.doc_id == s.doc_id && !c.content_preview.trim().is_empty())
-            .map(|c| c.content_preview.clone())
             .take(3)
+            .collect();
+        let mut documents: Vec<String> = chunks
+            .iter()
+            .map(|c| {
+                // OWUI has no native "section" slot, so prefix it into the
+                // snippet markdown the modal renders. Page rides metadata.page.
+                match c.section_title.as_deref() {
+                    Some(sec) if !sec.trim().is_empty() => {
+                        format!("**Section:** {sec}\n\n{}", c.content_preview)
+                    }
+                    _ => c.content_preview.clone(),
+                }
+            })
+            .collect();
+        let mut metadata: Vec<serde_json::Value> = chunks
+            .iter()
+            .map(|c| {
+                let mut m = serde_json::json!({ "source": s.doc_id, "name": s.title });
+                // OWUI's CitationModal renders metadata.page 0-indexed (shows
+                // page+1), so convert our 1-indexed page down by one.
+                if let Some(p) = primary_page(c) {
+                    m["page"] = serde_json::json!(p.saturating_sub(1));
+                }
+                m
+            })
             .collect();
         if documents.is_empty() {
             documents.push(s.title.clone());
+            metadata.push(serde_json::json!({ "source": s.doc_id, "name": s.title }));
         }
-        let metadata: Vec<serde_json::Value> = documents
-            .iter()
-            .map(|_| serde_json::json!({ "source": s.doc_id, "name": s.title }))
-            .collect();
         let mut source_obj = serde_json::json!({ "name": s.title, "id": s.doc_id });
         if !cite_base.is_empty()
             && let Some(jwt) = jwt
             && let Ok(token) = jwt.encode_citation(&s.doc_id, 24)
         {
             source_obj["url"] = serde_json::Value::String(format!(
-                "{cite_base}/v1/citation/{}?token={}",
-                s.doc_id, token
+                "{cite_base}/v1/citation/{}?token={}{}",
+                s.doc_id,
+                token,
+                provenance_query(s.page, s.section.as_deref()),
             ));
         }
         let event = serde_json::json!({
@@ -604,14 +655,52 @@ fn build_owui_source_events(
 /// configured and we can mint a signed token, return a browser-openable link to
 /// the citation viewer; otherwise fall back to the opaque `thairag:///doc/<id>`
 /// identifier (carries the id but is not openable).
-fn citation_url(state: &AppState, base: &str, doc_id: &str) -> String {
+fn citation_url(
+    state: &AppState,
+    base: &str,
+    doc_id: &str,
+    page: Option<usize>,
+    section: Option<&str>,
+) -> String {
     if !base.is_empty()
         && let Some(jwt) = state.jwt.as_ref()
         && let Ok(token) = jwt.encode_citation(doc_id, 24)
     {
-        return format!("{base}/v1/citation/{doc_id}?token={token}");
+        return format!(
+            "{base}/v1/citation/{doc_id}?token={token}{}",
+            provenance_query(page, section),
+        );
     }
     format!("thairag:///doc/{doc_id}")
+}
+
+/// Build the optional `&page=N&section=...` query suffix for citation viewer
+/// links. `page` is 1-indexed (as stored); empty string when neither is set.
+fn provenance_query(page: Option<usize>, section: Option<&str>) -> String {
+    let mut q = String::new();
+    if let Some(p) = page {
+        q.push_str(&format!("&page={p}"));
+    }
+    if let Some(sec) = section.map(str::trim).filter(|s| !s.is_empty()) {
+        q.push_str(&format!("&section={}", urlencode(sec)));
+    }
+    q
+}
+
+/// Minimal percent-encoding for query-string values (RFC 3986 unreserved set
+/// stays literal; everything else is `%XX`). Avoids pulling in a URL crate for
+/// the one place we build a citation link.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 fn escape_html(s: &str) -> String {
@@ -624,6 +713,12 @@ fn escape_html(s: &str) -> String {
 #[derive(serde::Deserialize)]
 pub struct CitationViewQuery {
     token: String,
+    /// 1-indexed source page of the cited passage, when known.
+    #[serde(default)]
+    page: Option<usize>,
+    /// Section/heading of the cited passage, when known.
+    #[serde(default)]
+    section: Option<String>,
 }
 
 /// Public, token-gated viewer for a cited source. The signed `token` (minted at
@@ -670,6 +765,29 @@ pub async fn view_citation(
         .unwrap_or(None)
         .unwrap_or_default();
 
+    // "Cited from: Section X · page N" banner so a reader landing on the viewer
+    // sees exactly where in the document the citation was drawn from.
+    let mut prov_parts: Vec<String> = Vec::new();
+    if let Some(sec) = params
+        .section
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        prov_parts.push(format!("Section {}", escape_html(sec)));
+    }
+    if let Some(p) = params.page {
+        prov_parts.push(format!("page {p}"));
+    }
+    let provenance = if prov_parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"prov\">Cited from: {}</div>",
+            prov_parts.join(" · ")
+        )
+    };
+
     let page = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
@@ -679,9 +797,11 @@ max-width:820px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}}\
 h1{{font-size:1.4rem;border-bottom:1px solid #e0e0e0;padding-bottom:.5rem}}\
 .src{{white-space:pre-wrap;word-wrap:break-word;background:#fafafa;\
 border:1px solid #eee;border-radius:8px;padding:1rem;font-size:.95rem}}\
+.prov{{background:#eef4ff;border:1px solid #cfe0ff;border-radius:8px;\
+padding:.5rem .75rem;margin-bottom:1rem;font-size:.9rem;color:#1a3a6b}}\
 .meta{{color:#888;font-size:.8rem;margin-bottom:1rem}}</style></head>\
 <body><h1>{title}</h1><div class=\"meta\">Cited source · {doc_id}</div>\
-<div class=\"src\">{content}</div></body></html>",
+{provenance}<div class=\"src\">{content}</div></body></html>",
         title = escape_html(&doc.title),
         doc_id = escape_html(&doc.id.0.to_string()),
         content = escape_html(&content),
@@ -1550,7 +1670,13 @@ async fn handle_stream(
                         .map(|s| ChatAnnotation {
                             annotation_type: "url_citation".to_string(),
                             url_citation: UrlCitation {
-                                url: citation_url(&state, cite_base, &s.doc_id),
+                                url: citation_url(
+                                    &state,
+                                    cite_base,
+                                    &s.doc_id,
+                                    s.page,
+                                    s.section.as_deref(),
+                                ),
                                 title: s.title.clone(),
                             },
                         })
@@ -1960,6 +2086,21 @@ mod citation_tests {
             score,
             rank,
             contributed: true,
+            ..Default::default()
+        }
+    }
+
+    fn chunk_loc(
+        id: &str,
+        preview: &str,
+        rank: u32,
+        page: Option<usize>,
+        section: Option<&str>,
+    ) -> RetrievedChunkMeta {
+        RetrievedChunkMeta {
+            page_numbers: page.map(|p| vec![p]),
+            section_title: section.map(str::to_string),
+            ..chunk(id, preview, 0.9, rank)
         }
     }
 
@@ -2069,6 +2210,8 @@ mod citation_tests {
         CitationSource {
             title: title.to_string(),
             doc_id: doc_id.to_string(),
+            page: None,
+            section: None,
         }
     }
 
@@ -2145,5 +2288,80 @@ mod citation_tests {
         let sources = vec![src("", "No Id")];
         let events = build_owui_source_events(None, &meta, &sources, "http://x");
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn citation_source_carries_page_and_section_from_marker_chunk() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![chunk_loc("a", "snippet", 0, Some(7), Some("Prohibited"))],
+            citations: vec![cite(1, "a", "Title A", 0.9)],
+            ..Default::default()
+        };
+        let sources = build_citation_sources(&meta, 10, echo_title);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].page, Some(7));
+        assert_eq!(sources[0].section.as_deref(), Some("Prohibited"));
+    }
+
+    #[test]
+    fn citation_source_provenance_in_no_marker_fallback() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![chunk_loc("a", "snippet", 0, Some(3), Some("Intro"))],
+            citations: vec![],
+            ..Default::default()
+        };
+        let sources = build_citation_sources(&meta, 10, echo_title);
+        assert_eq!(sources[0].page, Some(3));
+        assert_eq!(sources[0].section.as_deref(), Some("Intro"));
+    }
+
+    #[test]
+    fn owui_source_event_injects_section_and_zero_indexed_page() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![chunk_loc(
+                "a",
+                "the snippet",
+                0,
+                Some(7),
+                Some("Prohibited"),
+            )],
+            ..Default::default()
+        };
+        let sources = vec![src("doc-a", "Title A")];
+        let events = build_owui_source_events(None, &meta, &sources, "");
+        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        let data = &v["event"]["data"];
+        // Section prefixed into the snippet markdown the modal renders.
+        assert_eq!(
+            data["document"][0].as_str().unwrap(),
+            "**Section:** Prohibited\n\nthe snippet"
+        );
+        // metadata.page is 0-indexed (OWUI displays page+1), so 7 → 6.
+        assert_eq!(data["metadata"][0]["page"], 6);
+    }
+
+    #[test]
+    fn owui_source_event_omits_page_when_absent() {
+        let meta = PipelineMetadata {
+            retrieved_chunks: vec![chunk("a", "snippet", 0.9, 0)],
+            ..Default::default()
+        };
+        let sources = vec![src("doc-a", "Title A")];
+        let events = build_owui_source_events(None, &meta, &sources, "");
+        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        // No page metadata; snippet has no section prefix.
+        assert!(v["event"]["data"]["metadata"][0].get("page").is_none());
+        assert_eq!(v["event"]["data"]["document"][0], "snippet");
+    }
+
+    #[test]
+    fn provenance_query_encodes_page_and_section() {
+        assert_eq!(provenance_query(None, None), "");
+        assert_eq!(provenance_query(Some(5), None), "&page=5");
+        // Section is percent-encoded (the space becomes %20).
+        let q = provenance_query(Some(2), Some("Risk A"));
+        assert_eq!(q, "&page=2&section=Risk%20A");
+        // Blank section is dropped.
+        assert_eq!(provenance_query(None, Some("  ")), "");
     }
 }

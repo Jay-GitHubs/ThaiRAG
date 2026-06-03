@@ -28,7 +28,7 @@ pub mod speculative_rag;
 pub mod structured_extraction;
 pub mod tool_router;
 
-pub use chat_pipeline::ChatPipeline;
+pub use chat_pipeline::{ChatPipeline, MetadataResolver};
 pub use orchestrator::QueryOrchestrator;
 pub use pipeline_orchestrator::PipelineOrchestrator;
 pub use rag_engine::RagEngine;
