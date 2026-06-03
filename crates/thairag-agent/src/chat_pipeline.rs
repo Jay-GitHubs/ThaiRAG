@@ -57,6 +57,18 @@ pub type MetadataResolver =
 /// Vision blobs are large (base64 page renders) — cap to bound payload/latency.
 const MAX_VISION_IMAGES_PER_ANSWER: usize = 4;
 
+/// True when the client request itself carries answer-bearing context — e.g. an
+/// Open WebUI file upload injects the retrieved file text as a `system` message,
+/// or a client sets its own system prompt. The streaming pipeline uses this to
+/// suppress the empty-knowledge-base short-circuit so such context still reaches
+/// the answer LLM. Pass the RAW client messages (before any ThaiRAG-side memory
+/// or golden-example injection) so internal additions never trip the signal.
+pub fn has_client_supplied_context(messages: &[ChatMessage]) -> bool {
+    messages
+        .iter()
+        .any(|m| m.role == "system" && !m.content.trim().is_empty())
+}
+
 /// Per-request LLM call budget. Shared across pipeline stages to enforce
 /// `max_llm_calls_per_request` and skip optional agents when budget runs low.
 #[derive(Clone)]
@@ -1671,6 +1683,7 @@ impl ChatPipeline {
     }
 
     /// Streaming pipeline with 3-layer defense.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_stream(
         &self,
         messages: &[ChatMessage],
@@ -1679,6 +1692,7 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
         metadata: Option<MetadataCell>,
+        has_external_context: bool,
     ) -> Result<LlmStreamResponse> {
         let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
@@ -1918,7 +1932,9 @@ impl ChatPipeline {
                 let context = self
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
-                if let Some(resp) = self.context_insufficient_response(&context) {
+                if let Some(resp) =
+                    self.context_insufficient_response(&context, has_external_context)
+                {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
                         remaining_budget = budget.remaining(),
@@ -2041,7 +2057,9 @@ impl ChatPipeline {
                 let context = self
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
-                if let Some(resp) = self.context_insufficient_response(&context) {
+                if let Some(resp) =
+                    self.context_insufficient_response(&context, has_external_context)
+                {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
                         remaining_budget = budget.remaining(),
@@ -2148,7 +2166,19 @@ impl ChatPipeline {
     }
 
     /// Layer 1: Pre-stream context guard.
-    fn context_insufficient_response(&self, context: &CuratedContext) -> Option<LlmStreamResponse> {
+    fn context_insufficient_response(
+        &self,
+        context: &CuratedContext,
+        has_external_context: bool,
+    ) -> Option<LlmStreamResponse> {
+        // When the client supplied its own context (e.g. an Open WebUI file
+        // upload injects the retrieved file text as a system message), an empty
+        // knowledge base is NOT a dead end — the answer LLM can work from that
+        // injected context. Suppressing the short-circuit here lets the request
+        // reach the response generator, matching the non-streaming path.
+        if has_external_context {
+            return None;
+        }
         if context.chunks.is_empty() {
             let msg = "I don't have enough information in the knowledge base to answer this question. \
                        Please try rephrasing your query or check if the relevant documents have been uploaded."
@@ -2693,4 +2723,54 @@ fn deduplicate_results(results: &mut Vec<thairag_core::types::SearchResult>) {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     *results = keep;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_client_supplied_context;
+    use thairag_core::types::ChatMessage;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+            images: vec![],
+        }
+    }
+
+    #[test]
+    fn plain_question_has_no_external_context() {
+        let msgs = vec![msg("user", "ธุรกิจต้องห้ามมีอะไรบ้าง")];
+        assert!(!has_client_supplied_context(&msgs));
+    }
+
+    #[test]
+    fn owui_file_upload_injects_system_context() {
+        // OWUI's RAG default injects retrieved file text as a system message.
+        let msgs = vec![
+            msg(
+                "system",
+                "Use the following context from an uploaded file:\n[file] ...",
+            ),
+            msg("user", "What does the file say?"),
+        ];
+        assert!(has_client_supplied_context(&msgs));
+    }
+
+    #[test]
+    fn blank_system_message_does_not_count() {
+        let msgs = vec![msg("system", "   "), msg("user", "hi")];
+        assert!(!has_client_supplied_context(&msgs));
+    }
+
+    #[test]
+    fn multi_turn_user_assistant_history_is_not_external_context() {
+        // Prior conversation alone must not disable the empty-KB short-circuit.
+        let msgs = vec![
+            msg("user", "first question"),
+            msg("assistant", "an answer"),
+            msg("user", "follow-up question"),
+        ];
+        assert!(!has_client_supplied_context(&msgs));
+    }
 }

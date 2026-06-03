@@ -369,6 +369,7 @@ async fn handle_ws_stream(
                 &available_scopes,
                 Some(progress_tx),
                 Some(metadata_cell.clone()),
+                thairag_agent::chat_pipeline::has_client_supplied_context(original_messages),
             )
             .await
     } else {

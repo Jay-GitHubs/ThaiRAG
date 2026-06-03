@@ -67,6 +67,16 @@ services:
       ENABLE_API_KEYS: "true"
       # Increase timeout for pipeline responses (multiple sequential LLM calls)
       AIOHTTP_CLIENT_TIMEOUT: "600"
+      # Full-context mode: inject the whole uploaded file into the prompt instead
+      # of embedding + retrieving chunks. Avoids OWUI's local embedder picking
+      # weak chunks (esp. Thai); ThaiRAG answers from the injected system message
+      # (its empty-KB stream guard is suppressed when client context is present).
+      # Best for small/medium docs — a large file can exceed the answer model's
+      # context window (ollama_num_ctx_max). NOTE: these are OWUI PersistentConfig
+      # values — env only seeds a FRESH volume; a running instance is changed via
+      # POST /api/v1/retrieval/config/update (stored in webui.db).
+      RAG_FULL_CONTEXT: "true"
+      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
       # Forward user identity headers to ThaiRAG for per-user permission enforcement
       ENABLE_FORWARD_USER_INFO_HEADERS: "true"
       # OIDC SSO via Keycloak

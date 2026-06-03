@@ -1464,6 +1464,11 @@ async fn handle_stream(
     let scope_clone = scope.clone();
     let memories_clone = memories.clone();
     let available_scopes_clone = available_scopes.clone();
+    // Computed from the RAW request: when the client injects its own context
+    // (e.g. an OWUI file upload arrives as a system message), the empty-KB
+    // short-circuit must not fire — the answer LLM should use that context.
+    let has_external_context =
+        thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages);
 
     let pipeline_handle = tokio::spawn(async move {
         if let Some(ref pipeline) = scoped_pipeline {
@@ -1476,6 +1481,7 @@ async fn handle_stream(
                         &available_scopes_clone,
                         Some(progress_tx),
                         Some(metadata_cell_clone),
+                        has_external_context,
                     )
                     .await
             } else {
