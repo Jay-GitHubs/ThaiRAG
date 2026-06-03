@@ -573,6 +573,7 @@ async fn handle_v2_stream(
                     &available_scopes,
                     None,
                     Some(metadata_cell.clone()),
+                    thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages),
                 )
                 .await
                 .map_err(ApiError::from)?
