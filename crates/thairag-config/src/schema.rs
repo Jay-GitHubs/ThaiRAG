@@ -1997,6 +1997,7 @@ mod tests {
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
+            owui_feedback_sync: OwuiFeedbackSyncConfig::default(),
             session: SessionConfig::default(),
             attachments: AttachmentsConfig::default(),
             embedding_cache: EmbeddingCacheConfig::default(),
