@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { API_BASE, TEST_EMAIL, TEST_PASSWORD } from './helpers';
 
 /**
  * INLINE-CITATION verification spec.
@@ -29,6 +31,14 @@ const MODEL = process.env.OWUI_MODEL ?? 'ThaiRAG-1.0';
 const QUESTION = process.env.OWUI_QUESTION ?? 'ธุรกิจต้องห้ามมีอะไรบ้าง';
 const SHOTS = 'e2e/screenshots/owui';
 
+// The Keycloak test user (testuser → test@thairag.local) is a VIEWER scoped to
+// this single workspace, so a doc must be ingested HERE for OWUI retrieval to
+// surface it. Override via env if the seeded workspace id changes.
+const INGEST_WS = process.env.OWUI_INGEST_WS ?? 'b5ce5fad-ee71-4b8c-aebf-fa28302722d5';
+// Proven producer of section-bearing chunks ("Table: Prohibit Business and
+// Cautions", etc.) whose Thai prohibited-business content matches QUESTION.
+const FIXTURE_PDF = path.resolve(process.cwd(), '../tests/fixtures/test-from-powerpoint.pdf');
+
 mkdirSync(SHOTS, { recursive: true });
 
 async function shot(page: Page, name: string) {
@@ -37,8 +47,72 @@ async function shot(page: Page, name: string) {
 }
 
 test.describe('Open WebUI citation rendering (observation)', () => {
-  // The pipeline answer can be slow; give the whole flow room.
-  test.setTimeout(10 * 60_000);
+  // The pipeline answer can be slow and we may probe a few follow-up questions
+  // to surface section provenance; give the whole flow generous room.
+  test.setTimeout(15 * 60_000);
+
+  // Doc ingested freshly so its chunks carry persisted ChunkMetadata
+  // (section_title) — the provenance the citation modal must render.
+  let adminToken = '';
+  let provenanceDocId = '';
+
+  test.beforeAll(async ({ request }) => {
+    // Ingest can run the slow AI smart-chunker; allow plenty of headroom.
+    test.setTimeout(9 * 60_000);
+
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    });
+    expect(loginRes.ok(), 'admin API login should succeed').toBeTruthy();
+    adminToken = (await loginRes.json()).token;
+    const headers = { Authorization: `Bearer ${adminToken}` };
+
+    const uploadRes = await request.post(
+      `${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/upload`,
+      {
+        headers,
+        multipart: {
+          title: `owui-citation-provenance-${Date.now()}`,
+          file: {
+            name: 'test-from-powerpoint.pdf',
+            mimeType: 'application/pdf',
+            buffer: readFileSync(FIXTURE_PDF),
+          },
+        },
+      },
+    );
+    expect(uploadRes.ok(), `upload should succeed (status ${uploadRes.status()})`).toBeTruthy();
+    const uploaded = await uploadRes.json();
+    provenanceDocId = uploaded.doc_id;
+    console.log(`[owui] ingested provenance doc=${provenanceDocId} status=${uploaded.status}`);
+
+    // Background processing returns "processing"; poll until ready.
+    if (uploaded.status !== 'ready') {
+      await expect
+        .poll(
+          async () => {
+            const res = await request.get(
+              `${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/${provenanceDocId}`,
+              { headers },
+            );
+            if (!res.ok()) return 'unknown';
+            return (await res.json()).status as string;
+          },
+          { timeout: 8 * 60_000, intervals: [3000] },
+        )
+        .toBe('ready');
+    }
+    console.log(`[owui] provenance doc ready=${provenanceDocId}`);
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (!provenanceDocId || !adminToken) return;
+    await request
+      .delete(`${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/${provenanceDocId}`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      })
+      .catch(() => {});
+  });
 
   test('capture how ThaiRAG citations render in Open WebUI today', async ({ page }) => {
     // --- 1. Landing / login screen -----------------------------------------
@@ -104,12 +178,85 @@ test.describe('Open WebUI citation rendering (observation)', () => {
     }
     await shot(page, '04-chat-ready');
 
+    const MSG_SEL = '[class*="message"], [data-message-role="assistant"], .chat-assistant';
+
+    // Wait for the LAST assistant message to appear and its text to settle.
+    // OWUI renders native citations only at completion, so we must not proceed
+    // mid-stream. The plain-text "Sources:" footer is the last chunk on the
+    // wire, so require several consecutive unchanged polls before continuing.
+    const waitForAnswerStable = async () => {
+      await expect
+        .poll(
+          async () => (await page.locator(MSG_SEL).last().innerText().catch(() => '')).trim().length,
+          { timeout: 8 * 60_000, intervals: [2000] },
+        )
+        .toBeGreaterThan(20);
+      let prev = '';
+      let stableCount = 0;
+      const deadline = Date.now() + 8 * 60_000;
+      while (Date.now() < deadline) {
+        await page.waitForTimeout(1500);
+        const cur = (await page.locator(MSG_SEL).last().innerText().catch(() => '')).trim();
+        if (cur.length > 20 && cur === prev) {
+          stableCount += 1;
+          if (stableCount >= 4) break; // ~6s with no change → stream settled
+        } else {
+          stableCount = 0;
+        }
+        prev = cur;
+      }
+      await page.waitForTimeout(2000);
+    };
+
+    const chatInput = () =>
+      page
+        .locator('#chat-input')
+        .or(page.locator('[contenteditable="true"]'))
+        .or(page.getByRole('textbox'))
+        .first();
+
+    const askQuestion = async (q: string) => {
+      const input = chatInput();
+      await expect(input, 'expected a chat input box').toBeVisible({ timeout: 15_000 });
+      await input.click();
+      await input.fill(q);
+      await page.keyboard.press('Enter');
+      await waitForAnswerStable();
+    };
+
+    // Expand the LAST answer's sources (scoped to that message so we don't pick
+    // up an earlier question's citations) and click through every source modal,
+    // returning the first modal text that renders "Section:" provenance.
+    const scanLastSourcesForSection = async (): Promise<string> => {
+      const block = page.locator(MSG_SEL).last();
+      const entries = block.locator('[id^="source-"]');
+      if (!(await entries.first().isVisible({ timeout: 3000 }).catch(() => false))) {
+        const toggle = block
+          .getByRole('button', { name: /toggle \d+ sources?|^\s*\d+ sources?\s*$|1 source/i })
+          .first();
+        if (!(await toggle.isVisible({ timeout: 20_000 }).catch(() => false))) return '';
+        await toggle.click().catch(() => {});
+      }
+      const n = await entries.count();
+      for (let i = 0; i < n; i += 1) {
+        await entries.nth(i).click().catch(() => {});
+        const m = page
+          .locator('[role="dialog"], dialog, [id^="citation-"]')
+          .filter({ hasText: /.+/ })
+          .first();
+        let t = '';
+        if (await m.isVisible({ timeout: 5000 }).catch(() => false)) {
+          t = await m.innerText().catch(() => '');
+        }
+        await page.keyboard.press('Escape').catch(() => {});
+        await page.waitForTimeout(300);
+        if (/Section:/i.test(t)) return t;
+      }
+      return '';
+    };
+
     // --- 4. Send the Thai question -----------------------------------------
-    const input = page
-      .locator('#chat-input')
-      .or(page.locator('[contenteditable="true"]'))
-      .or(page.getByRole('textbox'))
-      .first();
+    const input = chatInput();
     await expect(input, 'expected a chat input box').toBeVisible({ timeout: 15_000 });
     await input.click();
     await input.fill(QUESTION);
@@ -234,5 +381,41 @@ test.describe('Open WebUI citation rendering (observation)', () => {
     expect(modalText.trim().length, 'citation modal should show snippet text').toBeGreaterThan(20);
     expect(popupOpened, 'clicking a citation must not open a new tab').toBe(false);
     expect(pagesAfter, 'no extra browser tab should be created').toBe(pagesBefore);
+
+    // --- 7. Verify SECTION PROVENANCE renders in a citation modal ----------
+    // The fresh ingest (beforeAll) carries persisted ChunkMetadata, so a
+    // section-bearing chunk's snippet markdown includes a "**Section:** …" line
+    // that OWUI renders as a bold "Section:" label. Only the fresh doc has
+    // metadata, so any "Section:" we see proves the persist→hydrate→render
+    // round-trip. Whether the ONE retrieved chunk happens to carry a
+    // section_title is non-deterministic (LLM chunker + BM25 ranking), so we
+    // probe a few section-targeted questions until a section-bearing source
+    // surfaces. If the feature regresses, none will and this fails.
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(400);
+
+    let provenanceModalText = await scanLastSourcesForSection();
+    const followups = [
+      'Quiz Time',
+      'ตารางธุรกิจต้องห้ามและพึงระมัดระวังอย่างยิ่ง',
+    ];
+    for (const q of followups) {
+      if (provenanceModalText) break;
+      await askQuestion(q);
+      await page.waitForTimeout(1500);
+      provenanceModalText = await scanLastSourcesForSection();
+    }
+    await shot(page, '10-section-provenance');
+
+    const sawSection = /Section:/i.test(provenanceModalText);
+    console.log('===== OWUI SECTION PROVENANCE VERIFICATION =====');
+    console.log(`section provenance rendered=${sawSection}`);
+    console.log('provenance modal head:', JSON.stringify(provenanceModalText.slice(0, 300)));
+    console.log('================================================');
+
+    expect(
+      sawSection,
+      'expected a citation modal to render "Section:" provenance from the freshly-ingested doc',
+    ).toBe(true);
   });
 });
