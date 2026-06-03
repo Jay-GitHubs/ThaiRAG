@@ -48,7 +48,7 @@ services:
   # OPENID_PROVIDER_URL must use host.docker.internal so that the discovery
   # doc returns browser-reachable URLs (same rule as ThaiRAG's issuer URL).
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.8.10
+    image: ghcr.io/open-webui/open-webui:v0.9.6
     ports:
       - "3000:8080"
     volumes:

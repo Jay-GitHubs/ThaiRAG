@@ -112,8 +112,10 @@ test.describe('Open WebUI citation rendering (observation)', () => {
     await page.keyboard.press('Enter');
 
     // --- 5. Wait for the assistant answer to finish ------------------------
-    // Poll until an assistant message has non-trivial text and the stop button
-    // is gone (generation finished).
+    // First wait for non-trivial text to appear, then wait for generation to
+    // actually finish: OWUI shows a "stop generating" button while streaming and
+    // swaps it back to the send button when done. We must not screenshot
+    // mid-stream or native citations (rendered at completion) will be missed.
     await expect
       .poll(
         async () => {
@@ -124,12 +126,38 @@ test.describe('Open WebUI citation rendering (observation)', () => {
             .catch(() => '');
           return text.trim().length;
         },
-        { timeout: 8 * 60_000, intervals: [3000] },
+        { timeout: 8 * 60_000, intervals: [2000] },
       )
       .toBeGreaterThan(20);
 
-    // Give the stream a moment to flush the trailing sources footer chunk.
-    await page.waitForTimeout(4000);
+    // Now block until the assistant message text stabilizes — robust across
+    // OWUI versions (button selectors drift). The plain-text "Sources:" footer
+    // is the LAST chunk on the wire, so we must not screenshot until streaming
+    // has fully settled or we'd miss it. Require the text to be unchanged across
+    // several consecutive polls before proceeding.
+    const lastAssistant = () =>
+      page
+        .locator('[class*="message"], [data-message-role="assistant"], .chat-assistant')
+        .last()
+        .innerText()
+        .catch(() => '');
+    let prev = '';
+    let stableCount = 0;
+    const deadline = Date.now() + 8 * 60_000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(1500);
+      const cur = (await lastAssistant()).trim();
+      if (cur.length > 20 && cur === prev) {
+        stableCount += 1;
+        if (stableCount >= 4) break; // ~6s with no change → stream settled
+      } else {
+        stableCount = 0;
+      }
+      prev = cur;
+    }
+
+    // Give OWUI a moment to render any post-completion citation panel.
+    await page.waitForTimeout(2000);
     await shot(page, '06-answer-with-citations');
 
     // --- 6. Report what we actually got ------------------------------------
