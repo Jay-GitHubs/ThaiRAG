@@ -41,6 +41,11 @@ services:
       THAIRAG__AUTH__API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
       # Browser-reachable base URL for clickable citation links (host-mapped 8080).
       THAIRAG__CHAT_PIPELINE__CITATION_BASE_URL: "http://localhost:8080"
+      # OWUI → ThaiRAG feedback sync (polls OWUI's admin export endpoint).
+      THAIRAG__OWUI_FEEDBACK_SYNC__ENABLED: "false"
+      THAIRAG__OWUI_FEEDBACK_SYNC__BASE_URL: "http://open-webui:8080"
+      THAIRAG__OWUI_FEEDBACK_SYNC__ADMIN_API_KEY: "${OWUI_ADMIN_API_KEY:-}"
+      THAIRAG__OWUI_FEEDBACK_SYNC__INTERVAL_SECS: "15"
     depends_on:
       keycloak:
         condition: service_healthy
@@ -58,6 +63,8 @@ services:
     environment:
       OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
       OPENAI_API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
+      # Enable API-key auth so ThaiRAG's feedback sync can call the admin export endpoint.
+      ENABLE_API_KEYS: "true"
       # Increase timeout for pipeline responses (multiple sequential LLM calls)
       AIOHTTP_CLIENT_TIMEOUT: "600"
       # Forward user identity headers to ThaiRAG for per-user permission enforcement
