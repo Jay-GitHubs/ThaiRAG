@@ -21,6 +21,16 @@ use super::{KmStoreTrait, ORPHAN_RECONCILE_MESSAGE, UserRecord};
 
 type Result<T> = std::result::Result<T, ThaiRagError>;
 
+/// Parse an rfc3339 timestamp string into a `DateTime<Utc>` for binding to a
+/// `TIMESTAMPTZ` column. Inference-log and lineage timestamps are always written
+/// as `Utc::now().to_rfc3339()`, so parsing succeeds; fall back to now on the
+/// off chance a malformed value slips through.
+fn parse_ts(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
 /// Row shape for the `documents` table. Used instead of a positional tuple
 /// because sqlx only derives `FromRow` for tuples up to 16 elements and the
 /// table now has 17 selectable columns.
@@ -2484,7 +2494,7 @@ impl KmStoreTrait for PostgresKmStore {
                 )",
             )
             .bind(&entry.id)
-            .bind(&entry.timestamp)
+            .bind(parse_ts(&entry.timestamp))
             .bind(&entry.user_id)
             .bind(&entry.workspace_id)
             .bind(&entry.org_id)
@@ -2500,9 +2510,9 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(&entry.settings_scope)
             .bind(entry.prompt_tokens as i32)
             .bind(entry.completion_tokens as i32)
-            .bind(entry.total_ms as i64)
-            .bind(entry.search_ms.map(|v| v as i64))
-            .bind(entry.generation_ms.map(|v| v as i64))
+            .bind(entry.total_ms as i32)
+            .bind(entry.search_ms.map(|v| v as i32))
+            .bind(entry.generation_ms.map(|v| v as i32))
             .bind(entry.chunks_retrieved.map(|v| v as i32))
             .bind(entry.avg_chunk_score)
             .bind(&entry.self_rag_decision)
@@ -2516,7 +2526,7 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(&entry.status)
             .bind(&entry.error_message)
             .bind(entry.response_length as i32)
-            .bind(entry.feedback_score.map(|v| v as i16))
+            .bind(entry.feedback_score.map(|v| v as i32))
             .bind(entry.input_guardrails_pass)
             .bind(entry.output_guardrails_pass)
             .bind(&entry.guardrail_violation_codes)
@@ -2583,12 +2593,12 @@ impl KmStoreTrait for PostgresKmStore {
             param_idx += 1;
         }
         if let Some(ref from) = filter.from_timestamp {
-            sql.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            sql.push_str(&format!(" AND timestamp >= ${param_idx}::timestamptz"));
             params_from = Some(from.clone());
             param_idx += 1;
         }
         if let Some(ref to) = filter.to_timestamp {
-            sql.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            sql.push_str(&format!(" AND timestamp <= ${param_idx}::timestamptz"));
             params_to = Some(to.clone());
             param_idx += 1;
         }
@@ -2661,10 +2671,10 @@ impl KmStoreTrait for PostgresKmStore {
         .unwrap_or_default()
         .into_iter()
         .map(|row| {
-            let feedback_raw: Option<i16> = row.get("feedback_score");
+            let feedback_raw: Option<i32> = row.get("feedback_score");
             super::InferenceLogEntry {
                 id: row.get("id"),
-                timestamp: row.get("timestamp"),
+                timestamp: row.get::<DateTime<Utc>, _>("timestamp").to_rfc3339(),
                 user_id: row.get("user_id"),
                 workspace_id: row.get("workspace_id"),
                 org_id: row.get("org_id"),
@@ -2680,9 +2690,9 @@ impl KmStoreTrait for PostgresKmStore {
                 settings_scope: row.get("settings_scope"),
                 prompt_tokens: row.get::<i32, _>("prompt_tokens") as u32,
                 completion_tokens: row.get::<i32, _>("completion_tokens") as u32,
-                total_ms: row.get::<i64, _>("total_ms") as u64,
-                search_ms: row.get::<Option<i64>, _>("search_ms").map(|v| v as u64),
-                generation_ms: row.get::<Option<i64>, _>("generation_ms").map(|v| v as u64),
+                total_ms: row.get::<i32, _>("total_ms") as u64,
+                search_ms: row.get::<Option<i32>, _>("search_ms").map(|v| v as u64),
+                generation_ms: row.get::<Option<i32>, _>("generation_ms").map(|v| v as u64),
                 chunks_retrieved: row
                     .get::<Option<i32>, _>("chunks_retrieved")
                     .map(|v| v as u32),
@@ -2726,12 +2736,12 @@ impl KmStoreTrait for PostgresKmStore {
             param_idx += 1;
         }
         if let Some(ref from) = filter.from_timestamp {
-            where_clause.push_str(&format!(" AND timestamp >= ${param_idx}"));
+            where_clause.push_str(&format!(" AND timestamp >= ${param_idx}::timestamptz"));
             params.push(from.clone());
             param_idx += 1;
         }
         if let Some(ref to) = filter.to_timestamp {
-            where_clause.push_str(&format!(" AND timestamp <= ${param_idx}"));
+            where_clause.push_str(&format!(" AND timestamp <= ${param_idx}::timestamptz"));
             params.push(to.clone());
             param_idx += 1;
         }
@@ -2896,7 +2906,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
         let _ = block_on(
             sqlx::query("UPDATE inference_logs SET feedback_score = $1 WHERE response_id = $2")
-                .bind(score as i16)
+                .bind(score as i32)
                 .bind(response_id)
                 .execute(&self.pool),
         );
@@ -3682,7 +3692,7 @@ impl KmStoreTrait for PostgresKmStore {
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind(&event.id)
-            .bind(&event.timestamp)
+            .bind(parse_ts(&event.timestamp))
             .bind(&event.query_text)
             .bind(&event.user_id)
             .bind(&event.workspace_id)
@@ -3731,7 +3741,7 @@ impl KmStoreTrait for PostgresKmStore {
             .into_iter()
             .map(|row| super::SearchAnalyticsEvent {
                 id: row.get::<String, _>("id"),
-                timestamp: row.get::<String, _>("timestamp"),
+                timestamp: row.get::<DateTime<Utc>, _>("timestamp").to_rfc3339(),
                 query_text: row.get::<String, _>("query_text"),
                 user_id: row.get::<Option<String>, _>("user_id"),
                 workspace_id: row.get::<Option<String>, _>("workspace_id"),
@@ -3846,7 +3856,7 @@ impl KmStoreTrait for PostgresKmStore {
             )
             .bind(&record.id)
             .bind(&record.response_id)
-            .bind(&record.timestamp)
+            .bind(parse_ts(&record.timestamp))
             .bind(&record.query_text)
             .bind(&record.chunk_id)
             .bind(&record.doc_id)
@@ -3875,7 +3885,7 @@ impl KmStoreTrait for PostgresKmStore {
         .map(|row| super::LineageRecord {
             id: row.get::<String, _>("id"),
             response_id: row.get::<String, _>("response_id"),
-            timestamp: row.get::<String, _>("timestamp"),
+            timestamp: row.get::<DateTime<Utc>, _>("timestamp").to_rfc3339(),
             query_text: row.get::<String, _>("query_text"),
             chunk_id: row.get::<String, _>("chunk_id"),
             doc_id: row.get::<String, _>("doc_id"),
@@ -3900,7 +3910,7 @@ impl KmStoreTrait for PostgresKmStore {
             .map(|row| super::LineageRecord {
                 id: row.get::<String, _>("id"),
                 response_id: row.get::<String, _>("response_id"),
-                timestamp: row.get::<String, _>("timestamp"),
+                timestamp: row.get::<DateTime<Utc>, _>("timestamp").to_rfc3339(),
                 query_text: row.get::<String, _>("query_text"),
                 chunk_id: row.get::<String, _>("chunk_id"),
                 doc_id: row.get::<String, _>("doc_id"),
