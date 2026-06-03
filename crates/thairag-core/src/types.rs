@@ -359,11 +359,17 @@ pub struct ChatChoice {
     pub finish_reason: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ChatUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Correlation key for the OWUI feedback bridge. Only set on the streaming
+    /// usage chunk for Open WebUI clients; serialized into the usage object
+    /// (which OWUI persists verbatim into its feedback snapshot). Omitted from
+    /// the wire when None, so all other responses are byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thairag_response_id: Option<String>,
 }
 
 // ── Streaming Chunk Types (SSE) ──────────────────────────────────────
