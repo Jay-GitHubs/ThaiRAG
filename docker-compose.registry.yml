@@ -78,7 +78,7 @@ services:
   # ── Open WebUI (chat interface) ──────────────────────────────────────
   # Set THAIRAG__AUTH__API_KEYS in .env to authenticate with ThaiRAG.
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.8.10
+    image: ghcr.io/open-webui/open-webui:v0.9.6
     ports:
       - "3000:8080"
     volumes:
