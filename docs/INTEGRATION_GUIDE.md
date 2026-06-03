@@ -77,13 +77,56 @@ When an admin revokes a user's workspace permission via the Admin UI:
 - **Existing sessions** — Server-side session history and personal memories for the revoked user are cleared to prevent stale context leaks
 - **Open WebUI client-side history** — Messages already displayed in Open WebUI's chat window remain visible (client-side cache), but starting a new chat enforces the updated permissions
 
+### Feedback Sync (OWUI ratings → ThaiRAG auto-tuning)
+
+Open WebUI's native thumbs-up/down can flow back into ThaiRAG to drive adaptive
+retrieval tuning and per-document boosts. This is **independent of SSO/OIDC** — it
+works with plain local Open WebUI accounts, no IDP required. It is **disabled by
+default** (strict no-op until enabled).
+
+How it works: for OWUI-originated requests, ThaiRAG stamps a response id into the
+OpenAI `usage` object, which OWUI persists verbatim in its feedback snapshot. A
+gated poller reads OWUI's admin feedback-export endpoint, correlates each rating
+back to the originating request via that id, and enriches it with the query plus
+the retrieved doc/chunk lineage. Synced ratings are then visible via
+`GET /api/km/settings/feedback/entries`.
+
+Prerequisites (none of these require an IDP):
+
+1. **User-identity forwarding** on the Open WebUI service:
+   `ENABLE_FORWARD_USER_INFO_HEADERS: "true"`. The forwarded `X-OpenWebUI-User-Email`
+   header is what tags a request as OWUI-originated — without it the response id is
+   never stamped and ratings can't be correlated.
+2. **Open WebUI API keys enabled**: `ENABLE_API_KEYS: "true"`. The feedback-export
+   endpoint is admin-gated.
+3. **An OWUI admin user's API key** (Open WebUI → Settings → Account → API Keys).
+4. **The ThaiRAG model's "Usage" capability enabled** in Open WebUI's model settings,
+   so OWUI persists the `usage` object that carries the correlation id.
+
+Then enable the sync on the **thairag** service (the base URL is the *internal*,
+browser-unreachable OWUI address):
+
+```yaml
+thairag:
+  environment:
+    THAIRAG__OWUI_FEEDBACK_SYNC__ENABLED: "true"
+    THAIRAG__OWUI_FEEDBACK_SYNC__BASE_URL: "http://open-webui:8080"
+    THAIRAG__OWUI_FEEDBACK_SYNC__ADMIN_API_KEY: "${OWUI_ADMIN_API_KEY}"
+    THAIRAG__OWUI_FEEDBACK_SYNC__INTERVAL_SECS: "300"  # optional, default 300
+```
+
+Keep the admin key out of the compose file by putting `OWUI_ADMIN_API_KEY=…` in
+`.env`. On startup the log line `Starting OWUI feedback sync base_url=… interval_secs=…`
+confirms the poller is running; `admin_api_key is empty; not starting` means the key
+didn't reach the container.
+
 ### Manual Setup (without docker-compose.test-idp.yml)
 
 Add the Open WebUI service to `docker-compose.yml`:
 
 ```yaml
 open-webui:
-  image: ghcr.io/open-webui/open-webui:v0.8.10
+  image: ghcr.io/open-webui/open-webui:v0.9.6
   ports:
     - "3000:8080"
   volumes:
@@ -93,6 +136,9 @@ open-webui:
     OPENAI_API_KEYS: "sk-thairag-openwebui"
     # Enable per-user permission enforcement (recommended)
     ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+    # Enable API keys so ThaiRAG can poll the feedback-export endpoint (optional;
+    # only needed for the feedback sync described above)
+    ENABLE_API_KEYS: "true"
     # Increase timeout for pipeline responses (multi-agent processing can take 60+ seconds)
     AIOHTTP_CLIENT_TIMEOUT: "600"
   depends_on:
@@ -127,6 +173,7 @@ docker run -d \
 - Personal memory — Per-user memory retrieval across sessions for personalized responses (when enabled)
 - Per-user permissions — When `ENABLE_FORWARD_USER_INFO_HEADERS` is set, each user only sees content from workspaces they have access to
 - SSE keepalive — Long pipeline processing (60+ seconds) stays connected via automatic ping comments every 15 seconds
+- Feedback sync — Native thumbs-up/down can flow back into ThaiRAG's adaptive tuning (opt-in; see *Feedback Sync* above)
 
 ### What Doesn't Work (by design)
 
