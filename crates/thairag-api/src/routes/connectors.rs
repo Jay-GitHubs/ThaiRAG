@@ -861,6 +861,12 @@ impl thairag_mcp::sync_engine::ContentIngester for DocumentIngester {
         use thairag_core::models::{DocStatus, Document};
         use thairag_document::converter::MarkdownConverter;
 
+        // The sync mapping may point at a doc that was deleted out from under
+        // us (e.g. a manual delete in the admin UI). If so, treat this as a
+        // fresh ingest with a new id instead of reusing a dangling doc_id —
+        // otherwise the blob/chunk saves below hit an FK violation.
+        let existing_doc_id =
+            existing_doc_id.filter(|id| self.state.km_store.get_document(*id).is_ok());
         let doc_id = existing_doc_id.unwrap_or_default();
         let now = chrono::Utc::now();
 
