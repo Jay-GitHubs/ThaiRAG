@@ -114,8 +114,10 @@ document-config knobs:
 | `pdf_max_vision_pages` | per-document budget cap on vision-LLM calls |
 | `pdf_image_dpi` | render DPI for rasterized pages (higher = sharper but more RAM) |
 
-These are hot-reloadable via the admin UI. The fallback only fires on pages
-below the char threshold, so a digital-text PDF skips vision entirely.
+Of these, only `pdf_image_dpi` is editable in the admin UI today; the rest are
+**deploy-time** config-file knobs (set them via env/config and restart, not the
+hot-reload settings API). The fallback only fires on pages below the char
+threshold, so a digital-text PDF skips vision entirely.
 
 ## Which store does each step write?
 
