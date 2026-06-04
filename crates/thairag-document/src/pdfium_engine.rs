@@ -68,6 +68,19 @@ pub fn is_available() -> bool {
     bind().is_ok()
 }
 
+/// One-shot per-page text extraction via pdfium, loading and dropping the
+/// engine in a single call. 1-indexed page numbers; includes pages with no
+/// text (empty string) so callers can align page indices. Errors when
+/// libpdfium is unavailable or the PDF cannot be parsed — callers fall back to
+/// the `pdf-extract` path.
+///
+/// pdfium decodes `ToUnicode`/CID font mappings far more faithfully than
+/// `pdf-extract`, which is why it is the preferred text path for Thai (whose
+/// subsetted fonts and tone/vowel marks `pdf-extract` frequently mangles).
+pub fn extract_text_by_pages(pdf: &[u8]) -> Result<Vec<(usize, String)>> {
+    PdfEngine::new()?.text_by_pages(pdf)
+}
+
 /// Sharpen + contrast boost to help Thai OCR (mirrors Jay-RAG-Tools).
 fn enhance(img: DynamicImage) -> DynamicImage {
     img.adjust_contrast(20.0).unsharpen(1.5, 3)
@@ -103,6 +116,18 @@ impl PdfEngine {
     /// Number of pages in the document.
     pub fn page_count(&self, pdf: &[u8]) -> Result<usize> {
         Ok(self.load(pdf)?.pages().len() as usize)
+    }
+
+    /// Per-page text for every page, in one load. 1-indexed; includes empty
+    /// pages so the caller can align page indices for vision fallback.
+    pub fn text_by_pages(&self, pdf: &[u8]) -> Result<Vec<(usize, String)>> {
+        let doc = self.load(pdf)?;
+        Ok(doc
+            .pages()
+            .iter()
+            .enumerate()
+            .map(|(i, page)| (i + 1, page_text(&page)))
+            .collect())
     }
 
     /// Cheap signals (image coverage + text) for every page, in one load.
