@@ -114,10 +114,11 @@ document-config knobs:
 | `pdf_max_vision_pages` | per-document budget cap on vision-LLM calls |
 | `pdf_image_dpi` | render DPI for rasterized pages (higher = sharper but more RAM) |
 
-Of these, only `pdf_image_dpi` is editable in the admin UI today; the rest are
-**deploy-time** config-file knobs (set them via env/config and restart, not the
-hot-reload settings API). The fallback only fires on pages below the char
-threshold, so a digital-text PDF skips vision entirely.
+All of these except `vision_llm` are editable and hot-reloadable from the admin
+UI's **Document Processing → Pipeline Settings → Smart-PDF Vision OCR** section;
+`vision_llm` is set via the Converter agent's LLM (or `providers.vision_llm`).
+The fallback only fires on pages below the char threshold, so a digital-text PDF
+skips vision entirely.
 
 ## Which store does each step write?
 

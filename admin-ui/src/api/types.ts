@@ -419,6 +419,11 @@ export interface DocumentConfigResponse {
   max_upload_size_mb: number;
   pdf_image_dpi: number;
   max_image_edge: number;
+  image_description_enabled: boolean;
+  pdf_vision_fallback_enabled: boolean;
+  pdf_min_chars_per_page: number;
+  pdf_max_vision_pages: number;
+  pdf_high_quality: boolean;
   ai_preprocessing: AiPreprocessingConfig;
 }
 
@@ -502,6 +507,11 @@ export interface UpdateDocumentConfigRequest {
   max_upload_size_mb?: number;
   pdf_image_dpi?: number;
   max_image_edge?: number;
+  image_description_enabled?: boolean;
+  pdf_vision_fallback_enabled?: boolean;
+  pdf_min_chars_per_page?: number;
+  pdf_max_vision_pages?: number;
+  pdf_high_quality?: boolean;
   ai_preprocessing?: Partial<Omit<AiPreprocessingConfig, 'llm' | 'analyzer_llm' | 'converter_llm' | 'quality_llm' | 'chunker_llm' | 'orchestrator_llm' | 'enricher_llm' | 'retry'>> & {
     llm?: LlmConfigUpdate;
     remove_llm?: boolean;
