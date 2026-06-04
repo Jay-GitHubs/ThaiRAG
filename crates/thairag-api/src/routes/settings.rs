@@ -851,8 +851,12 @@ pub async fn update_provider_config(
 
     // Hot-reload providers
     let eff_chat = crate::routes::settings::get_effective_chat_pipeline(&state);
-    let bundle =
-        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
+    let bundle = state.build_provider_bundle(
+        &pc,
+        &build_effective_search_config(&state.config, &*state.km_store),
+        &state.config.document,
+        &eff_chat,
+    );
     state.reload_providers(bundle);
 
     tracing::info!("Provider config updated and hot-reloaded by super admin");
@@ -2169,6 +2173,34 @@ pub fn build_effective_document_config(
     eff
 }
 
+/// Layer km_store retrieval overrides over the static `search` config. Mirrors
+/// `build_effective_document_config`: every bundle-build site (startup + each
+/// settings save) must run through this so an admin's `rerank_top_k`/`top_k`
+/// change survives a restart instead of reverting to the file default.
+///
+/// `rerank_top_k` is the knob admins feel directly — the hybrid engine truncates
+/// the RRF-merged hits to `rerank_top_k` before reranking, so it sets the final
+/// chunk count handed to the LLM. `top_k` is the per-store retrieval breadth.
+pub fn build_effective_search_config(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+) -> thairag_config::schema::SearchConfig {
+    let mut eff = config.search.clone();
+    if let Some(v) = store
+        .get_setting("search.top_k")
+        .and_then(|v| v.parse().ok())
+    {
+        eff.top_k = v;
+    }
+    if let Some(v) = store
+        .get_setting("search.rerank_top_k")
+        .and_then(|v| v.parse().ok())
+    {
+        eff.rerank_top_k = v;
+    }
+    eff
+}
+
 fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse {
     let effective_ai = get_effective_ai_config(state);
     AiPreprocessingResponse {
@@ -2550,13 +2582,14 @@ pub async fn update_document_config(
     // Same builder the startup bundle uses, so the save path and restart path
     // can't drift — that drift was what made AI preprocessing revert to OFF.
     let effective_doc = build_effective_document_config(&state.config, &*state.km_store);
+    let effective_search = build_effective_search_config(&state.config, &*state.km_store);
 
     // Try hot-reload; don't fail the save if provider creation has issues
     let eff_chat = get_effective_chat_pipeline(&state);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         state.build_provider_bundle(
             &state.providers().providers_config,
-            &state.config.search,
+            &effective_search,
             &effective_doc,
             &eff_chat,
         )
@@ -2601,6 +2634,113 @@ pub async fn update_document_config(
         pdf_image_dpi: effective_doc.pdf_image_dpi,
         max_image_edge: effective_doc.max_image_edge,
         ai_preprocessing: build_ai_preprocessing_response(&state),
+    }))
+}
+
+// ── Search / Retrieval Config ────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SearchConfigResponse {
+    /// Per-store retrieval breadth: how many candidates each of the vector and
+    /// BM25 stores returns before the RRF merge.
+    pub top_k: usize,
+    /// Final chunk count handed to the LLM — the RRF-merged hits are truncated
+    /// to this before reranking. This is the "how many chunks per answer" knob.
+    pub rerank_top_k: usize,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateSearchConfigRequest {
+    pub top_k: Option<usize>,
+    pub rerank_top_k: Option<usize>,
+}
+
+pub async fn get_search_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<SearchConfigResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let eff = build_effective_search_config(&state.config, &*state.km_store);
+    Ok(Json(SearchConfigResponse {
+        top_k: eff.top_k,
+        rerank_top_k: eff.rerank_top_k,
+    }))
+}
+
+pub async fn update_search_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(req): AppJson<UpdateSearchConfigRequest>,
+) -> Result<Json<SearchConfigResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    if let Some(v) = req.top_k {
+        if !(1..=200).contains(&v) {
+            return Err(ApiError(ThaiRagError::Validation(
+                "top_k must be between 1 and 200".into(),
+            )));
+        }
+        state.km_store.set_setting("search.top_k", &v.to_string());
+    }
+    if let Some(v) = req.rerank_top_k {
+        if !(1..=100).contains(&v) {
+            return Err(ApiError(ThaiRagError::Validation(
+                "rerank_top_k must be between 1 and 100".into(),
+            )));
+        }
+        state
+            .km_store
+            .set_setting("search.rerank_top_k", &v.to_string());
+    }
+
+    // rerank_top_k must not exceed top_k, or the rerank truncation can't reach
+    // the requested final count. Validate against the *effective* values so a
+    // partial update (only one field) is still checked.
+    let effective_search = build_effective_search_config(&state.config, &*state.km_store);
+    if effective_search.rerank_top_k > effective_search.top_k {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "rerank_top_k ({}) must be <= top_k ({})",
+            effective_search.rerank_top_k, effective_search.top_k
+        ))));
+    }
+
+    // Hot-reload the bundle so the new retrieval limits take effect without a
+    // restart. Same builder the startup path uses (build_effective_search_config),
+    // so the save path and restart path can't drift.
+    let eff_chat = get_effective_chat_pipeline(&state);
+    let effective_doc = build_effective_document_config(&state.config, &*state.km_store);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.build_provider_bundle(
+            &state.providers().providers_config,
+            &effective_search,
+            &effective_doc,
+            &eff_chat,
+        )
+    })) {
+        Ok(bundle) => {
+            state.reload_providers(bundle);
+            tracing::info!(
+                top_k = effective_search.top_k,
+                rerank_top_k = effective_search.rerank_top_k,
+                "Search config updated and hot-reloaded by super admin"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Hot-reload failed after search config save: {:?}. Config is saved but will take effect on restart.",
+                e
+            );
+        }
+    }
+
+    state.webhook_dispatcher.dispatch(
+        thairag_core::types::WebhookEvent::SettingsChanged,
+        serde_json::json!({ "section": "search" }),
+    );
+
+    Ok(Json(SearchConfigResponse {
+        top_k: effective_search.top_k,
+        rerank_top_k: effective_search.rerank_top_k,
     }))
 }
 
@@ -3902,10 +4042,11 @@ pub async fn update_chat_pipeline_config(
     // Hot-reload only for global scope (scoped settings are resolved at request time)
     if matches!(scope, SettingsScope::Global) {
         let eff_chat = get_effective_chat_pipeline(&state);
+        let effective_search = build_effective_search_config(&state.config, &*state.km_store);
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             state.build_provider_bundle(
                 &state.providers().providers_config,
-                &state.config.search,
+                &effective_search,
                 &state.config.document,
                 &eff_chat,
             )
@@ -5171,8 +5312,12 @@ pub async fn apply_preset(
 
     // Hot-reload providers with updated config (read from DB, not file config)
     let eff_chat = get_effective_chat_pipeline(&state);
-    let bundle =
-        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
+    let bundle = state.build_provider_bundle(
+        &pc,
+        &build_effective_search_config(&state.config, &*state.km_store),
+        &state.config.document,
+        &eff_chat,
+    );
     state.reload_providers(bundle);
     tracing::info!(preset = %req.preset_id, "Preset applied and providers hot-reloaded");
 
@@ -5830,8 +5975,12 @@ pub async fn restore_snapshot(
         .get_setting("provider_config")
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| state.config.providers.clone());
-    let bundle =
-        state.build_provider_bundle(&pc, &state.config.search, &state.config.document, &eff_chat);
+    let bundle = state.build_provider_bundle(
+        &pc,
+        &build_effective_search_config(&state.config, &*state.km_store),
+        &state.config.document,
+        &eff_chat,
+    );
     state.reload_providers(bundle);
 
     audit::audit_log(
