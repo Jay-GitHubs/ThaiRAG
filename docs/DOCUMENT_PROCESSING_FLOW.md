@@ -70,6 +70,53 @@ inline and returns the real chunk count synchronously:
 Background uploads return `202 Accepted` with `chunks = 0`; the UI polls every 3s
 until the status flips. Inline uploads return `201 Created` with the chunk count.
 
+## Thai documents & PDF conversion
+
+The **convert-to-markdown** step (sequence step 35) is language-agnostic — it
+holds **no** Thai-specific logic. Thai word segmentation (the `thairag-thai`
+crate) runs strictly *downstream* of conversion:
+
+- **Chunking** — `thai_chunker.rs` (`DictionarySegmenter`) splits on Thai word
+  boundaries (Thai has no spaces between words).
+- **BM25 indexing** — the Tantivy Thai tokenizer (`tantivy_tokenizer.rs`).
+- **Query time** — the orchestrator segments the incoming query the same way.
+
+So the choice of converter does **not** change how Thai is handled later — it
+only changes how faithfully the source text is extracted in the first place.
+
+**Chunking always consumes the converted text, never the raw file.** The
+pipeline converts bytes → text and feeds *that text* to the chunker
+(`pipeline.rs`, `self.converter.convert(raw, mime_type)` → `chunk_text`); the
+raw document is never chunked directly. Note the pipeline re-converts the raw
+bytes internally rather than re-reading the preview blob saved at upload, so
+conversion runs twice from the same source. For the mechanical path both
+produce identical text; the smart-PDF path produces richer semantic markdown and
+then overwrites the preview blob so the preview matches what was chunked.
+
+**Prefer DOCX (or any native digital-text source) over PDF for Thai.** DOCX,
+XLSX, and HTML carry structured digital text that extracts cleanly. PDF text
+extraction (`pdf-extract`) frequently mangles Thai — dropped word spacing,
+broken combining/tone marks, reordered glyphs — because a PDF stores positioned
+glyphs, not logical text. If you have the DOCX a PDF was exported from, **upload
+the DOCX instead.**
+
+For PDFs that are scanned or have image-only / tabular pages, the **smart-PDF
+vision path** can OCR them page-by-page, but it is **config-gated and off by
+default** (slow, RAM-heavy). It requires a vision-capable model and these
+document-config knobs:
+
+| Knob | Role |
+| --- | --- |
+| `vision_llm` | dedicated vision model (else the main LLM must be vision-capable) |
+| `image_description_enabled` | master switch for the vision path |
+| `pdf_vision_fallback_enabled` | rasterize + OCR pages whose extracted text is too short |
+| `pdf_min_chars_per_page` | threshold under which a page is treated as "no text" and sent to vision |
+| `pdf_max_vision_pages` | per-document budget cap on vision-LLM calls |
+| `pdf_image_dpi` | render DPI for rasterized pages (higher = sharper but more RAM) |
+
+These are hot-reloadable via the admin UI. The fallback only fires on pages
+below the char threshold, so a digital-text PDF skips vision entirely.
+
 ## Which store does each step write?
 
 | Step | Writes to | What |
