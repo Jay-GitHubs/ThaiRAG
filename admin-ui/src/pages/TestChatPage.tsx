@@ -38,6 +38,7 @@ import {
   MinusCircleOutlined,
   ExclamationCircleOutlined,
   DashboardOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import { useOrgs } from '../hooks/useOrgs';
 import { useDepts } from '../hooks/useDepts';
@@ -797,9 +798,41 @@ export function TestChatPage() {
                                       <Tooltip title="Chunk index — the sequential position of this text segment within the document. #0 is the first chunk, #1 the second, etc.">
                                         <Tag>#{chunk.chunk_index}</Tag>
                                       </Tooltip>
+                                      {(chunk.context_prefix || chunk.summary || (chunk.keywords && chunk.keywords.length > 0)) && (
+                                        <Tooltip title="AI preprocessing enriched this chunk. The text below includes an AI-generated context prefix (and a '[Related questions: …]' suffix); the summary and keywords are extra metadata that feed retrieval but are not shown in the raw document.">
+                                          <Tag color="purple" icon={<ExperimentOutlined />}>AI-enriched</Tag>
+                                        </Tooltip>
+                                      )}
                                     </Space>
                                   }
                                 >
+                                  {(chunk.summary || (chunk.keywords && chunk.keywords.length > 0)) && (
+                                    <div
+                                      style={{
+                                        fontSize: 12,
+                                        marginBottom: 8,
+                                        padding: 8,
+                                        borderRadius: 4,
+                                        border: `1px solid ${themeToken.colorBorderSecondary}`,
+                                        background: themeToken.colorFillQuaternary,
+                                      }}
+                                    >
+                                      {chunk.summary && (
+                                        <div style={{ marginBottom: chunk.keywords && chunk.keywords.length > 0 ? 4 : 0 }}>
+                                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>AI summary: </Typography.Text>
+                                          <Typography.Text style={{ fontSize: 12 }}>{chunk.summary}</Typography.Text>
+                                        </div>
+                                      )}
+                                      {chunk.keywords && chunk.keywords.length > 0 && (
+                                        <div>
+                                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>AI keywords: </Typography.Text>
+                                          {chunk.keywords.map((kw, ki) => (
+                                            <Tag key={ki} style={{ fontSize: 11, marginInlineEnd: 4 }}>{kw}</Tag>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                   <div
                                     style={{
                                       whiteSpace: 'pre-wrap',

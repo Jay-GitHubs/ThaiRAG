@@ -916,6 +916,12 @@ export interface RetrievedChunk {
   page_numbers?: number[];
   section_title?: string;
   doc_title?: string;
+  /** AI context prefix baked into `content` (present only when enriched). */
+  context_prefix?: string;
+  /** AI one-line summary (metadata only, not part of `content`). */
+  summary?: string;
+  /** AI keywords (metadata only, feed BM25). */
+  keywords?: string[];
 }
 
 export interface TestQueryUsage {
