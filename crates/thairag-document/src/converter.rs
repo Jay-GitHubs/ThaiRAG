@@ -294,18 +294,19 @@ fn convert_html(raw: &[u8]) -> Result<String> {
 }
 
 fn convert_pdf(raw: &[u8]) -> Result<String> {
-    pdf_extract::extract_text_from_mem(raw)
-        .map_err(|e| ThaiRagError::Validation(format!("Failed to read PDF: {e}")))
+    let pages = pdf_pages_all(raw)?;
+    Ok(pages
+        .into_iter()
+        .map(|(_, text)| text)
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 /// Extract PDF text page by page. Returns Vec of (1-indexed page number, text).
 fn convert_pdf_by_pages(raw: &[u8]) -> Result<Vec<(usize, String)>> {
-    let pages = pdf_extract::extract_text_from_mem_by_pages(raw)
-        .map_err(|e| ThaiRagError::Validation(format!("Failed to read PDF: {e}")))?;
-    Ok(pages
+    Ok(pdf_pages_all(raw)?
         .into_iter()
-        .enumerate()
-        .map(|(i, text)| (i + 1, text))
         .filter(|(_, text)| !text.trim().is_empty())
         .collect())
 }
@@ -315,6 +316,24 @@ fn convert_pdf_by_pages(raw: &[u8]) -> Result<Vec<(usize, String)>> {
 /// code needs page-index alignment to fall back to vision rasterization
 /// for empty pages (e.g. PowerPoint-exported, scanned, or image-only PDFs).
 pub fn extract_pdf_pages_unfiltered(raw: &[u8]) -> Result<Vec<(usize, String)>> {
+    pdf_pages_all(raw)
+}
+
+/// Per-page PDF text, **pdfium-first with a `pdf-extract` fallback**. 1-indexed
+/// page numbers; includes pages with no text so callers can align page indices.
+///
+/// pdfium (Chromium's PDF engine) decodes `ToUnicode`/CID font mappings far more
+/// reliably than `pdf-extract` — decisive for Thai, whose subsetted fonts and
+/// tone/vowel marks `pdf-extract` routinely drops or reorders. We fall back to
+/// `pdf-extract` when libpdfium is unavailable, fails to parse, or yields no
+/// text on any page (e.g. an image-only PDF that the downstream vision path
+/// must handle).
+fn pdf_pages_all(raw: &[u8]) -> Result<Vec<(usize, String)>> {
+    match crate::pdfium_engine::extract_text_by_pages(raw) {
+        Ok(pages) if pages.iter().any(|(_, t)| !t.trim().is_empty()) => return Ok(pages),
+        Ok(_) => tracing::debug!("pdfium extracted no PDF text; trying pdf-extract"),
+        Err(e) => tracing::debug!(error = %e, "pdfium unavailable/failed; using pdf-extract"),
+    }
     let pages = pdf_extract::extract_text_from_mem_by_pages(raw)
         .map_err(|e| ThaiRagError::Validation(format!("Failed to read PDF: {e}")))?;
     Ok(pages
