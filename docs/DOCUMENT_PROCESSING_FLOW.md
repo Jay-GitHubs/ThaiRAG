@@ -85,6 +85,66 @@ until the status flips. Inline uploads return `201 Created` with the chunk count
 At query time, Qdrant (vector) and Tantivy (BM25) are combined via an RRF hybrid
 merge. PostgreSQL is the system of record; Tantivy is a derived index.
 
+```mermaid
+flowchart LR
+    subgraph Pipeline[Ingestion Pipeline Steps]
+        direction TB
+        S2[2 Create record]
+        S4[4 Convert to markdown]
+        S6[6 Chunk + enrich]
+        S7[7 Embed chunks]
+        S8[8 Keyword index]
+        S9[9 CLIP image embeds - optional]
+        S10[10 Mark Ready/Failed]
+    end
+
+    subgraph PG[PostgreSQL - system of record]
+        direction TB
+        PG1[doc metadata + status]
+        PG2[original bytes + converted text]
+        PG3[chunks = source of truth]
+        PG4[content hash / dedup]
+        PG5[knowledge-graph entities]
+        PG6[inference logs / lineage]
+    end
+
+    subgraph QD[Qdrant - vector store]
+        direction TB
+        QD1[text chunk embeddings]
+        QD2[CLIP image embeddings - separate collection]
+    end
+
+    subgraph TV[Tantivy - BM25 keyword index]
+        direction TB
+        TV1[inverted index of chunk text]
+    end
+
+    S2 --> PG1
+    S4 --> PG2
+    S6 --> PG3
+    S7 --> QD1
+    S8 --> TV1
+    S9 --> QD2
+    S10 --> PG1
+
+    PG3 -. rebuilt on restart, derived .-> TV1
+
+    subgraph Q[Query time]
+        direction LR
+        REQ[search request] --> QDq[Qdrant: vector / semantic]
+        REQ --> TVq[Tantivy: BM25 / keyword]
+        QDq --> RRF[RRF hybrid merge]
+        TVq --> RRF
+    end
+
+    classDef pg fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a;
+    classDef qd fill:#ede9fe,stroke:#8b5cf6,color:#4c1d95;
+    classDef tv fill:#ccfbf1,stroke:#14b8a6,color:#134e4a;
+    class PG,PG1,PG2,PG3,PG4,PG5,PG6 pg;
+    class QD,QD1,QD2,QDq qd;
+    class TV,TV1,TVq tv;
+```
+
 ## Where to look when it breaks
 
 - **UI**: Documents table status chip + Jobs table (background job state).
