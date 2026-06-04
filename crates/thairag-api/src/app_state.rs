@@ -1156,10 +1156,12 @@ impl AppState {
         }
 
         // Build a new pipeline with the scoped config but shared infrastructure
+        let eff_search =
+            crate::routes::settings::build_effective_search_config(&self.config, &*self.km_store);
         let scoped_bundle =
             ProviderBundleBuilder::new(
                 &global_bundle.providers_config,
-                &self.config.search,
+                &eff_search,
                 &self.config.document,
                 &scoped_config,
                 Arc::clone(&self.prompt_registry),
@@ -1489,6 +1491,8 @@ impl AppState {
             // restart instead of reverting to the static file defaults.
             let eff_doc =
                 crate::routes::settings::build_effective_document_config(&config, &*km_store);
+            let eff_search =
+                crate::routes::settings::build_effective_search_config(&config, &*km_store);
             // Also read DB-overridden provider config
             let pc = if let Some(json) = km_store.get_setting("provider_config")
                 && let Ok(pc) = serde_json::from_str::<ProvidersConfig>(&json)
@@ -1499,7 +1503,7 @@ impl AppState {
             };
             ProviderBundleBuilder::new(
                 &pc,
-                &config.search,
+                &eff_search,
                 &eff_doc,
                 &eff_chat,
                 Arc::clone(&prompt_registry),

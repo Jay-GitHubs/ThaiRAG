@@ -424,6 +424,17 @@ export interface DocumentConfigResponse {
 
 export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean; ollama_num_ctx_max?: number; temperature?: number; clear_temperature?: boolean; thinking_enabled?: boolean };
 
+// ── Search / Retrieval Config ──────────────────────────────────────
+export interface SearchConfigResponse {
+  top_k: number;
+  rerank_top_k: number;
+}
+
+export interface UpdateSearchConfigRequest {
+  top_k?: number;
+  rerank_top_k?: number;
+}
+
 // ── API Key Vault ──────────────────────────────────────────────────
 export interface VaultKeyInfo {
   id: string;
