@@ -1,0 +1,104 @@
+# Document Processing Flow
+
+How a document moves from an upload on the Admin UI `/documents` page to a
+searchable, indexed document — and where it can fail at each step.
+
+This is the reference for triaging ingestion issues: find the step matching a
+document's stuck `processing_step`, then check the store / dependency it touches.
+
+## Sequence (time-ordered)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Admin UI
+    participant API as ThaiRAG API
+    participant W as Background Job
+    participant AI as Vision / AI Agents
+    participant PG as PostgreSQL
+    participant QD as Qdrant
+    participant TV as Tantivy
+
+    UI->>+API: POST upload (multipart)
+    API->>API: validate MIME + size
+    API->>PG: INSERT doc (status=Processing)
+    API-->>UI: 202 Accepted {doc_id}
+    API->>W: spawn background job
+    deactivate API
+
+    loop poll every 3s until Ready/Failed
+        UI->>API: GET documents
+        API-->>UI: status + processing_step
+    end
+
+    activate W
+    W->>W: convert to markdown (PDF/DOCX/XLSX/HTML)
+    W->>PG: save orig bytes + text
+
+    opt ai_preprocessing.enabled
+        W->>AI: Analyze, Convert, QualityCheck, Chunk, Enrich
+        AI-->>W: clean chunks (or silent fallback)
+    end
+
+    W->>PG: save chunks (source of truth)
+
+    alt success
+        W->>AI: embed chunks
+        AI-->>W: vectors
+        W->>QD: upsert text vectors
+        W->>TV: BM25 index
+        W->>PG: status=Ready, chunk_count
+    else failure
+        W->>PG: status=Failed, error_message (empty_extraction[reason])
+    end
+    deactivate W
+
+    UI->>API: next poll
+    API-->>UI: Ready (green) or Failed (red + tooltip)
+```
+
+## Routing: background vs inline
+
+`should_process_in_background()` (`crates/thairag-api/src/routes/documents.rs`)
+sends a document to a background job when any of these hold; otherwise it runs
+inline and returns the real chunk count synchronously:
+
+- file size > 1 MB
+- MIME type is `application/pdf` or `image/*` (slow vision path)
+- `ai_preprocessing.enabled` is set
+
+Background uploads return `202 Accepted` with `chunks = 0`; the UI polls every 3s
+until the status flips. Inline uploads return `201 Created` with the chunk count.
+
+## Which store does each step write?
+
+| Step | Writes to | What |
+| --- | --- | --- |
+| Create record | PostgreSQL | doc metadata, `status`, `processing_step` |
+| Convert | PostgreSQL | original bytes + converted markdown (for preview) |
+| Chunk + enrich | PostgreSQL | chunks — **source of truth**, used to rebuild Tantivy |
+| Embed chunks | Qdrant | text-chunk vectors (semantic search) |
+| CLIP image embeds (optional) | Qdrant | image vectors in a separate collection |
+| Keyword index | Tantivy | BM25 inverted index (derived; rebuilt from PG on restart) |
+| Mark Ready/Failed | PostgreSQL | final `status`, `chunk_count`, `error_message` |
+
+At query time, Qdrant (vector) and Tantivy (BM25) are combined via an RRF hybrid
+merge. PostgreSQL is the system of record; Tantivy is a derived index.
+
+## Where to look when it breaks
+
+- **UI**: Documents table status chip + Jobs table (background job state).
+- **API**: the document's `error_message` and `processing_step` fields.
+- **Failure codes**: `empty_extraction[<reason>]` — e.g. `no_text_vision_unavailable`,
+  `no_text_vision_failed`, `vision_budget_exceeded`, `no_text_no_fallback`.
+- **Dependencies**: Ollama (`:11435`) backs embedding (step 13) and the AI agents;
+  the vision LLM backs conversion and the agents; a missing embedding model
+  (e.g. `qwen3-embedding:0.6b` not pulled) surfaces as a 404 during indexing.
+
+## Key code references
+
+- Upload handler: `upload_document()` — `crates/thairag-api/src/routes/documents.rs`
+- Processing core: `process_document_inner_impl()` — same file
+- Converter: `MarkdownConverter::convert_with_stats()` — `crates/thairag-document/src/converter.rs`
+- AI pipeline: `AiDocumentPipeline::process()` — `crates/thairag-document/src/ai/pipeline.rs`
+- Indexing: `HybridSearchEngine::index_chunks()` — `crates/thairag-search/src/hybrid.rs`
