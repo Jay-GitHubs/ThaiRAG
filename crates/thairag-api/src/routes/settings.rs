@@ -1784,6 +1784,16 @@ pub struct DocumentConfigResponse {
     pub pdf_image_dpi: u32,
     /// Longest-edge px cap for any image sent to vision (all formats; 0 = off).
     pub max_image_edge: u32,
+    /// Master switch for the vision path (image OCR + PDF rasterization).
+    pub image_description_enabled: bool,
+    /// Rasterize + OCR PDF pages whose extracted text is below the threshold.
+    pub pdf_vision_fallback_enabled: bool,
+    /// Per-page char threshold below which a PDF page is routed to vision.
+    pub pdf_min_chars_per_page: usize,
+    /// Per-document cap on how many pages may be rasterized through vision.
+    pub pdf_max_vision_pages: usize,
+    /// Vision-first OCR for every PDF page (highest fidelity, highest cost).
+    pub pdf_high_quality: bool,
     pub ai_preprocessing: AiPreprocessingResponse,
 }
 
@@ -1837,6 +1847,11 @@ pub struct UpdateDocumentConfigRequest {
     pub max_upload_size_mb: Option<usize>,
     pub pdf_image_dpi: Option<u32>,
     pub max_image_edge: Option<u32>,
+    pub image_description_enabled: Option<bool>,
+    pub pdf_vision_fallback_enabled: Option<bool>,
+    pub pdf_min_chars_per_page: Option<usize>,
+    pub pdf_max_vision_pages: Option<usize>,
+    pub pdf_high_quality: Option<bool>,
     pub ai_preprocessing: Option<UpdateAiPreprocessing>,
 }
 
@@ -2102,6 +2117,21 @@ pub fn build_effective_document_config(
     eff.max_image_edge = s("document.max_image_edge")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.max_image_edge);
+    eff.image_description_enabled = s("document.image_description_enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.image_description_enabled);
+    eff.pdf_vision_fallback_enabled = s("document.pdf_vision_fallback_enabled")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_vision_fallback_enabled);
+    eff.pdf_min_chars_per_page = s("document.pdf_min_chars_per_page")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_min_chars_per_page);
+    eff.pdf_max_vision_pages = s("document.pdf_max_vision_pages")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_max_vision_pages);
+    eff.pdf_high_quality = s("document.pdf_high_quality")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_high_quality);
 
     // ── ai_preprocessing scalars ──
     eff.ai_preprocessing.enabled = s("ai_preprocessing.enabled")
@@ -2286,6 +2316,31 @@ pub async fn get_document_config(
             .get_setting("document.max_image_edge")
             .and_then(|v| v.parse().ok())
             .unwrap_or(doc.max_image_edge),
+        image_description_enabled: state
+            .km_store
+            .get_setting("document.image_description_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.image_description_enabled),
+        pdf_vision_fallback_enabled: state
+            .km_store
+            .get_setting("document.pdf_vision_fallback_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.pdf_vision_fallback_enabled),
+        pdf_min_chars_per_page: state
+            .km_store
+            .get_setting("document.pdf_min_chars_per_page")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.pdf_min_chars_per_page),
+        pdf_max_vision_pages: state
+            .km_store
+            .get_setting("document.pdf_max_vision_pages")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.pdf_max_vision_pages),
+        pdf_high_quality: state
+            .km_store
+            .get_setting("document.pdf_high_quality")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(doc.pdf_high_quality),
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }
@@ -2360,6 +2415,41 @@ pub async fn update_document_config(
         state
             .km_store
             .set_setting("document.max_image_edge", &v.to_string());
+    }
+    if let Some(v) = req.image_description_enabled {
+        state
+            .km_store
+            .set_setting("document.image_description_enabled", &v.to_string());
+    }
+    if let Some(v) = req.pdf_vision_fallback_enabled {
+        state
+            .km_store
+            .set_setting("document.pdf_vision_fallback_enabled", &v.to_string());
+    }
+    if let Some(v) = req.pdf_min_chars_per_page {
+        if v > 100_000 {
+            return Err(ApiError(ThaiRagError::Validation(
+                "pdf_min_chars_per_page must be at most 100000".into(),
+            )));
+        }
+        state
+            .km_store
+            .set_setting("document.pdf_min_chars_per_page", &v.to_string());
+    }
+    if let Some(v) = req.pdf_max_vision_pages {
+        if v > 10_000 {
+            return Err(ApiError(ThaiRagError::Validation(
+                "pdf_max_vision_pages must be at most 10000".into(),
+            )));
+        }
+        state
+            .km_store
+            .set_setting("document.pdf_max_vision_pages", &v.to_string());
+    }
+    if let Some(v) = req.pdf_high_quality {
+        state
+            .km_store
+            .set_setting("document.pdf_high_quality", &v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
@@ -2633,6 +2723,11 @@ pub async fn update_document_config(
         max_upload_size_mb: effective_doc.max_upload_size_mb,
         pdf_image_dpi: effective_doc.pdf_image_dpi,
         max_image_edge: effective_doc.max_image_edge,
+        image_description_enabled: effective_doc.image_description_enabled,
+        pdf_vision_fallback_enabled: effective_doc.pdf_vision_fallback_enabled,
+        pdf_min_chars_per_page: effective_doc.pdf_min_chars_per_page,
+        pdf_max_vision_pages: effective_doc.pdf_max_vision_pages,
+        pdf_high_quality: effective_doc.pdf_high_quality,
         ai_preprocessing: build_ai_preprocessing_response(&state),
     }))
 }

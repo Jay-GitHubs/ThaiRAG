@@ -677,6 +677,12 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
   const [maxUploadSizeMb, setMaxUploadSizeMb] = useState(50);
   const [pdfImageDpi, setPdfImageDpi] = useState(150);
   const [maxImageEdge, setMaxImageEdge] = useState(2048);
+  // Smart-PDF vision OCR knobs (global-only, opt-in escape hatch for scanned PDFs)
+  const [imageDescriptionEnabled, setImageDescriptionEnabled] = useState(false);
+  const [pdfVisionFallbackEnabled, setPdfVisionFallbackEnabled] = useState(true);
+  const [pdfMinCharsPerPage, setPdfMinCharsPerPage] = useState(50);
+  const [pdfMaxVisionPages, setPdfMaxVisionPages] = useState(100);
+  const [pdfHighQuality, setPdfHighQuality] = useState(false);
   const [savingPipeline, setSavingPipeline] = useState(false);
 
   // Cache of model sizes from Ollama sync (model_id → size_bytes)
@@ -717,6 +723,11 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
       setMaxUploadSizeMb(data.max_upload_size_mb);
       setPdfImageDpi(data.pdf_image_dpi);
       setMaxImageEdge(data.max_image_edge);
+      setImageDescriptionEnabled(data.image_description_enabled);
+      setPdfVisionFallbackEnabled(data.pdf_vision_fallback_enabled);
+      setPdfMinCharsPerPage(data.pdf_min_chars_per_page);
+      setPdfMaxVisionPages(data.pdf_max_vision_pages);
+      setPdfHighQuality(data.pdf_high_quality);
 
       // Determine LLM mode from saved config
       const hasSharedLlm = !!data.ai_preprocessing.llm;
@@ -793,6 +804,11 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
             max_upload_size_mb: maxUploadSizeMb,
             pdf_image_dpi: pdfImageDpi,
             max_image_edge: maxImageEdge,
+            image_description_enabled: imageDescriptionEnabled,
+            pdf_vision_fallback_enabled: pdfVisionFallbackEnabled,
+            pdf_min_chars_per_page: pdfMinCharsPerPage,
+            pdf_max_vision_pages: pdfMaxVisionPages,
+            pdf_high_quality: pdfHighQuality,
           };
       const resp = await updateDocumentConfig(req, scope);
       setConfig(resp);
@@ -1027,6 +1043,96 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
             and direct uploads too, not just PDFs — downscaling larger ones to bound token cost and
             RAM (0 disables).
           </Paragraph>
+        )}
+
+        {!isScoped && (
+          <>
+            <Divider style={{ margin: '16px 0 12px' }} />
+            <Space style={{ marginBottom: 8 }}>
+              <RobotOutlined />
+              <Text strong>Smart-PDF Vision OCR</Text>
+              <Switch
+                size="small"
+                checked={imageDescriptionEnabled}
+                onChange={setImageDescriptionEnabled}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {imageDescriptionEnabled ? 'On — vision path enabled' : 'Off (default)'}
+              </Text>
+            </Space>
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="Use only for scanned / image-only PDFs"
+              description={
+                <span>
+                  Vision OCR reads pages as images. On table- or figure-heavy pages it can
+                  <strong> invent</strong> text — fabricated numbers then get embedded and cited as if
+                  they came from the source. It needs a vision-capable model and is slow + RAM-heavy.
+                  For faithful extraction prefer the DOCX/native source; keep this for PDFs that have
+                  <em> no</em> text layer to extract.
+                </span>
+              }
+            />
+            {imageDescriptionEnabled && (
+              <Space size="large" wrap>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
+                    <Text type="secondary">Fallback OCR for low-text pages</Text>
+                    <Tooltip title="Rasterize + OCR only pages whose extracted text is below the char threshold (e.g. scanned or PowerPoint-exported pages). Digital-text pages skip vision entirely.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <Switch
+                    checked={pdfVisionFallbackEnabled}
+                    onChange={setPdfVisionFallbackEnabled}
+                  />
+                </Space>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
+                    <Text type="secondary">Min chars/page (below → OCR)</Text>
+                    <Tooltip title="A PDF page with fewer than this many extracted characters is treated as 'no text' and routed to vision OCR.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <InputNumber
+                    min={0}
+                    max={100000}
+                    step={10}
+                    value={pdfMinCharsPerPage}
+                    onChange={(v) => v != null && setPdfMinCharsPerPage(v)}
+                    style={{ width: 140 }}
+                  />
+                </Space>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
+                    <Text type="secondary">Max OCR pages/doc</Text>
+                    <Tooltip title="Hard cap on vision-LLM page calls per document — guards against a huge PDF translating to thousands of calls.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <InputNumber
+                    min={1}
+                    max={10000}
+                    step={10}
+                    value={pdfMaxVisionPages}
+                    onChange={(v) => v && setPdfMaxVisionPages(v)}
+                    style={{ width: 140 }}
+                  />
+                </Space>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
+                    <Text type="secondary">High quality (OCR every page)</Text>
+                    <Tooltip title="Force vision OCR on EVERY page, not just low-text ones — highest fidelity for fully scanned docs, but slowest and most expensive, and maximizes hallucination exposure on tables/figures.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <Switch checked={pdfHighQuality} onChange={setPdfHighQuality} />
+                </Space>
+              </Space>
+            )}
+          </>
         )}
       </Card>
           ),
