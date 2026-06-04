@@ -87,15 +87,15 @@ merge. PostgreSQL is the system of record; Tantivy is a derived index.
 
 ```mermaid
 flowchart LR
-    subgraph Pipeline[Ingestion Pipeline Steps]
+    subgraph Pipeline[Ingestion Pipeline Steps - numbers match sequence diagram]
         direction TB
-        S2[2 Create record]
-        S4[4 Convert to markdown]
-        S6[6 Chunk + enrich]
-        S7[7 Embed chunks]
-        S8[8 Keyword index]
-        S9[9 CLIP image embeds - optional]
-        S10[10 Mark Ready/Failed]
+        S3[3 Create record - status=Processing]
+        S9[9 Save orig bytes + text]
+        S12[12 Save chunks - source of truth]
+        S15[15 Embed chunks then upsert vectors]
+        S16[16 BM25 keyword index]
+        S17[17 Mark Ready/Failed]
+        SC[CLIP image embeds - optional, not in sequence]
     end
 
     subgraph PG[PostgreSQL - system of record]
@@ -119,13 +119,13 @@ flowchart LR
         TV1[inverted index of chunk text]
     end
 
-    S2 --> PG1
-    S4 --> PG2
-    S6 --> PG3
-    S7 --> QD1
-    S8 --> TV1
-    S9 --> QD2
-    S10 --> PG1
+    S3 --> PG1
+    S9 --> PG2
+    S12 --> PG3
+    S15 --> QD1
+    S16 --> TV1
+    SC --> QD2
+    S17 --> PG1
 
     PG3 -. rebuilt on restart, derived .-> TV1
 
