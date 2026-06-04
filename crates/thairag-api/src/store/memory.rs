@@ -320,6 +320,12 @@ impl KmStoreTrait for MemoryKmStore {
         if self.documents.write().unwrap().remove(&id).is_none() {
             return Err(ThaiRagError::NotFound(format!("Document {id} not found")));
         }
+        // Drop any connector sync mapping pointing at this doc so a stale entry
+        // can't later hand its old doc_id back to the ingester.
+        self.sync_states
+            .write()
+            .unwrap()
+            .retain(|_, s| s.doc_id != Some(id));
         Ok(())
     }
 
@@ -3224,6 +3230,54 @@ mod tests {
         assert_eq!(store.list_documents_in_workspace(ws.id).len(), 1);
         store.delete_document(doc.id).unwrap();
         assert!(store.get_document(doc.id).is_err());
+    }
+
+    #[test]
+    fn delete_document_clears_sync_mapping() {
+        let store = MemoryKmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let now = Utc::now();
+        let doc = store
+            .insert_document(Document {
+                id: DocId::new(),
+                workspace_id: ws.id,
+                title: "synced".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+                status: DocStatus::Ready,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: None,
+                processing_provenance: None,
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let connector_id = ConnectorId::new();
+        store
+            .upsert_sync_state(SyncState {
+                connector_id,
+                resource_uri: "mcp://res/1".into(),
+                content_hash: "abc".into(),
+                doc_id: Some(doc.id),
+                last_synced_at: now,
+                source_metadata: None,
+            })
+            .unwrap();
+        assert_eq!(store.list_sync_states(connector_id).len(), 1);
+
+        // Deleting the doc must drop the dangling sync mapping, otherwise a
+        // re-sync hands the old doc_id back to the ingester → FK violation.
+        store.delete_document(doc.id).unwrap();
+        assert!(store.list_sync_states(connector_id).is_empty());
     }
 
     #[test]

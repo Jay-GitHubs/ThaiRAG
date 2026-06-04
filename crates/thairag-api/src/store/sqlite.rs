@@ -728,6 +728,14 @@ impl KmStoreTrait for SqliteKmStore {
 
     fn delete_document(&self, id: DocId) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // Clear any connector sync mapping pointing at this doc first; a stale
+        // row would later hand its old doc_id back to the ingester and cause an
+        // FK violation on re-save (mcp_sync_states has no FK to documents).
+        conn.execute(
+            "DELETE FROM mcp_sync_states WHERE doc_id = ?1",
+            params![id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite delete sync states: {e}")))?;
         let affected = conn
             .execute(
                 "DELETE FROM documents WHERE id = ?1",
