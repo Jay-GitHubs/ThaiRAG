@@ -24,7 +24,9 @@ import type {
   PublicIdpInfo,
   RetrievalParams,
   ScopeInfoResponse,
+  SearchConfigResponse,
   SettingsScopeParam,
+  UpdateSearchConfigRequest,
   TestConnectionResponse,
   UpdateChatPipelineRequest,
   UpdateDocumentConfigRequest,
@@ -158,6 +160,16 @@ export async function updateDocumentConfig(
   const res = await client.put<DocumentConfigResponse>('/api/km/settings/document', data, {
     params: scopeParams(scope),
   });
+  return res.data;
+}
+
+export async function getSearchConfig() {
+  const res = await client.get<SearchConfigResponse>('/api/km/settings/search');
+  return res.data;
+}
+
+export async function updateSearchConfig(data: UpdateSearchConfigRequest) {
+  const res = await client.put<SearchConfigResponse>('/api/km/settings/search', data);
   return res.data;
 }
 

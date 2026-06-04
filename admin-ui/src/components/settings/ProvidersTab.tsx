@@ -53,6 +53,7 @@ import type {
   SettingsScopeParam,
 } from '../../api/types';
 import { ChatPipelineCard } from './ChatPipelineCard';
+import { RetrievalSettingsCard } from './RetrievalSettingsCard';
 
 const kindColors: Record<string, string> = {
   Ollama: 'blue',
@@ -1393,6 +1394,8 @@ export function ProvidersTab({ scope }: { scope?: SettingsScopeParam }) {
       <AvailableModelsPanel config={p} llmModels={models} onRefreshLlm={() => models.refetch()} />
 
       <RecommendationsCard />
+
+      <RetrievalSettingsCard />
 
       <ChatPipelineCard scope={scope} />
     </Space>

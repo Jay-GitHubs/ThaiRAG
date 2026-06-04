@@ -264,9 +264,11 @@ pub async fn switch_provider(
     );
 
     // Rebuild providers with the new vector store config
+    let eff_search =
+        crate::routes::settings::build_effective_search_config(&state.config, &*state.km_store);
     let bundle = crate::app_state::ProviderBundleBuilder::new(
         &providers_config,
-        &state.config.search,
+        &eff_search,
         &state.config.document,
         &state.providers().chat_pipeline_config,
         state.prompt_registry.clone(),

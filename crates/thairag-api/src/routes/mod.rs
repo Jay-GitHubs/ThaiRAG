@@ -222,6 +222,11 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/document",
             get(settings::get_document_config).put(settings::update_document_config),
         )
+        // Settings — search / retrieval
+        .route(
+            "/settings/search",
+            get(settings::get_search_config).put(settings::update_search_config),
+        )
         // Settings — chat pipeline
         .route(
             "/settings/chat-pipeline",

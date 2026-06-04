@@ -110,8 +110,10 @@ async fn main() {
             &config,
             &*state.km_store,
         );
+        let effective_search =
+            thairag_api::routes::settings::build_effective_search_config(&config, &*state.km_store);
         let bundle =
-            state.build_provider_bundle(pc, &config.search, &effective_doc, &effective_chat);
+            state.build_provider_bundle(pc, &effective_search, &effective_doc, &effective_chat);
         state.reload_providers(bundle);
         tracing::info!(
             ai_preprocessing_enabled = effective_doc.ai_preprocessing.enabled,
