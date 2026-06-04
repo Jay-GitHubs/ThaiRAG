@@ -61,6 +61,17 @@ pub struct RetrievedChunk {
     pub section_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_title: Option<String>,
+    /// AI-enrichment context prefix prepended into `content` (e.g. "From: …").
+    /// Present only when chunk enrichment ran. Surfaced so testers can tell
+    /// which part of `content` is AI-added context vs. raw document text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_prefix: Option<String>,
+    /// AI-generated one-line summary (metadata only — NOT part of `content`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// AI-generated keywords (metadata only — feed BM25, not shown in `content`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -234,6 +245,9 @@ pub async fn test_query(
                     page_numbers: meta.and_then(|m| m.page_numbers.clone()),
                     section_title: meta.and_then(|m| m.section_title.clone()),
                     doc_title,
+                    context_prefix: meta.and_then(|m| m.context_prefix.clone()),
+                    summary: meta.and_then(|m| m.summary.clone()),
+                    keywords: meta.and_then(|m| m.keywords.clone()),
                 }
             })
             .collect();
@@ -655,6 +669,9 @@ pub async fn test_query_stream(
                         page_numbers: meta.and_then(|m| m.page_numbers.clone()),
                         section_title: meta.and_then(|m| m.section_title.clone()),
                         doc_title,
+                        context_prefix: meta.and_then(|m| m.context_prefix.clone()),
+                        summary: meta.and_then(|m| m.summary.clone()),
+                        keywords: meta.and_then(|m| m.keywords.clone()),
                     }
                 })
                 .collect();
@@ -1117,6 +1134,9 @@ pub async fn search_stream(
                     page_numbers: meta.and_then(|m| m.page_numbers.clone()),
                     section_title: meta.and_then(|m| m.section_title.clone()),
                     doc_title,
+                    context_prefix: meta.and_then(|m| m.context_prefix.clone()),
+                    summary: meta.and_then(|m| m.summary.clone()),
+                    keywords: meta.and_then(|m| m.keywords.clone()),
                 }
             })
             .collect();
