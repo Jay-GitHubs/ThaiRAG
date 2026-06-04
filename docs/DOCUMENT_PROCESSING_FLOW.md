@@ -84,6 +84,15 @@ crate) runs strictly *downstream* of conversion:
 So the choice of converter does **not** change how Thai is handled later — it
 only changes how faithfully the source text is extracted in the first place.
 
+**Chunking always consumes the converted text, never the raw file.** The
+pipeline converts bytes → text and feeds *that text* to the chunker
+(`pipeline.rs`, `self.converter.convert(raw, mime_type)` → `chunk_text`); the
+raw document is never chunked directly. Note the pipeline re-converts the raw
+bytes internally rather than re-reading the preview blob saved at upload, so
+conversion runs twice from the same source. For the mechanical path both
+produce identical text; the smart-PDF path produces richer semantic markdown and
+then overwrites the preview blob so the preview matches what was chunked.
+
 **Prefer DOCX (or any native digital-text source) over PDF for Thai.** DOCX,
 XLSX, and HTML carry structured digital text that extracts cleanly. PDF text
 extraction (`pdf-extract`) frequently mangles Thai — dropped word spacing,
