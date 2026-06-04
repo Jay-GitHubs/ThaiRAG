@@ -696,6 +696,16 @@ impl KmStoreTrait for PostgresKmStore {
     }
 
     fn delete_document(&self, id: DocId) -> Result<()> {
+        // Clear any connector sync mapping that points at this doc first.
+        // mcp_sync_states has no FK to documents, so a stale row would later
+        // hand its old doc_id back to the connector ingester and trigger an FK
+        // violation when it re-saves chunks/blobs for a doc that no longer exists.
+        block_on(
+            sqlx::query("DELETE FROM mcp_sync_states WHERE doc_id = $1")
+                .bind(id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete sync states: {e}")))?;
         let result = block_on(
             sqlx::query("DELETE FROM documents WHERE id = $1")
                 .bind(id.0)
