@@ -1140,6 +1140,16 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
       />
 
       {!isScoped && (<>
+      {/* Document Vision LLM — the model the Smart-PDF Vision OCR above (and embedded
+          image description) calls during ingestion. Global; lives beside its feature. */}
+      <Collapse
+        items={[{
+          key: 'doc-vision',
+          label: <><RobotOutlined /> Document Vision LLM — model for Smart-PDF OCR &amp; image description</>,
+          children: <DocVisionSection />,
+        }]}
+      />
+
       {/* AI Preprocessing */}
       <Collapse
         defaultActiveKey={['ai-preprocessing']}
@@ -1796,15 +1806,6 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
           </Text>
         </Paragraph>
       </Card>
-
-      {/* Document Vision LLM — dedicated OCR/image model for ingestion (global) */}
-      <Collapse
-        items={[{
-          key: 'doc-vision',
-          label: 'Document Vision LLM',
-          children: <DocVisionSection />,
-        }]}
-      />
 
       {/* Vector Database — final storage step (embedding model lives in Shared / Common) */}
       <Collapse

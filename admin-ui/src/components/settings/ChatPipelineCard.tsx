@@ -1423,7 +1423,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                 checked={chatVisionEnabled}
                 onChange={setChatVisionEnabled}
                 checkedChildren="Dedicated"
-                unCheckedChildren="Use Chat LLM"
+                unCheckedChildren="Off"
                 data-testid="chat-vision-switch"
               />
               <Tooltip title="Dedicated vision model for answering over images attached to a chat. When off, image questions use the main Chat LLM (which must itself be vision-capable). Scope-aware — set per organization here.">
