@@ -2159,6 +2159,7 @@ function DocVisionSection() {
             onChange={setEnabled}
             checkedChildren="Dedicated"
             unCheckedChildren="Use primary LLM"
+            data-testid="doc-vision-switch"
           />
           <Button type="primary" size="small" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             Save

@@ -104,9 +104,10 @@ test.describe('Document Processing Tab', () => {
 
     // Find the segmented control (scoped to AI card to avoid Chat Pipeline tab)
     const aiCard = page.locator('.ant-card').filter({ hasText: 'AI Document Preprocessing' });
-    await expect(aiCard.getByText('Use Chat LLM')).toBeVisible();
     await expect(aiCard.getByText('Same model for all')).toBeVisible();
     await expect(aiCard.getByText('Different per agent')).toBeVisible();
+    // 'Use Chat LLM' was removed from Document Processing (each path owns its model).
+    await expect(aiCard.getByText('Use Chat LLM')).toHaveCount(0);
 
     // Switch to per-agent mode
     await aiCard.getByText('Different per agent').click();
@@ -209,74 +210,41 @@ test.describe('Document Processing Tab', () => {
     await expect(enricherSwitchReload).toHaveAttribute('aria-checked', 'true');
   });
 
-  test('Embedding & Vector Store section loads', async ({ page }) => {
-    // Scroll down to find the section
+  // Embedding moved to the Shared / Common tab in the settings redesign; the
+  // Document Processing tab now owns only the Vector Database storage step.
+  test('Vector Database section loads (no embedding here)', async ({ page }) => {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
 
-    await expect(page.getByText('Embedding & Vector Store').first()).toBeVisible();
-    await expect(page.getByText('Embedding Model', { exact: true })).toBeVisible();
-    await expect(page.getByText('Vector Database', { exact: true }).first()).toBeVisible();
-  });
+    const vsCard = page.locator('.ant-card').filter({ hasText: 'Vector Database' });
+    await expect(vsCard.first()).toBeVisible();
+    await expect(vsCard.first().getByText('Data Isolation')).toBeVisible();
 
-  test('Embedding provider selector and model sync', async ({ page }) => {
-    // Scroll to Embedding section
-    const embSection = page.getByText('Embedding & Vector Store').first();
-    await embSection.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(500);
-
-    // Check provider select is visible
-    const providerLabel = page.locator('text=Embedding Model').first();
-    await expect(providerLabel).toBeVisible();
-
-    // Check that Dimension field is visible
-    await expect(page.locator('text=Dimension').last()).toBeVisible();
+    // The old combined "Embedding & Vector Store" section is gone from this tab.
+    await expect(page.getByText('Embedding & Vector Store')).toHaveCount(0);
   });
 
   test('Vector store provider selector works', async ({ page }) => {
-    // Scroll to Vector section
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
 
-    await expect(page.getByText('Vector Database').first()).toBeVisible();
-
-    // The Vector Database card section should be visible
-    const embCard = page.locator('.ant-card').filter({ hasText: 'Embedding & Vector Store' });
-    await expect(embCard).toBeVisible();
-    await expect(embCard.getByText('Vector Database')).toBeVisible();
+    const vsCard = page.locator('.ant-card').filter({ hasText: 'Vector Database' });
+    await expect(vsCard.first()).toBeVisible();
+    // Provider select carries the current store kind as a tag (e.g. Qdrant).
+    await expect(vsCard.first().locator('.ant-select').first()).toBeVisible();
   });
 
-  test('Embedding sync button fetches Ollama models', async ({ page }) => {
+  test('save Vector Database settings', async ({ page }) => {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
 
-    // Try clicking Sync on the embedding section
-    const embSyncBtn = page.locator('.ant-card').filter({ hasText: 'Embedding & Vector Store' }).getByRole('button', { name: 'Sync' });
-
-    if (await embSyncBtn.isVisible()) {
-      await embSyncBtn.click();
-      await page.waitForTimeout(3000);
-
-      // Should show a message (success or warning)
-      const msgs = page.locator('.ant-message-notice');
-      await expect(msgs.first()).toBeVisible({ timeout: 5000 });
-    }
-  });
-
-  test('save Embedding & Vector Store settings', async ({ page }) => {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(500);
-
-    // Find the save button inside the Embedding & Vector Store card
-    const embCard = page.locator('.ant-card').filter({ hasText: 'Embedding & Vector Store' });
-    const saveBtn = embCard.getByRole('button', { name: 'Save' });
+    const vsCard = page.locator('.ant-card').filter({ hasText: 'Vector Database' });
+    const saveBtn = vsCard.first().getByRole('button', { name: 'Save' });
     await expect(saveBtn).toBeVisible();
 
-    // Click save (even without changes, it should show "No changes to save")
+    // No-op save still surfaces a message ("No changes to save").
     await saveBtn.click();
     await page.waitForTimeout(1500);
-
-    // Should show a message
     const msgs = page.locator('.ant-message-notice');
     await expect(msgs.first()).toBeVisible({ timeout: 5000 });
   });
