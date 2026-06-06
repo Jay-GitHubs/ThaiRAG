@@ -55,6 +55,17 @@ pub fn apply_chunk_plugins(registry: &PluginRegistry, chunks: &mut [DocumentChun
     }
 
     for chunk in chunks.iter_mut() {
+        // Skip table chunks: their HTML payload (with merged-cell structure) must
+        // stay intact — content-munging plugins like the summary-header plugin
+        // would prepend noise / corrupt the markup.
+        if chunk
+            .metadata
+            .as_ref()
+            .and_then(|m| m.content_type.as_ref())
+            == Some(&thairag_core::types::DocumentContentType::Table)
+        {
+            continue;
+        }
         for plugin in &plugins {
             chunk.content = plugin.transform_chunk(&chunk.content);
         }
