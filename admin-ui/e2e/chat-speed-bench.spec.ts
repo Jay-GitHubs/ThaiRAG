@@ -224,7 +224,9 @@ test.describe('Chat pipeline speed benchmark (model + mode sweep)', () => {
     const modal = page.locator('.ant-modal', { hasText: 'Upload Document' });
     await expect(modal).toBeVisible();
     await modal.locator('input[type="file"]').setInputFiles(PDF_PATH);
-    await modal.getByRole('button', { name: 'OK' }).click();
+    await modal.getByRole('button', { name: 'Upload' }).click();
+    // Upload now keeps the modal open as a live processing tracker; dismiss it.
+    await page.getByRole('button', { name: 'Done' }).click();
     await expect(modal).not.toBeVisible({ timeout: 15_000 });
 
     const list = (await (await page.request.get(`${API_BASE}/api/km/workspaces/${wsId}/documents`, { headers: { Authorization: `Bearer ${token}` } })).json()).data as { id: string; title: string }[];

@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use thairag_core::ThaiRagError;
 use thairag_core::models::{
-    Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, User,
-    UserPermission, Workspace,
+    Department, DocStatus, Document, IdentityProvider, Organization, PermissionScope, StageTiming,
+    User, UserPermission, Workspace,
 };
 use thairag_core::permission::Role;
 use thairag_core::types::{
@@ -50,6 +50,7 @@ impl SqliteKmStore {
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE finetune_jobs ADD COLUMN config TEXT",
             "ALTER TABLE documents ADD COLUMN processing_provenance TEXT",
+            "ALTER TABLE documents ADD COLUMN processing_timeline TEXT",
             "ALTER TABLE document_chunks ADD COLUMN metadata TEXT",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
@@ -139,6 +140,7 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
     let ca: String = row.get(14)?;
     let ua: String = row.get(15)?;
     let processing_provenance_s: Option<String> = row.get(16)?;
+    let processing_timeline_s: Option<String> = row.get(17)?;
     Ok(Document {
         id: DocId(parse_uuid(&id_s)),
         workspace_id: WorkspaceId(parse_uuid(&ws_s)),
@@ -150,6 +152,7 @@ fn doc_from_row(row: &rusqlite::Row) -> rusqlite::Result<Document> {
         error_message,
         processing_step,
         processing_provenance: processing_provenance_s.and_then(|s| serde_json::from_str(&s).ok()),
+        processing_timeline: processing_timeline_s.and_then(|s| serde_json::from_str(&s).ok()),
         version,
         content_hash,
         source_url,
@@ -615,7 +618,7 @@ impl KmStoreTrait for SqliteKmStore {
         self.get_workspace(doc.workspace_id)?;
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 doc.id.0.to_string(),
                 doc.workspace_id.0.to_string(),
@@ -636,6 +639,9 @@ impl KmStoreTrait for SqliteKmStore {
                 doc.processing_provenance
                     .as_ref()
                     .and_then(|p| serde_json::to_string(p).ok()),
+                doc.processing_timeline
+                    .as_ref()
+                    .and_then(|t| serde_json::to_string(t).ok()),
             ],
         )
         .map_err(|e| ThaiRagError::Internal(format!("SQLite insert document: {e}")))?;
@@ -645,7 +651,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_document(&self, id: DocId) -> Result<Document> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE id = ?1",
+            "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline FROM documents WHERE id = ?1",
             params![id.0.to_string()],
             doc_from_row,
         )
@@ -655,7 +661,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE workspace_id = ?1")
+            .prepare("SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline FROM documents WHERE workspace_id = ?1")
             .unwrap();
         stmt.query_map(params![workspace_id.0.to_string()], doc_from_row)
             .unwrap()
@@ -671,9 +677,16 @@ impl KmStoreTrait for SqliteKmStore {
         error_message: Option<String>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // A fresh processing run resets the per-stage timeline so the UI tracker
+        // never shows stale stages carried over from a prior (re)processing run.
+        let sql = if matches!(status, DocStatus::Processing) {
+            "UPDATE documents SET status = ?1, chunk_count = ?2, error_message = ?3, updated_at = ?4, processing_timeline = NULL WHERE id = ?5"
+        } else {
+            "UPDATE documents SET status = ?1, chunk_count = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?5"
+        };
         let affected = conn
             .execute(
-                "UPDATE documents SET status = ?1, chunk_count = ?2, error_message = ?3, updated_at = ?4 WHERE id = ?5",
+                sql,
                 params![
                     status.to_string(),
                     chunk_count,
@@ -689,12 +702,39 @@ impl KmStoreTrait for SqliteKmStore {
         Ok(())
     }
 
-    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()> {
+    fn update_document_step(
+        &self,
+        id: DocId,
+        step: Option<String>,
+        model: Option<String>,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        let now = Utc::now();
+        // Read-modify-write the running timeline so each step transition records
+        // the prior stage's duration and opens the new stage.
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT processing_timeline FROM documents WHERE id = ?1",
+                params![id.0.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite read timeline: {e}")))?
+            .flatten();
+        let mut timeline: Vec<StageTiming> = existing
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        StageTiming::advance(
+            &mut timeline,
+            step.as_deref(),
+            now.timestamp_millis(),
+            model.as_deref(),
+        );
+        let timeline_json = serde_json::to_string(&timeline).ok();
         let affected = conn
             .execute(
-                "UPDATE documents SET processing_step = ?1, updated_at = ?2 WHERE id = ?3",
-                params![step, ts(&Utc::now()), id.0.to_string()],
+                "UPDATE documents SET processing_step = ?1, processing_timeline = ?2, updated_at = ?3 WHERE id = ?4",
+                params![step, timeline_json, ts(&now), id.0.to_string()],
             )
             .map_err(|e| ThaiRagError::Internal(format!("SQLite update document step: {e}")))?;
         if affected == 0 {
@@ -1017,7 +1057,7 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline
                  FROM documents
                  WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
             )
@@ -5202,6 +5242,7 @@ mod tests {
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5282,6 +5323,7 @@ mod tests {
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5337,6 +5379,7 @@ mod tests {
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5422,6 +5465,7 @@ mod tests {
                 error_message: None,
                 processing_step: Some("chunking".into()),
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -5485,6 +5529,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -5690,6 +5735,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -5802,6 +5848,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,

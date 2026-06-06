@@ -55,6 +55,10 @@ impl LlmQualityChecker {
         self.llm.supports_vision()
     }
 
+    pub fn model_name(&self) -> &str {
+        self.llm.model_name()
+    }
+
     /// Vision-based quality check: compares original document image against converted Markdown.
     pub async fn check_with_vision(
         &self,
