@@ -284,6 +284,48 @@ fn build_app(auth_enabled: bool) -> Router {
     build_router(state, None)
 }
 
+/// The ingest path resolves a document pipeline by the workspace's scope. Prove
+/// the decision logic: global and override-free scopes reuse the global
+/// pipeline at zero cost, and an org override that resolves to the same
+/// effective config still short-circuits to global (no needless rebuild). The
+/// heavy "differing override builds a distinct pipeline" path constructs real
+/// providers, so it's covered by the live-stack check rather than here.
+#[tokio::test]
+async fn scoped_document_pipeline_decision_logic() {
+    use thairag_api::store::SettingsScope;
+    use thairag_core::types::OrgId;
+
+    let state = build_test_state(false);
+    let global = state.providers().document_pipeline;
+
+    // Global scope → exact same pipeline instance.
+    let g = state.get_scoped_document_pipeline(&SettingsScope::Global);
+    assert!(
+        Arc::ptr_eq(&g, &global),
+        "global scope must reuse global pipeline"
+    );
+
+    // Org scope with no overrides → still the global pipeline.
+    let org = OrgId::new();
+    let scope = SettingsScope::Org(org);
+    let none = state.get_scoped_document_pipeline(&scope);
+    assert!(
+        Arc::ptr_eq(&none, &global),
+        "override-free org must reuse global pipeline"
+    );
+
+    // Org override equal to the global value → resolves to the same effective
+    // config, so the hash matches and we reuse global (no wasted rebuild).
+    state
+        .km_store
+        .set_scoped_setting("document.max_chunk_size", "org", &org.0.to_string(), "512");
+    let same = state.get_scoped_document_pipeline(&scope);
+    assert!(
+        Arc::ptr_eq(&same, &global),
+        "override matching global must reuse global pipeline"
+    );
+}
+
 async fn body_json(body: Body) -> serde_json::Value {
     let bytes = body.collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
