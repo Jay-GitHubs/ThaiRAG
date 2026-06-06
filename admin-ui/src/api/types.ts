@@ -316,9 +316,9 @@ export interface ProviderConfigResponse {
   vector_store: VectorStoreProviderInfo;
   text_search: TextSearchProviderInfo;
   reranker: RerankerProviderInfo;
-  /** Optional dedicated vision LLM for image/PDF OCR.
+  /** Optional dedicated vision LLM for document ingestion (image description / PDF OCR).
    * When omitted, the primary `llm` is used (only works if it supports vision). */
-  vision_llm?: LlmProviderInfo;
+  doc_vision_llm?: LlmProviderInfo;
 }
 
 export interface AvailableModel {
@@ -376,11 +376,11 @@ export interface UpdateProviderConfigRequest {
   embedding?: { kind?: string; model?: string; dimension?: number; api_key?: string };
   vector_store?: { kind?: string; url?: string; collection?: string; isolation?: string };
   reranker?: { kind?: string; model?: string; api_key?: string };
-  /** Set fields on the dedicated vision LLM. Unset fields preserve existing values
-   * (or seed from primary `llm` if no vision config exists yet). */
-  vision_llm?: { kind?: string; model?: string; base_url?: string; api_key?: string };
-  /** When true, remove the vision_llm entirely so the pipeline falls back to primary `llm`. */
-  clear_vision_llm?: boolean;
+  /** Set fields on the dedicated document-ingestion vision LLM. Unset fields preserve
+   * existing values (or seed from primary `llm` if no vision config exists yet). */
+  doc_vision_llm?: LlmConfigUpdate;
+  /** When true, remove the doc_vision_llm entirely so ingestion falls back to primary `llm`. */
+  clear_doc_vision_llm?: boolean;
 }
 
 // ── Document Config ────────────────────────────────────────────────
@@ -613,6 +613,9 @@ export interface ChatPipelineConfigResponse {
   multimodal_enabled: boolean;
   multimodal_max_images: number;
   multimodal_llm?: LlmProviderInfo;
+  /** Optional dedicated vision LLM for chat answers over image context.
+   * When omitted, the main chat `llm` is used (only works if it supports vision). */
+  chat_vision_llm?: LlmProviderInfo;
   // RAPTOR
   raptor_enabled: boolean;
   raptor_max_depth: number;
@@ -759,6 +762,8 @@ export interface UpdateChatPipelineRequest {
   multimodal_max_images?: number;
   multimodal_llm?: LlmConfigUpdate;
   remove_multimodal_llm?: boolean;
+  chat_vision_llm?: LlmConfigUpdate;
+  remove_chat_vision_llm?: boolean;
   // RAPTOR
   raptor_enabled?: boolean;
   raptor_max_depth?: number;

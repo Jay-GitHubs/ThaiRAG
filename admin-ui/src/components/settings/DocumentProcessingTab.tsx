@@ -1335,7 +1335,6 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                   value={llmMode}
                   onChange={(v) => setLlmMode(v as 'chat' | 'shared' | 'per-agent')}
                   options={[
-                    { label: 'Use Chat LLM', value: 'chat' },
                     { label: 'Same model for all', value: 'shared' },
                     { label: 'Different per agent', value: 'per-agent' },
                   ]}
@@ -1348,7 +1347,7 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                   fontSize: 12,
                   color: token.colorTextSecondary,
                 }}>
-                  {llmMode === 'chat' && 'All agents share your main Chat LLM. Simplest setup — no extra config needed.'}
+                  {llmMode === 'chat' && 'No dedicated document model is configured — agents currently reuse the main Chat LLM. Pick a mode above and save to give Document Processing its own model.'}
                   {llmMode === 'shared' && 'All agents use a dedicated model below, keeping document processing separate from chat.'}
                   {llmMode === 'per-agent' && 'Assign a different model to each agent to optimize cost and memory usage.'}
                 </div>
@@ -1798,6 +1797,15 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
         </Paragraph>
       </Card>
 
+      {/* Document Vision LLM — dedicated OCR/image model for ingestion (global) */}
+      <Collapse
+        items={[{
+          key: 'doc-vision',
+          label: 'Document Vision LLM',
+          children: <DocVisionSection />,
+        }]}
+      />
+
       {/* Vector Database — final storage step (embedding model lives in Shared / Common) */}
       <Collapse
         defaultActiveKey={['vector-store']}
@@ -2047,6 +2055,146 @@ function VectorStoreSection() {
           </div>
         </div>
       </Space>
+    </Card>
+  );
+}
+
+// ── Document Vision LLM Section ─────────────────────────────────────
+// Dedicated vision model for ingestion (OCR / image description). Global —
+// stored in the provider config as `doc_vision_llm`. When disabled, ingestion
+// vision falls back to the primary preprocessing LLM.
+function DocVisionSection() {
+  const { token } = theme.useToken();
+  const [providerConfig, setProviderConfig] = useState<ProviderConfigResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [form, setForm] = useState<LlmFormState>({ ...defaultLlmForm });
+  const [numCtx, setNumCtx] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await getProviderConfig();
+        setProviderConfig(data);
+        if (data.doc_vision_llm) {
+          setEnabled(true);
+          setForm(llmInfoToForm(data.doc_vision_llm));
+          setNumCtx(data.doc_vision_llm.ollama_num_ctx_max ?? 0);
+        }
+      } catch {
+        message.error('Failed to load provider config');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const existing = providerConfig?.doc_vision_llm;
+  const existingKey = !!existing?.has_api_key && form.kind === existing?.kind;
+
+  async function handleSave() {
+    if (enabled && !form.profile_id && !form.model.trim()) {
+      message.error('Please select or enter a model for the Document Vision LLM');
+      return;
+    }
+    setSaving(true);
+    try {
+      const req: { doc_vision_llm?: LlmConfigUpdate; clear_doc_vision_llm?: boolean } = {};
+      if (!enabled) {
+        if (existing) req.clear_doc_vision_llm = true;
+        else {
+          message.info('No changes to save');
+          setSaving(false);
+          return;
+        }
+      } else if (form.profile_id) {
+        req.doc_vision_llm = { profile_id: form.profile_id };
+      } else {
+        req.doc_vision_llm = {
+          kind: form.kind,
+          model: form.model.trim(),
+          base_url: form.base_url.trim() || undefined,
+          api_key: form.api_key || undefined,
+          ollama_num_ctx_max: numCtx,
+          ...(existing?.profile_id ? { clear_profile: true } : {}),
+        };
+      }
+      const updated = await updateProviderConfig(req);
+      setProviderConfig(updated);
+      if (updated.doc_vision_llm) {
+        setEnabled(true);
+        setForm(llmInfoToForm(updated.doc_vision_llm));
+        setNumCtx(updated.doc_vision_llm.ollama_num_ctx_max ?? 0);
+      } else {
+        setEnabled(false);
+        setForm({ ...defaultLlmForm });
+        setNumCtx(0);
+      }
+      message.success('Document Vision LLM saved');
+    } catch {
+      message.error('Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <Spin tip="Loading provider config..." />;
+
+  return (
+    <Card
+      title={
+        <Space>
+          <RobotOutlined />
+          <span>Document Vision LLM</span>
+          <Tooltip title="Dedicated vision model used during ingestion for OCR and image description (scanned PDFs, image-only documents). When off, vision tasks reuse the primary preprocessing LLM. Shared across the whole platform.">
+            <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+          </Tooltip>
+        </Space>
+      }
+      extra={
+        <Space>
+          <Switch
+            checked={enabled}
+            onChange={setEnabled}
+            checkedChildren="Dedicated"
+            unCheckedChildren="Use primary LLM"
+          />
+          <Button type="primary" size="small" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+            Save
+          </Button>
+        </Space>
+      }
+    >
+      {!enabled ? (
+        <Alert
+          type="info"
+          showIcon
+          message="Vision tasks (image description, PDF OCR) will use the primary preprocessing LLM."
+          description="Enable a dedicated vision model if your primary LLM is not vision-capable, or to isolate OCR memory usage."
+        />
+      ) : (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Vision-capable models"
+            description="Cloud: Claude 3+ (Opus/Sonnet/Haiku), GPT-4o/4.1, Gemini 1.5+. Ollama: llava, llava-llama3, qwen2.5vl, llama3.2-vision, minicpm-v, bakllava, moondream."
+          />
+          <LlmConfigForm form={form} onChange={setForm} existingKey={existingKey} requireVision />
+          {form.kind === 'Ollama' && !form.profile_id && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                Max Context (num_ctx)
+                <Tooltip title="Vision calls request this full value (image token counts aren't known up front). Lower it, or lower PDF Render DPI, to cut memory. 0 = inherit model default.">
+                  <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary, marginLeft: 6 }} />
+                </Tooltip>
+              </Text>
+              <InputNumber min={0} max={131072} step={1024} value={numCtx} onChange={(v) => setNumCtx(v ?? 0)} style={{ width: 200 }} />
+            </div>
+          )}
+        </Space>
+      )}
     </Card>
   );
 }

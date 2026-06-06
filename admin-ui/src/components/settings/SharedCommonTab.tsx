@@ -60,6 +60,7 @@ const CHAT_SLOTS: [keyof ChatPipelineConfigResponse, string][] = [
   ['colbert_llm', 'ColBERT'],
   ['personal_memory_llm', 'Personal Memory'],
   ['live_retrieval_llm', 'Live Retrieval'],
+  ['chat_vision_llm', 'Vision'],
 ];
 
 const DOC_SLOTS: [string, string][] = [
@@ -87,8 +88,8 @@ function collectConsumers(
     const info = (ai as unknown as Record<string, LlmProviderInfo | undefined>)[key];
     if (info && info.model) out.push({ label: `Document · ${label}`, info });
   }
-  if (provider.vision_llm && provider.vision_llm.model) {
-    out.push({ label: 'Document · Vision', info: provider.vision_llm });
+  if (provider.doc_vision_llm && provider.doc_vision_llm.model) {
+    out.push({ label: 'Document · Vision', info: provider.doc_vision_llm });
   }
   return out;
 }
