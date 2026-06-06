@@ -724,6 +724,9 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
   });
   const [agentLlms, setAgentLlms] = useState<Record<string, LlmFormState>>({});
   const [featureLlms, setFeatureLlms] = useState<Record<string, LlmFormState>>({});
+  // Chat Vision LLM — dedicated vision model for answering over images in chat
+  const [chatVisionEnabled, setChatVisionEnabled] = useState(false);
+  const [chatVisionLlm, setChatVisionLlm] = useState<LlmFormState>({ ...defaultLlmForm });
   const [qualityMaxRetries, setQualityMaxRetries] = useState(1);
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
@@ -879,6 +882,10 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         fLlms[k] = llmInfo ? llmInfoToForm(llmInfo) : { ...defaultLlmForm };
       }
       setFeatureLlms(fLlms);
+
+      // Chat vision LLM
+      setChatVisionEnabled(!!data.chat_vision_llm);
+      setChatVisionLlm(data.chat_vision_llm ? llmInfoToForm(data.chat_vision_llm) : { ...defaultLlmForm });
 
       // Feature states
       setConversationMemoryEnabled(data.conversation_memory_enabled);
@@ -1138,6 +1145,17 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         }
       }
 
+      // Chat vision LLM
+      if (chatVisionEnabled && (chatVisionLlm.model || chatVisionLlm.profile_id)) {
+        req.chat_vision_llm = formToUpdate(
+          chatVisionLlm,
+          !!config?.chat_vision_llm?.has_api_key,
+          !!config?.chat_vision_llm?.profile_id,
+        );
+      } else {
+        req.remove_chat_vision_llm = true;
+      }
+
       const resp = await updateChatPipelineConfig(req, scope);
       setConfig(resp);
       message.success('Chat pipeline settings saved');
@@ -1393,6 +1411,39 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
               })()}
             </>
           )}
+
+          <Divider style={{ margin: '8px 0' }} />
+
+          {/* Chat Vision LLM */}
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            <Space>
+              <Text strong>Vision LLM</Text>
+              <Switch
+                size="small"
+                checked={chatVisionEnabled}
+                onChange={setChatVisionEnabled}
+                checkedChildren="Dedicated"
+                unCheckedChildren="Off"
+                data-testid="chat-vision-switch"
+              />
+              <Tooltip title="Dedicated vision model for answering over images attached to a chat. When off, image questions use the main Chat LLM (which must itself be vision-capable). Scope-aware — set per organization here.">
+                <QuestionCircleOutlined />
+              </Tooltip>
+            </Space>
+            {chatVisionEnabled ? (
+              <LlmConfigForm
+                form={chatVisionLlm}
+                onChange={setChatVisionLlm}
+                syncedModels={syncedModels}
+                onSync={handleSync}
+                syncing={syncing}
+              />
+            ) : (
+              <Paragraph type="secondary" style={{ margin: 0 }}>
+                Image questions reuse the main Chat LLM. Enable a dedicated vision model if your chat model can't read images.
+              </Paragraph>
+            )}
+          </Space>
 
           <Divider style={{ margin: '8px 0' }} />
 

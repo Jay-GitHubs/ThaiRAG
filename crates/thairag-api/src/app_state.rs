@@ -365,7 +365,7 @@ impl ProviderBundle {
             );
 
             // Enable image description if configured. Prefer the dedicated
-            // `providers.vision_llm` so operators can keep a fast text-only
+            // `providers.doc_vision_llm` so operators can keep a fast text-only
             // chat model for `llm` while routing OCR / image description to
             // a heavier vision-capable model (e.g. Ollama `llava`, Claude
             // 3+, GPT-4o). Falls back to the primary LLM when unset, which
@@ -373,7 +373,9 @@ impl ProviderBundle {
             // pipeline.rs::process_image will fail loud with a structured
             // EmptyExtraction reason if it doesn't.
             let pipeline = if doc.image_description_enabled {
-                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = providers.vision_llm {
+                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) =
+                    providers.doc_vision_llm
+                {
                     let resolved = if let Some(v) = vault {
                         resolve_profile(cfg, store_ref, v)
                     } else {
@@ -389,7 +391,7 @@ impl ProviderBundle {
                     Arc::from(create_llm_provider(&resolved))
                 } else {
                     tracing::info!(
-                        "No `providers.vision_llm` configured — falling back to primary LLM \
+                        "No `providers.doc_vision_llm` configured — falling back to primary LLM \
                              for image description. This only works when the primary model is \
                              itself vision-capable."
                     );
@@ -483,10 +485,34 @@ impl ProviderBundle {
                 None
             };
 
+            // Dedicated chat-answer vision LLM. Unlike per-agent LLMs, this
+            // stays `None` when unconfigured so the ResponseGenerator falls
+            // back to its own answer LLM (which only sees images if it is
+            // itself vision-capable) rather than the shared chat LLM.
+            let chat_vision_llm: Option<Arc<dyn LlmProvider>> =
+                chat.chat_vision_llm.as_ref().map(|cfg| {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
+                    tracing::info!(
+                        kind = ?resolved.kind,
+                        model = %resolved.model,
+                        "Chat: using dedicated vision LLM for answer-time image input"
+                    );
+                    Arc::from(create_llm_provider_with_options(
+                        &resolved,
+                        chat_timeout,
+                        ka_opt,
+                    )) as Arc<dyn LlmProvider>
+                });
+
             let rg = ResponseGenerator::new_with_prompts(
                 resolve_chat_agent_llm("response_generator", &chat.response_generator_llm),
                 Arc::clone(&prompts),
-            );
+            )
+            .with_vision_llm(chat_vision_llm);
 
             let se = if chat.structured_extraction_enabled {
                 Some(StructuredExtractor::new_with_prompts(
@@ -987,16 +1013,28 @@ impl Drop for UserRequestGuard {
     }
 }
 
-/// Cache of scoped chat pipelines, keyed by a hash of the effective
-/// `ChatPipelineConfig`.  Entries expire after `ttl` seconds to pick up
-/// settings changes without requiring explicit invalidation.
-#[derive(Clone)]
-pub struct ScopedPipelineCache {
-    cache: Arc<dashmap::DashMap<u64, (Arc<ChatPipeline>, Instant)>>,
+/// Cache of scoped pipelines, keyed by a hash of the effective config.
+/// Generic over the pipeline type so the same TTL/eviction logic serves both
+/// chat (`ChatPipeline`) and document (`DocumentPipeline`) pipelines. Entries
+/// expire after `ttl` seconds to pick up settings changes without requiring
+/// explicit invalidation.
+pub struct ScopedPipelineCache<P> {
+    cache: Arc<dashmap::DashMap<u64, (Arc<P>, Instant)>>,
     ttl: std::time::Duration,
 }
 
-impl ScopedPipelineCache {
+// Hand-written so the bound is `P` (not `P: Clone`): we only clone the `Arc`s,
+// never `P` itself, and the cached pipelines are not `Clone`.
+impl<P> Clone for ScopedPipelineCache<P> {
+    fn clone(&self) -> Self {
+        Self {
+            cache: Arc::clone(&self.cache),
+            ttl: self.ttl,
+        }
+    }
+}
+
+impl<P> ScopedPipelineCache<P> {
     pub fn new(ttl_secs: u64) -> Self {
         Self {
             cache: Arc::new(dashmap::DashMap::new()),
@@ -1005,7 +1043,7 @@ impl ScopedPipelineCache {
     }
 
     /// Get a cached pipeline if it exists and hasn't expired.
-    pub fn get(&self, key: u64) -> Option<Arc<ChatPipeline>> {
+    pub fn get(&self, key: u64) -> Option<Arc<P>> {
         if let Some(entry) = self.cache.get(&key) {
             if entry.1.elapsed() < self.ttl {
                 return Some(Arc::clone(&entry.0));
@@ -1017,7 +1055,7 @@ impl ScopedPipelineCache {
     }
 
     /// Insert a pipeline into the cache.
-    pub fn insert(&self, key: u64, pipeline: Arc<ChatPipeline>) {
+    pub fn insert(&self, key: u64, pipeline: Arc<P>) {
         self.cache.insert(key, (pipeline, Instant::now()));
     }
 
@@ -1029,6 +1067,16 @@ impl ScopedPipelineCache {
 
 /// Hash a `ChatPipelineConfig` by serializing it to JSON, then hashing the bytes.
 pub fn hash_chat_pipeline_config(cfg: &ChatPipelineConfig) -> u64 {
+    let json = serde_json::to_string(cfg).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Hash a `DocumentConfig` by serializing it to JSON, then hashing the bytes.
+/// Keys the scoped document-pipeline cache so two scopes that resolve to the
+/// same effective config share one pipeline.
+pub fn hash_document_config(cfg: &DocumentConfig) -> u64 {
     let json = serde_json::to_string(cfg).unwrap_or_default();
     let mut hasher = DefaultHasher::new();
     json.hash(&mut hasher);
@@ -1058,7 +1106,10 @@ pub struct AppState {
     pub plugin_registry: Arc<crate::plugin_registry::PluginRegistry>,
     pub training_runner: Arc<crate::training_runner::TrainingRunner>,
     providers: Arc<RwLock<ProviderBundle>>,
-    pub scoped_pipeline_cache: ScopedPipelineCache,
+    pub scoped_pipeline_cache: ScopedPipelineCache<ChatPipeline>,
+    /// Scoped document pipelines (org/dept/workspace overrides of chunking,
+    /// PDF/OCR, and AI-preprocessing config) resolved at ingest time.
+    pub scoped_doc_pipeline_cache: ScopedPipelineCache<DocumentPipeline>,
     migration_status: crate::vector_migration::SharedMigrationStatus,
     /// Cached, layered model-capability catalog driving advisory ⭐/vision badges.
     pub model_catalog: Arc<crate::model_catalog::ModelCatalog>,
@@ -1080,6 +1131,7 @@ impl AppState {
     pub fn reload_providers(&self, bundle: ProviderBundle) {
         *self.providers.write().unwrap() = bundle;
         self.scoped_pipeline_cache.clear();
+        self.scoped_doc_pipeline_cache.clear();
     }
 
     /// Resolve a workspace ID to a full `SettingsScope` by walking
@@ -1188,6 +1240,87 @@ impl AppState {
         scoped_bundle.chat_pipeline
     }
 
+    /// Get a `DocumentPipeline` appropriate for the given settings scope.
+    ///
+    /// Mirrors [`get_scoped_pipeline`](Self::get_scoped_pipeline): an org/dept/
+    /// workspace with document overrides (chunking, PDF/OCR, AI-preprocessing,
+    /// per-agent models) gets a pipeline built from its effective scoped config;
+    /// scopes without overrides — or whose overrides resolve to the same config
+    /// as global — share the global pipeline at zero cost. Built pipelines are
+    /// cached (TTL) so a busy org doesn't rebuild per document.
+    pub fn get_scoped_document_pipeline(
+        &self,
+        scope: &crate::store::SettingsScope,
+    ) -> Arc<DocumentPipeline> {
+        let global_bundle = self.providers();
+
+        // Fast path: global scope → global pipeline directly.
+        if matches!(scope, crate::store::SettingsScope::Global) {
+            return global_bundle.document_pipeline;
+        }
+
+        // Any overrides anywhere in the inheritance chain?
+        let has_overrides = {
+            let chain = scope.inheritance_chain();
+            chain.iter().any(|(st, sid)| {
+                *st != "global" && !self.km_store.list_override_keys(st, sid).is_empty()
+            })
+        };
+        if !has_overrides {
+            return global_bundle.document_pipeline;
+        }
+
+        // Resolve effective scoped config and compare against global. If an org
+        // set overrides that happen to equal the global values, reuse global.
+        let scoped_doc = crate::routes::settings::build_effective_document_config_scoped(
+            &self.config,
+            &*self.km_store,
+            scope,
+        );
+        let global_doc =
+            crate::routes::settings::build_effective_document_config(&self.config, &*self.km_store);
+        let scoped_hash = hash_document_config(&scoped_doc);
+        if scoped_hash == hash_document_config(&global_doc) {
+            return global_bundle.document_pipeline;
+        }
+
+        // Cache hit?
+        if let Some(cached) = self.scoped_doc_pipeline_cache.get(scoped_hash) {
+            return cached;
+        }
+
+        // Build a bundle with the scoped document config but shared infra (same
+        // providers, search, chat config as global) and lift out its pipeline.
+        let eff_search =
+            crate::routes::settings::build_effective_search_config(&self.config, &*self.km_store);
+        let scoped_bundle =
+            ProviderBundleBuilder::new(
+                &global_bundle.providers_config,
+                &eff_search,
+                &scoped_doc,
+                &global_bundle.chat_pipeline_config,
+                Arc::clone(&self.prompt_registry),
+            )
+            .with_km_store(Arc::clone(&self.km_store))
+            .with_vault(&self.vault)
+            .with_embedding_cache(Arc::clone(&self.embedding_cache))
+            .with_plugin_engine(Arc::clone(&self.plugin_registry)
+                as Arc<dyn thairag_core::traits::SearchPluginEngine>)
+            .with_guardrail_metrics(Arc::clone(&self.metrics)
+                as Arc<dyn thairag_core::traits::GuardrailMetricsRecorder>)
+            .build();
+
+        let pipeline = Arc::clone(&scoped_bundle.document_pipeline);
+        self.scoped_doc_pipeline_cache
+            .insert(scoped_hash, Arc::clone(&pipeline));
+        tracing::info!(
+            scope = ?scope,
+            hash = scoped_hash,
+            "Built and cached scoped document pipeline"
+        );
+        pipeline
+    }
+
     /// Build a new `ProviderBundle` with doc-title resolver and prompt registry.
     pub fn build_provider_bundle(
         &self,
@@ -1266,6 +1399,7 @@ impl AppState {
             training_runner: Arc::new(crate::training_runner::TrainingRunner::new()),
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
+            scoped_doc_pipeline_cache: ScopedPipelineCache::new(60),
             migration_status: Arc::new(tokio::sync::RwLock::new(
                 crate::vector_migration::MigrationStatus::default(),
             )),
@@ -1557,6 +1691,7 @@ impl AppState {
             training_runner,
             providers: Arc::new(RwLock::new(bundle)),
             scoped_pipeline_cache: ScopedPipelineCache::new(60),
+            scoped_doc_pipeline_cache: ScopedPipelineCache::new(60),
             migration_status: Arc::new(tokio::sync::RwLock::new(
                 crate::vector_migration::MigrationStatus::default(),
             )),
