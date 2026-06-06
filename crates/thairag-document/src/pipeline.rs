@@ -345,6 +345,15 @@ impl DocumentPipeline {
         self
     }
 
+    /// The model backing a given processing step, if it's run by an AI agent.
+    /// Drives the live per-stage model attribution in the admin UI.
+    pub fn model_for_step(&self, step: &str) -> Option<String> {
+        self.ai_pipeline
+            .as_ref()
+            .and_then(|ai| ai.model_for_step(step))
+            .map(|m| m.to_string())
+    }
+
     /// Configure the chunking strategy and its sizing parameters.
     ///
     /// A non-`Standard` strategy bypasses the AI preprocessing pipeline for
@@ -576,7 +585,7 @@ impl DocumentPipeline {
 
         // A non-Standard chunking strategy bypasses the AI pipeline: the
         // window/parent splitters are an alternative chunking philosophy.
-        let (mut chunks, path, mechanical_fallback) =
+        let (mut chunks, path, mechanical_fallback, agents) =
             if self.chunking_strategy != ChunkingStrategy::Standard {
                 if self.ai_pipeline.is_some() {
                     info!(
@@ -591,6 +600,7 @@ impl DocumentPipeline {
                     chunks,
                     "mechanical (non-standard chunking)".to_string(),
                     false,
+                    Vec::new(),
                 )
             } else if let Some(ai) = &self.ai_pipeline {
                 let chunks = ai
@@ -603,11 +613,18 @@ impl DocumentPipeline {
                         overrides.max_chunk_size,
                     )
                     .await?;
-                (chunks, "AI agents".to_string(), false)
+                // Attribute the agents + models that ran (process() returns only
+                // chunks, so provenance is assembled from the pipeline's config).
+                (
+                    chunks,
+                    "AI agents".to_string(),
+                    false,
+                    ai.participating_agents(),
+                )
             } else {
                 let chunks =
                     self.process_mechanical_with(raw, mime_type, doc_id, workspace_id, overrides)?;
-                (chunks, "mechanical".to_string(), false)
+                (chunks, "mechanical".to_string(), false, Vec::new())
             };
 
         // Run table extraction on text-based content and append table chunks
@@ -634,7 +651,7 @@ impl DocumentPipeline {
 
         let prov = ProcessingProvenance {
             path,
-            agents: Vec::new(),
+            agents,
             mechanical_fallback,
             chunk_count: chunks.len() as i64,
         };

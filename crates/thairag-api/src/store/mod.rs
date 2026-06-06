@@ -790,7 +790,12 @@ pub trait KmStoreTrait: Send + Sync {
         chunk_count: i64,
         error_message: Option<String>,
     ) -> Result<()>;
-    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()>;
+    fn update_document_step(
+        &self,
+        id: DocId,
+        step: Option<String>,
+        model: Option<String>,
+    ) -> Result<()>;
     /// Persist the processing provenance (path, agents, models, fallback) for a document.
     fn update_document_provenance(
         &self,

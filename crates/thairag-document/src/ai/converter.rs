@@ -51,6 +51,10 @@ impl LlmDocumentConverter {
         self.llm.supports_vision()
     }
 
+    pub fn model_name(&self) -> &str {
+        self.llm.model_name()
+    }
+
     /// Convert a document using vision — sends the raw document image/PDF to the vision model.
     /// This produces much better results for scanned/OCR documents than text-only conversion.
     pub async fn convert_with_vision(

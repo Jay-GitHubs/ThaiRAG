@@ -73,6 +73,64 @@ pub struct AgentRun {
     pub note: Option<String>,
 }
 
+/// Timing record for a single processing stage. The pipeline reports a stream
+/// of step names (analyzing, converting, chunking, indexing, …); each distinct
+/// step becomes one `StageTiming`. `duration_ms` is `None` while the stage is
+/// still in progress and filled in when the next step starts (or processing
+/// terminates). Powers the admin UI's live per-stage tracker + bottleneck view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageTiming {
+    /// Raw step identifier as reported by the pipeline (e.g. "converting").
+    pub step: String,
+    /// Wall-clock start of this stage, epoch milliseconds.
+    pub started_at_ms: i64,
+    /// Elapsed time for this stage in milliseconds, or `None` if still running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    /// Model backing this stage (e.g. an LLM agent's model), when applicable.
+    /// Recorded live as the step starts so operators can see — and abort on —
+    /// the wrong model mid-run. `None` for non-model stages (e.g. indexing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl StageTiming {
+    /// Advance a processing timeline by one step transition.
+    ///
+    /// Closes the currently-open stage (filling its `duration_ms`) and, when
+    /// `step` is `Some`, opens a new stage starting at `now_ms`. Passing `None`
+    /// closes the timeline at a terminal state (ready/failed). Consecutive
+    /// reports of the same step name are coalesced — the open stage keeps
+    /// running — so retries that re-report a step don't create duplicates.
+    pub fn advance(
+        timeline: &mut Vec<StageTiming>,
+        step: Option<&str>,
+        now_ms: i64,
+        model: Option<&str>,
+    ) {
+        let same_as_open = matches!(
+            (timeline.last(), step),
+            (Some(last), Some(s)) if last.step == s && last.duration_ms.is_none()
+        );
+        if same_as_open {
+            return;
+        }
+        if let Some(last) = timeline.last_mut()
+            && last.duration_ms.is_none()
+        {
+            last.duration_ms = Some((now_ms - last.started_at_ms).max(0));
+        }
+        if let Some(s) = step {
+            timeline.push(StageTiming {
+                step: s.to_string(),
+                started_at_ms: now_ms,
+                duration_ms: None,
+                model: model.map(|m| m.to_string()),
+            });
+        }
+    }
+}
+
 /// Persistent, per-document summary of how a document was processed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessingProvenance {
@@ -109,6 +167,10 @@ pub struct Document {
     /// Persistent record of how this document was processed (path, agents, models, fallback).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing_provenance: Option<ProcessingProvenance>,
+    /// Per-stage timing accumulated during processing; drives the admin UI's
+    /// live step tracker and bottleneck breakdown. Reset on each (re)processing run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_timeline: Option<Vec<StageTiming>>,
     /// Current version number (1-indexed, increments on each update).
     #[serde(default = "default_version")]
     pub version: i32,
@@ -206,4 +268,53 @@ pub enum PermissionScope {
         dept_id: DeptId,
         workspace_id: WorkspaceId,
     },
+}
+
+#[cfg(test)]
+mod stage_timing_tests {
+    use super::StageTiming;
+
+    #[test]
+    fn advance_closes_prior_and_opens_new() {
+        let mut tl = Vec::new();
+        StageTiming::advance(&mut tl, Some("converting"), 1_000, Some("qwen"));
+        StageTiming::advance(&mut tl, Some("chunking"), 1_400, Some("qwen"));
+        assert_eq!(tl.len(), 2);
+        // First stage closed with its measured duration; second still running.
+        assert_eq!(tl[0].step, "converting");
+        assert_eq!(tl[0].duration_ms, Some(400));
+        assert_eq!(tl[0].model.as_deref(), Some("qwen"));
+        assert_eq!(tl[1].step, "chunking");
+        assert_eq!(tl[1].duration_ms, None);
+    }
+
+    #[test]
+    fn advance_none_closes_final_stage() {
+        let mut tl = Vec::new();
+        StageTiming::advance(&mut tl, Some("indexing"), 2_000, None);
+        StageTiming::advance(&mut tl, None, 2_500, None);
+        assert_eq!(tl.len(), 1);
+        assert_eq!(tl[0].duration_ms, Some(500));
+        assert_eq!(tl[0].model, None);
+    }
+
+    #[test]
+    fn advance_coalesces_repeated_step() {
+        let mut tl = Vec::new();
+        StageTiming::advance(&mut tl, Some("indexing"), 100, None);
+        StageTiming::advance(&mut tl, Some("indexing"), 300, None);
+        // Same step reported twice: keep one open stage rather than duplicating.
+        assert_eq!(tl.len(), 1);
+        assert_eq!(tl[0].started_at_ms, 100);
+        assert_eq!(tl[0].duration_ms, None);
+    }
+
+    #[test]
+    fn advance_clamps_negative_duration_to_zero() {
+        let mut tl = Vec::new();
+        StageTiming::advance(&mut tl, Some("a"), 1_000, None);
+        // A clock that goes backwards must not yield a negative duration.
+        StageTiming::advance(&mut tl, Some("b"), 500, None);
+        assert_eq!(tl[0].duration_ms, Some(0));
+    }
 }

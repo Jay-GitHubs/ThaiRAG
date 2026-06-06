@@ -154,7 +154,9 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     const modal = page.locator('.ant-modal', { hasText: 'Upload Document' });
     await expect(modal).toBeVisible();
     await modal.locator('input[type="file"]').setInputFiles(PDF_PATH);
-    await modal.getByRole('button', { name: 'OK' }).click();
+    await modal.getByRole('button', { name: 'Upload' }).click();
+    // Upload now keeps the modal open as a live processing tracker; dismiss it.
+    await page.getByRole('button', { name: 'Done' }).click();
     await expect(modal).not.toBeVisible({ timeout: 15_000 });
 
     // Find the freshly-uploaded doc id via API (title defaults to filename).

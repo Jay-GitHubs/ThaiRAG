@@ -47,6 +47,15 @@ export interface ProcessingProvenance {
   chunk_count: number;
 }
 
+/** Timing for one processing stage; `duration_ms` is absent while in progress. */
+export interface StageTiming {
+  step: string;
+  started_at_ms: number;
+  duration_ms?: number;
+  /** Model running this stage, recorded live (absent for non-model stages). */
+  model?: string;
+}
+
 export interface Document {
   id: DocId;
   workspace_id: WorkspaceId;
@@ -58,6 +67,7 @@ export interface Document {
   error_message?: string;
   processing_step?: string;
   processing_provenance?: ProcessingProvenance;
+  processing_timeline?: StageTiming[];
   created_at: string;
   updated_at: string;
 }

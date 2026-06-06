@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deleteDocument,
+  getDocument,
   ingestDocument,
   listDocuments,
   reprocessAllDocuments,
@@ -23,6 +24,26 @@ export function useDocuments(workspaceId: string | undefined) {
     },
   });
   return query;
+}
+
+/**
+ * Poll a single document while it's processing — backs the live upload tracker.
+ * Refetches every 1.5s until the document reaches a terminal (ready/failed)
+ * state so the per-stage timeline updates in near-real-time. `enabled` lets the
+ * caller switch polling on only while the tracker is visible.
+ */
+export function useDocument(
+  workspaceId: string | undefined,
+  docId: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ['document', workspaceId, docId],
+    queryFn: () => getDocument(workspaceId!, docId!),
+    enabled: enabled && !!workspaceId && !!docId,
+    refetchInterval: (query) =>
+      query.state.data?.status === 'processing' ? 1500 : false,
+  });
 }
 
 export function useIngestDocument() {

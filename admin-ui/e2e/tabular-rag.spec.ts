@@ -157,7 +157,9 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
     const modal = page.locator('.ant-modal', { hasText: 'Upload Document' });
     await expect(modal).toBeVisible();
     await modal.locator('input[type="file"]').setInputFiles(PDF_PATH);
-    await modal.getByRole('button', { name: 'OK' }).click();
+    await modal.getByRole('button', { name: 'Upload' }).click();
+    // Upload now keeps the modal open as a live processing tracker; dismiss it.
+    await page.getByRole('button', { name: 'Done' }).click();
     await expect(modal).not.toBeVisible({ timeout: 15_000 });
 
     const listRes = await page.request.get(
