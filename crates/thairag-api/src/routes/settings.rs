@@ -1795,6 +1795,12 @@ pub struct DocumentConfigResponse {
     /// Vision-first OCR for every PDF page (highest fidelity, highest cost).
     pub pdf_high_quality: bool,
     pub ai_preprocessing: AiPreprocessingResponse,
+    /// km_store keys overridden at the *requested* scope (empty at global).
+    /// Drives the admin UI origin badges + "Reset to Global" affordance: any
+    /// `document.*` / `ai_preprocessing.*` key listed here is set by this org
+    /// rather than inherited from the global default.
+    #[serde(default)]
+    pub overrides: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1981,106 +1987,6 @@ fn get_effective_agent_llm(
         })
 }
 
-/// Read all effective AI preprocessing settings from KM store + file config.
-struct EffectiveAiConfig {
-    enabled: bool,
-    auto_params: bool,
-    quality_threshold: f32,
-    max_llm_input_chars: usize,
-    agent_max_tokens: u32,
-    min_ai_size_bytes: usize,
-    retry_enabled: bool,
-    converter_max_retries: u32,
-    chunker_max_retries: u32,
-    analyzer_max_retries: u32,
-    analyzer_retry_below_confidence: f32,
-    orchestrator_enabled: bool,
-    auto_orchestrator_budget: bool,
-    max_orchestrator_calls: u32,
-    enricher_enabled: bool,
-}
-
-fn get_effective_ai_config(state: &AppState) -> EffectiveAiConfig {
-    let ai = &state.config.document.ai_preprocessing;
-    EffectiveAiConfig {
-        enabled: state
-            .km_store
-            .get_setting("ai_preprocessing.enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.enabled),
-        auto_params: state
-            .km_store
-            .get_setting("ai_preprocessing.auto_params")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.auto_params),
-        quality_threshold: state
-            .km_store
-            .get_setting("ai_preprocessing.quality_threshold")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.quality_threshold),
-        max_llm_input_chars: state
-            .km_store
-            .get_setting("ai_preprocessing.max_llm_input_chars")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.max_llm_input_chars),
-        agent_max_tokens: state
-            .km_store
-            .get_setting("ai_preprocessing.agent_max_tokens")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.agent_max_tokens),
-        min_ai_size_bytes: state
-            .km_store
-            .get_setting("ai_preprocessing.min_ai_size_bytes")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.min_ai_size_bytes),
-        retry_enabled: state
-            .km_store
-            .get_setting("ai_preprocessing.retry.enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.retry.enabled),
-        converter_max_retries: state
-            .km_store
-            .get_setting("ai_preprocessing.retry.converter_max_retries")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.retry.converter_max_retries),
-        chunker_max_retries: state
-            .km_store
-            .get_setting("ai_preprocessing.retry.chunker_max_retries")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.retry.chunker_max_retries),
-        analyzer_max_retries: state
-            .km_store
-            .get_setting("ai_preprocessing.retry.analyzer_max_retries")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.retry.analyzer_max_retries),
-        analyzer_retry_below_confidence: state
-            .km_store
-            .get_setting("ai_preprocessing.retry.analyzer_retry_below_confidence")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.retry.analyzer_retry_below_confidence),
-        orchestrator_enabled: state
-            .km_store
-            .get_setting("ai_preprocessing.orchestrator_enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.orchestrator_enabled),
-        auto_orchestrator_budget: state
-            .km_store
-            .get_setting("ai_preprocessing.auto_orchestrator_budget")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.auto_orchestrator_budget),
-        max_orchestrator_calls: state
-            .km_store
-            .get_setting("ai_preprocessing.max_orchestrator_calls")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.max_orchestrator_calls),
-        enricher_enabled: state
-            .km_store
-            .get_setting("ai_preprocessing.enricher_enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ai.enricher_enabled),
-    }
-}
-
 /// Build an effective `DocumentConfig` by layering km_store overrides on top of
 /// the static file config. Usable before `AppState` exists (e.g. at startup),
 /// mirroring `get_effective_chat_pipeline_with_store`. Keeping both the save path
@@ -2090,9 +1996,37 @@ pub fn build_effective_document_config(
     config: &thairag_config::AppConfig,
     store: &dyn crate::store::KmStoreTrait,
 ) -> thairag_config::schema::DocumentConfig {
-    let doc = &config.document;
+    build_effective_document_config_from_getter(&config.document, |key| store.get_setting(key))
+}
+
+/// Scope-aware document config: resolves every `document.*` and
+/// `ai_preprocessing.*` override through the inheritance chain
+/// (workspace → dept → org → global) so an org can run a different document
+/// pipeline — including different per-agent models — than the global default.
+/// Global scope short-circuits to the plain global resolver.
+pub fn build_effective_document_config_scoped(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+    scope: &SettingsScope,
+) -> thairag_config::schema::DocumentConfig {
+    if matches!(scope, SettingsScope::Global) {
+        return build_effective_document_config(config, store);
+    }
+    let settings = crate::store::resolve_all_settings(store, scope);
+    build_effective_document_config_from_getter(&config.document, |key| settings.get(key).cloned())
+}
+
+/// Core document-config resolver, parameterized over a setting getter so the
+/// same field logic serves both the global path (`store.get_setting`) and the
+/// scoped path (a pre-resolved inheritance-chain map).
+fn build_effective_document_config_from_getter<F>(
+    doc: &thairag_config::schema::DocumentConfig,
+    s: F,
+) -> thairag_config::schema::DocumentConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
     let ai = &doc.ai_preprocessing;
-    let s = |key: &str| store.get_setting(key);
     let llm = |key: &str, fb: &Option<thairag_config::schema::LlmConfig>| {
         s(key)
             .and_then(|j| serde_json::from_str(&j).ok())
@@ -2231,47 +2165,38 @@ pub fn build_effective_search_config(
     eff
 }
 
-fn build_ai_preprocessing_response(state: &AppState) -> AiPreprocessingResponse {
-    let effective_ai = get_effective_ai_config(state);
+/// Build the AI-preprocessing response from an already-resolved config (the
+/// scoped path). At global scope this is byte-identical to
+/// `build_ai_preprocessing_response`, since the scoped builder applies the same
+/// key→config fallback the per-agent helpers use.
+fn build_ai_preprocessing_response_from_config(
+    ai: &thairag_config::schema::AiPreprocessingConfig,
+) -> AiPreprocessingResponse {
     AiPreprocessingResponse {
-        enabled: effective_ai.enabled,
-        auto_params: effective_ai.auto_params,
-        quality_threshold: effective_ai.quality_threshold,
-        max_llm_input_chars: effective_ai.max_llm_input_chars,
-        agent_max_tokens: effective_ai.agent_max_tokens,
-        min_ai_size_bytes: effective_ai.min_ai_size_bytes,
-        llm: get_effective_preprocessing_llm(state)
-            .as_ref()
-            .map(llm_config_to_info),
-        analyzer_llm: get_effective_agent_llm(state, "analyzer")
-            .as_ref()
-            .map(llm_config_to_info),
-        converter_llm: get_effective_agent_llm(state, "converter")
-            .as_ref()
-            .map(llm_config_to_info),
-        quality_llm: get_effective_agent_llm(state, "quality")
-            .as_ref()
-            .map(llm_config_to_info),
-        chunker_llm: get_effective_agent_llm(state, "chunker")
-            .as_ref()
-            .map(llm_config_to_info),
+        enabled: ai.enabled,
+        auto_params: ai.auto_params,
+        quality_threshold: ai.quality_threshold,
+        max_llm_input_chars: ai.max_llm_input_chars,
+        agent_max_tokens: ai.agent_max_tokens,
+        min_ai_size_bytes: ai.min_ai_size_bytes,
+        llm: ai.llm.as_ref().map(llm_config_to_info),
+        analyzer_llm: ai.analyzer_llm.as_ref().map(llm_config_to_info),
+        converter_llm: ai.converter_llm.as_ref().map(llm_config_to_info),
+        quality_llm: ai.quality_llm.as_ref().map(llm_config_to_info),
+        chunker_llm: ai.chunker_llm.as_ref().map(llm_config_to_info),
         retry: AiRetryResponse {
-            enabled: effective_ai.retry_enabled,
-            converter_max_retries: effective_ai.converter_max_retries,
-            chunker_max_retries: effective_ai.chunker_max_retries,
-            analyzer_max_retries: effective_ai.analyzer_max_retries,
-            analyzer_retry_below_confidence: effective_ai.analyzer_retry_below_confidence,
+            enabled: ai.retry.enabled,
+            converter_max_retries: ai.retry.converter_max_retries,
+            chunker_max_retries: ai.retry.chunker_max_retries,
+            analyzer_max_retries: ai.retry.analyzer_max_retries,
+            analyzer_retry_below_confidence: ai.retry.analyzer_retry_below_confidence,
         },
-        orchestrator_enabled: effective_ai.orchestrator_enabled,
-        auto_orchestrator_budget: effective_ai.auto_orchestrator_budget,
-        max_orchestrator_calls: effective_ai.max_orchestrator_calls,
-        orchestrator_llm: get_effective_agent_llm(state, "orchestrator")
-            .as_ref()
-            .map(llm_config_to_info),
-        enricher_enabled: effective_ai.enricher_enabled,
-        enricher_llm: get_effective_agent_llm(state, "enricher")
-            .as_ref()
-            .map(llm_config_to_info),
+        orchestrator_enabled: ai.orchestrator_enabled,
+        auto_orchestrator_budget: ai.auto_orchestrator_budget,
+        max_orchestrator_calls: ai.max_orchestrator_calls,
+        orchestrator_llm: ai.orchestrator_llm.as_ref().map(llm_config_to_info),
+        enricher_enabled: ai.enricher_enabled,
+        enricher_llm: ai.enricher_llm.as_ref().map(llm_config_to_info),
     }
 }
 
@@ -2281,68 +2206,42 @@ pub async fn get_document_config(
     Query(sq): Query<ScopeQuery>,
 ) -> Result<Json<DocumentConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
-    let doc = &state.config.document;
-    // The two chunk knobs are scope-aware (Tier 1): resolve them through the
-    // workspace → dept → org → global inheritance chain. Everything else is
-    // still global-only.
+    // Every document.* / ai_preprocessing.* field is scope-aware: resolve the
+    // whole config through the workspace → dept → org → global inheritance chain
+    // so an org sees (and can run) its own document pipeline. At global scope the
+    // scoped builder is identical to the plain global resolver.
     let scope = parse_scope_query(&sq, &*state.km_store)?;
+    let eff = build_effective_document_config_scoped(&state.config, &*state.km_store, &scope);
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: crate::store::resolve_setting(
-            &*state.km_store,
-            "document.max_chunk_size",
-            &scope,
-        )
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.max_chunk_size),
-        chunk_overlap: crate::store::resolve_setting(
-            &*state.km_store,
-            "document.chunk_overlap",
-            &scope,
-        )
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(doc.chunk_overlap),
-        max_upload_size_mb: state
-            .km_store
-            .get_setting("document.max_upload_size_mb")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.max_upload_size_mb),
-        pdf_image_dpi: state
-            .km_store
-            .get_setting("document.pdf_image_dpi")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.pdf_image_dpi),
-        max_image_edge: state
-            .km_store
-            .get_setting("document.max_image_edge")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.max_image_edge),
-        image_description_enabled: state
-            .km_store
-            .get_setting("document.image_description_enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.image_description_enabled),
-        pdf_vision_fallback_enabled: state
-            .km_store
-            .get_setting("document.pdf_vision_fallback_enabled")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.pdf_vision_fallback_enabled),
-        pdf_min_chars_per_page: state
-            .km_store
-            .get_setting("document.pdf_min_chars_per_page")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.pdf_min_chars_per_page),
-        pdf_max_vision_pages: state
-            .km_store
-            .get_setting("document.pdf_max_vision_pages")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.pdf_max_vision_pages),
-        pdf_high_quality: state
-            .km_store
-            .get_setting("document.pdf_high_quality")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(doc.pdf_high_quality),
-        ai_preprocessing: build_ai_preprocessing_response(&state),
+        max_chunk_size: eff.max_chunk_size,
+        chunk_overlap: eff.chunk_overlap,
+        max_upload_size_mb: eff.max_upload_size_mb,
+        pdf_image_dpi: eff.pdf_image_dpi,
+        max_image_edge: eff.max_image_edge,
+        image_description_enabled: eff.image_description_enabled,
+        pdf_vision_fallback_enabled: eff.pdf_vision_fallback_enabled,
+        pdf_min_chars_per_page: eff.pdf_min_chars_per_page,
+        pdf_max_vision_pages: eff.pdf_max_vision_pages,
+        pdf_high_quality: eff.pdf_high_quality,
+        ai_preprocessing: build_ai_preprocessing_response_from_config(&eff.ai_preprocessing),
+        overrides: document_scope_overrides(&state, &scope),
     }))
+}
+
+/// km_store keys overridden at the requested scope, restricted to the
+/// `document.*` / `ai_preprocessing.*` namespace this endpoint owns. Empty at
+/// global scope (global is the default, not an override).
+fn document_scope_overrides(state: &AppState, scope: &SettingsScope) -> Vec<String> {
+    if matches!(scope, SettingsScope::Global) {
+        return Vec::new();
+    }
+    let (scope_type, scope_id) = scope.as_pair();
+    state
+        .km_store
+        .list_override_keys(scope_type, &scope_id)
+        .into_iter()
+        .filter(|k| k.starts_with("document.") || k.starts_with("ai_preprocessing."))
+        .collect()
 }
 
 pub async fn update_document_config(
@@ -2353,11 +2252,17 @@ pub async fn update_document_config(
 ) -> Result<Json<DocumentConfigResponse>, ApiError> {
     require_super_admin(&claims, &state)?;
 
-    // Tier-1 chunk knobs are scope-aware; write them to the requested scope.
-    // Everything else below is global-only.
+    // Every field is scope-aware: writes land at the requested scope so an org
+    // can run a different document pipeline (including different models) than
+    // the global default. Global scope writes the global default as before.
     let scope = parse_scope_query(&sq, &*state.km_store)?;
     let (scope_type, scope_id) = scope.as_pair();
     let is_global = matches!(scope, SettingsScope::Global);
+    let set = |key: &str, val: String| {
+        state
+            .km_store
+            .set_scoped_setting(key, scope_type, &scope_id, &val);
+    };
 
     // Persist pipeline settings
     if let Some(v) = req.max_chunk_size {
@@ -2392,9 +2297,7 @@ pub async fn update_document_config(
                 "max_upload_size_mb must be between 1 and 1024".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.max_upload_size_mb", &v.to_string());
+        set("document.max_upload_size_mb", v.to_string());
     }
     if let Some(v) = req.pdf_image_dpi {
         if !(72..=600).contains(&v) {
@@ -2402,9 +2305,7 @@ pub async fn update_document_config(
                 "pdf_image_dpi must be between 72 and 600".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.pdf_image_dpi", &v.to_string());
+        set("document.pdf_image_dpi", v.to_string());
     }
     if let Some(v) = req.max_image_edge {
         if v != 0 && !(256..=8192).contains(&v) {
@@ -2412,19 +2313,13 @@ pub async fn update_document_config(
                 "max_image_edge must be 0 (disabled) or between 256 and 8192".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.max_image_edge", &v.to_string());
+        set("document.max_image_edge", v.to_string());
     }
     if let Some(v) = req.image_description_enabled {
-        state
-            .km_store
-            .set_setting("document.image_description_enabled", &v.to_string());
+        set("document.image_description_enabled", v.to_string());
     }
     if let Some(v) = req.pdf_vision_fallback_enabled {
-        state
-            .km_store
-            .set_setting("document.pdf_vision_fallback_enabled", &v.to_string());
+        set("document.pdf_vision_fallback_enabled", v.to_string());
     }
     if let Some(v) = req.pdf_min_chars_per_page {
         if v > 100_000 {
@@ -2432,9 +2327,7 @@ pub async fn update_document_config(
                 "pdf_min_chars_per_page must be at most 100000".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.pdf_min_chars_per_page", &v.to_string());
+        set("document.pdf_min_chars_per_page", v.to_string());
     }
     if let Some(v) = req.pdf_max_vision_pages {
         if v > 10_000 {
@@ -2442,99 +2335,72 @@ pub async fn update_document_config(
                 "pdf_max_vision_pages must be at most 10000".into(),
             )));
         }
-        state
-            .km_store
-            .set_setting("document.pdf_max_vision_pages", &v.to_string());
+        set("document.pdf_max_vision_pages", v.to_string());
     }
     if let Some(v) = req.pdf_high_quality {
-        state
-            .km_store
-            .set_setting("document.pdf_high_quality", &v.to_string());
+        set("document.pdf_high_quality", v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
         // Persist scalar AI settings
         if let Some(enabled) = ai_update.enabled {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.enabled", &enabled.to_string());
+            set("ai_preprocessing.enabled", enabled.to_string());
         }
         if let Some(auto_params) = ai_update.auto_params {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.auto_params", &auto_params.to_string());
+            set("ai_preprocessing.auto_params", auto_params.to_string());
         }
         if let Some(threshold) = ai_update.quality_threshold {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.quality_threshold", &threshold.to_string());
+            set("ai_preprocessing.quality_threshold", threshold.to_string());
         }
         if let Some(chars) = ai_update.max_llm_input_chars {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.max_llm_input_chars", &chars.to_string());
+            set("ai_preprocessing.max_llm_input_chars", chars.to_string());
         }
         if let Some(tokens) = ai_update.agent_max_tokens {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.agent_max_tokens", &tokens.to_string());
+            set("ai_preprocessing.agent_max_tokens", tokens.to_string());
         }
         if let Some(size) = ai_update.min_ai_size_bytes {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.min_ai_size_bytes", &size.to_string());
+            set("ai_preprocessing.min_ai_size_bytes", size.to_string());
         }
 
         // Persist retry-with-feedback settings
         if let Some(v) = ai_update.retry_enabled {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.retry.enabled", &v.to_string());
+            set("ai_preprocessing.retry.enabled", v.to_string());
         }
         if let Some(v) = ai_update.converter_max_retries {
-            state.km_store.set_setting(
+            set(
                 "ai_preprocessing.retry.converter_max_retries",
-                &v.to_string(),
+                v.to_string(),
             );
         }
         if let Some(v) = ai_update.chunker_max_retries {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.retry.chunker_max_retries", &v.to_string());
+            set("ai_preprocessing.retry.chunker_max_retries", v.to_string());
         }
         if let Some(v) = ai_update.analyzer_max_retries {
-            state.km_store.set_setting(
-                "ai_preprocessing.retry.analyzer_max_retries",
-                &v.to_string(),
-            );
+            set("ai_preprocessing.retry.analyzer_max_retries", v.to_string());
         }
         if let Some(v) = ai_update.analyzer_retry_below_confidence {
-            state.km_store.set_setting(
+            set(
                 "ai_preprocessing.retry.analyzer_retry_below_confidence",
-                &v.to_string(),
+                v.to_string(),
             );
         }
 
         // Persist orchestrator settings
         if let Some(v) = ai_update.orchestrator_enabled {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.orchestrator_enabled", &v.to_string());
+            set("ai_preprocessing.orchestrator_enabled", v.to_string());
         }
         if let Some(v) = ai_update.auto_orchestrator_budget {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.auto_orchestrator_budget", &v.to_string());
+            set("ai_preprocessing.auto_orchestrator_budget", v.to_string());
         }
         if let Some(v) = ai_update.max_orchestrator_calls {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.max_orchestrator_calls", &v.to_string());
+            set("ai_preprocessing.max_orchestrator_calls", v.to_string());
         }
 
-        // Helper: persist an LLM config update to a given KM store key
+        // Helper: persist an LLM config update to a given KM store key at scope.
         fn persist_llm_update(
             state: &AppState,
+            scope_type: &str,
+            scope_id: &str,
             key: &str,
             llm_update: &UpdateLlmConfig,
             current: Option<thairag_config::schema::LlmConfig>,
@@ -2561,20 +2427,31 @@ pub async fn update_document_config(
             let json = serde_json::to_string(&llm_config).map_err(|e| {
                 ApiError(ThaiRagError::Internal(format!("Serialize LLM config: {e}")))
             })?;
-            state.km_store.set_setting(key, &json);
+            state
+                .km_store
+                .set_scoped_setting(key, scope_type, scope_id, &json);
             Ok(())
         }
 
         // Persist shared preprocessing LLM config
         if let Some(llm_update) = &ai_update.llm {
             let current = get_effective_preprocessing_llm(&state);
-            persist_llm_update(&state, "ai_preprocessing.llm", llm_update, current)?;
+            persist_llm_update(
+                &state,
+                scope_type,
+                &scope_id,
+                "ai_preprocessing.llm",
+                llm_update,
+                current,
+            )?;
         }
 
         // Persist per-agent LLM configs
         if let Some(ref u) = ai_update.analyzer_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.analyzer_llm",
                 u,
                 get_effective_agent_llm(&state, "analyzer"),
@@ -2583,6 +2460,8 @@ pub async fn update_document_config(
         if let Some(ref u) = ai_update.converter_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.converter_llm",
                 u,
                 get_effective_agent_llm(&state, "converter"),
@@ -2591,6 +2470,8 @@ pub async fn update_document_config(
         if let Some(ref u) = ai_update.quality_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.quality_llm",
                 u,
                 get_effective_agent_llm(&state, "quality"),
@@ -2599,6 +2480,8 @@ pub async fn update_document_config(
         if let Some(ref u) = ai_update.chunker_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.chunker_llm",
                 u,
                 get_effective_agent_llm(&state, "chunker"),
@@ -2607,6 +2490,8 @@ pub async fn update_document_config(
         if let Some(ref u) = ai_update.orchestrator_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.orchestrator_llm",
                 u,
                 get_effective_agent_llm(&state, "orchestrator"),
@@ -2615,13 +2500,13 @@ pub async fn update_document_config(
 
         // Persist enricher settings
         if let Some(v) = ai_update.enricher_enabled {
-            state
-                .km_store
-                .set_setting("ai_preprocessing.enricher_enabled", &v.to_string());
+            set("ai_preprocessing.enricher_enabled", v.to_string());
         }
         if let Some(ref u) = ai_update.enricher_llm {
             persist_llm_update(
                 &state,
+                scope_type,
+                &scope_id,
                 "ai_preprocessing.enricher_llm",
                 u,
                 get_effective_agent_llm(&state, "enricher"),
@@ -2629,70 +2514,66 @@ pub async fn update_document_config(
         }
     }
 
-    // Handle explicit removal of LLM overrides
+    // Handle explicit removal of LLM overrides (scoped)
     if let Some(ai_update) = &req.ai_preprocessing {
+        let del = |key: &str| {
+            state
+                .km_store
+                .delete_scoped_setting(key, scope_type, &scope_id);
+        };
         if ai_update.llm.is_none() && ai_update.remove_llm.unwrap_or(false) {
-            state.km_store.delete_setting("ai_preprocessing.llm");
+            del("ai_preprocessing.llm");
         }
         if ai_update.analyzer_llm.is_none() && ai_update.remove_analyzer_llm.unwrap_or(false) {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.analyzer_llm");
+            del("ai_preprocessing.analyzer_llm");
         }
         if ai_update.converter_llm.is_none() && ai_update.remove_converter_llm.unwrap_or(false) {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.converter_llm");
+            del("ai_preprocessing.converter_llm");
         }
         if ai_update.quality_llm.is_none() && ai_update.remove_quality_llm.unwrap_or(false) {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.quality_llm");
+            del("ai_preprocessing.quality_llm");
         }
         if ai_update.chunker_llm.is_none() && ai_update.remove_chunker_llm.unwrap_or(false) {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.chunker_llm");
+            del("ai_preprocessing.chunker_llm");
         }
         if ai_update.orchestrator_llm.is_none()
             && ai_update.remove_orchestrator_llm.unwrap_or(false)
         {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.orchestrator_llm");
+            del("ai_preprocessing.orchestrator_llm");
         }
         if ai_update.enricher_llm.is_none() && ai_update.remove_enricher_llm.unwrap_or(false) {
-            state
-                .km_store
-                .delete_setting("ai_preprocessing.enricher_llm");
+            del("ai_preprocessing.enricher_llm");
         }
     }
 
-    // Read back effective config (km_store overrides layered over file config).
-    // Same builder the startup bundle uses, so the save path and restart path
-    // can't drift — that drift was what made AI preprocessing revert to OFF.
-    let effective_doc = build_effective_document_config(&state.config, &*state.km_store);
-    let effective_search = build_effective_search_config(&state.config, &*state.km_store);
-
-    // Try hot-reload; don't fail the save if provider creation has issues
-    let eff_chat = get_effective_chat_pipeline(&state);
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        state.build_provider_bundle(
-            &state.providers().providers_config,
-            &effective_search,
-            &effective_doc,
-            &eff_chat,
-        )
-    })) {
-        Ok(bundle) => {
-            state.reload_providers(bundle);
-            tracing::info!("Document processing config updated and hot-reloaded by super admin");
-        }
-        Err(e) => {
-            tracing::warn!(
-                "Hot-reload failed after document config save: {:?}. Config is saved but will take effect on restart.",
-                e
-            );
+    // Hot-reload the live (global) bundle only when the global default changed.
+    // Scoped overrides are resolved per-request (see get_scoped_*), so a scoped
+    // save must not rebuild the global bundle. Same builder the startup bundle
+    // uses, so the save path and restart path can't drift.
+    if is_global {
+        let effective_doc = build_effective_document_config(&state.config, &*state.km_store);
+        let effective_search = build_effective_search_config(&state.config, &*state.km_store);
+        let eff_chat = get_effective_chat_pipeline(&state);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.build_provider_bundle(
+                &state.providers().providers_config,
+                &effective_search,
+                &effective_doc,
+                &eff_chat,
+            )
+        })) {
+            Ok(bundle) => {
+                state.reload_providers(bundle);
+                tracing::info!(
+                    "Document processing config updated and hot-reloaded by super admin"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Hot-reload failed after document config save: {:?}. Config is saved but will take effect on restart.",
+                    e
+                );
+            }
         }
     }
 
@@ -2701,34 +2582,22 @@ pub async fn update_document_config(
         serde_json::json!({ "section": "document" }),
     );
 
-    // For the scoped chunk knobs, echo back the value resolved through the
-    // requested scope's inheritance chain — not the global effective config —
-    // so a workspace-scoped save reflects the override the caller just set.
-    let (resp_max_chunk_size, resp_chunk_overlap) = if is_global {
-        (effective_doc.max_chunk_size, effective_doc.chunk_overlap)
-    } else {
-        (
-            crate::store::resolve_setting(&*state.km_store, "document.max_chunk_size", &scope)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(effective_doc.max_chunk_size),
-            crate::store::resolve_setting(&*state.km_store, "document.chunk_overlap", &scope)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(effective_doc.chunk_overlap),
-        )
-    };
-
+    // Echo back the config resolved through the requested scope so the caller
+    // sees exactly what it just saved — its own override, or the inherited value.
+    let eff = build_effective_document_config_scoped(&state.config, &*state.km_store, &scope);
     Ok(Json(DocumentConfigResponse {
-        max_chunk_size: resp_max_chunk_size,
-        chunk_overlap: resp_chunk_overlap,
-        max_upload_size_mb: effective_doc.max_upload_size_mb,
-        pdf_image_dpi: effective_doc.pdf_image_dpi,
-        max_image_edge: effective_doc.max_image_edge,
-        image_description_enabled: effective_doc.image_description_enabled,
-        pdf_vision_fallback_enabled: effective_doc.pdf_vision_fallback_enabled,
-        pdf_min_chars_per_page: effective_doc.pdf_min_chars_per_page,
-        pdf_max_vision_pages: effective_doc.pdf_max_vision_pages,
-        pdf_high_quality: effective_doc.pdf_high_quality,
-        ai_preprocessing: build_ai_preprocessing_response(&state),
+        max_chunk_size: eff.max_chunk_size,
+        chunk_overlap: eff.chunk_overlap,
+        max_upload_size_mb: eff.max_upload_size_mb,
+        pdf_image_dpi: eff.pdf_image_dpi,
+        max_image_edge: eff.max_image_edge,
+        image_description_enabled: eff.image_description_enabled,
+        pdf_vision_fallback_enabled: eff.pdf_vision_fallback_enabled,
+        pdf_min_chars_per_page: eff.pdf_min_chars_per_page,
+        pdf_max_vision_pages: eff.pdf_max_vision_pages,
+        pdf_high_quality: eff.pdf_high_quality,
+        ai_preprocessing: build_ai_preprocessing_response_from_config(&eff.ai_preprocessing),
+        overrides: document_scope_overrides(&state, &scope),
     }))
 }
 
@@ -6238,4 +6107,68 @@ pub async fn get_audit_analytics(
     require_super_admin(&claims, &state)?;
     let analytics = state.km_store.get_audit_analytics(&filter);
     Ok(Json(analytics))
+}
+
+#[cfg(test)]
+mod document_scope_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn base_doc() -> thairag_config::schema::DocumentConfig {
+        // DocumentConfig has no Default; only max_chunk_size / chunk_overlap are
+        // required — everything else fills in via serde defaults.
+        serde_json::from_str(r#"{"max_chunk_size":1024,"chunk_overlap":200}"#).unwrap()
+    }
+
+    #[test]
+    fn no_overrides_yields_config_defaults() {
+        let doc = base_doc();
+        let eff = build_effective_document_config_from_getter(&doc, |_| None);
+        assert_eq!(eff.max_chunk_size, 1024);
+        assert_eq!(eff.chunk_overlap, 200);
+        assert!(eff.ai_preprocessing.llm.is_none());
+        assert!(!eff.ai_preprocessing.enabled);
+    }
+
+    #[test]
+    fn overrides_win_over_config() {
+        let doc = base_doc();
+        let map: HashMap<String, String> = [
+            ("document.max_chunk_size", "512"),
+            ("ai_preprocessing.enabled", "true"),
+            (
+                "ai_preprocessing.llm",
+                r#"{"kind":"ollama","model":"org-only-model"}"#,
+            ),
+            (
+                "ai_preprocessing.analyzer_llm",
+                r#"{"kind":"ollama","model":"org-analyzer"}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let eff = build_effective_document_config_from_getter(&doc, |k| map.get(k).cloned());
+        assert_eq!(eff.max_chunk_size, 512);
+        assert_eq!(eff.chunk_overlap, 200); // untouched → config default
+        assert!(eff.ai_preprocessing.enabled);
+        assert_eq!(eff.ai_preprocessing.llm.unwrap().model, "org-only-model");
+        assert_eq!(
+            eff.ai_preprocessing.analyzer_llm.unwrap().model,
+            "org-analyzer"
+        );
+    }
+
+    #[test]
+    fn malformed_llm_override_falls_back_to_config() {
+        let doc = base_doc();
+        let map: HashMap<String, String> =
+            [("ai_preprocessing.llm".to_string(), "not-json".to_string())]
+                .into_iter()
+                .collect();
+        let eff = build_effective_document_config_from_getter(&doc, |k| map.get(k).cloned());
+        // Garbage override is ignored, not fatal — falls back to the config value.
+        assert!(eff.ai_preprocessing.llm.is_none());
+    }
 }
