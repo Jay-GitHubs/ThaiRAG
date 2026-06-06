@@ -365,7 +365,7 @@ impl ProviderBundle {
             );
 
             // Enable image description if configured. Prefer the dedicated
-            // `providers.vision_llm` so operators can keep a fast text-only
+            // `providers.doc_vision_llm` so operators can keep a fast text-only
             // chat model for `llm` while routing OCR / image description to
             // a heavier vision-capable model (e.g. Ollama `llava`, Claude
             // 3+, GPT-4o). Falls back to the primary LLM when unset, which
@@ -373,7 +373,9 @@ impl ProviderBundle {
             // pipeline.rs::process_image will fail loud with a structured
             // EmptyExtraction reason if it doesn't.
             let pipeline = if doc.image_description_enabled {
-                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = providers.vision_llm {
+                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) =
+                    providers.doc_vision_llm
+                {
                     let resolved = if let Some(v) = vault {
                         resolve_profile(cfg, store_ref, v)
                     } else {
@@ -389,7 +391,7 @@ impl ProviderBundle {
                     Arc::from(create_llm_provider(&resolved))
                 } else {
                     tracing::info!(
-                        "No `providers.vision_llm` configured — falling back to primary LLM \
+                        "No `providers.doc_vision_llm` configured — falling back to primary LLM \
                              for image description. This only works when the primary model is \
                              itself vision-capable."
                     );
@@ -483,10 +485,34 @@ impl ProviderBundle {
                 None
             };
 
+            // Dedicated chat-answer vision LLM. Unlike per-agent LLMs, this
+            // stays `None` when unconfigured so the ResponseGenerator falls
+            // back to its own answer LLM (which only sees images if it is
+            // itself vision-capable) rather than the shared chat LLM.
+            let chat_vision_llm: Option<Arc<dyn LlmProvider>> =
+                chat.chat_vision_llm.as_ref().map(|cfg| {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
+                    tracing::info!(
+                        kind = ?resolved.kind,
+                        model = %resolved.model,
+                        "Chat: using dedicated vision LLM for answer-time image input"
+                    );
+                    Arc::from(create_llm_provider_with_options(
+                        &resolved,
+                        chat_timeout,
+                        ka_opt,
+                    )) as Arc<dyn LlmProvider>
+                });
+
             let rg = ResponseGenerator::new_with_prompts(
                 resolve_chat_agent_llm("response_generator", &chat.response_generator_llm),
                 Arc::clone(&prompts),
-            );
+            )
+            .with_vision_llm(chat_vision_llm);
 
             let se = if chat.structured_extraction_enabled {
                 Some(StructuredExtractor::new_with_prompts(

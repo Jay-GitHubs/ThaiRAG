@@ -142,10 +142,11 @@ pub struct ProviderConfigResponse {
     pub vector_store: VectorStoreProviderInfo,
     pub text_search: TextSearchProviderInfo,
     pub reranker: RerankerProviderInfo,
-    /// Optional dedicated vision LLM for image/PDF-OCR. Falls back to
-    /// `llm` when unset (only works if primary supports vision).
+    /// Optional dedicated vision LLM for the document pipeline (image
+    /// description / PDF-OCR). Falls back to `llm` when unset (only works if
+    /// primary supports vision).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vision_llm: Option<LlmProviderInfo>,
+    pub doc_vision_llm: Option<LlmProviderInfo>,
     /// Optional CLIP visual-search config. `None`/`enabled=false` = text-only
     /// retrieval (today's behaviour).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -438,7 +439,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: non_empty(&p.reranker.model),
             has_api_key: !p.reranker.api_key.is_empty(),
         },
-        vision_llm: p.vision_llm.as_ref().map(|v| LlmProviderInfo {
+        doc_vision_llm: p.doc_vision_llm.as_ref().map(|v| LlmProviderInfo {
             kind: kind_str(&v.kind),
             model: v.model.clone(),
             base_url: non_empty(&v.base_url),
@@ -475,14 +476,14 @@ pub struct UpdateProviderConfigRequest {
     pub embedding: Option<UpdateEmbeddingConfig>,
     pub vector_store: Option<UpdateVectorStoreConfig>,
     pub reranker: Option<UpdateRerankerConfig>,
-    /// Optional dedicated vision LLM. Setting this routes image
-    /// description / PDF vision OCR to a separate provider from the
-    /// primary chat `llm`.
-    pub vision_llm: Option<UpdateLlmConfig>,
-    /// When true, remove the vision_llm config entirely (falls back to
+    /// Optional dedicated vision LLM for the document pipeline. Setting this
+    /// routes image description / PDF vision OCR to a separate provider from
+    /// the primary chat `llm`.
+    pub doc_vision_llm: Option<UpdateLlmConfig>,
+    /// When true, remove the doc_vision_llm config entirely (falls back to
     /// using the primary LLM for vision). Takes precedence over
-    /// `vision_llm` field updates.
-    pub clear_vision_llm: Option<bool>,
+    /// `doc_vision_llm` field updates.
+    pub clear_doc_vision_llm: Option<bool>,
     /// Optional CLIP visual-search toggle/config. Enabling it rebuilds the
     /// bundle with the image-embedding provider + `{collection}_clip` store.
     pub image_embedding: Option<UpdateImageEmbeddingConfig>,
@@ -665,15 +666,15 @@ pub async fn update_provider_config(
         pc.image_embedding = Some(current);
     }
 
-    // Vision LLM is optional. A `clear_vision_llm = true` flag removes it
-    // (falls back to the primary LLM). Otherwise, fields in `vision_llm`
-    // are merged into the existing config or seed a new one when none
-    // exists. Setting kind requires model; we let the validator catch
-    // missing combinations.
-    if body.clear_vision_llm.unwrap_or(false) {
-        pc.vision_llm = None;
-    } else if let Some(vis) = body.vision_llm {
-        let mut current = pc.vision_llm.clone().unwrap_or_else(|| {
+    // Document vision LLM is optional. A `clear_doc_vision_llm = true` flag
+    // removes it (falls back to the primary LLM). Otherwise, fields in
+    // `doc_vision_llm` are merged into the existing config or seed a new one
+    // when none exists. Setting kind requires model; we let the validator
+    // catch missing combinations.
+    if body.clear_doc_vision_llm.unwrap_or(false) {
+        pc.doc_vision_llm = None;
+    } else if let Some(vis) = body.doc_vision_llm {
+        let mut current = pc.doc_vision_llm.clone().unwrap_or_else(|| {
             // Seed from primary LLM so the user only has to override what differs
             thairag_config::schema::LlmConfig {
                 kind: pc.llm.kind.clone(),
@@ -719,7 +720,7 @@ pub async fn update_provider_config(
         } else if let Some(pid) = vis.profile_id {
             current.profile_id = Some(pid);
         }
-        pc.vision_llm = Some(current);
+        pc.doc_vision_llm = Some(current);
     }
 
     // Detect embedding dimension or model change — clear stale vectors
@@ -813,6 +814,7 @@ pub async fn update_provider_config(
             "chat_pipeline.ragas_llm",
             "chat_pipeline.compression_llm",
             "chat_pipeline.multimodal_llm",
+            "chat_pipeline.chat_vision_llm",
             "chat_pipeline.raptor_llm",
             "chat_pipeline.colbert_llm",
             "chat_pipeline.personal_memory_llm",
@@ -2787,6 +2789,9 @@ pub struct ChatPipelineConfigResponse {
     pub multimodal_enabled: bool,
     pub multimodal_max_images: u32,
     pub multimodal_llm: Option<LlmProviderInfo>,
+    /// Dedicated chat-answer vision LLM. When set, retrieved image-derived
+    /// chunks are fed as pixels to this model at answer time.
+    pub chat_vision_llm: Option<LlmProviderInfo>,
     // RAPTOR
     pub raptor_enabled: bool,
     pub raptor_max_depth: u32,
@@ -2926,6 +2931,9 @@ pub struct UpdateChatPipelineRequest {
     pub multimodal_max_images: Option<u32>,
     pub multimodal_llm: Option<UpdateLlmConfig>,
     pub remove_multimodal_llm: Option<bool>,
+    /// Dedicated chat-answer vision LLM.
+    pub chat_vision_llm: Option<UpdateLlmConfig>,
+    pub remove_chat_vision_llm: Option<bool>,
     // RAPTOR
     pub raptor_enabled: Option<bool>,
     pub raptor_max_depth: Option<u32>,
@@ -3223,6 +3231,9 @@ where
         multimodal_llm: s("chat_pipeline.multimodal_llm")
             .and_then(|v| serde_json::from_str(&v).ok())
             .or_else(|| cp.multimodal_llm.clone()),
+        chat_vision_llm: s("chat_pipeline.chat_vision_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.chat_vision_llm.clone()),
         // RAPTOR
         raptor_enabled: s("chat_pipeline.raptor_enabled")
             .and_then(|v| v.parse().ok())
@@ -3421,6 +3432,7 @@ fn build_chat_pipeline_response_from_config(
         multimodal_enabled: eff.multimodal_enabled,
         multimodal_max_images: eff.multimodal_max_images,
         multimodal_llm: eff.multimodal_llm.as_ref().map(llm_config_to_info),
+        chat_vision_llm: eff.chat_vision_llm.as_ref().map(llm_config_to_info),
         raptor_enabled: eff.raptor_enabled,
         raptor_max_depth: eff.raptor_max_depth,
         raptor_group_size: eff.raptor_group_size,
@@ -3887,6 +3899,11 @@ pub async fn update_chat_pipeline_config(
         eff.multimodal_llm.clone()
     );
     persist_llm!(
+        chat_vision_llm,
+        "chat_pipeline.chat_vision_llm",
+        eff.chat_vision_llm.clone()
+    );
+    persist_llm!(
         raptor_llm,
         "chat_pipeline.raptor_llm",
         eff.raptor_llm.clone()
@@ -3984,6 +4001,11 @@ pub async fn update_chat_pipeline_config(
         multimodal_llm,
         remove_multimodal_llm,
         "chat_pipeline.multimodal_llm"
+    );
+    remove_llm!(
+        chat_vision_llm,
+        remove_chat_vision_llm,
+        "chat_pipeline.chat_vision_llm"
     );
     remove_llm!(raptor_llm, remove_raptor_llm, "chat_pipeline.raptor_llm");
     remove_llm!(colbert_llm, remove_colbert_llm, "chat_pipeline.colbert_llm");
@@ -4788,6 +4810,10 @@ pub async fn apply_preset(
             // Vision: Llama4 Scout
             store.set_setting(
                 "chat_pipeline.multimodal_llm",
+                &ollama_llm("llama4:scout", &url),
+            );
+            store.set_setting(
+                "chat_pipeline.chat_vision_llm",
                 &ollama_llm("llama4:scout", &url),
             );
             // ── Embedding ──
