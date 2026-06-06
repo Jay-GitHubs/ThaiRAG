@@ -36,6 +36,38 @@ pub struct ExtractedImage {
     pub index: u32,
 }
 
+/// A single positioned glyph: the character plus its bounding box, in PDF
+/// point space (origin bottom-left, y increases upward). The exact, never-OCR'd
+/// raw material for deterministic table reconstruction.
+#[derive(Debug, Clone)]
+pub struct PositionedChar {
+    pub ch: char,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// An axis-aligned ruling-line segment (table border) in PDF point space.
+#[derive(Debug, Clone)]
+pub struct RuleLine {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// Per-page geometry: glyph positions + ruling lines + page size. This is the
+/// deterministic input to lattice table reconstruction — no model, no OCR, so
+/// cell content (numbers) is exact and cannot be fabricated.
+#[derive(Debug, Clone)]
+pub struct PageGeometry {
+    pub width: f32,
+    pub height: f32,
+    pub chars: Vec<PositionedChar>,
+    pub lines: Vec<RuleLine>,
+}
+
 fn err(msg: impl Into<String>) -> ThaiRagError {
     ThaiRagError::Validation(msg.into())
 }
@@ -228,6 +260,94 @@ impl PdfEngine {
             });
         }
         Ok(images)
+    }
+
+    /// Extract deterministic geometry for one page: every glyph with its
+    /// bounding box (from the text layer — exact, never OCR'd) plus axis-aligned
+    /// ruling-line segments (table borders) from path objects. This is the raw
+    /// input to lattice table reconstruction. Diagonal/curved segments are
+    /// ignored; near-horizontal and near-vertical edges are kept.
+    pub fn page_geometry(&self, pdf: &[u8], page_index: usize) -> Result<PageGeometry> {
+        let doc = self.load(pdf)?;
+        let page = doc
+            .pages()
+            .get(page_index as u16)
+            .map_err(|e| err(format!("get page {page_index}: {e}")))?;
+        let width = page.width().value;
+        let height = page.height().value;
+
+        // Glyph positions from the text layer (the exact characters; no OCR).
+        let mut chars = Vec::new();
+        if let Ok(text) = page.text() {
+            for c in text.chars().iter() {
+                let Some(ch) = c.unicode_char() else { continue };
+                if ch.is_control() {
+                    continue;
+                }
+                if let Ok(b) = c.tight_bounds() {
+                    chars.push(PositionedChar {
+                        ch,
+                        x0: b.left().value,
+                        y0: b.bottom().value,
+                        x1: b.right().value,
+                        y1: b.top().value,
+                    });
+                }
+            }
+        }
+
+        // Ruling lines: walk each path object's segments and emit only the
+        // axis-aligned edges (horizontal or vertical). A segment within
+        // `AXIS_TOL` points of horizontal/vertical is treated as a rule line;
+        // a closing segment draws the edge back to the subpath start (captures
+        // the 4th side of rectangle borders).
+        const AXIS_TOL: f32 = 1.5;
+        let mut lines = Vec::new();
+        let mut push_axis = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            let dx = (x1 - x0).abs();
+            let dy = (y1 - y0).abs();
+            if (dy <= AXIS_TOL && dx > AXIS_TOL) || (dx <= AXIS_TOL && dy > AXIS_TOL) {
+                lines.push(RuleLine { x0, y0, x1, y1 });
+            }
+        };
+        for object in page.objects().iter() {
+            if object.object_type() != PdfPageObjectType::Path {
+                continue;
+            }
+            let Some(path) = object.as_path_object() else {
+                continue;
+            };
+            let mut cur: Option<(f32, f32)> = None;
+            let mut start: Option<(f32, f32)> = None;
+            for seg in path.segments().iter() {
+                let (x, y) = (seg.x().value, seg.y().value);
+                match seg.segment_type() {
+                    PdfPathSegmentType::MoveTo => {
+                        cur = Some((x, y));
+                        start = Some((x, y));
+                    }
+                    PdfPathSegmentType::LineTo => {
+                        if let Some((px, py)) = cur {
+                            push_axis(px, py, x, y);
+                        }
+                        cur = Some((x, y));
+                    }
+                    _ => cur = Some((x, y)),
+                }
+                if seg.is_close()
+                    && let (Some((px, py)), Some((sx, sy))) = (cur, start)
+                {
+                    push_axis(px, py, sx, sy);
+                }
+            }
+        }
+
+        Ok(PageGeometry {
+            width,
+            height,
+            chars,
+            lines,
+        })
     }
 }
 

@@ -34,6 +34,16 @@ const PNG_MIME: &str = "image/png";
 const PAGE_VISION_TOKENS: u32 = 4096;
 /// Token budget for a single embedded-image description.
 const IMAGE_VISION_TOKENS: u32 = 1024;
+/// Minimum lattice confidence to trust a reconstructed table over vision OCR.
+/// Below this, the page falls back to the vision path (and is flagged).
+const LATTICE_MIN_CONFIDENCE: f32 = 0.3;
+/// Minimum fraction of a page's glyphs that must fall inside the reconstructed
+/// grid before we treat the page as table-dominated and replace its body with
+/// the HTML. Guards against clobbering a prose page that has a small ruled box.
+const LATTICE_MIN_COVERAGE: f32 = 0.5;
+/// Minimum grid cells for a reconstruction to count as a real table (avoids
+/// turning a stray 1×1 ruled box into a "table").
+const LATTICE_MIN_CELLS: usize = 4;
 
 /// Tunables for the smart-PDF engine. Defaults mirror Jay-RAG-Tools.
 #[derive(Debug, Clone)]
@@ -94,10 +104,17 @@ pub struct PageExtract {
     pub strategy: PageStrategy,
     /// Extracted pdfium text (trimmed).
     pub text: String,
-    /// Full-page PNG render, present for ImageHeavy / Scanned / Tabular.
+    /// Full-page PNG render, present for ImageHeavy / Scanned / Tabular pages
+    /// that need vision. `None` for a Tabular page handled by deterministic
+    /// lattice reconstruction (no vision needed).
     pub page_png: Option<Vec<u8>>,
     /// Embedded image PNGs, present for Mixed pages (already size-filtered).
     pub embedded: Vec<Vec<u8>>,
+    /// Deterministic lattice reconstruction of a bordered digital table, when
+    /// the page is Tabular and a ruled grid was found with sufficient
+    /// confidence. When present, the page is rendered from this HTML — no
+    /// vision call, so cell numbers come straight from the text layer.
+    pub lattice: Option<crate::table_lattice::LatticeTable>,
 }
 
 /// An image blob extracted during processing, with a minted id, ready for the
@@ -176,11 +193,32 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
             )
         };
 
-        // Render a full-page image for the strategies that OCR the whole page.
-        let page_png = if matches!(
-            strategy,
-            PageStrategy::ImageHeavy | PageStrategy::Scanned | PageStrategy::Tabular
-        ) {
+        // Deterministic lattice reconstruction from the digital text layer
+        // (exact numbers, no vision). Driven by GEOMETRY, not the whitespace
+        // "looks tabular" heuristic — a bordered table is often classified
+        // TextOnly, so we attempt reconstruction on any page with a usable text
+        // layer (i.e. not a scanned/image-only page). Accept only a
+        // table-dominated, sufficiently-confident grid; otherwise fall through
+        // to the page's normal handling (and vision for true Tabular pages).
+        let has_text_layer =
+            meaningful >= cfg.min_chars_per_page && !matches!(strategy, PageStrategy::Scanned);
+        let lattice = if has_text_layer {
+            engine.page_geometry(pdf, sig.index).ok().and_then(|g| {
+                crate::table_lattice::reconstruct(&g.chars, &g.lines).filter(|t| {
+                    t.confidence >= LATTICE_MIN_CONFIDENCE
+                        && t.char_coverage >= LATTICE_MIN_COVERAGE
+                        && t.n_rows * t.n_cols >= LATTICE_MIN_CELLS
+                })
+            })
+        } else {
+            None
+        };
+
+        // Render a full-page image for the whole-page-OCR strategies — but skip
+        // it for a Tabular page already solved by lattice.
+        let needs_render = matches!(strategy, PageStrategy::ImageHeavy | PageStrategy::Scanned)
+            || (matches!(strategy, PageStrategy::Tabular) && lattice.is_none());
+        let page_png = if needs_render {
             engine
                 .render_page_png(pdf, sig.index, cfg.image_dpi, cfg.enhance)
                 .map(|img| img.png_bytes)
@@ -195,6 +233,7 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
             text: sig.text,
             page_png,
             embedded,
+            lattice,
         });
     }
     Ok(pages)
@@ -218,112 +257,131 @@ pub async fn render_to_document(
         let lang = Language::detect(&ex.text);
         let over_budget = vision_pages_used >= cfg.max_vision_pages;
 
-        let mut body = match ex.strategy {
-            PageStrategy::TextOnly => ex.text.clone(),
+        // A successful lattice reconstruction wins for ANY page strategy: the
+        // HTML table's numbers come straight from the text layer (no vision, no
+        // fabrication). This is what fixes a bordered table that the heuristic
+        // mislabelled TextOnly.
+        let mut body = if let Some(lat) = ex.lattice.as_ref() {
+            lat.html.clone()
+        } else {
+            match ex.strategy {
+                PageStrategy::TextOnly => ex.text.clone(),
 
-            PageStrategy::Tabular => {
-                let Some(png) = ex.page_png.as_ref() else {
-                    rendered.push(rp(&ex, ex.text.clone()));
-                    continue;
-                };
-                if over_budget {
-                    ex.text.clone()
-                } else {
-                    let prompt = get_prompts(lang).table_extraction;
-                    match describe(llm, png, prompt, PAGE_VISION_TOKENS, cfg.max_image_edge).await {
-                        Ok(desc) => {
-                            vision_pages_used += 1;
-                            desc // contains the markdown table; raw text suppressed
-                        }
-                        Err(e) => {
-                            pages_vision_failed += 1;
-                            warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
-                                "smart-pdf: table OCR failed — keeping extracted text");
-                            ex.text.clone()
-                        }
-                    }
-                }
-            }
-
-            PageStrategy::ImageHeavy | PageStrategy::Scanned => {
-                let Some(png) = ex.page_png.as_ref() else {
-                    rendered.push(rp(&ex, ex.text.clone()));
-                    continue;
-                };
-                if over_budget {
-                    ex.text.clone()
-                } else {
-                    let prompt = if cfg.high_quality {
-                        high_quality_prompt(lang, &ex.text)
-                    } else {
-                        get_prompts(lang).full_page.to_string()
+                PageStrategy::Tabular => {
+                    // No lattice (borderless / low-confidence) → vision OCR
+                    // fallback (probabilistic; flagged via vision_pages_used).
+                    let Some(png) = ex.page_png.as_ref() else {
+                        rendered.push(rp(&ex, ex.text.clone()));
+                        continue;
                     };
-                    match describe(llm, png, &prompt, PAGE_VISION_TOKENS, cfg.max_image_edge).await
-                    {
-                        Ok(desc) => {
-                            vision_pages_used += 1;
-                            // ImageHeavy keeps the readable pdfium text as a
-                            // prefix; Scanned text is unreliable, so use OCR only.
-                            if ex.strategy == PageStrategy::ImageHeavy && !ex.text.is_empty() {
-                                format!("{}\n\n{}", ex.text, desc)
-                            } else {
-                                desc
-                            }
-                        }
-                        Err(e) => {
-                            pages_vision_failed += 1;
-                            warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
-                                "smart-pdf: page OCR failed — keeping extracted text");
-                            ex.text.clone()
-                        }
-                    }
-                }
-            }
-
-            PageStrategy::Mixed => {
-                let mut body = ex.text.clone();
-                if !over_budget {
-                    let prompt = get_prompts(lang).single_image;
-                    let mut described = 0usize;
-                    for png in &ex.embedded {
-                        match describe(llm, png, prompt, IMAGE_VISION_TOKENS, cfg.max_image_edge)
+                    if over_budget {
+                        ex.text.clone()
+                    } else {
+                        let prompt = get_prompts(lang).table_extraction;
+                        match describe(llm, png, prompt, PAGE_VISION_TOKENS, cfg.max_image_edge)
                             .await
                         {
                             Ok(desc) => {
-                                // Persist the embedded image and embed its
-                                // marker before the description.
-                                let image_id = ImageId::new();
-                                let meta = crate::image::extract_image_metadata(png, PNG_MIME);
-                                images.push(ExtractedImageBlob {
-                                    image_id,
-                                    bytes: png.clone(),
-                                    mime: PNG_MIME.to_string(),
-                                    width: meta.width,
-                                    height: meta.height,
-                                    page_num: Some(ex.page_num as u32),
-                                    source: "pdf_embedded",
-                                });
-                                body.push_str("\n\n");
-                                body.push_str(&crate::semantic::image_marker(
-                                    &image_id.to_string(),
-                                ));
-                                body.push('\n');
-                                body.push_str(&desc);
-                                described += 1;
+                                vision_pages_used += 1;
+                                desc // markdown table from vision; raw text suppressed
                             }
                             Err(e) => {
                                 pages_vision_failed += 1;
-                                warn!(page = ex.page_num, error = %e,
-                                    vision_model = llm.model_name(),
-                                    "smart-pdf: embedded-image description failed — skipping image");
+                                warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
+                                    "smart-pdf: table OCR failed — keeping extracted text");
+                                ex.text.clone()
                             }
                         }
                     }
-                    if described > 0 {
-                        vision_pages_used += 1;
+                }
+
+                PageStrategy::ImageHeavy | PageStrategy::Scanned => {
+                    let Some(png) = ex.page_png.as_ref() else {
+                        rendered.push(rp(&ex, ex.text.clone()));
+                        continue;
+                    };
+                    if over_budget {
+                        ex.text.clone()
+                    } else {
+                        let prompt = if cfg.high_quality {
+                            high_quality_prompt(lang, &ex.text)
+                        } else {
+                            get_prompts(lang).full_page.to_string()
+                        };
+                        match describe(llm, png, &prompt, PAGE_VISION_TOKENS, cfg.max_image_edge)
+                            .await
+                        {
+                            Ok(desc) => {
+                                vision_pages_used += 1;
+                                // ImageHeavy keeps the readable pdfium text as a
+                                // prefix; Scanned text is unreliable, so use OCR only.
+                                if ex.strategy == PageStrategy::ImageHeavy && !ex.text.is_empty() {
+                                    format!("{}\n\n{}", ex.text, desc)
+                                } else {
+                                    desc
+                                }
+                            }
+                            Err(e) => {
+                                pages_vision_failed += 1;
+                                warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
+                                "smart-pdf: page OCR failed — keeping extracted text");
+                                ex.text.clone()
+                            }
+                        }
                     }
                 }
-                body
+
+                PageStrategy::Mixed => {
+                    let mut body = ex.text.clone();
+                    if !over_budget {
+                        let prompt = get_prompts(lang).single_image;
+                        let mut described = 0usize;
+                        for png in &ex.embedded {
+                            match describe(
+                                llm,
+                                png,
+                                prompt,
+                                IMAGE_VISION_TOKENS,
+                                cfg.max_image_edge,
+                            )
+                            .await
+                            {
+                                Ok(desc) => {
+                                    // Persist the embedded image and embed its
+                                    // marker before the description.
+                                    let image_id = ImageId::new();
+                                    let meta = crate::image::extract_image_metadata(png, PNG_MIME);
+                                    images.push(ExtractedImageBlob {
+                                        image_id,
+                                        bytes: png.clone(),
+                                        mime: PNG_MIME.to_string(),
+                                        width: meta.width,
+                                        height: meta.height,
+                                        page_num: Some(ex.page_num as u32),
+                                        source: "pdf_embedded",
+                                    });
+                                    body.push_str("\n\n");
+                                    body.push_str(&crate::semantic::image_marker(
+                                        &image_id.to_string(),
+                                    ));
+                                    body.push('\n');
+                                    body.push_str(&desc);
+                                    described += 1;
+                                }
+                                Err(e) => {
+                                    pages_vision_failed += 1;
+                                    warn!(page = ex.page_num, error = %e,
+                                    vision_model = llm.model_name(),
+                                    "smart-pdf: embedded-image description failed — skipping image");
+                                }
+                            }
+                        }
+                        if described > 0 {
+                            vision_pages_used += 1;
+                        }
+                    }
+                    body
+                }
             }
         };
 
@@ -369,12 +427,16 @@ pub async fn render_to_document(
     }
 }
 
-/// Build a `RenderedPage` carrying the page's strategy and markdown body.
+/// Build a `RenderedPage` carrying the page's strategy and markdown body, plus
+/// the lattice table (HTML + linearized) when the page was reconstructed
+/// deterministically — so the pipeline can chunk it atomically.
 fn rp(ex: &PageExtract, markdown: String) -> RenderedPage {
     RenderedPage {
         page_num: ex.page_num,
         strategy: ex.strategy,
         markdown,
+        table_html: ex.lattice.as_ref().map(|l| l.html.clone()),
+        table_linearized: ex.lattice.as_ref().map(|l| l.linearized.clone()),
     }
 }
 
@@ -447,6 +509,7 @@ mod tests {
             text: "Plenty of readable body text on this page.".into(),
             page_png: None,
             embedded: vec![],
+            lattice: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
@@ -467,6 +530,7 @@ mod tests {
             text: String::new(),
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
+            lattice: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
@@ -495,11 +559,61 @@ mod tests {
             text: "raw  tabular  text  that  should  be  replaced".into(),
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
+            lattice: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
         assert!(doc.markdown.contains("| a | b |"));
         assert!(!doc.markdown.contains("should  be  replaced"));
+    }
+
+    #[tokio::test]
+    async fn tabular_page_uses_lattice_html_without_vision() {
+        // A Tabular page with a reconstructed lattice must use the deterministic
+        // HTML — no vision call, no page-render blob — so numbers stay exact.
+        let llm = StubVision {
+            reply: "VISION SHOULD NOT RUN".into(),
+            supports: true,
+        };
+        let lat = crate::table_lattice::LatticeTable {
+            html: "<table><tr><td>ก</td><td>๑๒๓</td></tr></table>".into(),
+            linearized: "ก | ๑๒๓".into(),
+            confidence: 1.0,
+            char_coverage: 1.0,
+            n_rows: 1,
+            n_cols: 2,
+            x_min: 0.0,
+            x_max: 200.0,
+            y_min: 0.0,
+            y_max: 100.0,
+        };
+        let pages = vec![PageExtract {
+            page_num: 1,
+            strategy: PageStrategy::Tabular,
+            text: "raw tabular text".into(),
+            page_png: None,
+            embedded: vec![],
+            lattice: Some(lat),
+        }];
+        let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
+        assert_eq!(doc.vision_pages_used, 0, "lattice must not call vision");
+        assert!(
+            doc.markdown.contains("<table>"),
+            "html missing: {}",
+            doc.markdown
+        );
+        assert!(doc.markdown.contains("๑๒๓"));
+        assert!(!doc.markdown.contains("VISION SHOULD NOT RUN"));
+        assert!(
+            doc.images.is_empty(),
+            "no page-render blob for lattice tables"
+        );
+        // The page carries the table html + linearized embedding text.
+        assert_eq!(
+            doc.pages[0].table_html.as_deref(),
+            Some("<table><tr><td>ก</td><td>๑๒๓</td></tr></table>")
+        );
+        assert_eq!(doc.pages[0].table_linearized.as_deref(), Some("ก | ๑๒๓"));
     }
 
     #[tokio::test]
@@ -518,6 +632,7 @@ mod tests {
             text: "fallback body text".into(),
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
+            lattice: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &c).await;
         assert_eq!(doc.vision_pages_used, 0);

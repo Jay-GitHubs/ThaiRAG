@@ -497,6 +497,12 @@ pub struct ChunkMetadata {
     /// Original content before enrichment (for display in search results)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_content: Option<String>,
+    /// Override text used for embedding/search in place of `content`. Lets a
+    /// chunk carry a faithful-but-noisy payload (e.g. an HTML table) in
+    /// `content` while embedding a clean, retrievable representation (e.g.
+    /// row-linearized table text). When present, the index embeds this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_text: Option<String>,
     /// Content type of this chunk (text, image, table, mixed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<DocumentContentType>,

@@ -710,6 +710,31 @@ fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Render the document's converted text for the citation viewer: prose stays as
+/// plain (escaped) text shown pre-wrapped, while reconstructed `<table>` blocks
+/// render as real tables. Sanitised with a strict allowlist (table tags +
+/// colspan/rowspan only) so any HTML in the *document's own text* — e.g. a
+/// stray `<script>` from the source — is stripped. Guaranteed-safe by allowlist
+/// rather than by trusting the table's origin.
+fn render_citation_html(content: &str) -> String {
+    ammonia::Builder::default()
+        .tags(std::collections::HashSet::from([
+            "table", "thead", "tbody", "tr", "td", "th",
+        ]))
+        .tag_attributes(std::collections::HashMap::from([
+            (
+                "td",
+                std::collections::HashSet::from(["colspan", "rowspan"]),
+            ),
+            (
+                "th",
+                std::collections::HashSet::from(["colspan", "rowspan"]),
+            ),
+        ]))
+        .clean(content)
+        .to_string()
+}
+
 #[derive(serde::Deserialize)]
 pub struct CitationViewQuery {
     token: String,
@@ -797,6 +822,8 @@ max-width:820px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}}\
 h1{{font-size:1.4rem;border-bottom:1px solid #e0e0e0;padding-bottom:.5rem}}\
 .src{{white-space:pre-wrap;word-wrap:break-word;background:#fafafa;\
 border:1px solid #eee;border-radius:8px;padding:1rem;font-size:.95rem}}\
+.src table{{border-collapse:collapse;margin:.5rem 0;white-space:normal}}\
+.src td,.src th{{border:1px solid #ccc;padding:.3rem .5rem;vertical-align:top}}\
 .prov{{background:#eef4ff;border:1px solid #cfe0ff;border-radius:8px;\
 padding:.5rem .75rem;margin-bottom:1rem;font-size:.9rem;color:#1a3a6b}}\
 .meta{{color:#888;font-size:.8rem;margin-bottom:1rem}}</style></head>\
@@ -804,7 +831,7 @@ padding:.5rem .75rem;margin-bottom:1rem;font-size:.9rem;color:#1a3a6b}}\
 {provenance}<div class=\"src\">{content}</div></body></html>",
         title = escape_html(&doc.title),
         doc_id = escape_html(&doc.id.0.to_string()),
-        content = escape_html(&content),
+        content = render_citation_html(&content),
     );
 
     Html(page).into_response()
@@ -2089,6 +2116,23 @@ pub async fn summarize_session(
 mod citation_tests {
     use super::*;
     use thairag_core::types::{Citation, RetrievedChunkMeta};
+
+    #[test]
+    fn citation_html_renders_tables_but_strips_scripts() {
+        let content = "Intro prose.\n\
+            <table><tr><td colspan=\"2\">หัวข้อ</td></tr>\
+            <tr><td>ก</td><td>๑๒๓</td></tr></table>\n\
+            <script>alert('xss')</script> tail";
+        let out = render_citation_html(content);
+        // Reconstructed table survives with its span + Thai numerals intact.
+        assert!(out.contains("<table>"), "table dropped: {out}");
+        assert!(out.contains("colspan=\"2\""), "span dropped: {out}");
+        assert!(out.contains("๑๒๓"));
+        // Any HTML from the document's own text is stripped (no script tag).
+        assert!(!out.contains("<script"), "script survived: {out}");
+        // Prose text is preserved.
+        assert!(out.contains("Intro prose."));
+    }
 
     fn chunk(id: &str, preview: &str, score: f32, rank: u32) -> RetrievedChunkMeta {
         RetrievedChunkMeta {

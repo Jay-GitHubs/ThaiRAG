@@ -87,6 +87,64 @@ fn build_ai_provenance(
     }
 }
 
+/// Build one atomic chunk for a lattice-reconstructed table page: the HTML is
+/// the payload the LLM reads (numbers exact, from the text layer), while the
+/// row-linearized form is the embedding text so retrieval matches clean words
+/// rather than HTML tags. Returns `None` for non-table pages.
+fn lattice_table_chunk(
+    page: &crate::semantic::RenderedPage,
+    doc_id: DocId,
+    workspace_id: WorkspaceId,
+    chunk_index: usize,
+) -> Option<DocumentChunk> {
+    let html = page.table_html.as_ref()?;
+    let strategy = crate::semantic::PageStrategy::Tabular.as_str().to_string();
+    Some(DocumentChunk {
+        chunk_id: ChunkId::new(),
+        doc_id,
+        workspace_id,
+        content: html.clone(),
+        chunk_index,
+        embedding: None,
+        metadata: Some(ChunkMetadata {
+            content_type: Some(DocumentContentType::Table),
+            chunk_type: Some(strategy.clone()),
+            page_strategy: Some(strategy),
+            mime_type: Some(PDF_MIME.to_string()),
+            page_numbers: Some(vec![page.page_num]),
+            embed_text: page.table_linearized.clone(),
+            ..Default::default()
+        }),
+    })
+}
+
+/// Build one atomic chunk for a structured office (DOCX/XLSX) table: faithful
+/// HTML payload + row-linearized embedding text. Same payload/embed split as
+/// the PDF lattice path.
+fn office_table_chunk(
+    table: &crate::office_tables::OfficeTable,
+    doc_id: DocId,
+    workspace_id: WorkspaceId,
+    chunk_index: usize,
+    mime_type: &str,
+) -> DocumentChunk {
+    DocumentChunk {
+        chunk_id: ChunkId::new(),
+        doc_id,
+        workspace_id,
+        content: table.html.clone(),
+        chunk_index,
+        embedding: None,
+        metadata: Some(ChunkMetadata {
+            content_type: Some(DocumentContentType::Table),
+            chunk_type: Some("office_table".to_string()),
+            mime_type: Some(mime_type.to_string()),
+            embed_text: Some(table.linearized.clone()),
+            ..Default::default()
+        }),
+    }
+}
+
 /// Orchestrates: convert raw bytes → chunk text → produce DocumentChunks.
 /// When AI preprocessing is enabled, delegates to the AI agent team.
 /// Supports multi-modal content: images (via LLM vision) and table extraction.
@@ -836,50 +894,75 @@ impl DocumentPipeline {
         // / content-type / image-blob metadata below. Otherwise chunk each page
         // mechanically.
         let (chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
-            let outcome = ai
-                .chunk_extracted(
-                    &doc.markdown,
-                    PDF_MIME,
-                    doc_id,
-                    workspace_id,
-                    &None,
-                    overrides.max_chunk_size,
-                )
-                .await?;
-            let crate::ai::pipeline::AiChunkOutcome {
-                mut chunks,
-                agents,
-                mechanical_fallback,
-            } = outcome;
-            for chunk in &mut chunks {
-                let first_page = chunk
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.page_numbers.as_ref())
-                    .and_then(|p| p.first().copied());
-                let page = first_page.and_then(|pn| doc.pages.iter().find(|p| p.page_num == pn));
-                let meta = chunk.metadata.get_or_insert_with(Default::default);
-                meta.mime_type = Some(PDF_MIME.to_string());
-                if let Some(page) = page {
-                    let content_type = match page.strategy {
-                        PageStrategy::Tabular => DocumentContentType::Table,
-                        PageStrategy::ImageHeavy | PageStrategy::Scanned => {
-                            DocumentContentType::Image
+            // Lattice tables become atomic chunks (below); the AI chunker only
+            // sees NON-table pages, so it can never reshape — and thereby
+            // re-hallucinate — the deterministic HTML tables.
+            let non_table: Vec<crate::semantic::RenderedPage> = doc
+                .pages
+                .iter()
+                .filter(|p| p.table_html.is_none())
+                .cloned()
+                .collect();
+            let mut chunks: Vec<DocumentChunk> = Vec::new();
+            let mut agents = Vec::new();
+            let mut mechanical_fallback = false;
+            if !non_table.is_empty() {
+                let prose_md = crate::semantic::assemble_document_markdown("", non_table);
+                let outcome = ai
+                    .chunk_extracted(
+                        &prose_md,
+                        PDF_MIME,
+                        doc_id,
+                        workspace_id,
+                        &None,
+                        overrides.max_chunk_size,
+                    )
+                    .await?;
+                let crate::ai::pipeline::AiChunkOutcome {
+                    chunks: mut c,
+                    agents: a,
+                    mechanical_fallback: mf,
+                } = outcome;
+                for chunk in &mut c {
+                    let first_page = chunk
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.page_numbers.as_ref())
+                        .and_then(|p| p.first().copied());
+                    let page =
+                        first_page.and_then(|pn| doc.pages.iter().find(|p| p.page_num == pn));
+                    let meta = chunk.metadata.get_or_insert_with(Default::default);
+                    meta.mime_type = Some(PDF_MIME.to_string());
+                    if let Some(page) = page {
+                        let content_type = match page.strategy {
+                            PageStrategy::Tabular => DocumentContentType::Table,
+                            PageStrategy::ImageHeavy | PageStrategy::Scanned => {
+                                DocumentContentType::Image
+                            }
+                            PageStrategy::Mixed => DocumentContentType::Mixed,
+                            PageStrategy::TextOnly => DocumentContentType::Text,
+                        };
+                        let strategy = page.strategy.as_str().to_string();
+                        meta.content_type = Some(content_type);
+                        meta.page_strategy = Some(strategy.clone());
+                        if meta.chunk_type.is_none() {
+                            meta.chunk_type = Some(strategy);
                         }
-                        PageStrategy::Mixed => DocumentContentType::Mixed,
-                        PageStrategy::TextOnly => DocumentContentType::Text,
-                    };
-                    let strategy = page.strategy.as_str().to_string();
-                    meta.content_type = Some(content_type);
-                    meta.page_strategy = Some(strategy.clone());
-                    if meta.chunk_type.is_none() {
-                        meta.chunk_type = Some(strategy);
+                        meta.image_blob_id = doc
+                            .images
+                            .iter()
+                            .find(|b| b.page_num == Some(page.page_num as u32))
+                            .map(|b| b.image_id);
                     }
-                    meta.image_blob_id = doc
-                        .images
-                        .iter()
-                        .find(|b| b.page_num == Some(page.page_num as u32))
-                        .map(|b| b.image_id);
+                }
+                chunks.append(&mut c);
+                agents = a;
+                mechanical_fallback = mf;
+            }
+            // Append one atomic chunk per lattice-reconstructed table page.
+            for page in &doc.pages {
+                if let Some(tc) = lattice_table_chunk(page, doc_id, workspace_id, chunks.len()) {
+                    chunks.push(tc);
                 }
             }
             let prov = build_ai_provenance(
@@ -895,6 +978,13 @@ impl DocumentPipeline {
             let mut chunks = Vec::new();
             let mut chunk_index = 0usize;
             for page in &doc.pages {
+                // Lattice-reconstructed table → one atomic HTML chunk; never run
+                // the chunker over it (would split the table mid-tag).
+                if let Some(tc) = lattice_table_chunk(page, doc_id, workspace_id, chunk_index) {
+                    chunks.push(tc);
+                    chunk_index += 1;
+                    continue;
+                }
                 let body = page.markdown.trim();
                 if body.is_empty() {
                     continue;
@@ -965,7 +1055,21 @@ impl DocumentPipeline {
     ) -> Result<ProcessedDocument> {
         use thairag_core::types::ImageId;
 
-        let text = self.converter.convert(raw, mime_type)?;
+        // Structured table extraction for DOCX/XLSX: faithful HTML tables
+        // (merged cells preserved) instead of lossy markdown. Prose feeds the
+        // chunker; tables become atomic chunks; converted_text shows the HTML.
+        let office = match mime_type {
+            DOCX_MIME => crate::office_tables::convert_docx_structured(raw).ok(),
+            XLSX_MIME => crate::office_tables::convert_xlsx_structured(raw).ok(),
+            _ => None,
+        };
+        // What the chunker sees: prose only for office docs (so the AI chunker
+        // never reshapes — and re-mangles — the HTML tables); the full
+        // converter output otherwise (HTML, CSV, …).
+        let text = match &office {
+            Some(o) => o.prose.clone(),
+            None => self.converter.convert(raw, mime_type)?,
+        };
         let (raw_images, source): (Vec<crate::office_media::RawImage>, &'static str) =
             match mime_type {
                 DOCX_MIME => (
@@ -987,21 +1091,27 @@ impl DocumentPipeline {
         // intelligence layer (analyzer → smart chunker → enricher); otherwise
         // chunk mechanically. Embedded images are appended as image chunks below.
         let (mut chunks, provenance) = if let Some(ai) = &self.ai_pipeline {
-            let outcome = ai
-                .chunk_extracted(
-                    &text,
-                    mime_type,
-                    doc_id,
-                    workspace_id,
-                    &None,
-                    overrides.max_chunk_size,
-                )
-                .await?;
-            let crate::ai::pipeline::AiChunkOutcome {
-                chunks,
-                agents,
-                mechanical_fallback,
-            } = outcome;
+            // Skip the chunker entirely for an all-table office doc (no prose).
+            let (chunks, agents, mechanical_fallback) = if text.trim().is_empty() {
+                (Vec::new(), Vec::new(), false)
+            } else {
+                let outcome = ai
+                    .chunk_extracted(
+                        &text,
+                        mime_type,
+                        doc_id,
+                        workspace_id,
+                        &None,
+                        overrides.max_chunk_size,
+                    )
+                    .await?;
+                let crate::ai::pipeline::AiChunkOutcome {
+                    chunks,
+                    agents,
+                    mechanical_fallback,
+                } = outcome;
+                (chunks, agents, mechanical_fallback)
+            };
             let prov = build_ai_provenance(
                 "embedded-media + AI agents",
                 agents,
@@ -1010,7 +1120,11 @@ impl DocumentPipeline {
             );
             (chunks, Some(prov))
         } else {
-            let chunks = self.chunk_with_strategy(&text, doc_id, workspace_id, overrides);
+            let chunks = if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                self.chunk_with_strategy(&text, doc_id, workspace_id, overrides)
+            };
             let prov = thairag_core::models::ProcessingProvenance {
                 path: "embedded-media (mechanical)".to_string(),
                 agents: Vec::new(),
@@ -1019,7 +1133,29 @@ impl DocumentPipeline {
             };
             (chunks, Some(prov))
         };
-        let mut markdown = text;
+
+        // Atomic table chunks for DOCX/XLSX: faithful HTML payload + linearized
+        // embedding text. The AI chunker never sees these, so it can't reshape
+        // the merged-cell structure.
+        if let Some(o) = &office {
+            let base = chunks.len();
+            for (i, t) in o.tables.iter().enumerate() {
+                chunks.push(office_table_chunk(
+                    t,
+                    doc_id,
+                    workspace_id,
+                    base + i,
+                    mime_type,
+                ));
+            }
+        }
+
+        // converted_text: office markdown (HTML tables inline) when available,
+        // else the converter output.
+        let mut markdown = match &office {
+            Some(o) => o.markdown.clone(),
+            None => text,
+        };
         let mut images = Vec::new();
         let mut chunk_index = chunks.len();
 

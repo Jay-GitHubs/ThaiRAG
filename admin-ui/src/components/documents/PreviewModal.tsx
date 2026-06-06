@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Modal, Spin, Tag, Space, Typography, Empty, theme } from 'antd';
 import { FileImageOutlined, TableOutlined } from '@ant-design/icons';
+import DOMPurify from 'dompurify';
 import { getDocumentContent } from '../../api/documents';
 import type { Document, DocumentContentResponse } from '../../api/types';
+
+// Reconstructed tables are stored as HTML inside the converted text. Render
+// them, but strip everything else (incl. any HTML in the document's own text)
+// via a strict allowlist — guaranteed-safe regardless of the table's origin.
+function sanitizeDocHtml(text: string): string {
+  return DOMPurify.sanitize(text, {
+    ALLOWED_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th'],
+    ALLOWED_ATTR: ['colspan', 'rowspan'],
+  });
+}
 
 interface Props {
   workspaceId: string;
@@ -47,7 +58,10 @@ export function PreviewModal({ workspaceId, doc, open, onClose }: Props) {
             </Tag>
             <Tag>{doc.mime_type}</Tag>
           </Space>
+          <style>{`.doc-preview table{border-collapse:collapse;margin:.5rem 0;white-space:normal}
+.doc-preview td,.doc-preview th{border:1px solid ${themeToken.colorBorderSecondary};padding:.3rem .5rem;vertical-align:top}`}</style>
           <div
+            className="doc-preview"
             style={{
               maxHeight: 500,
               overflow: 'auto',
@@ -62,9 +76,9 @@ export function PreviewModal({ workspaceId, doc, open, onClose }: Props) {
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
             }}
-          >
-            {content.converted_text}
-          </div>
+            // Sanitised: only table tags survive; prose shows as pre-wrapped text.
+            dangerouslySetInnerHTML={{ __html: sanitizeDocHtml(content.converted_text) }}
+          />
         </>
       ) : (
         <Empty description={<Typography.Text type="secondary">No converted content available</Typography.Text>} />
