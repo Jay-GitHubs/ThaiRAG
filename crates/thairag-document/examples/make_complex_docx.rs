@@ -42,17 +42,16 @@ fn main() {
         ]),
     ]);
 
-    let docx = Docx::new()
-        .add_paragraph(
-            Paragraph::new()
-                .add_run(Run::new().add_text("รายงานทดสอบตารางซับซ้อน / Complex Table Test")),
-        )
-        .add_table(table)
-        .add_paragraph(
-            Paragraph::new().add_run(
-                Run::new().add_text("สรุป: ตารางด้านบนมีเซลล์ผสาน / Summary: the table above has merged cells."),
-            ),
-        );
+    let docx =
+        Docx::new()
+            .add_paragraph(
+                Paragraph::new()
+                    .add_run(Run::new().add_text("รายงานทดสอบตารางซับซ้อน / Complex Table Test")),
+            )
+            .add_table(table)
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text(
+                "สรุป: ตารางด้านบนมีเซลล์ผสาน / Summary: the table above has merged cells.",
+            )));
 
     let mut buf = Cursor::new(Vec::new());
     docx.build().pack(&mut buf).expect("pack docx");
