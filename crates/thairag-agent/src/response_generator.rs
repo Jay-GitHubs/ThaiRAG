@@ -22,6 +22,10 @@ Context:\n{{context_text}}";
 /// Generates citation-aware responses using curated context.
 pub struct ResponseGenerator {
     llm: Arc<dyn LlmProvider>,
+    /// Optional dedicated vision LLM for answer-time image input
+    /// (`chat_pipeline.chat_vision_llm`). When unset, vision requests reuse
+    /// [`llm`], which only sees images if it is itself vision-capable.
+    vision_llm: Option<Arc<dyn LlmProvider>>,
     prompts: Arc<PromptRegistry>,
 }
 
@@ -29,12 +33,38 @@ impl ResponseGenerator {
     pub fn new(llm: Arc<dyn LlmProvider>) -> Self {
         Self {
             llm,
+            vision_llm: None,
             prompts: Arc::new(PromptRegistry::new()),
         }
     }
 
     pub fn new_with_prompts(llm: Arc<dyn LlmProvider>, prompts: Arc<PromptRegistry>) -> Self {
-        Self { llm, prompts }
+        Self {
+            llm,
+            vision_llm: None,
+            prompts,
+        }
+    }
+
+    /// Attach a dedicated vision LLM used for answer-time image input. When
+    /// `None`, the answer path falls back to the main response-generator LLM.
+    pub fn with_vision_llm(mut self, vision_llm: Option<Arc<dyn LlmProvider>>) -> Self {
+        self.vision_llm = vision_llm;
+        self
+    }
+
+    /// The provider used for answer-time vision: the dedicated vision LLM if
+    /// configured, otherwise the main response-generator LLM.
+    fn vision_provider(&self) -> &Arc<dyn LlmProvider> {
+        self.vision_llm.as_ref().unwrap_or(&self.llm)
+    }
+
+    /// Whether the answer path can consume images — true if a dedicated vision
+    /// LLM is configured, or the main LLM is itself vision-capable. Callers use
+    /// this to gate image hydration so pixels are only fetched when a model can
+    /// actually read them.
+    pub fn supports_vision(&self) -> bool {
+        self.vision_provider().supports_vision()
     }
 
     pub async fn generate(
@@ -54,7 +84,9 @@ impl ResponseGenerator {
                     images: m.images.clone(),
                 })
                 .collect();
-            self.llm.generate_vision(&vision_msgs, max_tokens).await
+            self.vision_provider()
+                .generate_vision(&vision_msgs, max_tokens)
+                .await
         } else {
             self.llm.generate(&augmented, max_tokens).await
         }
@@ -104,7 +136,9 @@ impl ResponseGenerator {
                     images: m.images.clone(),
                 })
                 .collect();
-            self.llm.generate_vision(&vision_msgs, max_tokens).await
+            self.vision_provider()
+                .generate_vision(&vision_msgs, max_tokens)
+                .await
         } else {
             self.llm.generate(&augmented, max_tokens).await
         }
@@ -209,15 +243,15 @@ impl ResponseGenerator {
         }];
         augmented.extend_from_slice(messages);
 
-        // PR-δ multimodal retrieval: when the answer LLM is vision-capable,
-        // attach the hydrated source images from retrieved chunks to the latest
-        // message so the model reads the original pixels — not just the
-        // ingest-time caption text already inlined as chunk content. For
-        // text-only LLMs (default `supports_vision() == false`) this is a no-op,
-        // and the chunks won't carry images anyway (chat_pipeline gates hydration
-        // on the same check). Streaming uses the text path (no vision stream),
-        // so attached images are simply ignored there.
-        if self.llm.supports_vision() {
+        // PR-δ multimodal retrieval: when the answer path is vision-capable
+        // (dedicated `chat_vision_llm` or a vision-capable main LLM), attach the
+        // hydrated source images from retrieved chunks to the latest message so
+        // the model reads the original pixels — not just the ingest-time caption
+        // text already inlined as chunk content. For text-only answer paths this
+        // is a no-op, and the chunks won't carry images anyway (chat_pipeline
+        // gates hydration on the same check). Streaming uses the text path (no
+        // vision stream), so attached images are simply ignored there.
+        if self.supports_vision() {
             let context_images: Vec<ImageContent> = context
                 .chunks
                 .iter()
@@ -231,5 +265,162 @@ impl ResponseGenerator {
         }
 
         augmented
+    }
+}
+
+#[cfg(test)]
+mod vision_routing_tests {
+    use super::*;
+    use crate::context_curator::{CuratedChunk, CuratedContext};
+    use crate::query_analyzer::{Complexity, QueryAnalysis, QueryLanguage};
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+    use thairag_core::error::Result;
+    use thairag_core::types::{
+        ChatMessage, ChunkId, DocId, ImageContent, ImageId, LlmResponse, LlmUsage, QueryIntent,
+        VisionMessage,
+    };
+
+    struct MockLlm {
+        name: &'static str,
+        vision: bool,
+        last_call: Mutex<Option<&'static str>>,
+    }
+
+    impl MockLlm {
+        fn new(name: &'static str, vision: bool) -> Self {
+            Self {
+                name,
+                vision,
+                last_call: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for MockLlm {
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<LlmResponse> {
+            *self.last_call.lock().unwrap() = Some("generate");
+            Ok(LlmResponse {
+                content: format!("{}:text", self.name),
+                usage: LlmUsage::default(),
+            })
+        }
+
+        async fn generate_vision(
+            &self,
+            _messages: &[VisionMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<LlmResponse> {
+            *self.last_call.lock().unwrap() = Some("vision");
+            Ok(LlmResponse {
+                content: format!("{}:vision", self.name),
+                usage: LlmUsage::default(),
+            })
+        }
+
+        fn model_name(&self) -> &str {
+            self.name
+        }
+
+        fn supports_vision(&self) -> bool {
+            self.vision
+        }
+    }
+
+    fn analysis() -> QueryAnalysis {
+        QueryAnalysis {
+            language: QueryLanguage::English,
+            intent: QueryIntent::Retrieval,
+            complexity: Complexity::Simple,
+            topics: vec![],
+            needs_context: true,
+        }
+    }
+
+    fn ctx_with_image() -> CuratedContext {
+        CuratedContext {
+            chunks: vec![CuratedChunk {
+                index: 0,
+                content: "a chunk".into(),
+                relevance_score: 1.0,
+                source_doc_id: DocId::new(),
+                source_chunk_id: ChunkId::new(),
+                source_doc_title: None,
+                image_blob_id: Some(ImageId::new()),
+                images: vec![ImageContent {
+                    base64_data: "AAAA".into(),
+                    media_type: "image/png".into(),
+                }],
+            }],
+            total_tokens_est: 10,
+        }
+    }
+
+    fn user_msg(text: &str) -> Vec<ChatMessage> {
+        vec![ChatMessage {
+            role: "user".into(),
+            content: text.into(),
+            images: vec![],
+        }]
+    }
+
+    #[test]
+    fn supports_vision_false_when_text_only_and_no_dedicated() {
+        let rg = ResponseGenerator::new(Arc::new(MockLlm::new("main", false)));
+        assert!(!rg.supports_vision());
+    }
+
+    #[test]
+    fn supports_vision_reflects_main_when_no_dedicated() {
+        let rg = ResponseGenerator::new(Arc::new(MockLlm::new("main", true)));
+        assert!(rg.supports_vision());
+    }
+
+    #[test]
+    fn dedicated_vision_makes_text_only_main_vision_capable() {
+        let rg = ResponseGenerator::new(Arc::new(MockLlm::new("main", false))).with_vision_llm(
+            Some(Arc::new(MockLlm::new("vis", true)) as Arc<dyn LlmProvider>),
+        );
+        assert!(rg.supports_vision());
+    }
+
+    #[tokio::test]
+    async fn dedicated_vision_llm_handles_image_answer() {
+        // Main is text-only; the dedicated vision LLM makes the answer path
+        // vision-capable, so images are attached and routed to it.
+        let main = Arc::new(MockLlm::new("main", false));
+        let vis = Arc::new(MockLlm::new("vis", true));
+        let rg = ResponseGenerator::new(main.clone() as Arc<dyn LlmProvider>)
+            .with_vision_llm(Some(vis.clone() as Arc<dyn LlmProvider>));
+
+        let resp = rg
+            .generate(&analysis(), &ctx_with_image(), &user_msg("see this"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.content, "vis:vision");
+        assert_eq!(*vis.last_call.lock().unwrap(), Some("vision"));
+        assert_eq!(*main.last_call.lock().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn text_only_path_skips_images_and_uses_main() {
+        // No dedicated vision LLM and a text-only main → images are never
+        // attached, so the text generate path is used.
+        let main = Arc::new(MockLlm::new("main", false));
+        let rg = ResponseGenerator::new(main.clone() as Arc<dyn LlmProvider>);
+
+        let resp = rg
+            .generate(&analysis(), &ctx_with_image(), &user_msg("hi"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(resp.content, "main:text");
+        assert_eq!(*main.last_call.lock().unwrap(), Some("generate"));
     }
 }

@@ -8,8 +8,8 @@ import { PresetsCard } from '../components/settings/PresetsCard';
 import { PromptsTab } from '../components/settings/PromptsTab';
 import { ProvidersTab } from '../components/settings/ProvidersTab';
 import { ScopeSelector } from '../components/settings/ScopeSelector';
+import { SharedCommonTab } from '../components/settings/SharedCommonTab';
 import { SnapshotsCard } from '../components/settings/SnapshotsCard';
-import { VaultTab } from '../components/settings/VaultTab';
 import { VectorDbTab } from '../components/settings/VectorDbTab';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
@@ -36,7 +36,7 @@ export function SettingsPage() {
           defaultActiveKey="presets"
           items={[
             { key: 'presets', label: 'Quick Setup', children: <div data-tour="settings-presets"><PresetsCard /></div> },
-            { key: 'vault', label: 'API Keys & Profiles', children: <VaultTab /> },
+            { key: 'shared', label: 'Shared / Common', children: <SharedCommonTab /> },
             { key: 'providers', label: 'Chat & Response Pipeline', children: <ProvidersTab scope={scope} /> },
             { key: 'documents', label: 'Document Processing', children: <DocumentProcessingTab scope={scope} /> },
             { key: 'vectordb', label: 'Vector Database', children: <VectorDbTab /> },

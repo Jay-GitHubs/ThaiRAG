@@ -152,8 +152,10 @@ pub struct ChatPipeline {
     /// Optional resolver: DocId → document title (for richer LLM context).
     doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
     /// Optional resolver: ImageId → image bytes (PR-δ multimodal retrieval).
-    /// When set AND the answer LLM `supports_vision()`, retrieved chunks that
-    /// carry an `image_blob_id` get their source image fed to the answer LLM.
+    /// When set AND the answer path `supports_vision()` (dedicated
+    /// `chat_vision_llm` or a vision-capable response-generator LLM), retrieved
+    /// chunks that carry an `image_blob_id` get their source image fed to the
+    /// answer LLM.
     image_resolver: Option<Arc<dyn Fn(ImageId) -> Option<ImageContent> + Send + Sync>>,
     /// Optional plugin engine; when set, every search call applies the
     /// registered SearchPlugins' pre/post hooks.
@@ -2564,7 +2566,7 @@ impl ChatPipeline {
         // the source image bytes for chunks derived from images (PDF page renders,
         // scanned pages, embedded/uploaded images) so the model reads the original
         // pixels — not just the ingest-time text caption. No-op for text-only LLMs.
-        if self.main_llm.supports_vision()
+        if self.response_generator.supports_vision()
             && let Some(ref resolver) = self.image_resolver
         {
             ctx.hydrate_images(resolver.as_ref(), MAX_VISION_IMAGES_PER_ANSWER);

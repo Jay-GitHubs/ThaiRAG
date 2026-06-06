@@ -141,6 +141,51 @@ pub fn resolve_all_settings(
     merged
 }
 
+/// Whether a setting's effective value comes from the selected scope itself
+/// (an override) or was inherited from a parent scope / global default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingOrigin {
+    /// A row exists at the exact scope being viewed (e.g. the org sets its own).
+    Overridden,
+    /// No row at this scope; value came from a parent scope or the global default.
+    Inherited,
+}
+
+impl SettingOrigin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SettingOrigin::Overridden => "overridden",
+            SettingOrigin::Inherited => "inherited",
+        }
+    }
+}
+
+/// Resolve a single setting and report whether the value is set at the requested
+/// scope (`Overridden`) or inherited from a parent / global default (`Inherited`).
+///
+/// Used to drive the admin UI origin badges (`Overridden for {Org}` vs
+/// `Inherited from Global`) and the "Reset to Global" affordance. Returns `None`
+/// only when no scope in the chain — including global — has a stored override; in
+/// that case the caller falls back to the static config value.
+pub fn resolve_setting_with_origin(
+    store: &dyn KmStoreTrait,
+    key: &str,
+    scope: &SettingsScope,
+) -> Option<(String, SettingOrigin)> {
+    let (self_type, self_id) = scope.as_pair();
+    for (scope_type, scope_id) in scope.inheritance_chain() {
+        if let Some(val) = store.get_scoped_setting(key, scope_type, &scope_id) {
+            let origin = if scope_type == self_type && scope_id == self_id {
+                SettingOrigin::Overridden
+            } else {
+                SettingOrigin::Inherited
+            };
+            return Some((val, origin));
+        }
+    }
+    None
+}
+
 /// Check whether two `PermissionScope` values target the same entity.
 pub fn scopes_match(a: &PermissionScope, b: &PermissionScope) -> bool {
     match (a, b) {
@@ -1224,5 +1269,58 @@ pub fn create_km_store(db_url: &str, max_connections: u32) -> std::sync::Arc<dyn
         std::sync::Arc::new(store)
     } else {
         std::sync::Arc::new(sqlite::SqliteKmStore::new(db_url).expect("SQLite init failed"))
+    }
+}
+
+#[cfg(test)]
+mod scope_origin_tests {
+    use super::*;
+    use crate::store::memory::MemoryKmStore;
+    use thairag_core::types::OrgId;
+
+    fn org_scope() -> (OrgId, SettingsScope) {
+        let org = OrgId::new();
+        (org, SettingsScope::Org(org))
+    }
+
+    #[test]
+    fn unset_key_resolves_to_none() {
+        let store = MemoryKmStore::new();
+        let (_, scope) = org_scope();
+        assert!(resolve_setting_with_origin(&store, "k", &scope).is_none());
+    }
+
+    #[test]
+    fn parent_value_is_inherited_at_child_scope() {
+        let store = MemoryKmStore::new();
+        let (_, scope) = org_scope();
+        store.set_scoped_setting("k", "global", "", "g");
+        let (val, origin) = resolve_setting_with_origin(&store, "k", &scope).unwrap();
+        assert_eq!(val, "g");
+        assert_eq!(origin, SettingOrigin::Inherited);
+    }
+
+    #[test]
+    fn value_set_at_scope_is_overridden() {
+        let store = MemoryKmStore::new();
+        let (org, scope) = org_scope();
+        store.set_scoped_setting("k", "global", "", "g");
+        store.set_scoped_setting("k", "org", &org.0.to_string(), "o");
+        let (val, origin) = resolve_setting_with_origin(&store, "k", &scope).unwrap();
+        // Most-specific wins, and a row at the queried scope reads as an override.
+        assert_eq!(val, "o");
+        assert_eq!(origin, SettingOrigin::Overridden);
+    }
+
+    #[test]
+    fn reset_clears_override_and_falls_back_to_parent() {
+        let store = MemoryKmStore::new();
+        let (org, scope) = org_scope();
+        store.set_scoped_setting("k", "global", "", "g");
+        store.set_scoped_setting("k", "org", &org.0.to_string(), "o");
+        store.delete_scoped_setting("k", "org", &org.0.to_string());
+        let (val, origin) = resolve_setting_with_origin(&store, "k", &scope).unwrap();
+        assert_eq!(val, "g");
+        assert_eq!(origin, SettingOrigin::Inherited);
     }
 }

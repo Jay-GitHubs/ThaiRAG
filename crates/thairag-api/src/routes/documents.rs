@@ -308,33 +308,27 @@ async fn process_document_inner_impl(
         }
     }
 
-    // Resolve per-workspace chunk overrides (max_chunk_size / chunk_overlap)
-    // from scoped settings, walking workspace → dept → org → global. Unset
-    // keys leave the override `None`, so the pipeline falls back to config.
-    let chunk_overrides = {
-        let scope = state.resolve_scope_for_workspace(workspace_id);
-        let store = state.km_store.as_ref();
-        thairag_document::pipeline::ChunkOverrides {
-            max_chunk_size: crate::store::resolve_setting(store, "document.max_chunk_size", &scope)
-                .and_then(|v| v.parse().ok()),
-            chunk_overlap: crate::store::resolve_setting(store, "document.chunk_overlap", &scope)
-                .and_then(|v| v.parse().ok()),
-        }
-    };
+    // Resolve the document pipeline for this workspace's scope (walking
+    // workspace → dept → org → global). An org/dept/workspace that overrides
+    // chunking, PDF/OCR, or AI-preprocessing config gets a pipeline built from
+    // its effective config; scopes without overrides share the global pipeline.
+    // The scoped pipeline already bakes in chunk sizing, so no per-call
+    // `ChunkOverrides` are needed (default = transparent no-op).
+    let scope = state.resolve_scope_for_workspace(workspace_id);
+    let pipeline = state.get_scoped_document_pipeline(&scope);
 
     // Convert + chunk (AI or mechanical depending on config). The pipeline
     // returns `EmptyExtraction` when no meaningful content was produced —
     // surface its structured reason/hint instead of swallowing it into a
     // generic failure message so the admin UI can act on it.
-    let processed = match p
-        .document_pipeline
+    let processed = match pipeline
         .process_to_document(
             &bytes,
             &mime_type,
             doc_id,
             workspace_id,
             on_step,
-            chunk_overrides,
+            thairag_document::pipeline::ChunkOverrides::default(),
         )
         .await
     {
@@ -563,7 +557,12 @@ const BACKGROUND_THRESHOLD: usize = 1024 * 1024; // 1MB
 /// client connection to drop and the upload modal to appear frozen. Route
 /// any of those slow paths to the job queue so the POST returns immediately
 /// as `processing` and the table polls for completion.
-fn should_process_in_background(state: &AppState, mime_type: &str, size: usize) -> bool {
+fn should_process_in_background(
+    state: &AppState,
+    workspace_id: WorkspaceId,
+    mime_type: &str,
+    size: usize,
+) -> bool {
     if size > BACKGROUND_THRESHOLD {
         return true;
     }
@@ -573,11 +572,11 @@ fn should_process_in_background(state: &AppState, mime_type: &str, size: usize) 
         return true;
     }
     // AI-agent preprocessing adds analyzer/converter/quality/enricher LLM
-    // round-trips; effective value layers the km_store override over the
-    // file default, mirroring `build_effective_document_config`.
-    state
-        .km_store
-        .get_setting("ai_preprocessing.enabled")
+    // round-trips; effective value layers scoped overrides (workspace → dept →
+    // org → global) over the file default, so an org that enables AI
+    // preprocessing routes its uploads to the background queue.
+    let scope = state.resolve_scope_for_workspace(workspace_id);
+    crate::store::resolve_setting(state.km_store.as_ref(), "ai_preprocessing.enabled", &scope)
         .and_then(|v| v.parse().ok())
         .unwrap_or(state.config.document.ai_preprocessing.enabled)
 }
@@ -617,7 +616,8 @@ pub async fn ingest_document(
 
     let doc_id = DocId::new();
     let size_bytes = body.content.len() as i64;
-    let background = should_process_in_background(&state, &body.mime_type, body.content.len());
+    let background =
+        should_process_in_background(&state, workspace_id, &body.mime_type, body.content.len());
 
     info!(
         %doc_id, %workspace_id, title = %body.title, mime_type = %body.mime_type,
@@ -762,7 +762,7 @@ pub async fn upload_document(
     let workspace_id = workspace_id_typed;
     let doc_id = DocId::new();
     let size_bytes = bytes.len() as i64;
-    let background = should_process_in_background(&state, &mime_type, bytes.len());
+    let background = should_process_in_background(&state, workspace_id, &mime_type, bytes.len());
 
     info!(
         %doc_id, %workspace_id, %title, %mime_type,

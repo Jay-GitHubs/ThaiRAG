@@ -31,7 +31,7 @@ import {
   ClusterOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
-import { getDocumentConfig, updateDocumentConfig, syncModels, getProviderConfig, updateProviderConfig, syncEmbeddingModels } from '../../api/settings';
+import { getDocumentConfig, updateDocumentConfig, syncModels, getProviderConfig, updateProviderConfig } from '../../api/settings';
 import { useLlmProfiles } from '../../hooks/useSettings';
 import type {
   AiPreprocessingConfig,
@@ -1140,6 +1140,16 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
       />
 
       {!isScoped && (<>
+      {/* Document Vision LLM — the model the Smart-PDF Vision OCR above (and embedded
+          image description) calls during ingestion. Global; lives beside its feature. */}
+      <Collapse
+        items={[{
+          key: 'doc-vision',
+          label: <><RobotOutlined /> Document Vision LLM — model for Smart-PDF OCR &amp; image description</>,
+          children: <DocVisionSection />,
+        }]}
+      />
+
       {/* AI Preprocessing */}
       <Collapse
         defaultActiveKey={['ai-preprocessing']}
@@ -1335,7 +1345,6 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                   value={llmMode}
                   onChange={(v) => setLlmMode(v as 'chat' | 'shared' | 'per-agent')}
                   options={[
-                    { label: 'Use Chat LLM', value: 'chat' },
                     { label: 'Same model for all', value: 'shared' },
                     { label: 'Different per agent', value: 'per-agent' },
                   ]}
@@ -1348,7 +1357,7 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                   fontSize: 12,
                   color: token.colorTextSecondary,
                 }}>
-                  {llmMode === 'chat' && 'All agents share your main Chat LLM. Simplest setup — no extra config needed.'}
+                  {llmMode === 'chat' && 'No dedicated document model is configured — agents currently reuse the main Chat LLM. Pick a mode above and save to give Document Processing its own model.'}
                   {llmMode === 'shared' && 'All agents use a dedicated model below, keeping document processing separate from chat.'}
                   {llmMode === 'per-agent' && 'Assign a different model to each agent to optimize cost and memory usage.'}
                 </div>
@@ -1798,13 +1807,13 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
         </Paragraph>
       </Card>
 
-      {/* Embedding & Vector Store — final pipeline steps */}
+      {/* Vector Database — final storage step (embedding model lives in Shared / Common) */}
       <Collapse
-        defaultActiveKey={['embedding-vector']}
+        defaultActiveKey={['vector-store']}
         items={[{
-          key: 'embedding-vector',
-          label: 'Embedding & Vector Store',
-          children: <EmbeddingVectorSection />,
+          key: 'vector-store',
+          label: 'Vector Database',
+          children: <VectorStoreSection />,
         }]}
       />
       </>)}
@@ -1813,81 +1822,6 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
 }
 
 // ── Embedding & Vector Store Section ────────────────────────────────
-
-const embeddingProviderOptions = [
-  { label: 'Fastembed (Local)', value: 'Fastembed' },
-  { label: 'OpenAI / Compatible', value: 'OpenAi' },
-  { label: 'Ollama (Local)', value: 'Ollama' },
-  { label: 'Cohere', value: 'Cohere' },
-];
-
-const staticEmbModels: Record<string, { label: string; value: string }[]> = {
-  Fastembed: [
-    { label: 'BGE Small EN v1.5 (dim=384)', value: 'BAAI/bge-small-en-v1.5' },
-    { label: 'BGE Base EN v1.5 (dim=768)', value: 'BAAI/bge-base-en-v1.5' },
-    { label: 'BGE Large EN v1.5 (dim=1024)', value: 'BAAI/bge-large-en-v1.5' },
-    { label: 'All-MiniLM-L6-v2 (dim=384)', value: 'sentence-transformers/all-MiniLM-L6-v2' },
-    { label: 'Multilingual MiniLM L12 v2 (dim=384)', value: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2' },
-    { label: 'Jina Embeddings v2 Small EN (dim=512)', value: 'jinaai/jina-embeddings-v2-small-en' },
-    { label: 'Jina Embeddings v2 Base EN (dim=768)', value: 'jinaai/jina-embeddings-v2-base-en' },
-  ],
-  OpenAi: [
-    { label: 'text-embedding-3-small (dim=1536)', value: 'text-embedding-3-small' },
-    { label: 'text-embedding-3-large (dim=3072)', value: 'text-embedding-3-large' },
-    { label: 'text-embedding-ada-002 (dim=1536)', value: 'text-embedding-ada-002' },
-  ],
-  Cohere: [
-    { label: 'Embed v4.0 (dim=1024)', value: 'embed-v4.0' },
-    { label: 'Embed English v3.0 (dim=1024)', value: 'embed-english-v3.0' },
-    { label: 'Embed Multilingual v3.0 (dim=1024)', value: 'embed-multilingual-v3.0' },
-    { label: 'Embed English Light v3.0 (dim=384)', value: 'embed-english-light-v3.0' },
-    { label: 'Embed Multilingual Light v3.0 (dim=384)', value: 'embed-multilingual-light-v3.0' },
-  ],
-};
-
-/** Known model → default dimension mapping. Used to auto-fill the Dimension field. */
-const knownEmbDimensions: Record<string, number> = {
-  // Fastembed
-  'BAAI/bge-small-en-v1.5': 384,
-  'BAAI/bge-base-en-v1.5': 768,
-  'BAAI/bge-large-en-v1.5': 1024,
-  'sentence-transformers/all-MiniLM-L6-v2': 384,
-  'sentence-transformers/all-MiniLM-L12-v2': 384,
-  'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': 384,
-  'jinaai/jina-embeddings-v2-small-en': 512,
-  'jinaai/jina-embeddings-v2-base-en': 768,
-  // OpenAI
-  'text-embedding-3-small': 1536,
-  'text-embedding-3-large': 3072,
-  'text-embedding-ada-002': 1536,
-  // Cohere
-  'embed-v4.0': 1024,
-  'embed-english-v3.0': 1024,
-  'embed-multilingual-v3.0': 1024,
-  'embed-english-light-v3.0': 384,
-  'embed-multilingual-light-v3.0': 384,
-  // Ollama — popular embedding models
-  'nomic-embed-text:latest': 768,
-  'nomic-embed-text-v2-moe:latest': 768,
-  'mxbai-embed-large:latest': 1024,
-  'all-minilm:latest': 384,
-  'bge-m3:latest': 1024,
-  'snowflake-arctic-embed:latest': 1024,
-  'embeddinggemma:300m': 1536,
-  'qwen3-embedding:8b': 2048,
-  'qwen3-embedding:0.6b': 1024,
-};
-
-/** Try to find the dimension for a model, matching with or without ":latest" tag. */
-function lookupEmbDimension(model: string): number | undefined {
-  if (knownEmbDimensions[model]) return knownEmbDimensions[model];
-  // Try with :latest suffix
-  if (knownEmbDimensions[model + ':latest']) return knownEmbDimensions[model + ':latest'];
-  // Try without tag
-  const base = model.replace(/:.*$/, '');
-  if (knownEmbDimensions[base + ':latest']) return knownEmbDimensions[base + ':latest'];
-  return undefined;
-}
 
 const vectorStoreOptions = [
   { label: 'In-Memory (dev only)', value: 'InMemory' },
@@ -1914,20 +1848,11 @@ const kindColors: Record<string, string> = {
   Pinecone: 'green', Weaviate: 'purple', Milvus: 'geekblue',
 };
 
-function EmbeddingVectorSection() {
+function VectorStoreSection() {
   const { token } = theme.useToken();
   const [providerConfig, setProviderConfig] = useState<ProviderConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-
-  // Embedding form state
-  const [embKind, setEmbKind] = useState('Fastembed');
-  const [embModel, setEmbModel] = useState('');
-  const [embDimension, setEmbDimension] = useState(384);
-  const [embBaseUrl, setEmbBaseUrl] = useState('');
-  const [embApiKey, setEmbApiKey] = useState('');
-  const [syncedEmbModels, setSyncedEmbModels] = useState<AvailableModel[] | null>(null);
-  const [syncingEmb, setSyncingEmb] = useState(false);
 
   // Vector store form state
   const [vsKind, setVsKind] = useState('InMemory');
@@ -1944,10 +1869,6 @@ function EmbeddingVectorSection() {
     try {
       const data = await getProviderConfig();
       setProviderConfig(data);
-      setEmbKind(data.embedding.kind);
-      setEmbModel(data.embedding.model);
-      setEmbDimension(data.embedding.dimension);
-      setEmbBaseUrl(data.embedding.base_url || '');
       setVsKind(data.vector_store.kind);
       setVsUrl(data.vector_store.url || '');
       setVsCollection(data.vector_store.collection || '');
@@ -1962,94 +1883,33 @@ function EmbeddingVectorSection() {
   async function handleSave() {
     setSaving(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const req: Record<string, any> = {};
-
-      // Embedding changes
-      const emb: Record<string, unknown> = {};
-      if (embKind !== providerConfig?.embedding.kind) emb.kind = embKind;
-      if (embModel !== providerConfig?.embedding.model) emb.model = embModel;
-      if (embDimension !== providerConfig?.embedding.dimension) emb.dimension = embDimension;
-      if (embBaseUrl !== (providerConfig?.embedding.base_url || '')) emb.base_url = embBaseUrl;
-      if (embApiKey) emb.api_key = embApiKey;
-      if (Object.keys(emb).length > 0) req.embedding = emb;
-
-      // Vector store changes
       const vs: Record<string, unknown> = {};
       if (vsKind !== providerConfig?.vector_store.kind) vs.kind = vsKind;
       if (vsUrl !== (providerConfig?.vector_store.url || '')) vs.url = vsUrl;
       if (vsCollection !== (providerConfig?.vector_store.collection || '')) vs.collection = vsCollection;
       if (vsApiKey) vs.api_key = vsApiKey;
       if (vsIsolation !== (providerConfig?.vector_store.isolation || 'Shared')) vs.isolation = vsIsolation;
-      if (Object.keys(vs).length > 0) req.vector_store = vs;
 
-      if (Object.keys(req).length === 0) {
+      if (Object.keys(vs).length === 0) {
         message.info('No changes to save');
         setSaving(false);
         return;
       }
 
-      const updated = await updateProviderConfig(req);
+      const updated = await updateProviderConfig({ vector_store: vs });
       setProviderConfig(updated);
-      setEmbKind(updated.embedding.kind);
-      setEmbModel(updated.embedding.model);
-      setEmbDimension(updated.embedding.dimension);
-      setEmbBaseUrl(updated.embedding.base_url || '');
-      setEmbApiKey('');
       setVsKind(updated.vector_store.kind);
       setVsUrl(updated.vector_store.url || '');
       setVsCollection(updated.vector_store.collection || '');
       setVsApiKey('');
       setVsIsolation(updated.vector_store.isolation || 'Shared');
-      message.success('Embedding & Vector Store settings saved');
+      message.success('Vector Database settings saved');
     } catch {
       message.error('Failed to save settings');
     } finally {
       setSaving(false);
     }
   }
-
-  const handleSyncEmb = async () => {
-    setSyncingEmb(true);
-    try {
-      const result = await syncEmbeddingModels({
-        kind: embKind,
-        base_url: embBaseUrl || '',
-        api_key: embApiKey || '',
-      });
-      if (result.models.length === 0) {
-        message.warning('No embedding models found.');
-      } else {
-        message.success(`Found ${result.models.length} embedding model(s)`);
-      }
-      setSyncedEmbModels(result.models);
-    } catch {
-      message.error('Failed to sync embedding models.');
-    } finally {
-      setSyncingEmb(false);
-    }
-  };
-
-  /** Set model and auto-fill dimension if known. */
-  const handleEmbModelChange = (model: string) => {
-    setEmbModel(model);
-    const dim = lookupEmbDimension(model);
-    if (dim) setEmbDimension(dim);
-  };
-
-  useEffect(() => {
-    setSyncedEmbModels(null);
-  }, [embKind]);
-
-  const embModelOptions = (() => {
-    if (syncedEmbModels && syncedEmbModels.length > 0) {
-      return syncedEmbModels.map((m) => ({
-        label: m.size ? `${m.name} (${formatModelSize(m.size)})` : m.name,
-        value: m.id,
-      }));
-    }
-    return staticEmbModels[embKind] || [];
-  })();
 
   if (loading) return <Spin tip="Loading provider config..." />;
 
@@ -2058,8 +1918,8 @@ function EmbeddingVectorSection() {
       title={
         <Space>
           <SettingOutlined />
-          <span>Embedding & Vector Store</span>
-          <Tooltip title="After chunks are prepared (and optionally enriched), they are converted to numerical vectors by the Embedding Model, then stored in the Vector Database for fast similarity search. These are the final two steps of the ingestion pipeline.">
+          <span>Vector Database</span>
+          <Tooltip title="After chunks are embedded by the shared Embedding Model (configured in Shared / Common), the vectors are stored in the Vector Database for fast similarity search. This is the final step of the ingestion pipeline.">
             <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
           </Tooltip>
         </Space>
@@ -2077,125 +1937,6 @@ function EmbeddingVectorSection() {
       }
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        {/* Embedding Model */}
-        <div>
-          <Space style={{ marginBottom: 8 }}>
-            <Text strong>Embedding Model</Text>
-            <Tooltip title="The embedding model converts text chunks into numerical vectors (arrays of numbers). Similar texts get similar vectors, which is how search finds relevant results. The dimension determines the vector size — higher dimensions capture more nuance but use more storage.">
-              <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            </Tooltip>
-            {providerConfig && (
-              <Tag color={kindColors[providerConfig.embedding.kind] || 'default'}>
-                {providerConfig.embedding.kind}
-              </Tag>
-            )}
-          </Space>
-
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ minWidth: 180 }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>Provider</Text>
-              <Select
-                size="small"
-                value={embKind}
-                onChange={(v) => { setEmbKind(v); setEmbModel(''); }}
-                options={embeddingProviderOptions}
-                style={{ width: 180 }}
-              />
-            </div>
-
-            <div style={{ flex: 1, minWidth: 250 }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>Model</Text>
-              <Space.Compact style={{ width: '100%' }}>
-                {embModelOptions.length > 0 ? (
-                  <Select
-                    size="small"
-                    showSearch
-                    optionFilterProp="label"
-                    value={embModel || undefined}
-                    onChange={handleEmbModelChange}
-                    options={embModelOptions}
-                    placeholder="Select embedding model"
-                    style={{ width: '100%' }}
-                  />
-                ) : (
-                  <Input
-                    size="small"
-                    value={embModel}
-                    onChange={(e) => setEmbModel(e.target.value)}
-                    onBlur={(e) => { const d = lookupEmbDimension(e.target.value); if (d) setEmbDimension(d); }}
-                    placeholder="e.g. nomic-embed-text"
-                    style={{ width: '100%' }}
-                  />
-                )}
-                <Button
-                  size="small"
-                  icon={<SyncOutlined spin={syncingEmb} />}
-                  onClick={handleSyncEmb}
-                  loading={syncingEmb}
-                >
-                  Sync
-                </Button>
-              </Space.Compact>
-            </div>
-
-            <div>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>Dimension</Text>
-              <InputNumber
-                size="small"
-                min={1}
-                max={8192}
-                value={embDimension}
-                onChange={(v) => v && setEmbDimension(v)}
-                style={{ width: 90 }}
-              />
-            </div>
-          </div>
-
-          {(embKind === 'Ollama' || embKind === 'OpenAi') && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>Base URL</Text>
-              <Input
-                size="small"
-                value={embBaseUrl}
-                onChange={(e) => setEmbBaseUrl(e.target.value)}
-                placeholder={embKind === 'Ollama' ? 'http://localhost:11435' : 'https://api.openai.com (default)'}
-                style={{ maxWidth: 400 }}
-              />
-            </div>
-          )}
-
-          {(embKind === 'OpenAi' || embKind === 'Cohere') && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                API Key {providerConfig?.embedding.has_api_key && <Tag color="success" style={{ fontSize: 10 }}>Configured</Tag>}
-              </Text>
-              <Input.Password
-                size="small"
-                value={embApiKey}
-                onChange={(e) => setEmbApiKey(e.target.value)}
-                placeholder={providerConfig?.embedding.has_api_key ? '(unchanged — leave blank to keep)' : 'Enter API key'}
-                style={{ maxWidth: 400 }}
-              />
-            </div>
-          )}
-
-          <div style={{
-            marginTop: 8,
-            padding: '6px 12px',
-            background: token.colorFillQuaternary,
-            borderRadius: 6,
-            fontSize: 12,
-            color: token.colorTextSecondary,
-          }}>
-            {embKind === 'Fastembed' && 'Runs locally on your server — no API calls, no cost. Good for getting started.'}
-            {embKind === 'Ollama' && 'Uses Ollama\'s embedding models locally. Good balance of quality and privacy.'}
-            {embKind === 'OpenAi' && 'High-quality embeddings via OpenAI API. Best multilingual support. Costs ~$0.02 per 1M tokens.'}
-            {embKind === 'Cohere' && 'Strong multilingual embeddings. Embed Multilingual v3 works well for Thai + English.'}
-          </div>
-        </div>
-
-        <Divider style={{ margin: '4px 0' }} />
-
         {/* Vector Store */}
         <div>
           <Space style={{ marginBottom: 8 }}>
@@ -2319,9 +2060,143 @@ function EmbeddingVectorSection() {
   );
 }
 
-function formatModelSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+// ── Document Vision LLM Section ─────────────────────────────────────
+// Dedicated vision model for ingestion (OCR / image description). Global —
+// stored in the provider config as `doc_vision_llm`. When disabled, ingestion
+// vision falls back to the primary preprocessing LLM.
+function DocVisionSection() {
+  const { token } = theme.useToken();
+  const [providerConfig, setProviderConfig] = useState<ProviderConfigResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [form, setForm] = useState<LlmFormState>({ ...defaultLlmForm });
+  const [numCtx, setNumCtx] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await getProviderConfig();
+        setProviderConfig(data);
+        if (data.doc_vision_llm) {
+          setEnabled(true);
+          setForm(llmInfoToForm(data.doc_vision_llm));
+          setNumCtx(data.doc_vision_llm.ollama_num_ctx_max ?? 0);
+        }
+      } catch {
+        message.error('Failed to load provider config');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const existing = providerConfig?.doc_vision_llm;
+  const existingKey = !!existing?.has_api_key && form.kind === existing?.kind;
+
+  async function handleSave() {
+    if (enabled && !form.profile_id && !form.model.trim()) {
+      message.error('Please select or enter a model for the Document Vision LLM');
+      return;
+    }
+    setSaving(true);
+    try {
+      const req: { doc_vision_llm?: LlmConfigUpdate; clear_doc_vision_llm?: boolean } = {};
+      if (!enabled) {
+        if (existing) req.clear_doc_vision_llm = true;
+        else {
+          message.info('No changes to save');
+          setSaving(false);
+          return;
+        }
+      } else if (form.profile_id) {
+        req.doc_vision_llm = { profile_id: form.profile_id };
+      } else {
+        req.doc_vision_llm = {
+          kind: form.kind,
+          model: form.model.trim(),
+          base_url: form.base_url.trim() || undefined,
+          api_key: form.api_key || undefined,
+          ollama_num_ctx_max: numCtx,
+          ...(existing?.profile_id ? { clear_profile: true } : {}),
+        };
+      }
+      const updated = await updateProviderConfig(req);
+      setProviderConfig(updated);
+      if (updated.doc_vision_llm) {
+        setEnabled(true);
+        setForm(llmInfoToForm(updated.doc_vision_llm));
+        setNumCtx(updated.doc_vision_llm.ollama_num_ctx_max ?? 0);
+      } else {
+        setEnabled(false);
+        setForm({ ...defaultLlmForm });
+        setNumCtx(0);
+      }
+      message.success('Document Vision LLM saved');
+    } catch {
+      message.error('Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <Spin tip="Loading provider config..." />;
+
+  return (
+    <Card
+      title={
+        <Space>
+          <RobotOutlined />
+          <span>Document Vision LLM</span>
+          <Tooltip title="Dedicated vision model used during ingestion for OCR and image description (scanned PDFs, image-only documents). When off, vision tasks reuse the primary preprocessing LLM. Shared across the whole platform.">
+            <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+          </Tooltip>
+        </Space>
+      }
+      extra={
+        <Space>
+          <Switch
+            checked={enabled}
+            onChange={setEnabled}
+            checkedChildren="Dedicated"
+            unCheckedChildren="Use primary LLM"
+            data-testid="doc-vision-switch"
+          />
+          <Button type="primary" size="small" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+            Save
+          </Button>
+        </Space>
+      }
+    >
+      {!enabled ? (
+        <Alert
+          type="info"
+          showIcon
+          message="Vision tasks (image description, PDF OCR) will use the primary preprocessing LLM."
+          description="Enable a dedicated vision model if your primary LLM is not vision-capable, or to isolate OCR memory usage."
+        />
+      ) : (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Vision-capable models"
+            description="Cloud: Claude 3+ (Opus/Sonnet/Haiku), GPT-4o/4.1, Gemini 1.5+. Ollama: llava, llava-llama3, qwen2.5vl, llama3.2-vision, minicpm-v, bakllava, moondream."
+          />
+          <LlmConfigForm form={form} onChange={setForm} existingKey={existingKey} requireVision />
+          {form.kind === 'Ollama' && !form.profile_id && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                Max Context (num_ctx)
+                <Tooltip title="Vision calls request this full value (image token counts aren't known up front). Lower it, or lower PDF Render DPI, to cut memory. 0 = inherit model default.">
+                  <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextSecondary, marginLeft: 6 }} />
+                </Tooltip>
+              </Text>
+              <InputNumber min={0} max={131072} step={1024} value={numCtx} onChange={(v) => setNumCtx(v ?? 0)} style={{ width: 200 }} />
+            </div>
+          )}
+        </Space>
+      )}
+    </Card>
+  );
 }

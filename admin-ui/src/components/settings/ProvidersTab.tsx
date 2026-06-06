@@ -209,7 +209,7 @@ function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
   const p = config;
   return (
     <Collapse
-      defaultActiveKey={['llm-provider', 'vision-llm', 'reranker']}
+      defaultActiveKey={['llm-provider', 'reranker']}
       items={[
         {
           key: 'llm-provider',
@@ -233,57 +233,6 @@ function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
                 )}
               </Descriptions.Item>
             </Descriptions>
-          ),
-        },
-        {
-          key: 'vision-llm',
-          label: (
-            <Space>
-              <span>Vision LLM</span>
-              {p.vision_llm ? (
-                <Tag color="purple">Dedicated</Tag>
-              ) : (
-                <Tag color="default">Uses primary LLM</Tag>
-              )}
-            </Space>
-          ),
-          children: p.vision_llm ? (
-            <Descriptions column={2} size="small" bordered>
-              <Descriptions.Item label="Provider">
-                <Tag color={kindColors[p.vision_llm.kind] || 'default'}>{p.vision_llm.kind}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Model">
-                <Space>
-                  <Typography.Text code>{p.vision_llm.model}</Typography.Text>
-                  {p.vision_llm.supports_vision ? (
-                    <Tag color="success">Vision-capable</Tag>
-                  ) : (
-                    <Tag color="warning">Not recognized as vision-capable</Tag>
-                  )}
-                </Space>
-              </Descriptions.Item>
-              {p.vision_llm.base_url && (
-                <Descriptions.Item label="Base URL">{p.vision_llm.base_url}</Descriptions.Item>
-              )}
-              <Descriptions.Item label="API Key">
-                {p.vision_llm.has_api_key ? (
-                  <Tag color="success">Configured</Tag>
-                ) : (
-                  <Tag color="default">Not set</Tag>
-                )}
-              </Descriptions.Item>
-            </Descriptions>
-          ) : (
-            <Alert
-              type="info"
-              showIcon
-              message="Falls back to the primary LLM for image description and PDF OCR."
-              description={
-                p.llm.supports_vision
-                  ? 'The primary LLM is vision-capable — this works.'
-                  : 'The primary LLM is NOT vision-capable. Image-only documents will fail with "Vision OCR Required". Configure a dedicated vision LLM here, or switch primary to a vision model (Claude 3+, GPT-4o, Ollama llava/qwen2.5vl).'
-              }
-            />
           ),
         },
         {
@@ -334,19 +283,9 @@ function EditForm({
   const [syncing, setSyncing] = useState(false);
   const [syncedRrModels, setSyncedRrModels] = useState<AvailableModel[] | null>(null);
   const [syncingRr, setSyncingRr] = useState(false);
-  const [syncedVisionModels, setSyncedVisionModels] = useState<AvailableModel[] | null>(null);
-  const [syncingVision, setSyncingVision] = useState(false);
   // Server-resolved capability flags (vision/recommended) for the displayed
   // option sets. Falls back to the local heuristic when the resolve call fails.
   const [llmCaps, setLlmCaps] = useState<Record<string, ModelCapabilities>>({});
-  const [visionCaps, setVisionCaps] = useState<Record<string, ModelCapabilities>>({});
-  // Vision LLM is a dedicated provider for image/PDF OCR — falls back
-  // to the primary `llm` when disabled. See pipeline.rs::process_image
-  // and process_pdf_with_vision.
-  const [visionEnabled, setVisionEnabled] = useState(!!config.vision_llm);
-  const [visionKind, setVisionKind] = useState(
-    config.vision_llm?.kind || config.llm.kind,
-  );
 
   useEffect(() => {
     form.setFieldsValue({
@@ -359,12 +298,6 @@ function EditForm({
       rr_kind: config.reranker.kind,
       rr_model: config.reranker.model || '',
       rr_api_key: '',
-      vision_kind: config.vision_llm?.kind || config.llm.kind,
-      vision_model: config.vision_llm?.model || '',
-      vision_base_url: config.vision_llm?.base_url || '',
-      vision_api_key: '',
-      vision_num_ctx_max:
-        config.vision_llm?.ollama_num_ctx_max ?? config.llm.ollama_num_ctx_max ?? 16384,
     });
   }, [config, form]);
 
@@ -397,24 +330,6 @@ function EditForm({
     if (values.rr_model !== (config.reranker.model || '')) rr.model = values.rr_model;
     if (values.rr_api_key) rr.api_key = values.rr_api_key;
     if (Object.keys(rr).length > 0) req.reranker = rr;
-
-    // Vision LLM — three cases:
-    //   1. Toggle off but config has one  → send `clear_vision_llm: true`
-    //   2. Toggle on  → send `vision_llm` (kind+model required, others optional)
-    //   3. Toggle off and no existing config → no-op
-    if (!visionEnabled && config.vision_llm) {
-      req.clear_vision_llm = true;
-    } else if (visionEnabled) {
-      const vision: Record<string, unknown> = {
-        kind: values.vision_kind,
-        model: values.vision_model,
-      };
-      if (values.vision_base_url) vision.base_url = values.vision_base_url;
-      if (values.vision_api_key) vision.api_key = values.vision_api_key;
-      if (values.vision_kind === 'Ollama' && values.vision_num_ctx_max != null)
-        vision.ollama_num_ctx_max = values.vision_num_ctx_max;
-      req.vision_llm = vision;
-    }
 
     if (Object.keys(req).length === 0) {
       message.info('No changes to save');
@@ -517,71 +432,6 @@ function EditForm({
       setSyncing(false);
     }
   };
-
-  // Sync vision models from the (possibly dedicated) vision provider API.
-  const handleSyncVisionModels = async () => {
-    const values = form.getFieldsValue();
-    setSyncingVision(true);
-    try {
-      const result = await syncModels({
-        kind: visionKind,
-        base_url: values.vision_base_url || '',
-        api_key: values.vision_api_key || '',
-      });
-      if (result.models.length === 0) {
-        message.warning('No models found. Check your credentials and try again.');
-      } else {
-        message.success(`Found ${result.models.length} model(s) from ${result.provider}`);
-      }
-      setSyncedVisionModels(result.models);
-    } catch {
-      message.error('Failed to sync models. Check your credentials.');
-    } finally {
-      setSyncingVision(false);
-    }
-  };
-
-  // Vision picker models — synced list (vision provider) or the static fallback,
-  // each tagged with the advisory vision flag.
-  const visionPickerModels: PickerModel[] = (
-    syncedVisionModels && syncedVisionModels.length > 0
-      ? syncedVisionModels.map((m) => ({
-          id: m.id,
-          name: m.name,
-          size: m.size,
-          vision: looksVisionCapable(visionKind, m.id),
-        }))
-      : (staticModels[visionKind] || []).map((m) => ({
-          id: m.value,
-          name: m.label,
-          vision: looksVisionCapable(visionKind, m.value),
-        }))
-  );
-  const visionModelIds = visionPickerModels.map((m) => m.id).filter(Boolean).join(',');
-  useEffect(() => {
-    const ids = visionModelIds ? visionModelIds.split(',') : [];
-    if (ids.length === 0) {
-      setVisionCaps({});
-      return;
-    }
-    let cancelled = false;
-    resolveRecommendations({ kind: visionKind, models: ids })
-      .then((r) => {
-        if (!cancelled) setVisionCaps(r.resolved);
-      })
-      .catch(() => {
-        /* keep local-heuristic fallback */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [visionKind, visionModelIds]);
-  const visionOptions = toPickerOptions(visionPickerModels, visionCaps);
-
-  // Reset synced vision models when switching the vision provider kind.
-  useEffect(() => {
-    setSyncedVisionModels(null);
-  }, [visionKind]);
 
   // Reset synced models and model selection when switching provider kind
   useEffect(() => {
@@ -739,137 +589,6 @@ function EditForm({
             </Form.Item>
           )}
         </Space>
-      </Card>
-
-      <Divider />
-
-      <Card
-        title="Vision LLM"
-        size="small"
-        extra={
-          <Switch
-            checked={visionEnabled}
-            onChange={setVisionEnabled}
-            checkedChildren="Dedicated"
-            unCheckedChildren="Use primary LLM"
-          />
-        }
-      >
-        {!visionEnabled ? (
-          <Alert
-            type="info"
-            showIcon
-            message="Vision tasks (image description, PDF OCR) will use the primary LLM."
-            description={
-              config.llm.supports_vision
-                ? 'Your primary LLM is vision-capable — this works.'
-                : 'Warning: your primary LLM is NOT recognized as vision-capable. Image-only documents will fail with "Vision OCR Required" until you either enable a dedicated vision LLM here or switch your primary to a vision model.'
-            }
-          />
-        ) : (
-          <Space style={{ width: '100%' }} direction="vertical">
-            <Alert
-              type="info"
-              showIcon
-              message="Vision-capable models"
-              description="Cloud: Claude 3+ (Opus/Sonnet/Haiku), GPT-4o/4V, Gemini 1.5+. Ollama: llava, llava-llama3, qwen2.5vl, llama3.2-vision, minicpm-v, bakllava, moondream."
-            />
-            <Form.Item name="vision_kind" label="Provider" rules={[{ required: true }]}>
-              <Select
-                onChange={(v) => setVisionKind(v)}
-                options={[
-                  { label: 'Ollama (Local)', value: 'Ollama' },
-                  { label: 'Claude (Anthropic)', value: 'Claude' },
-                  { label: 'OpenAI', value: 'OpenAi' },
-                  { label: 'Gemini (Google)', value: 'Gemini' },
-                  { label: 'OpenAI-Compatible', value: 'OpenAiCompatible' },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item
-              label="Model"
-              required
-              style={{ marginBottom: 0 }}
-              extra={
-                visionKind === 'Ollama'
-                  ? 'e.g. llava:13b, qwen2.5vl:7b, llama3.2-vision:11b — or type any model id.'
-                  : visionKind === 'Claude'
-                  ? 'e.g. claude-sonnet-4-20250514 (all Claude 3+ models support vision)'
-                  : visionKind === 'OpenAi'
-                  ? 'e.g. gpt-4o, gpt-4o-mini'
-                  : visionKind === 'Gemini'
-                  ? 'e.g. gemini-2.5-pro, gemini-1.5-pro'
-                  : 'Any OpenAI-compatible vision model'
-              }
-            >
-              <Space.Compact style={{ width: '100%' }}>
-                <Form.Item
-                  name="vision_model"
-                  noStyle
-                  rules={[{ required: true, message: 'Model is required' }]}
-                >
-                  <AutoComplete
-                    options={visionOptions}
-                    filterOption={modelFilterOption}
-                    placeholder="Select or type a vision model"
-                    style={{ width: '100%' }}
-                  />
-                </Form.Item>
-                <Button
-                  icon={<SyncOutlined spin={syncingVision} />}
-                  onClick={handleSyncVisionModels}
-                  loading={syncingVision}
-                  title="Sync models from provider"
-                >
-                  Sync
-                </Button>
-              </Space.Compact>
-            </Form.Item>
-            {(visionKind === 'Ollama' || visionKind === 'OpenAiCompatible') && (
-              <Form.Item
-                name="vision_base_url"
-                label="Base URL"
-                rules={visionKind === 'OpenAiCompatible' ? [{ required: true }] : undefined}
-                extra={
-                  visionKind === 'Ollama'
-                    ? 'Leave blank to use the same base URL as the primary LLM.'
-                    : undefined
-                }
-              >
-                <Input
-                  placeholder={
-                    visionKind === 'Ollama'
-                      ? 'http://localhost:11435'
-                      : 'e.g. https://api.together.xyz'
-                  }
-                />
-              </Form.Item>
-            )}
-            {visionKind === 'Ollama' && (
-              <Form.Item
-                name="vision_num_ctx_max"
-                label="Max Context (num_ctx)"
-                extra="Vision calls request this full value (image token counts aren't known up front). Lower it, or lower PDF Render DPI, to cut memory. 0 = inherit model default."
-              >
-                <InputNumber min={0} max={131072} step={1024} style={{ width: 200 }} />
-              </Form.Item>
-            )}
-            {(visionKind === 'Claude' ||
-              visionKind === 'OpenAi' ||
-              visionKind === 'Gemini' ||
-              visionKind === 'OpenAiCompatible') && (
-              <Form.Item name="vision_api_key" label="API Key">
-                <Input.Password
-                  placeholder={
-                    config.vision_llm?.has_api_key
-                      ? '(unchanged — leave blank to keep)'
-                      : 'Enter API key (or reuse primary LLM\'s key by leaving blank)'
-                  }
-                />
-              </Form.Item>
-            )}
-          </Space>
-        )}
       </Card>
 
       <Divider />
