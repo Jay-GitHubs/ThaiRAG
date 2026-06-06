@@ -391,7 +391,8 @@ async fn process_document_inner_impl(
             .chunks
             .iter()
             .filter(|c| {
-                c.metadata.as_ref().and_then(|m| m.page_strategy.as_deref()) == Some("pdf_tabular")
+                c.metadata.as_ref().and_then(|m| m.content_type.as_ref())
+                    == Some(&thairag_core::types::DocumentContentType::Table)
             })
             .count() as i32;
         let _ = state.km_store.save_document_blob(

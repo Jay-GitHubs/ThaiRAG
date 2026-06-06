@@ -70,6 +70,17 @@ fn cluster(mut vals: Vec<f32>) -> Vec<f32> {
     out
 }
 
+/// Thai combining marks — above/below vowels and tone marks (zero-advance
+/// glyphs positioned relative to a base consonant). They must inherit their
+/// base glyph's cell rather than be placed by their own offset bounding box.
+fn is_thai_combining_mark(c: char) -> bool {
+    matches!(c,
+        '\u{0E31}'                 // MAI HAN-AKAT
+        | '\u{0E34}'..='\u{0E3A}'  // SARA I .. PHINTHU (above/below vowels)
+        | '\u{0E47}'..='\u{0E4E}'  // MAITAIKHU .. YAMAKKAN (tone marks etc.)
+    )
+}
+
 fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -167,11 +178,25 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Latti
     // yields characters in logical order (the project's trusted Thai text
     // path), so preserving insertion order keeps cell text correct.
     let mut cell_glyphs: Vec<Vec<char>> = vec![Vec::new(); n_rows * n_cols];
+    let mut last_idx: Option<usize> = None;
     for ch in chars {
-        let cx = (ch.x0 + ch.x1) / 2.0;
-        let cy = (ch.y0 + ch.y1) / 2.0;
-        if let (Some(c), Some(r)) = (col_of(cx), row_of(cy)) {
-            cell_glyphs[r * n_cols + c].push(ch.ch);
+        // Thai combining marks (above/below vowels, tone marks) are zero-advance
+        // glyphs whose box sits over/under the base consonant and can fall just
+        // outside the base's cell at a column edge. Keep them in the preceding
+        // glyph's cell so they never orphan into a neighbouring column.
+        let idx = if is_thai_combining_mark(ch.ch) {
+            last_idx
+        } else {
+            let cx = (ch.x0 + ch.x1) / 2.0;
+            let cy = (ch.y0 + ch.y1) / 2.0;
+            match (col_of(cx), row_of(cy)) {
+                (Some(c), Some(r)) => Some(r * n_cols + c),
+                _ => None,
+            }
+        };
+        if let Some(i) = idx {
+            cell_glyphs[i].push(ch.ch);
+            last_idx = Some(i);
         }
     }
 
