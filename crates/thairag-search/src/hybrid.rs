@@ -159,6 +159,12 @@ impl HybridSearchEngine {
             None => return chunk.content.clone(),
         };
 
+        // The base text to embed: an explicit `embed_text` override wins over
+        // raw `content`. This lets a table chunk store faithful HTML in
+        // `content` (what the LLM reads) while embedding a clean, retrievable
+        // row-linearized form here — avoiding indexing HTML tags as terms.
+        let base = meta.embed_text.as_deref().unwrap_or(&chunk.content);
+
         let has_enrichment = meta.context_prefix.is_some()
             || meta.keywords.as_ref().is_some_and(|k| !k.is_empty())
             || meta
@@ -167,7 +173,7 @@ impl HybridSearchEngine {
                 .is_some_and(|h| !h.is_empty());
 
         if !has_enrichment {
-            return chunk.content.clone();
+            return base.to_string();
         }
 
         let mut text = String::new();
@@ -178,8 +184,8 @@ impl HybridSearchEngine {
             text.push('\n');
         }
 
-        // Main content
-        text.push_str(&chunk.content);
+        // Main content (embed override when present)
+        text.push_str(base);
 
         // Append keywords for broader term matching
         if let Some(ref kw) = meta.keywords

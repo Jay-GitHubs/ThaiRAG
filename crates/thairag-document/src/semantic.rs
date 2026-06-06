@@ -119,6 +119,12 @@ pub struct RenderedPage {
     pub strategy: PageStrategy,
     /// The page's semantic markdown body (text + tables + `[IMAGE:..]` markers).
     pub markdown: String,
+    /// For a Tabular page reconstructed by deterministic lattice: the HTML table
+    /// (atomic chunk payload). `None` for non-table or vision-fallback pages.
+    pub table_html: Option<String>,
+    /// The row-linearized form of `table_html`, used as the chunk's embedding
+    /// text so retrieval matches on clean words rather than HTML tags.
+    pub table_linearized: Option<String>,
 }
 
 /// The stable inline marker for an image blob inside the semantic markdown.
@@ -235,11 +241,15 @@ mod tests {
                 page_num: 2,
                 strategy: PageStrategy::TextOnly,
                 markdown: "second".into(),
+                table_html: None,
+                table_linearized: None,
             },
             RenderedPage {
                 page_num: 1,
                 strategy: PageStrategy::Tabular,
                 markdown: "| a | b |\n|---|---|\n| 1 | 2 |".into(),
+                table_html: None,
+                table_linearized: None,
             },
         ];
         let md = assemble_document_markdown("My Doc", pages);
@@ -257,6 +267,8 @@ mod tests {
             page_num: 1,
             strategy: PageStrategy::TextOnly,
             markdown: "   ".into(),
+            table_html: None,
+            table_linearized: None,
         }];
         let md = assemble_document_markdown("  ", pages);
         assert!(!md.starts_with('#'));
