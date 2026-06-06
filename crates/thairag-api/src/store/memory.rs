@@ -285,6 +285,11 @@ impl KmStoreTrait for MemoryKmStore {
         let doc = docs
             .get_mut(&id)
             .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        // A fresh processing run resets the per-stage timeline so the UI tracker
+        // never shows stale stages carried over from a prior (re)processing run.
+        if matches!(status, DocStatus::Processing) {
+            doc.processing_timeline = None;
+        }
         doc.status = status;
         doc.chunk_count = chunk_count;
         doc.error_message = error_message;
@@ -292,11 +297,24 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
-    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()> {
+    fn update_document_step(
+        &self,
+        id: DocId,
+        step: Option<String>,
+        model: Option<String>,
+    ) -> Result<()> {
         let mut docs = self.documents.write().unwrap();
         let doc = docs
             .get_mut(&id)
             .ok_or_else(|| ThaiRagError::NotFound(format!("Document {id} not found")))?;
+        let mut timeline = doc.processing_timeline.take().unwrap_or_default();
+        thairag_core::models::StageTiming::advance(
+            &mut timeline,
+            step.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+            model.as_deref(),
+        );
+        doc.processing_timeline = Some(timeline);
         doc.processing_step = step;
         doc.updated_at = chrono::Utc::now();
         Ok(())
@@ -3188,6 +3206,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3217,6 +3236,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3251,6 +3271,7 @@ mod tests {
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,
@@ -3311,6 +3332,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3348,6 +3370,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,
@@ -3490,6 +3513,7 @@ mod tests {
             error_message: None,
             processing_step: None,
             processing_provenance: None,
+            processing_timeline: None,
             version: 1,
             content_hash: None,
             source_url: None,

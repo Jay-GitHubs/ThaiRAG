@@ -293,6 +293,56 @@ impl AiDocumentPipeline {
         }
     }
 
+    /// The agents that participate in the full text/PDF pipeline, with the
+    /// model backing each. Used to assemble provenance for the `process()` path
+    /// (which otherwise reports no per-agent attribution). Status is the
+    /// configured intent ("ran" for always-on agents, "skipped" for a disabled
+    /// enricher) — best-effort, since `process()` returns only chunks.
+    pub fn participating_agents(&self) -> Vec<thairag_core::models::AgentRun> {
+        use thairag_core::models::AgentRun;
+        let ran = |agent: &str, model: &str| AgentRun {
+            agent: agent.into(),
+            model: Some(model.to_string()),
+            status: "ran".into(),
+            note: None,
+        };
+        let mut agents = vec![
+            ran("analyzer", self.analyzer.model_name()),
+            ran("converter", self.converter.model_name()),
+            ran("quality", self.quality_checker.model_name()),
+            ran("chunker", self.smart_chunker.model_name()),
+        ];
+        match &self.enricher {
+            Some(e) => agents.push(ran("enricher", e.model_name())),
+            None => agents.push(AgentRun {
+                agent: "enricher".into(),
+                model: None,
+                status: "skipped".into(),
+                note: Some("enricher disabled".into()),
+            }),
+        }
+        agents
+    }
+
+    /// The model that backs a given pipeline step (by step-name substring), so
+    /// the live tracker can attribute each stage to its model as it runs.
+    /// `None` for steps with no LLM agent (or a disabled enricher).
+    pub fn model_for_step(&self, step: &str) -> Option<&str> {
+        if step.contains("analy") {
+            Some(self.analyzer.model_name())
+        } else if step.contains("convert") || step.contains("conversion") {
+            Some(self.converter.model_name())
+        } else if step.contains("quality") {
+            Some(self.quality_checker.model_name())
+        } else if step.contains("chunk") {
+            Some(self.smart_chunker.model_name())
+        } else if step.contains("enrich") {
+            self.enricher.as_ref().map(|e| e.model_name())
+        } else {
+            None
+        }
+    }
+
     // ── Orchestrator-driven flow ────────────────────────────────────────
 
     #[allow(clippy::too_many_arguments)]

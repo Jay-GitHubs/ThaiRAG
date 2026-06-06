@@ -256,7 +256,7 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
 /// Each `let _` is intentional — we are already in an error path and
 /// cannot meaningfully recover from a store failure here.
 async fn mark_doc_failed_best_effort(state: &AppState, doc_id: DocId, error_message: &str) {
-    let _ = state.km_store.update_document_step(doc_id, None);
+    let _ = state.km_store.update_document_step(doc_id, None, None);
     let _ = state.km_store.update_document_status(
         doc_id,
         DocStatus::Failed,
@@ -274,12 +274,25 @@ async fn process_document_inner_impl(
 ) -> (usize, Option<String>) {
     let p = state.providers();
 
-    // Step callback: update the document's processing_step in the store
+    // Resolve the document pipeline for this workspace's scope (walking
+    // workspace → dept → org → global). An org/dept/workspace that overrides
+    // chunking, PDF/OCR, or AI-preprocessing config gets a pipeline built from
+    // its effective config; scopes without overrides share the global pipeline.
+    // The scoped pipeline already bakes in chunk sizing, so no per-call
+    // `ChunkOverrides` are needed (default = transparent no-op).
+    let scope = state.resolve_scope_for_workspace(workspace_id);
+    let pipeline = state.get_scoped_document_pipeline(&scope);
+
+    // Step callback: record the processing step AND the model that runs it (from
+    // the scoped pipeline) so the admin UI can see, live, which model is acting
+    // on each stage — and abort the run if it's the wrong one.
     let km = state.km_store.clone();
     let step_doc_id = doc_id;
+    let step_pipeline = pipeline.clone();
     let on_step: Option<thairag_document::pipeline::StepCallback> =
         Some(std::sync::Arc::new(move |step: &str| {
-            let _ = km.update_document_step(step_doc_id, Some(step.to_string()));
+            let model = step_pipeline.model_for_step(step);
+            let _ = km.update_document_step(step_doc_id, Some(step.to_string()), model);
         }));
 
     // Apply document plugins (e.g., metadata stripping) before processing
@@ -308,15 +321,6 @@ async fn process_document_inner_impl(
         }
     }
 
-    // Resolve the document pipeline for this workspace's scope (walking
-    // workspace → dept → org → global). An org/dept/workspace that overrides
-    // chunking, PDF/OCR, or AI-preprocessing config gets a pipeline built from
-    // its effective config; scopes without overrides share the global pipeline.
-    // The scoped pipeline already bakes in chunk sizing, so no per-call
-    // `ChunkOverrides` are needed (default = transparent no-op).
-    let scope = state.resolve_scope_for_workspace(workspace_id);
-    let pipeline = state.get_scoped_document_pipeline(&scope);
-
     // Convert + chunk (AI or mechanical depending on config). The pipeline
     // returns `EmptyExtraction` when no meaningful content was produced —
     // surface its structured reason/hint instead of swallowing it into a
@@ -336,7 +340,7 @@ async fn process_document_inner_impl(
         Err(thairag_core::ThaiRagError::EmptyExtraction { reason, hint }) => {
             let msg = format!("empty_extraction[{reason}]: {hint}");
             warn!(%doc_id, reason, hint, "Document produced no chunks");
-            let _ = state.km_store.update_document_step(doc_id, None);
+            let _ = state.km_store.update_document_step(doc_id, None, None);
             let _ = state.km_store.update_document_status(
                 doc_id,
                 DocStatus::Failed,
@@ -348,7 +352,7 @@ async fn process_document_inner_impl(
         Err(e) => {
             let msg = format!("Document processing failed: {e}");
             warn!(%doc_id, %msg);
-            let _ = state.km_store.update_document_step(doc_id, None);
+            let _ = state.km_store.update_document_step(doc_id, None, None);
             let _ = state.km_store.update_document_status(
                 doc_id,
                 DocStatus::Failed,
@@ -424,7 +428,7 @@ async fn process_document_inner_impl(
                    Check chunk plugins and document content."
             .to_string();
         warn!(%doc_id, %msg);
-        let _ = state.km_store.update_document_step(doc_id, None);
+        let _ = state.km_store.update_document_step(doc_id, None, None);
         let _ =
             state
                 .km_store
@@ -476,11 +480,11 @@ async fn process_document_inner_impl(
     // Embed + index
     let _ = state
         .km_store
-        .update_document_step(doc_id, Some("indexing".into()));
+        .update_document_step(doc_id, Some("indexing".into()), None);
     if let Err(e) = p.search_engine.index_chunks(&chunks).await {
         let msg = format!("Indexing failed: {e}");
         warn!(%doc_id, %msg);
-        let _ = state.km_store.update_document_step(doc_id, None);
+        let _ = state.km_store.update_document_step(doc_id, None, None);
         let _ =
             state
                 .km_store
@@ -496,7 +500,7 @@ async fn process_document_inner_impl(
         .map(|text| compute_content_hash(text.as_bytes()));
 
     // Mark as ready, clear processing step, and bump version + content_hash
-    let _ = state.km_store.update_document_step(doc_id, None);
+    let _ = state.km_store.update_document_step(doc_id, None, None);
     let _ =
         state
             .km_store
@@ -639,6 +643,7 @@ pub async fn ingest_document(
         error_message: None,
         processing_step: None,
         processing_provenance: None,
+        processing_timeline: None,
         version: 1,
         content_hash: None,
         source_url: body.source_url,
@@ -782,6 +787,7 @@ pub async fn upload_document(
         error_message: None,
         processing_step: None,
         processing_provenance: None,
+        processing_timeline: None,
         version: 1,
         content_hash: None,
         source_url: None,
@@ -1479,6 +1485,7 @@ pub async fn batch_upload_documents(
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,

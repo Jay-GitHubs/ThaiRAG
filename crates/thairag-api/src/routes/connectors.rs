@@ -883,6 +883,7 @@ impl thairag_mcp::sync_engine::ContentIngester for DocumentIngester {
                 error_message: None,
                 processing_step: None,
                 processing_provenance: None,
+                processing_timeline: None,
                 version: 1,
                 content_hash: None,
                 source_url: None,

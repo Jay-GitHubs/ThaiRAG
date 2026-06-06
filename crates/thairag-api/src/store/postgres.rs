@@ -53,6 +53,7 @@ struct DocRow {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     processing_provenance: Option<String>,
+    processing_timeline: Option<String>,
 }
 
 impl From<DocRow> for Document {
@@ -69,6 +70,9 @@ impl From<DocRow> for Document {
             processing_step: r.processing_step,
             processing_provenance: r
                 .processing_provenance
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            processing_timeline: r
+                .processing_timeline
                 .and_then(|s| serde_json::from_str(&s).ok()),
             version: r.version,
             content_hash: r.content_hash,
@@ -116,6 +120,10 @@ impl PostgresKmStore {
         )
         .execute(&pool)
         .await;
+        let _ =
+            sqlx::query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS processing_timeline TEXT")
+                .execute(&pool)
+                .await;
         let _ = sqlx::query("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS metadata TEXT")
             .execute(&pool)
             .await;
@@ -583,7 +591,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn insert_document(&self, doc: Document) -> Result<Document> {
         self.get_workspace(doc.workspace_id)?;
         block_on(sqlx::query(
-            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+            "INSERT INTO documents (id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
         )
         .bind(doc.id.0)
         .bind(doc.workspace_id.0)
@@ -602,6 +610,7 @@ impl KmStoreTrait for PostgresKmStore {
         .bind(doc.created_at)
         .bind(doc.updated_at)
         .bind(doc.processing_provenance.as_ref().and_then(|p| serde_json::to_string(p).ok()))
+        .bind(doc.processing_timeline.as_ref().and_then(|t| serde_json::to_string(t).ok()))
         .execute(&self.pool))
         .map_err(|e| ThaiRagError::Internal(format!("Postgres insert document: {e}")))?;
         Ok(doc)
@@ -610,7 +619,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn get_document(&self, id: DocId) -> Result<Document> {
         block_on(
             sqlx::query_as::<_, DocRow>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE id = $1",
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline FROM documents WHERE id = $1",
             )
             .bind(id.0)
             .fetch_one(&self.pool),
@@ -622,7 +631,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn list_documents_in_workspace(&self, workspace_id: WorkspaceId) -> Vec<Document> {
         block_on(
             sqlx::query_as::<_, DocRow>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance FROM documents WHERE workspace_id = $1",
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline FROM documents WHERE workspace_id = $1",
             )
             .bind(workspace_id.0)
             .fetch_all(&self.pool),
@@ -640,8 +649,15 @@ impl KmStoreTrait for PostgresKmStore {
         chunk_count: i64,
         error_message: Option<String>,
     ) -> Result<()> {
+        // A fresh processing run resets the per-stage timeline so the UI tracker
+        // never shows stale stages carried over from a prior (re)processing run.
+        let sql = if matches!(status, DocStatus::Processing) {
+            "UPDATE documents SET status = $1, chunk_count = $2, error_message = $3, updated_at = $4, processing_timeline = NULL WHERE id = $5"
+        } else {
+            "UPDATE documents SET status = $1, chunk_count = $2, error_message = $3, updated_at = $4 WHERE id = $5"
+        };
         let result = block_on(
-            sqlx::query("UPDATE documents SET status = $1, chunk_count = $2, error_message = $3, updated_at = $4 WHERE id = $5")
+            sqlx::query(sql)
                 .bind(status.to_string())
                 .bind(chunk_count)
                 .bind(&error_message)
@@ -656,11 +672,37 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(())
     }
 
-    fn update_document_step(&self, id: DocId, step: Option<String>) -> Result<()> {
+    fn update_document_step(
+        &self,
+        id: DocId,
+        step: Option<String>,
+        model: Option<String>,
+    ) -> Result<()> {
+        let now = Utc::now();
+        // Read-modify-write the running timeline so each step transition records
+        // the prior stage's duration and opens the new stage.
+        let existing: Option<String> = block_on(
+            sqlx::query_scalar("SELECT processing_timeline FROM documents WHERE id = $1")
+                .bind(id.0)
+                .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres read timeline: {e}")))?
+        .flatten();
+        let mut timeline: Vec<thairag_core::models::StageTiming> = existing
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        thairag_core::models::StageTiming::advance(
+            &mut timeline,
+            step.as_deref(),
+            now.timestamp_millis(),
+            model.as_deref(),
+        );
+        let timeline_json = serde_json::to_string(&timeline).ok();
         let result = block_on(
-            sqlx::query("UPDATE documents SET processing_step = $1, updated_at = $2 WHERE id = $3")
+            sqlx::query("UPDATE documents SET processing_step = $1, processing_timeline = $2, updated_at = $3 WHERE id = $4")
                 .bind(&step)
-                .bind(Utc::now())
+                .bind(&timeline_json)
+                .bind(now)
                 .bind(id.0)
                 .execute(&self.pool),
         )
@@ -989,7 +1031,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn list_documents_due_for_refresh(&self) -> Vec<Document> {
         let all: Vec<Document> = block_on(
             sqlx::query_as::<_, DocRow>(
-                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance
+                "SELECT id, workspace_id, title, mime_type, size_bytes, status, chunk_count, error_message, processing_step, COALESCE(version, 1) AS version, content_hash, source_url, refresh_schedule, last_refreshed_at, created_at, updated_at, processing_provenance, processing_timeline
                  FROM documents WHERE status = 'ready' AND source_url IS NOT NULL AND refresh_schedule IS NOT NULL",
             )
             .fetch_all(&self.pool),
