@@ -1,7 +1,15 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  pinSharedModel,
+  setSharedModel,
+} from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +69,7 @@ test.describe('Borderless table is embedded and answerable through RAG', () => {
   let wsId: string;
   let docId: string;
   let originalAiEnabled = false;
+  let prevModel: string | undefined;
 
   test.beforeAll(async ({ request }) => {
     token = (
@@ -92,6 +101,11 @@ test.describe('Borderless table is embedded and answerable through RAG', () => {
       ).json()
     ).id;
 
+    // Pin a known-pulled chat model so this spec is independent of suite
+    // ordering (an earlier spec can leave a leaked/unpulled model selected,
+    // which would 404 the chat call). Restored in afterAll.
+    prevModel = await pinSharedModel(request, token);
+
     // Disable AI preprocessing for deterministic, fast chunking (the table chunk
     // is produced by the deterministic smart-PDF path regardless). Restored after.
     const cfgRes = await request.get(`${API_BASE}/api/km/settings/document`, { headers });
@@ -113,6 +127,7 @@ test.describe('Borderless table is embedded and answerable through RAG', () => {
       data: { ai_preprocessing: { enabled: originalAiEnabled } },
       headers,
     });
+    if (prevModel) await setSharedModel(request, token, prevModel);
   });
 
   test('asking about a borderless table row retrieves its chunk and answers with the figures', async ({

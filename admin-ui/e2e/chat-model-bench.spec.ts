@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE, GOOD_CHAT_MODEL } from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,7 +97,10 @@ test.describe('Chat model speed sweep (lean shared, latest Thai models)', () => 
     const cp = await (await request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
     snap = {
       llm_mode: cp.llm_mode,
-      llm: OLLAMA(cp.llm?.model ?? 'iapp/chinda-qwen3-4b'),
+      // Restore to a known-pulled model, not the ambient one — the bench loads
+      // oversized models, and the ambient value may itself be a leaked/unpulled
+      // model from an earlier spec. Leaving a good model avoids cascading 404s.
+      llm: OLLAMA(GOOD_CHAT_MODEL),
       query_analyzer_enabled: cp.query_analyzer_enabled,
       query_rewriter_enabled: cp.query_rewriter_enabled,
       context_curator_enabled: cp.context_curator_enabled,

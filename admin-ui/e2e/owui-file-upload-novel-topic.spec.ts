@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { TEST_EMAIL, TEST_PASSWORD, API_BASE, pinSharedModel, setSharedModel } from './helpers';
 
 /**
  * Gap-2 regression spec (headed): an Open WebUI file upload on a topic that is
@@ -78,6 +79,27 @@ function writeFixture(): string {
 
 test.describe('OWUI file upload on a topic absent from ThaiRAG KM', () => {
   test.setTimeout(15 * 60_000);
+
+  // ThaiRAG answers OWUI's request with the global chat model. Pin a known-pulled
+  // one (via the admin API) so this spec is independent of suite ordering — an
+  // earlier spec can leave a leaked/unpulled model that would 404 the call.
+  let token: string;
+  let prevModel: string | undefined;
+
+  test.beforeAll(async ({ request }) => {
+    token = (
+      await (
+        await request.post(`${API_BASE}/api/auth/login`, {
+          data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+        })
+      ).json()
+    ).token;
+    prevModel = await pinSharedModel(request, token);
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (prevModel) await setSharedModel(request, token, prevModel);
+  });
 
   test('uploaded-file question is answered, not refused with empty-KB message', async ({ page }) => {
     const fixture = writeFixture();

@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE, GOOD_CHAT_MODEL } from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -174,9 +174,12 @@ test.describe('Chat pipeline speed benchmark (model + mode sweep)', () => {
     deptId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts`, { data: { name: deptName }, headers })).json()).id;
     wsId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}/workspaces`, { data: { name: wsName }, headers })).json()).id;
 
-    // Snapshot original chat config so afterAll can restore it.
+    // Snapshot original mode so afterAll can restore it. Restore the model to a
+    // known-pulled one (not the ambient value): the bench loads oversized models
+    // and the ambient model may itself be a leaked/unpulled model from an earlier
+    // spec — leaving a good model avoids cascading 404s in later specs.
     const cp = await (await request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
-    originalSharedModel = cp.llm?.model ?? M_35B;
+    originalSharedModel = GOOD_CHAT_MODEL;
     originalMode = cp.llm_mode ?? 'shared';
 
     // Disable AI preprocessing for fast deterministic ingest; raise chunk size so

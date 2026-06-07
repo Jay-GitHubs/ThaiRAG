@@ -1,7 +1,15 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  pinSharedModel,
+  setSharedModel,
+} from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +83,7 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
   let wsId: string;
   let docId: string;
   let originalAiEnabled = false;
+  let prevModel: string | undefined;
 
   test.beforeAll(async ({ request }) => {
     const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
@@ -100,6 +109,10 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
       { data: { name: wsName }, headers },
     );
     wsId = (await wsRes.json()).id;
+
+    // Pin a known-pulled chat model so the chat query is independent of suite
+    // ordering (an earlier spec can leave a leaked/unpulled model). Restored after.
+    prevModel = await pinSharedModel(request, token);
 
     // Disable AI preprocessing globally for deterministic, fast non-AI chunking
     // (the AI path runs Ollama and takes minutes per pass). Restored in afterAll.
@@ -134,6 +147,7 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
       data: { ai_preprocessing: { enabled: originalAiEnabled } },
       headers,
     });
+    if (prevModel) await setSharedModel(request, token, prevModel);
   });
 
   test('asking about a table row retrieves the atomic table chunk from the vector DB', async ({ page }) => {
