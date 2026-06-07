@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Steps, Tag, Typography, Alert, Space } from 'antd';
+import { Steps, Tag, Typography, Alert, Space, Tooltip } from 'antd';
 import {
   LoadingOutlined,
   CheckCircleFilled,
@@ -284,6 +284,16 @@ export function ProcessingTimeline({ doc }: Props) {
               <Tag color="geekblue">{doc.processing_provenance.path}</Tag>
               {doc.processing_provenance.mechanical_fallback && (
                 <Tag color="warning">mechanical fallback</Tag>
+              )}
+              {!!doc.processing_provenance.tables_kept_as_text && (
+                <Tooltip
+                  title="Tabular page(s) had no clean grid to reconstruct deterministically. The raw text was kept verbatim (numbers exact) instead of risking vision OCR — the table structure may need a manual look."
+                >
+                  <Tag color="warning">
+                    {doc.processing_provenance.tables_kept_as_text} table
+                    {doc.processing_provenance.tables_kept_as_text > 1 ? 's' : ''} kept as text
+                  </Tag>
+                </Tooltip>
               )}
             </Space>
           }

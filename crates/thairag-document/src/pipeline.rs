@@ -65,6 +65,7 @@ fn build_ai_provenance(
     mut agents: Vec<thairag_core::models::AgentRun>,
     mechanical_fallback: bool,
     chunk_count: usize,
+    tables_kept_as_text: usize,
 ) -> thairag_core::models::ProcessingProvenance {
     use thairag_core::models::AgentRun;
     agents.push(AgentRun {
@@ -85,6 +86,7 @@ fn build_ai_provenance(
         mechanical_fallback,
         chunk_count: chunk_count as i64,
         fidelity: None,
+        tables_kept_as_text: tables_kept_as_text as i64,
     }
 }
 
@@ -620,6 +622,7 @@ impl DocumentPipeline {
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
+                tables_kept_as_text: 0,
             };
             return Ok((chunks, prov));
         }
@@ -640,6 +643,7 @@ impl DocumentPipeline {
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
+                tables_kept_as_text: 0,
             };
             return Ok((chunks, prov));
         }
@@ -716,6 +720,7 @@ impl DocumentPipeline {
             mechanical_fallback,
             chunk_count: chunks.len() as i64,
             fidelity: None,
+            tables_kept_as_text: 0,
         };
         Ok((chunks, prov))
     }
@@ -886,6 +891,7 @@ impl DocumentPipeline {
             total_pages = doc.total_pages,
             vision_pages_used = doc.vision_pages_used,
             pages_vision_failed = doc.pages_vision_failed,
+            tables_kept_as_text = doc.tables_kept_as_text,
             markdown_bytes = doc.markdown.len(),
             vision_model = llm.model_name(),
             "Smart PDF (pdfium) processing complete"
@@ -974,6 +980,7 @@ impl DocumentPipeline {
                 agents,
                 mechanical_fallback,
                 chunks.len(),
+                doc.tables_kept_as_text,
             );
             (chunks, Some(prov))
         } else {
@@ -1035,6 +1042,7 @@ impl DocumentPipeline {
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
+                tables_kept_as_text: doc.tables_kept_as_text as i64,
             };
             (chunks, Some(prov))
         };
@@ -1122,6 +1130,7 @@ impl DocumentPipeline {
                 agents,
                 mechanical_fallback,
                 chunks.len(),
+                0,
             );
             (chunks, Some(prov))
         } else {
@@ -1136,6 +1145,7 @@ impl DocumentPipeline {
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
+                tables_kept_as_text: 0,
             };
             (chunks, Some(prov))
         };
@@ -1311,6 +1321,7 @@ impl DocumentPipeline {
             mechanical_fallback: false,
             chunk_count: 1,
             fidelity: None,
+            tables_kept_as_text: 0,
         };
         Ok(ProcessedDocument {
             chunks: vec![chunk],

@@ -34,8 +34,9 @@ const PNG_MIME: &str = "image/png";
 const PAGE_VISION_TOKENS: u32 = 4096;
 /// Token budget for a single embedded-image description.
 const IMAGE_VISION_TOKENS: u32 = 1024;
-/// Minimum lattice confidence to trust a reconstructed table over vision OCR.
-/// Below this, the page falls back to the vision path (and is flagged).
+/// Minimum confidence to trust a deterministic table reconstruction. Below
+/// this, the page keeps its raw text and is flagged (`tables_kept_as_text`) —
+/// we do not fall back to vision OCR, which can fabricate numerals.
 const LATTICE_MIN_CONFIDENCE: f32 = 0.3;
 /// Minimum fraction of a page's glyphs that must fall inside the reconstructed
 /// grid before we treat the page as table-dominated and replace its body with
@@ -110,11 +111,11 @@ pub struct PageExtract {
     pub page_png: Option<Vec<u8>>,
     /// Embedded image PNGs, present for Mixed pages (already size-filtered).
     pub embedded: Vec<Vec<u8>>,
-    /// Deterministic lattice reconstruction of a bordered digital table, when
-    /// the page is Tabular and a ruled grid was found with sufficient
-    /// confidence. When present, the page is rendered from this HTML — no
-    /// vision call, so cell numbers come straight from the text layer.
-    pub lattice: Option<crate::table_lattice::LatticeTable>,
+    /// Deterministic table reconstruction of a digital table — bordered (lattice,
+    /// from ruling lines) or borderless (stream, from whitespace columns). When
+    /// present the page is rendered from this HTML — no vision call, so cell
+    /// content comes straight from the text layer.
+    pub table: Option<crate::table_lattice::ReconstructedTable>,
 }
 
 /// An image blob extracted during processing, with a minted id, ready for the
@@ -147,6 +148,13 @@ pub struct SmartPdfDocument {
     pub total_pages: usize,
     pub vision_pages_used: usize,
     pub pages_vision_failed: usize,
+    /// Pages classified `Tabular` whose table could not be reconstructed
+    /// deterministically (no ruled grid, no trustworthy borderless grid). Their
+    /// raw text is kept verbatim — numbers stay exact, but the table *structure*
+    /// is not recovered. Surfaced so an analyst can spot a layout that may need
+    /// a manual look (we deliberately do NOT fall back to probabilistic vision
+    /// OCR, which can fabricate Thai numerals).
+    pub tables_kept_as_text: usize,
 }
 
 /// Phase 1 (sync): open the PDF once and gather per-page extraction data.
@@ -202,9 +210,13 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
         // to the page's normal handling (and vision for true Tabular pages).
         let has_text_layer =
             meaningful >= cfg.min_chars_per_page && !matches!(strategy, PageStrategy::Scanned);
-        let lattice = if has_text_layer {
+        let table = if has_text_layer {
             engine.page_geometry(pdf, sig.index).ok().and_then(|g| {
-                crate::table_lattice::reconstruct(&g.chars, &g.lines).filter(|t| {
+                // Bordered first (lattice, from ruling lines); if there's no
+                // ruled grid, try borderless (stream, from whitespace columns).
+                let lattice = crate::table_lattice::reconstruct(&g.chars, &g.lines);
+                let chosen = lattice.or_else(|| crate::table_stream::reconstruct(&g.chars));
+                chosen.filter(|t| {
                     t.confidence >= LATTICE_MIN_CONFIDENCE
                         && t.char_coverage >= LATTICE_MIN_COVERAGE
                         && t.n_rows * t.n_cols >= LATTICE_MIN_CELLS
@@ -215,9 +227,10 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
         };
 
         // Render a full-page image for the whole-page-OCR strategies — but skip
-        // it for a Tabular page already solved by lattice.
-        let needs_render = matches!(strategy, PageStrategy::ImageHeavy | PageStrategy::Scanned)
-            || (matches!(strategy, PageStrategy::Tabular) && lattice.is_none());
+        // it for a Tabular page already solved deterministically. (A borderless
+        // Tabular page with no reconstruction now keeps its text — vision is
+        // reserved for genuinely scanned pages.)
+        let needs_render = matches!(strategy, PageStrategy::ImageHeavy | PageStrategy::Scanned);
         let page_png = if needs_render {
             engine
                 .render_page_png(pdf, sig.index, cfg.image_dpi, cfg.enhance)
@@ -233,7 +246,7 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
             text: sig.text,
             page_png,
             embedded,
-            lattice,
+            table,
         });
     }
     Ok(pages)
@@ -250,6 +263,7 @@ pub async fn render_to_document(
     let total_pages = extracts.len();
     let mut vision_pages_used = 0usize;
     let mut pages_vision_failed = 0usize;
+    let mut tables_kept_as_text = 0usize;
     let mut rendered = Vec::with_capacity(total_pages);
     let mut images: Vec<ExtractedImageBlob> = Vec::new();
 
@@ -261,38 +275,20 @@ pub async fn render_to_document(
         // HTML table's numbers come straight from the text layer (no vision, no
         // fabrication). This is what fixes a bordered table that the heuristic
         // mislabelled TextOnly.
-        let mut body = if let Some(lat) = ex.lattice.as_ref() {
+        let mut body = if let Some(lat) = ex.table.as_ref() {
             lat.html.clone()
         } else {
             match ex.strategy {
                 PageStrategy::TextOnly => ex.text.clone(),
 
                 PageStrategy::Tabular => {
-                    // No lattice (borderless / low-confidence) → vision OCR
-                    // fallback (probabilistic; flagged via vision_pages_used).
-                    let Some(png) = ex.page_png.as_ref() else {
-                        rendered.push(rp(&ex, ex.text.clone()));
-                        continue;
-                    };
-                    if over_budget {
-                        ex.text.clone()
-                    } else {
-                        let prompt = get_prompts(lang).table_extraction;
-                        match describe(llm, png, prompt, PAGE_VISION_TOKENS, cfg.max_image_edge)
-                            .await
-                        {
-                            Ok(desc) => {
-                                vision_pages_used += 1;
-                                desc // markdown table from vision; raw text suppressed
-                            }
-                            Err(e) => {
-                                pages_vision_failed += 1;
-                                warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
-                                    "smart-pdf: table OCR failed — keeping extracted text");
-                                ex.text.clone()
-                            }
-                        }
-                    }
+                    // No trustworthy reconstruction (borderless with no clean
+                    // column grid, or below the confidence/coverage gate). Keep
+                    // the raw text verbatim — numbers stay exact — and flag the
+                    // page. We deliberately do NOT fall back to vision OCR: it is
+                    // probabilistic and fabricates Thai numerals.
+                    tables_kept_as_text += 1;
+                    ex.text.clone()
                 }
 
                 PageStrategy::ImageHeavy | PageStrategy::Scanned => {
@@ -392,7 +388,7 @@ pub async fn render_to_document(
         // described inline.
         if matches!(
             ex.strategy,
-            PageStrategy::ImageHeavy | PageStrategy::Scanned | PageStrategy::Tabular
+            PageStrategy::ImageHeavy | PageStrategy::Scanned
         ) && let Some(png) = ex.page_png.as_ref()
         {
             let image_id = ImageId::new();
@@ -424,6 +420,7 @@ pub async fn render_to_document(
         total_pages,
         vision_pages_used,
         pages_vision_failed,
+        tables_kept_as_text,
     }
 }
 
@@ -435,8 +432,8 @@ fn rp(ex: &PageExtract, markdown: String) -> RenderedPage {
         page_num: ex.page_num,
         strategy: ex.strategy,
         markdown,
-        table_html: ex.lattice.as_ref().map(|l| l.html.clone()),
-        table_linearized: ex.lattice.as_ref().map(|l| l.linearized.clone()),
+        table_html: ex.table.as_ref().map(|l| l.html.clone()),
+        table_linearized: ex.table.as_ref().map(|l| l.linearized.clone()),
     }
 }
 
@@ -509,7 +506,7 @@ mod tests {
             text: "Plenty of readable body text on this page.".into(),
             page_png: None,
             embedded: vec![],
-            lattice: None,
+            table: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
@@ -530,7 +527,7 @@ mod tests {
             text: String::new(),
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
-            lattice: None,
+            table: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
@@ -548,23 +545,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tabular_page_replaces_text_with_table_ocr() {
+    async fn tabular_page_without_reconstruction_keeps_text_and_flags() {
+        // A Tabular page with no trustworthy reconstruction keeps its raw text
+        // verbatim (numbers exact) and is flagged — never vision OCR, which can
+        // fabricate Thai numerals.
         let llm = StubVision {
-            reply: "| a | b |\n|---|---|\n| 1 | 2 |".into(),
+            reply: "VISION SHOULD NOT RUN".into(),
             supports: true,
         };
         let pages = vec![PageExtract {
             page_num: 1,
             strategy: PageStrategy::Tabular,
-            text: "raw  tabular  text  that  should  be  replaced".into(),
-            page_png: Some(vec![1, 2, 3]),
+            text: "raw tabular text with exact numbers 123 456".into(),
+            page_png: None,
             embedded: vec![],
-            lattice: None,
+            table: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
-        assert_eq!(doc.vision_pages_used, 1);
-        assert!(doc.markdown.contains("| a | b |"));
-        assert!(!doc.markdown.contains("should  be  replaced"));
+        assert_eq!(doc.vision_pages_used, 0, "must not call vision");
+        assert_eq!(doc.tables_kept_as_text, 1, "page should be flagged");
+        assert!(doc.markdown.contains("exact numbers 123 456"));
+        assert!(!doc.markdown.contains("VISION SHOULD NOT RUN"));
     }
 
     #[tokio::test]
@@ -575,17 +576,13 @@ mod tests {
             reply: "VISION SHOULD NOT RUN".into(),
             supports: true,
         };
-        let lat = crate::table_lattice::LatticeTable {
+        let lat = crate::table_lattice::ReconstructedTable {
             html: "<table><tr><td>ก</td><td>๑๒๓</td></tr></table>".into(),
             linearized: "ก | ๑๒๓".into(),
             confidence: 1.0,
             char_coverage: 1.0,
             n_rows: 1,
             n_cols: 2,
-            x_min: 0.0,
-            x_max: 200.0,
-            y_min: 0.0,
-            y_max: 100.0,
         };
         let pages = vec![PageExtract {
             page_num: 1,
@@ -593,7 +590,7 @@ mod tests {
             text: "raw tabular text".into(),
             page_png: None,
             embedded: vec![],
-            lattice: Some(lat),
+            table: Some(lat),
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "lattice must not call vision");
@@ -632,7 +629,7 @@ mod tests {
             text: "fallback body text".into(),
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
-            lattice: None,
+            table: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &c).await;
         assert_eq!(doc.vision_pages_used, 0);
