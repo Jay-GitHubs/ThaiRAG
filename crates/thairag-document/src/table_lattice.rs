@@ -26,27 +26,22 @@ const SNAP: f32 = 3.0;
 /// future word-grouping; cell assignment uses glyph centers directly.
 const _RESERVED: f32 = 0.0;
 
-/// A reconstructed table.
+/// A reconstructed table — shared by the lattice (bordered) and stream
+/// (borderless) paths. Content comes from the text layer (exact); only the
+/// structure is inferred, and scored with `confidence`.
 #[derive(Debug, Clone)]
-pub struct LatticeTable {
-    /// Faithful HTML (`<table>` with colspan/rowspan); cell text is escaped.
+pub struct ReconstructedTable {
+    /// Faithful HTML (`<table>`, colspan/rowspan on the lattice path); cell text escaped.
     pub html: String,
     /// Row-linearized, merge-filled text for embedding/search.
     pub linearized: String,
-    /// Heuristic confidence in [0,1] (fraction of grid cells that held text).
+    /// Heuristic confidence in [0,1].
     pub confidence: f32,
     /// Fraction of the page's input glyphs that fell inside the grid. Near 1.0
-    /// means the table dominates the page; low means a small table amid prose
-    /// (caller may decline to replace the whole page body).
+    /// means the table dominates the page; low means a small table amid prose.
     pub char_coverage: f32,
     pub n_rows: usize,
     pub n_cols: usize,
-    /// Grid bounding box in PDF point space, so callers can separate the
-    /// surrounding prose (text above/below the table).
-    pub x_min: f32,
-    pub x_max: f32,
-    pub y_min: f32,
-    pub y_max: f32,
 }
 
 /// Cluster a set of scalar coordinates into representative positions, merging
@@ -104,7 +99,7 @@ struct Line {
 /// Reconstruct a bordered table from page geometry. Returns `None` when the
 /// geometry does not form a grid (fewer than 2 distinct row or column borders)
 /// — i.e. this is not a lattice (ruled) table and the caller should fall back.
-pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<LatticeTable> {
+pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<ReconstructedTable> {
     // Split ruling lines into horizontal and vertical, capturing position +
     // extent so we can later test whether an internal border covers a cell.
     let mut h: Vec<Line> = Vec::new();
@@ -137,10 +132,6 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Latti
 
     let n_rows = ys.len() - 1;
     let n_cols = xs.len() - 1;
-    let x_min = *xs.first().unwrap();
-    let x_max = *xs.last().unwrap();
-    let y_min = *ys_asc.first().unwrap();
-    let y_max = *ys_asc.last().unwrap();
 
     // Does a vertical line sit at column-boundary `b` (1..n_cols) and cover the
     // y-span of row `r`? Boundary x = xs[b]; row band = [ys[r+1], ys[r]].
@@ -309,17 +300,13 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Latti
         assigned as f32 / chars.len() as f32
     };
 
-    Some(LatticeTable {
+    Some(ReconstructedTable {
         html,
         linearized,
         confidence,
         char_coverage,
         n_rows,
         n_cols,
-        x_min,
-        x_max,
-        y_min,
-        y_max,
     })
 }
 
