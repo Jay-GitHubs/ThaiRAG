@@ -4,6 +4,7 @@ import {
   UploadOutlined, PlusOutlined, DeleteOutlined, LoadingOutlined,
   SyncOutlined, EyeOutlined, DownloadOutlined, BlockOutlined, ReloadOutlined,
   FileMarkdownOutlined, CheckCircleTwoTone, MinusCircleOutlined, CloseCircleTwoTone,
+  ProfileOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
@@ -16,6 +17,7 @@ import { UploadModal } from './UploadModal';
 import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
+import { ProcessingDetailModal } from './ProcessingDetailModal';
 import { downloadDocument, getDocumentContent } from '../../api/documents';
 import type { Document, DocStatus, ProcessingProvenance } from '../../api/types';
 
@@ -173,6 +175,7 @@ export function DocumentTable({ workspaceId }: Props) {
   const [ingestOpen, setIngestOpen] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
   const [chunksDoc, setChunksDoc] = useState<Document | null>(null);
+  const [detailDoc, setDetailDoc] = useState<Document | null>(null);
 
   // Auto-refresh when any document is processing
   const hasProcessing = data?.data?.some((d) => d.status === 'processing');
@@ -229,26 +232,34 @@ export function DocumentTable({ workspaceId }: Props) {
   }
 
   function renderStatus(status: DocStatus, record: Document) {
+    // The status tag is clickable: it opens the per-stage processing detail
+    // (live while processing, the persisted record afterwards).
+    const open = () => setDetailDoc(record);
+    const clickable = { cursor: 'pointer' as const };
     switch (status) {
       case 'processing':
         return (
-          <Tooltip title={record.processing_step ? `Step: ${STEP_LABELS[record.processing_step] || record.processing_step}` : 'Processing...'}>
-            <Tag icon={<SyncOutlined spin />} color="processing">
+          <Tooltip title={record.processing_step ? `Step: ${STEP_LABELS[record.processing_step] || record.processing_step} — click for details` : 'Processing… — click for details'}>
+            <Tag icon={<SyncOutlined spin />} color="processing" style={clickable} onClick={open}>
               {record.processing_step ? STEP_LABELS[record.processing_step] || record.processing_step : 'Processing'}
             </Tag>
           </Tooltip>
         );
       case 'ready':
-        return <Tag color="success">Ready</Tag>;
+        return (
+          <Tooltip title="Click for processing details">
+            <Tag color="success" style={clickable} onClick={open}>Ready</Tag>
+          </Tooltip>
+        );
       case 'failed': {
         const reason = parseEmptyExtractionReason(record.error_message);
         const label = reason ? (EMPTY_REASON_LABELS[reason] ?? reason) : 'Failed';
         return (
           <Tooltip
-            title={record.error_message || 'Processing failed'}
+            title={`${record.error_message || 'Processing failed'} — click for details`}
             styles={{ root: { maxWidth: 480 } }}
           >
-            <Tag color={reason ? 'warning' : 'error'}>
+            <Tag color={reason ? 'warning' : 'error'} style={clickable} onClick={open}>
               {label}
             </Tag>
           </Tooltip>
@@ -309,6 +320,9 @@ export function DocumentTable({ workspaceId }: Props) {
       key: 'actions',
       render: (_: unknown, record: Document) => (
         <Space size="small">
+          <Tooltip title="Processing details">
+            <Button size="small" icon={<ProfileOutlined />} onClick={() => setDetailDoc(record)} />
+          </Tooltip>
           <Tooltip title="Preview content">
             <Button size="small" icon={<EyeOutlined />} onClick={() => setPreviewDoc(record)} disabled={record.status === 'processing'} />
           </Tooltip>
@@ -399,6 +413,14 @@ export function DocumentTable({ workspaceId }: Props) {
           doc={chunksDoc}
           open={!!chunksDoc}
           onClose={() => setChunksDoc(null)}
+        />
+      )}
+      {detailDoc && (
+        <ProcessingDetailModal
+          workspaceId={workspaceId}
+          doc={detailDoc}
+          open={!!detailDoc}
+          onClose={() => setDetailDoc(null)}
         />
       )}
     </>
