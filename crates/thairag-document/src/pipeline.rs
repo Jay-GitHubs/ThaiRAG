@@ -84,6 +84,7 @@ fn build_ai_provenance(
         agents,
         mechanical_fallback,
         chunk_count: chunk_count as i64,
+        fidelity: None,
     }
 }
 
@@ -618,6 +619,7 @@ impl DocumentPipeline {
                 agents: Vec::new(),
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
+                fidelity: None,
             };
             return Ok((chunks, prov));
         }
@@ -637,6 +639,7 @@ impl DocumentPipeline {
                 agents: Vec::new(),
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
+                fidelity: None,
             };
             return Ok((chunks, prov));
         }
@@ -712,6 +715,7 @@ impl DocumentPipeline {
             agents,
             mechanical_fallback,
             chunk_count: chunks.len() as i64,
+            fidelity: None,
         };
         Ok((chunks, prov))
     }
@@ -1030,6 +1034,7 @@ impl DocumentPipeline {
                 agents: Vec::new(),
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
+                fidelity: None,
             };
             (chunks, Some(prov))
         };
@@ -1130,6 +1135,7 @@ impl DocumentPipeline {
                 agents: Vec::new(),
                 mechanical_fallback: false,
                 chunk_count: chunks.len() as i64,
+                fidelity: None,
             };
             (chunks, Some(prov))
         };
@@ -1304,6 +1310,7 @@ impl DocumentPipeline {
             }],
             mechanical_fallback: false,
             chunk_count: 1,
+            fidelity: None,
         };
         Ok(ProcessedDocument {
             chunks: vec![chunk],
