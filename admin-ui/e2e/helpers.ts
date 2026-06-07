@@ -1,8 +1,56 @@
-import { type Page, expect } from '@playwright/test';
+import { type Page, type APIRequestContext, expect } from '@playwright/test';
 
 export const TEST_EMAIL = 'playwright@test.com';
 export const TEST_PASSWORD = 'Test1234!';
 export const API_BASE = 'http://localhost:8080';
+
+/**
+ * A chat/generation model that is reliably pulled in the local dev Ollama.
+ * Chat-dependent specs pin to this so they don't inherit a leaked/unpulled
+ * model (e.g. a model-bench spec that left an oversized model selected), and
+ * model-mutating specs restore to it so they never leave a bad model behind.
+ */
+export const GOOD_CHAT_MODEL = 'qwen3:14b';
+
+/** Read the current global shared chat-pipeline LLM model (or undefined). */
+export async function getSharedModel(
+  request: APIRequestContext,
+  token: string,
+): Promise<string | undefined> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const cp = await (
+    await request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })
+  ).json();
+  return cp.llm?.model as string | undefined;
+}
+
+/** Set the global shared chat-pipeline LLM model (merges; hot-reloaded by the API). */
+export async function setSharedModel(
+  request: APIRequestContext,
+  token: string,
+  model: string,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${token}` };
+  await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, {
+    data: { llm: { kind: 'Ollama', model } },
+    headers,
+  });
+}
+
+/**
+ * Pin the shared model to a known-pulled one for the duration of a spec and
+ * return the previous model so `afterAll` can restore it. Guards chat-dependent
+ * specs against inheriting a leaked/unpulled model from an earlier spec.
+ */
+export async function pinSharedModel(
+  request: APIRequestContext,
+  token: string,
+  model: string = GOOD_CHAT_MODEL,
+): Promise<string | undefined> {
+  const prev = await getSharedModel(request, token);
+  await setSharedModel(request, token, model);
+  return prev;
+}
 
 /** Suppress guided tours and quick start from auto-starting during tests. */
 export async function suppressTours(page: Page) {

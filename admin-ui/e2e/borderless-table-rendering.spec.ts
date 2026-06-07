@@ -1,7 +1,15 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  pinSharedModel,
+  setSharedModel,
+} from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PDF = path.resolve(__dirname, '../../tests/fixtures/borderless_table.pdf');
@@ -22,6 +30,7 @@ test.describe('Borderless table rendering (whitespace-stream PDF)', () => {
   let orgId: string;
   let deptId: string;
   let wsId: string;
+  let prevModel: string | undefined;
 
   test.beforeAll(async ({ request }) => {
     token = (
@@ -51,6 +60,10 @@ test.describe('Borderless table rendering (whitespace-stream PDF)', () => {
         })
       ).json()
     ).id;
+
+    // Pin a known-pulled chat model so ingest's AI analyzer is never blocked by
+    // a leaked/unpulled model left by an earlier spec. Restored in afterAll.
+    prevModel = await pinSharedModel(request, token);
   });
 
   test.afterAll(async ({ request }) => {
@@ -60,6 +73,7 @@ test.describe('Borderless table rendering (whitespace-stream PDF)', () => {
     });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}`, { headers });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}`, { headers });
+    if (prevModel) await setSharedModel(request, token, prevModel);
   });
 
   test('borderless PDF reconstructs as an HTML table in the preview', async ({ page }) => {
