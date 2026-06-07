@@ -8,16 +8,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Per-workspace chunk-size override (Tier 1).
  *
- * Reproduces the split-table problem: a bilingual Thai/English table PDF whose
- * extracted markdown is several thousand chars splits into many fragments at
- * the default max_chunk_size. Setting a per-workspace `document.max_chunk_size`
- * override raises the size (and suppresses the AI analyzer's auto-shrink), so
- * the table stays atomic on reprocess.
+ * Proves that a per-scope `document.max_chunk_size` override actually governs
+ * chunking: a ~5.8k-char prose document splits into many fragments at the
+ * default size, but raising the size at org scope (inherited by the workspace)
+ * collapses it to a single chunk on reprocess.
+ *
+ * Uses prose rather than a table on purpose — tables are reconstructed into one
+ * atomic chunk per page regardless of chunk size (deterministic table
+ * extraction), so a table can no longer demonstrate size-driven splitting.
  */
-const PDF_PATH = path.resolve(
-  __dirname,
-  '../../tests/fixtures/micro_sme_prohibited_business.pdf',
-);
+const PROSE_PATH = path.resolve(__dirname, '../../tests/fixtures/long_prose.md');
 
 // Poll the documents list until the target doc leaves the 'processing' state.
 interface DocState {
@@ -133,10 +133,10 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     });
   });
 
-  test('raising per-workspace max_chunk_size keeps the table atomic', async ({ page }) => {
+  test('raising per-workspace max_chunk_size collapses a prose doc to one chunk', async ({ page }) => {
     test.setTimeout(300_000);
 
-    // ── 1. Upload the split-table PDF through the UI ───────────────────────
+    // ── 1. Upload the long prose document through the UI ───────────────────
     await login(page);
     await navigateTo(page, 'Documents');
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
@@ -153,7 +153,7 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
 
     const modal = page.locator('.ant-modal', { hasText: 'Upload Document' });
     await expect(modal).toBeVisible();
-    await modal.locator('input[type="file"]').setInputFiles(PDF_PATH);
+    await modal.locator('input[type="file"]').setInputFiles(PROSE_PATH);
     await modal.getByRole('button', { name: 'Upload' }).click();
     // Upload now keeps the modal open as a live processing tracker; dismiss it.
     await page.getByRole('button', { name: 'Done' }).click();
@@ -165,14 +165,14 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     const list = (await listRes.json()).data as { id: string; title: string }[];
-    const doc = list.find((d) => d.title.includes('micro_sme_prohibited_business'));
-    expect(doc, 'uploaded PDF should appear in the workspace').toBeTruthy();
+    const doc = list.find((d) => d.title.includes('long_prose'));
+    expect(doc, 'uploaded document should appear in the workspace').toBeTruthy();
     docId = doc!.id;
 
-    // ── 2. Baseline: default chunk size splits the table ───────────────────
+    // ── 2. Baseline: default chunk size splits the prose into many chunks ──
     const baseline = await waitForReady(page.request, token, wsId, docId);
     console.log(`[per-scope-chunking] baseline chunk_count=${baseline.chunkCount}`);
-    expect(baseline.chunkCount, 'table should split into multiple chunks at default size').toBeGreaterThan(1);
+    expect(baseline.chunkCount, 'prose should split into multiple chunks at default size').toBeGreaterThan(1);
 
     // ── 3. Set a scoped Max Chunk Size override in Settings ────────────────
     // The scope selector only cascades into workspace options when there is a
@@ -214,7 +214,7 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     );
     expect((await globalCfg.json()).max_chunk_size).not.toBe(8000);
 
-    // ── 4. Reprocess and verify the table is now atomic ────────────────────
+    // ── 4. Reprocess and verify the prose is now a single chunk ────────────
     await navigateTo(page, 'Documents');
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
     await page.getByTitle(orgName).click();
@@ -223,7 +223,7 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
     await page.getByTitle(wsName).click();
 
-    const docRow = page.locator('tr', { hasText: 'micro_sme_prohibited_business' });
+    const docRow = page.locator('tr', { hasText: 'long_prose' });
     await expect(docRow).toBeVisible({ timeout: 5000 });
     // Reprocess is an icon-only button (ReloadOutlined) wrapped in a Popconfirm.
     await docRow.locator('button:has(.anticon-reload)').click();
@@ -238,7 +238,7 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     // The override must produce strictly fewer chunks than the baseline split.
     expect(overridden.chunkCount).toBeLessThan(baseline.chunkCount);
 
-    // And the whole table should now live in a single atomic chunk.
+    // And the whole prose document should now live in a single chunk.
     const chunksRes = await page.request.get(
       `${API_BASE}/api/km/workspaces/${wsId}/documents/${docId}/chunks`,
       { headers: { Authorization: `Bearer ${token}` } },
