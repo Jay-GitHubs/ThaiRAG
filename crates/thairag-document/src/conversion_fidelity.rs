@@ -155,13 +155,18 @@ fn meaningful_chars(s: &str) -> usize {
 
 /// Remove HTML tags and `[IMAGE:…]` markers so only readable text remains.
 fn strip_markup(s: &str) -> String {
-    // Pass 1: drop anything between '<' and '>'.
+    // Pass 1: replace anything between '<' and '>' with a SPACE — not nothing —
+    // so adjacent cells (`</td><td>`) don't fuse their content (which would,
+    // e.g., merge two numbers into one bogus token).
     let mut no_tags = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {
         match c {
             '<' => in_tag = true,
-            '>' => in_tag = false,
+            '>' => {
+                in_tag = false;
+                no_tags.push(' ');
+            }
             _ if !in_tag => no_tags.push(c),
             _ => {}
         }
@@ -326,6 +331,18 @@ mod tests {
         assert_eq!(a, b);
         a.insert("x".into()); // sanity: sets are real
         assert!(a.contains("5678"));
+    }
+
+    #[test]
+    fn adjacent_numeric_cells_do_not_fuse() {
+        // Two cells each holding only a number, no internal space. Stripping
+        // tags must not merge "1" and "1234" into "11234".
+        let orig = "Item 1 ๑,๒๓๔";
+        let conv = "<table><tr><td>Item 1</td><td>๑,๒๓๔</td></tr></table>";
+        let r = compare(orig, &strip_markup(conv));
+        assert_eq!(r.numbers_fabricated, 0, "{r:?}");
+        assert_eq!(r.numbers_matched, r.numbers_total);
+        assert_eq!(r.status, "verified", "{r:?}");
     }
 
     #[test]
