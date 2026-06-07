@@ -13,6 +13,7 @@ pub mod semantic_prompts;
 pub mod smart_pdf;
 pub mod table_extractor;
 pub mod table_lattice;
+pub mod table_stream;
 pub mod text_utils;
 pub mod thai_chunker;
 pub mod window_chunker;

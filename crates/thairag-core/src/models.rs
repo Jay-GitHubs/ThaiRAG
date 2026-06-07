@@ -173,6 +173,16 @@ pub struct ProcessingProvenance {
     /// ingest; `None` for older documents processed before this existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<ConversionFidelity>,
+    /// Count of PDF pages classified as tabular whose table could not be
+    /// reconstructed deterministically; their raw text was kept verbatim
+    /// (numbers exact, structure not recovered) rather than risking vision OCR.
+    /// A non-zero value flags pages an analyst may want to review by hand.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tables_kept_as_text: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

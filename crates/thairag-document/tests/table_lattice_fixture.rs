@@ -22,7 +22,7 @@ fn lattice_reconstructs_real_thai_table_fixture() {
     // text heuristic classifies it TextOnly.
     let lat = pages
         .iter()
-        .find_map(|p| p.lattice.as_ref())
+        .find_map(|p| p.table.as_ref())
         .expect("a page should reconstruct as a lattice table");
 
     // Structure: a 4-column table with many rows, high confidence.

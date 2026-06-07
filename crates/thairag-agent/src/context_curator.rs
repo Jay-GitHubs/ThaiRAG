@@ -178,6 +178,21 @@ impl ContextCurator {
             }
         };
 
+        // Safety net: search + rerank already filtered to relevant results, so a
+        // curator that selects nothing would answer from empty context — almost
+        // always wrong (the answer LLM, not the curator, is responsible for
+        // saying "not found"). Small curator models do emit a valid `[]`, so
+        // never let an empty selection collapse a non-empty result set.
+        let selected_indices = if selected_indices.is_empty() {
+            warn!(
+                retrieved = results.len(),
+                "LLM curation selected no chunks; keeping all to avoid empty context"
+            );
+            (1..=results.len()).collect()
+        } else {
+            selected_indices
+        };
+
         build_curated_context(results, &selected_indices, self.max_context_tokens)
     }
 }
@@ -316,5 +331,56 @@ mod tests {
         let mut ctx = fallback_curate(&results, 10_000);
         ctx.hydrate_images(&|_id| None, 10);
         assert!(ctx.chunks[0].images.is_empty());
+    }
+
+    /// LLM stub that returns a fixed curation reply.
+    struct StubCurator {
+        reply: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for StubCurator {
+        fn model_name(&self) -> &str {
+            "stub-curator"
+        }
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            Ok(thairag_core::types::LlmResponse {
+                content: self.reply.clone(),
+                usage: Default::default(),
+            })
+        }
+        async fn generate_vision(
+            &self,
+            _messages: &[thairag_core::types::VisionMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            unreachable!("curator does not use vision")
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_curation_falls_back_to_all_retrieved_chunks() {
+        // A small curator model can emit a valid `{"selected": []}`. Search +
+        // rerank already vetted these results, so the curator must not collapse
+        // them to empty context (which would force an "I have no information"
+        // answer despite a relevant chunk being retrieved).
+        let llm = Arc::new(StubCurator {
+            reply: "{\"selected\": []}".into(),
+        });
+        let curator = ContextCurator::new(llm, 10_000, 256);
+        let results = [
+            result_with_image("North | 100 | 200", None),
+            result_with_image("Northeast | 1100 | 1200", None),
+        ];
+        let ctx = curator
+            .curate("Northeast Q1 sales", &results)
+            .await
+            .unwrap();
+        assert_eq!(ctx.chunks.len(), 2, "empty selection must keep all chunks");
+        assert!(ctx.chunks.iter().any(|c| c.content.contains("1100")));
     }
 }

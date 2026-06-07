@@ -28,3 +28,7 @@ tokio = { workspace = true }
 ureq = "2"
 flate2 = "1"
 tar = "0.4"
+
+[dev-dependencies]
+# Used only by examples that generate test-fixture PDFs (borderless tables).
+printpdf = "0.6"

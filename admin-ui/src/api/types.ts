@@ -57,6 +57,10 @@ export interface ProcessingProvenance {
   mechanical_fallback: boolean;
   chunk_count: number;
   fidelity?: ConversionFidelity;
+  /** PDF pages classified tabular whose table could not be reconstructed
+   * deterministically; raw text kept verbatim (numbers exact, structure not).
+   * Non-zero flags pages an analyst may want to review by hand. */
+  tables_kept_as_text?: number;
 }
 
 /** Timing for one processing stage; `duration_ms` is absent while in progress. */
