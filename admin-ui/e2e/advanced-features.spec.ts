@@ -23,9 +23,13 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     const panel = page.locator('.ant-collapse-item').filter({ hasText: 'Context Compaction' });
     await expect(panel).toBeVisible();
 
-    // Should have a switch and a tag (ON or OFF)
+    // Should have a switch and an ON/OFF status tag. Target the status tag
+    // specifically — the header also carries an "Experimental" badge, so a bare
+    // `.ant-tag` locator now matches multiple elements.
     await expect(panel.locator('.ant-switch')).toBeVisible();
-    await expect(panel.locator('.ant-collapse-header .ant-tag')).toBeVisible();
+    await expect(
+      panel.locator('.ant-collapse-header .ant-tag').filter({ hasText: /^(ON|OFF)$/ }),
+    ).toBeVisible();
   });
 
   test('toggling context compaction shows parameter inputs', async ({ page }) => {
@@ -105,7 +109,13 @@ test.describe('Advanced Features — Context Compaction & Personal Memory', () =
     await expect(panel).toBeVisible();
 
     await expect(panel.locator('.ant-switch')).toBeVisible();
-    await expect(panel.locator('.ant-collapse-header').first().locator('.ant-tag')).toBeVisible();
+    await expect(
+      panel
+        .locator('.ant-collapse-header')
+        .first()
+        .locator('.ant-tag')
+        .filter({ hasText: /^(ON|OFF)$/ }),
+    ).toBeVisible();
   });
 
   test('toggling personal memory shows parameter inputs', async ({ page }) => {
