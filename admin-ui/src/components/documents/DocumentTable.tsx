@@ -116,6 +116,54 @@ function ProvenanceCell({ doc }: { doc: Document }) {
   );
 }
 
+/// Conversion-fidelity badge: how faithfully the converted text (vector-DB
+/// content) matches the original. Verified = nothing dropped/fabricated; Review
+/// = numbers dropped/fabricated or low coverage; Unverifiable = no text layer
+/// in the original (e.g. scanned).
+function FidelityCell({ doc }: { doc: Document }) {
+  const f = doc.processing_provenance?.fidelity;
+  if (!f) return <span style={{ color: '#bbb' }}>—</span>;
+  const meta: Record<string, { color: string; label: string }> = {
+    verified: { color: 'success', label: 'Verified' },
+    review: { color: 'warning', label: 'Review' },
+    unverifiable: { color: 'default', label: 'Unverifiable' },
+  };
+  const m = meta[f.status] ?? { color: 'default', label: f.status };
+  const detail = (
+    <div style={{ maxWidth: 300, fontSize: 13, lineHeight: '20px' }}>
+      {f.status !== 'unverifiable' && (
+        <>
+          <div>
+            Score: <strong>{Math.round(f.score * 100)}%</strong>
+          </div>
+          <div>
+            Numbers matched: {f.numbers_matched}/{f.numbers_total}
+          </div>
+          {f.numbers_fabricated > 0 && (
+            <div style={{ color: '#cf1322' }}>
+              Fabricated numbers: {f.numbers_fabricated}
+            </div>
+          )}
+          <div>Char coverage: {Math.round(f.char_coverage * 100)}%</div>
+        </>
+      )}
+      {f.status === 'unverifiable' && (
+        <div style={{ color: '#999' }}>
+          The original has no extractable text layer (e.g. a scanned PDF), so the
+          conversion cannot be verified against it.
+        </div>
+      )}
+    </div>
+  );
+  return (
+    <Popover content={detail} title="Conversion fidelity" trigger="hover">
+      <Tag color={m.color} style={{ cursor: 'help' }}>
+        {m.label}
+      </Tag>
+    </Popover>
+  );
+}
+
 export function DocumentTable({ workspaceId }: Props) {
   const { data, isLoading } = useDocuments(workspaceId);
   const deleteDoc = useDeleteDocument();
@@ -231,6 +279,12 @@ export function DocumentTable({ workspaceId }: Props) {
       key: 'pipeline',
       render: (_: unknown, record: Document) =>
         record.status === 'processing' ? <LoadingOutlined /> : <ProvenanceCell doc={record} />,
+    },
+    {
+      title: 'Fidelity',
+      key: 'fidelity',
+      render: (_: unknown, record: Document) =>
+        record.status === 'processing' ? <LoadingOutlined /> : <FidelityCell doc={record} />,
     },
     {
       title: 'MIME Type',

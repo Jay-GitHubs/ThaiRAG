@@ -404,9 +404,30 @@ async fn process_document_inner_impl(
         );
     }
 
-    // Persist processing provenance (path, agents, models, fallback) so the
-    // admin UI can show a per-document transparency summary.
-    if let Some(provenance) = processed.provenance.clone() {
+    // Conversion fidelity: compare the converted text (what feeds the vector DB)
+    // against an independent extraction of the original — deterministic, no LLM.
+    // Runs in spawn_blocking because the ground-truth extractors (pdfium etc.)
+    // are sync/!Send. Folded into provenance for the admin UI.
+    let converted_text = state
+        .km_store
+        .get_document_content(doc_id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let fidelity = {
+        let bytes_f = bytes.clone();
+        let mime_f = mime_type.clone();
+        tokio::task::spawn_blocking(move || {
+            thairag_document::conversion_fidelity::assess(&bytes_f, &mime_f, &converted_text)
+        })
+        .await
+        .ok()
+    };
+
+    // Persist processing provenance (path, agents, models, fallback, fidelity)
+    // so the admin UI can show a per-document transparency summary.
+    if let Some(mut provenance) = processed.provenance.clone() {
+        provenance.fidelity = fidelity;
         let _ = state
             .km_store
             .update_document_provenance(doc_id, Some(provenance));

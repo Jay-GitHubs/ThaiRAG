@@ -39,12 +39,24 @@ export interface AgentRun {
   note?: string;
 }
 
+/** Deterministic conversion-fidelity assessment (converted text vs original). */
+export interface ConversionFidelity {
+  /** "verified" | "review" | "unverifiable". */
+  status: string;
+  score: number;
+  numbers_total: number;
+  numbers_matched: number;
+  numbers_fabricated: number;
+  char_coverage: number;
+}
+
 /** Per-document record of how it was processed (path, agents, models, fallback). */
 export interface ProcessingProvenance {
   path: string;
   agents: AgentRun[];
   mechanical_fallback: boolean;
   chunk_count: number;
+  fidelity?: ConversionFidelity;
 }
 
 /** Timing for one processing stage; `duration_ms` is absent while in progress. */

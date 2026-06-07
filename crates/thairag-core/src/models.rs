@@ -131,6 +131,29 @@ impl StageTiming {
     }
 }
 
+/// Deterministic conversion-fidelity assessment: how faithfully the converted
+/// text (what feeds the vector DB) preserves the original document's extractable
+/// content. Computed at ingest by comparing token sets (no LLM), so it cannot
+/// itself hallucinate. `status` is "verified" (nothing dropped/fabricated),
+/// "review" (numbers dropped or fabricated, or low coverage), or "unverifiable"
+/// (the original has no extractable text layer — e.g. a scanned PDF).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversionFidelity {
+    /// "verified" | "review" | "unverifiable".
+    pub status: String,
+    /// Overall fidelity score in [0,1] (1.0 = full coverage, no fabrication).
+    pub score: f32,
+    /// Distinct numeric tokens found in the original (Thai digits normalised).
+    pub numbers_total: usize,
+    /// Of those, how many appear in the converted text.
+    pub numbers_matched: usize,
+    /// Numeric tokens in the converted text that are absent from the original
+    /// (a fabrication signal — should be 0 on the deterministic paths).
+    pub numbers_fabricated: usize,
+    /// Fraction of the original's non-space characters present in the output.
+    pub char_coverage: f32,
+}
+
 /// Persistent, per-document summary of how a document was processed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessingProvenance {
@@ -146,6 +169,10 @@ pub struct ProcessingProvenance {
     /// Final chunk count produced.
     #[serde(default)]
     pub chunk_count: i64,
+    /// Conversion-fidelity assessment (converted text vs original). Populated at
+    /// ingest; `None` for older documents processed before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity: Option<ConversionFidelity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

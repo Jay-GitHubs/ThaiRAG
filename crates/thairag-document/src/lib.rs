@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod chunker;
+pub mod conversion_fidelity;
 pub mod converter;
 pub mod image;
 pub mod office_media;
