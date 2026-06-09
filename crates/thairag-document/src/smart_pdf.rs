@@ -45,6 +45,11 @@ const LATTICE_MIN_COVERAGE: f32 = 0.5;
 /// Minimum grid cells for a reconstruction to count as a real table (avoids
 /// turning a stray 1×1 ruled box into a "table").
 const LATTICE_MIN_CELLS: usize = 4;
+/// A table whose glyph coverage reaches this is trusted even if its fill-ratio
+/// `confidence` is low. Real tax/statistical tables are legitimately sparse
+/// (many empty cells → low fill-ratio) yet place nearly all their text in the
+/// grid (coverage ≈ 1.0). Gating only on fill-ratio dropped these to flat text.
+const LATTICE_HIGH_COVERAGE: f32 = 0.7;
 
 /// Tunables for the smart-PDF engine. Defaults mirror Jay-RAG-Tools.
 #[derive(Debug, Clone)]
@@ -217,9 +222,13 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
                 let lattice = crate::table_lattice::reconstruct(&g.chars, &g.lines);
                 let chosen = lattice.or_else(|| crate::table_stream::reconstruct(&g.chars));
                 chosen.filter(|t| {
-                    t.confidence >= LATTICE_MIN_CONFIDENCE
+                    t.n_rows * t.n_cols >= LATTICE_MIN_CELLS
                         && t.char_coverage >= LATTICE_MIN_COVERAGE
-                        && t.n_rows * t.n_cols >= LATTICE_MIN_CELLS
+                        // Trust a sparse grid (low fill-ratio) when nearly all of
+                        // the page's text landed in it; require the fill-ratio
+                        // floor only when coverage is merely moderate.
+                        && (t.confidence >= LATTICE_MIN_CONFIDENCE
+                            || t.char_coverage >= LATTICE_HIGH_COVERAGE)
                 })
             })
         } else {
