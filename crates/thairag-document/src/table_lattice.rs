@@ -22,6 +22,16 @@ fn fcmp(a: f32, b: f32) -> Ordering {
 
 /// Snap tolerance (points) for clustering near-coincident gridlines.
 const SNAP: f32 = 3.0;
+/// A clustered boundary is only real if ruling-line segments at that position
+/// cover at least this fraction of the table's extent along the boundary. Real
+/// Thai government tables draw borders as many short per-cell segments and add
+/// decorative/sub-cell rules; without this gate those fragments split a
+/// 3-column table into 20+ spurious thin columns (low fill → rejected → the
+/// table is silently dropped to flat text).
+const BOUNDARY_COVER_FRAC: f32 = 0.5;
+/// Adjacent boundaries closer than this (points) are merged — collapses doubled
+/// borders that survive the snap step as separate hairline columns/rows.
+const MIN_CELL_GAP: f32 = 6.0;
 /// How close a glyph's neighbour must be (points) — unused placeholder kept for
 /// future word-grouping; cell assignment uses glyph centers directly.
 const _RESERVED: f32 = 0.0;
@@ -63,6 +73,58 @@ fn cluster(mut vals: Vec<f32>) -> Vec<f32> {
     }
     out.push(group.iter().sum::<f32>() / group.len() as f32);
     out
+}
+
+/// Derive grid boundaries along one axis from its ruling lines. `extent` is the
+/// table's size along the *other* axis (table height for vertical lines → column
+/// boundaries; table width for horizontal lines → row boundaries).
+///
+/// Two-stage clean-up that prevents over-segmentation on noisy real-world PDFs:
+/// 1. cluster near-coincident line positions (handles per-cell segments drawn at
+///    the same x/y), then keep a position only if the *union* of segment spans
+///    there covers ≥ [`BOUNDARY_COVER_FRAC`] of `extent` (drops short fragments);
+/// 2. merge any surviving boundaries closer than [`MIN_CELL_GAP`] (doubled borders).
+fn boundaries(lines: &[Line], extent: f32) -> Vec<f32> {
+    let candidates = cluster(lines.iter().map(|l| l.pos).collect());
+    let mut kept: Vec<f32> = candidates
+        .into_iter()
+        .filter(|&p| {
+            let mut spans: Vec<(f32, f32)> = lines
+                .iter()
+                .filter(|l| (l.pos - p).abs() <= SNAP)
+                .map(|l| l.span)
+                .collect();
+            if spans.is_empty() {
+                return false;
+            }
+            spans.sort_by(|a, b| fcmp(a.0, b.0));
+            // Union length of the (possibly overlapping) segment spans.
+            let mut union = 0.0;
+            let mut cur = spans[0];
+            for s in &spans[1..] {
+                if s.0 <= cur.1 + SNAP {
+                    cur.1 = cur.1.max(s.1);
+                } else {
+                    union += cur.1 - cur.0;
+                    cur = *s;
+                }
+            }
+            union += cur.1 - cur.0;
+            extent > 0.0 && union / extent >= BOUNDARY_COVER_FRAC
+        })
+        .collect();
+    kept.sort_by(|a, b| fcmp(*a, *b));
+    let mut merged: Vec<f32> = Vec::new();
+    for p in kept {
+        if let Some(last) = merged.last_mut()
+            && p - *last < MIN_CELL_GAP
+        {
+            *last = (*last + p) / 2.0;
+            continue;
+        }
+        merged.push(p);
+    }
+    merged
 }
 
 /// Thai combining marks — above/below vowels and tone marks (zero-advance
@@ -120,9 +182,33 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Recon
         }
     }
 
-    // Distinct row boundaries (y) and column boundaries (x).
-    let ys_asc = cluster(h.iter().map(|l| l.pos).collect());
-    let xs = cluster(v.iter().map(|l| l.pos).collect());
+    if h.is_empty() || v.is_empty() {
+        return None;
+    }
+    // Table bounding box from all ruling lines (positions + span endpoints), so
+    // a boundary's coverage can be judged against the table's true extent.
+    let mut x_min = f32::INFINITY;
+    let mut x_max = f32::NEG_INFINITY;
+    let mut y_min = f32::INFINITY;
+    let mut y_max = f32::NEG_INFINITY;
+    for l in &v {
+        x_min = x_min.min(l.pos);
+        x_max = x_max.max(l.pos);
+        y_min = y_min.min(l.span.0);
+        y_max = y_max.max(l.span.1);
+    }
+    for l in &h {
+        y_min = y_min.min(l.pos);
+        y_max = y_max.max(l.pos);
+        x_min = x_min.min(l.span.0);
+        x_max = x_max.max(l.span.1);
+    }
+    let table_w = (x_max - x_min).max(1.0);
+    let table_h = (y_max - y_min).max(1.0);
+
+    // Distinct, significance-filtered row boundaries (y) and column boundaries (x).
+    let ys_asc = boundaries(&h, table_w);
+    let xs = boundaries(&v, table_h);
     if ys_asc.len() < 2 || xs.len() < 2 {
         return None; // not a ruled grid
     }
@@ -396,6 +482,31 @@ mod tests {
             t.html.contains("colspan=\"2\""),
             "expected a merged top cell, html: {}",
             t.html
+        );
+    }
+
+    #[test]
+    fn ignores_short_decorative_fragments() {
+        // A clean 2x2 grid plus short sub-cell tick marks (decorative fragments
+        // covering a tiny fraction of the table) must NOT create extra columns
+        // or rows — this is the real-Thai-PDF over-segmentation case.
+        let mut lines = grid_2x2_lines();
+        lines.push(vline(50.0, 0.0, 8.0)); // tiny vertical tick mid-column
+        lines.push(vline(150.0, 190.0, 200.0)); // another short fragment
+        lines.push(hline(50.0, 0.0, 6.0)); // tiny horizontal fragment
+        let chars = vec![
+            ch('a', 40.0, 150.0),
+            ch('b', 140.0, 150.0),
+            ch('c', 40.0, 50.0),
+            ch('d', 140.0, 50.0),
+        ];
+        let t = reconstruct(&chars, &lines).expect("grid");
+        assert_eq!(
+            (t.n_rows, t.n_cols),
+            (2, 2),
+            "short fragments must not add boundaries, got {}x{}",
+            t.n_rows,
+            t.n_cols
         );
     }
 
