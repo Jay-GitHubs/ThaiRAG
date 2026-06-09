@@ -9,7 +9,11 @@ use printpdf::*;
 use std::fs;
 
 fn out(name: &str) -> String {
-    format!("{}/../../tests/fixtures/edge-cases/{}", env!("CARGO_MANIFEST_DIR"), name)
+    format!(
+        "{}/../../tests/fixtures/edge-cases/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        name
+    )
 }
 
 /// Draw one straight ruling-line segment (mm coordinates).
@@ -113,8 +117,20 @@ fn main() {
         seg(&l, xb[0], yb[0], xb[0], yb[2]);
         seg(&l, xb[1], yb[0], xb[1], yb[2]);
         seg(&l, xb[2], yb[0], xb[2], yb[2]);
-        l.use_text("Logo A", 11.0, Mm(xb[0] + 4.0), Mm((yb[0] + yb[1]) / 2.0), &f);
-        l.use_text("Logo B", 11.0, Mm(xb[0] + 4.0), Mm((yb[1] + yb[2]) / 2.0), &f);
+        l.use_text(
+            "Logo A",
+            11.0,
+            Mm(xb[0] + 4.0),
+            Mm((yb[0] + yb[1]) / 2.0),
+            &f,
+        );
+        l.use_text(
+            "Logo B",
+            11.0,
+            Mm(xb[0] + 4.0),
+            Mm((yb[1] + yb[2]) / 2.0),
+            &f,
+        );
         // Place an image inside each col1 cell (dpi sizes it to ~14mm).
         for r in 0..2 {
             Image::from_dynamic_image(&small_image()).add_to_layer(
@@ -149,9 +165,23 @@ fn main() {
                 }
             }
         };
-        draw_page(&doc.get_page(pg1).get_layer(ly1), &[["Region", "Q1", "Q2"], ["North", "100", "200"], ["South", "300", "400"]]);
+        draw_page(
+            &doc.get_page(pg1).get_layer(ly1),
+            &[
+                ["Region", "Q1", "Q2"],
+                ["North", "100", "200"],
+                ["South", "300", "400"],
+            ],
+        );
         let (pg2, ly2) = doc.add_page(Mm(210.0), Mm(297.0), "L2");
-        draw_page(&doc.get_page(pg2).get_layer(ly2), &[["Region", "Q1", "Q2"], ["East", "500", "600"], ["West", "700", "800"]]);
+        draw_page(
+            &doc.get_page(pg2).get_layer(ly2),
+            &[
+                ["Region", "Q1", "Q2"],
+                ["East", "500", "600"],
+                ["West", "700", "800"],
+            ],
+        );
         save(doc, "multipage_table.pdf");
     }
 
@@ -164,7 +194,13 @@ fn main() {
         let colx = [20.0f32, 90.0, 140.0];
         l.use_text("Region", 12.0, Mm(colx[0]), Mm(255.0), &f);
         l.use_text("Sales", 12.0, Mm(colx[1] + 10.0), Mm(255.0), &f); // spans the 2 value cols
-        let rows = [["North", "100", "200"], ["South", "300", "400"], ["East", "500", "600"], ["West", "700", "800"], ["Central", "900", "1000"]];
+        let rows = [
+            ["North", "100", "200"],
+            ["South", "300", "400"],
+            ["East", "500", "600"],
+            ["West", "700", "800"],
+            ["Central", "900", "1000"],
+        ];
         let mut y = 245.0;
         for r in rows {
             for (c, t) in r.iter().enumerate() {
