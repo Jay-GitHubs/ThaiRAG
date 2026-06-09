@@ -90,23 +90,67 @@ fn build_ai_provenance(
     }
 }
 
-/// Build one atomic chunk for a lattice-reconstructed table page: the HTML is
-/// the payload the LLM reads (numbers exact, from the text layer), while the
-/// row-linearized form is the embedding text so retrieval matches clean words
-/// rather than HTML tags. Returns `None` for non-table pages.
+/// Render a row-linearized dense grid (`"a | b | c\n..."`) as a GitHub-flavoured
+/// markdown table — the LLM-facing payload for a reconstructed table. Markdown
+/// has no colspan/rowspan, so merged values are already repeated across their
+/// span (the linearized grid is merge-filled), making every row self-contained.
+/// Small models answer merged-cell questions far more reliably from this than
+/// from raw colspan/rowspan HTML, which they routinely misread.
+fn linearized_to_markdown(linearized: &str) -> String {
+    let rows: Vec<Vec<&str>> = linearized
+        .lines()
+        .map(|l| l.split(" | ").collect())
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let n_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let row_md = |cells: &[&str]| -> String {
+        let mut s = String::from("|");
+        for c in 0..n_cols {
+            let cell = cells
+                .get(c)
+                .copied()
+                .unwrap_or("")
+                .trim()
+                .replace('|', "\\|");
+            s.push(' ');
+            s.push_str(&cell);
+            s.push_str(" |");
+        }
+        s
+    };
+    let mut out = row_md(&rows[0]);
+    out.push('\n');
+    out.push('|');
+    for _ in 0..n_cols {
+        out.push_str(" --- |");
+    }
+    for r in &rows[1..] {
+        out.push('\n');
+        out.push_str(&row_md(r));
+    }
+    out
+}
+
+/// Build one atomic chunk for a lattice-reconstructed table page. The chunk
+/// content is a dense markdown table (merged values filled across their span) —
+/// the LLM-facing form — while the row-linearized text is the embedding input so
+/// retrieval matches clean words. The faithful colspan/rowspan HTML stays on the
+/// page/preview path, not in the chunk. Returns `None` for non-table pages.
 fn lattice_table_chunk(
     page: &crate::semantic::RenderedPage,
     doc_id: DocId,
     workspace_id: WorkspaceId,
     chunk_index: usize,
 ) -> Option<DocumentChunk> {
-    let html = page.table_html.as_ref()?;
+    let linearized = page.table_linearized.clone()?;
     let strategy = crate::semantic::PageStrategy::Tabular.as_str().to_string();
     Some(DocumentChunk {
         chunk_id: ChunkId::new(),
         doc_id,
         workspace_id,
-        content: html.clone(),
+        content: linearized_to_markdown(&linearized),
         chunk_index,
         embedding: None,
         metadata: Some(ChunkMetadata {
@@ -115,15 +159,15 @@ fn lattice_table_chunk(
             page_strategy: Some(strategy),
             mime_type: Some(PDF_MIME.to_string()),
             page_numbers: Some(vec![page.page_num]),
-            embed_text: page.table_linearized.clone(),
+            embed_text: Some(linearized),
             ..Default::default()
         }),
     })
 }
 
-/// Build one atomic chunk for a structured office (DOCX/XLSX) table: faithful
-/// HTML payload + row-linearized embedding text. Same payload/embed split as
-/// the PDF lattice path.
+/// Build one atomic chunk for a structured office (DOCX/XLSX) table. Same
+/// payload/embed split as the PDF lattice path: a dense markdown table for the
+/// LLM, row-linearized text for the embedding.
 fn office_table_chunk(
     table: &crate::office_tables::OfficeTable,
     doc_id: DocId,
@@ -135,7 +179,7 @@ fn office_table_chunk(
         chunk_id: ChunkId::new(),
         doc_id,
         workspace_id,
-        content: table.html.clone(),
+        content: linearized_to_markdown(&table.linearized),
         chunk_index,
         embedding: None,
         metadata: Some(ChunkMetadata {
@@ -1679,6 +1723,29 @@ async fn rasterize_pdf_page(pdf_bytes: &[u8], page: usize, dpi: u32) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linearized_to_markdown_builds_dense_gfm_table() {
+        // Merge-filled grid: a rowspan header "Region" repeats down its column,
+        // a colspan header "Sales" repeats across — every row self-contained.
+        let lin = "Region | Sales | Sales\nNorth | 100 | 200\nNorth | 300 | 400";
+        let md = linearized_to_markdown(lin);
+        let lines: Vec<&str> = md.lines().collect();
+        assert_eq!(lines[0], "| Region | Sales | Sales |");
+        assert_eq!(lines[1], "| --- | --- | --- |", "header separator row");
+        assert_eq!(lines[2], "| North | 100 | 200 |");
+        assert_eq!(lines[3], "| North | 300 | 400 |");
+        // No HTML span markup leaks into the LLM-facing payload.
+        assert!(!md.contains("colspan") && !md.contains("<td"));
+    }
+
+    #[test]
+    fn linearized_to_markdown_escapes_pipes_and_pads_short_rows() {
+        let md = linearized_to_markdown("a|b | c\nd"); // cell "a|b", short 2nd row
+        let lines: Vec<&str> = md.lines().collect();
+        assert_eq!(lines[0], "| a\\|b | c |", "literal pipe escaped");
+        assert_eq!(lines[2], "| d |  |", "short row padded to column count");
+    }
 
     #[test]
     fn process_simple_text() {
