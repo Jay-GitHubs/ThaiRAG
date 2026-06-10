@@ -33,6 +33,26 @@ pub struct QueryAnalysis {
     pub needs_context: bool,
 }
 
+/// JSON schema mirroring [`LlmAnalysis`] — passed to `generate_structured` so
+/// schema-capable providers (Ollama `format`) grammar-constrain the output
+/// instead of relying on the prompt alone.
+fn analysis_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "language": {"type": "string"},
+            "intent": {"type": "string", "enum": [
+                "greeting", "retrieval", "comparison", "analysis",
+                "clarification", "thanks", "meta"
+            ]},
+            "complexity": {"type": "string", "enum": ["simple", "moderate", "complex"]},
+            "topics": {"type": "array", "items": {"type": "string"}},
+            "needs_context": {"type": "boolean"}
+        },
+        "required": ["language", "intent", "complexity", "topics", "needs_context"]
+    })
+}
+
 /// LLM JSON response format.
 #[derive(Deserialize)]
 struct LlmAnalysis {
@@ -122,7 +142,7 @@ impl QueryAnalyzer {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &analysis_schema())
             .await
         {
             Ok(resp) => {
@@ -136,12 +156,14 @@ impl QueryAnalyzer {
                     }
                     Err(e) => {
                         warn!(error = %e, raw = %content, "Failed to parse LLM analysis, using fallback");
+                        crate::degradation::record_fallback("query_analyzer");
                         Ok(fallback_analyze(query))
                     }
                 }
             }
             Err(e) => {
                 warn!(error = %e, "LLM analysis failed, using fallback");
+                crate::degradation::record_fallback("query_analyzer");
                 Ok(fallback_analyze(query))
             }
         }
@@ -217,5 +239,57 @@ pub fn fallback_analyze(query: &str) -> QueryAnalysis {
         complexity,
         topics,
         needs_context,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::types::LlmResponse;
+
+    /// An LLM that never returns valid JSON — the schema default-impl path
+    /// for providers without grammar enforcement.
+    struct GarbageLlm;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for GarbageLlm {
+        fn model_name(&self) -> &str {
+            "garbage"
+        }
+        async fn generate(
+            &self,
+            _messages: &[ChatMessage],
+            _max_tokens: Option<u32>,
+        ) -> Result<thairag_core::types::LlmResponse> {
+            Ok(LlmResponse {
+                content: "certainly! here is some prose, no JSON".into(),
+                usage: Default::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_failure_falls_back_and_records_degradation() {
+        let analyzer = QueryAnalyzer::new(Arc::new(GarbageLlm), 256);
+        let before = crate::degradation::fallback_counts()
+            .iter()
+            .find(|(a, _)| *a == "query_analyzer")
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        let a = analyzer
+            .analyze("what is the withholding rate?", &[])
+            .await
+            .unwrap();
+        // Heuristic fallback still classifies a question as retrieval.
+        assert_eq!(a.intent, QueryIntent::Retrieval);
+        let after = crate::degradation::fallback_counts()
+            .iter()
+            .find(|(a, _)| *a == "query_analyzer")
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        assert!(
+            after > before,
+            "fallback must be recorded ({before} -> {after})"
+        );
     }
 }

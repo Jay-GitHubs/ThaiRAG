@@ -5,7 +5,7 @@ use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ChatMessage, SearchResult};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Default hardcoded template for ColBERT-style passage scoring.
 const DEFAULT_COLBERT_PROMPT: &str = r#"You are a fine-grained relevance scorer. Given a query and a passage, evaluate relevance across multiple aspects:
@@ -139,7 +139,16 @@ async fn score_passage(
         images: vec![],
     };
 
-    let resp = llm.generate(&[system, user], Some(max_tokens)).await?;
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "overall": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+        },
+        "required": ["overall"]
+    });
+    let resp = llm
+        .generate_structured(&[system, user], Some(max_tokens), &schema)
+        .await?;
     let json_str = thairag_core::extract_json(resp.content.trim());
 
     #[derive(Deserialize)]
@@ -150,7 +159,13 @@ async fn score_passage(
 
     match serde_json::from_str::<Score>(json_str) {
         Ok(s) => Ok(s.overall.clamp(0.0, 1.0)),
-        Err(_) => Ok(0.5),
+        Err(e) => {
+            // A neutral 0.5 keeps ranking stable, but it means the reranker
+            // contributed nothing — make that visible instead of silent.
+            warn!(error = %e, "Reranker score parse failed, using neutral 0.5");
+            crate::degradation::record_fallback("colbert_reranker");
+            Ok(0.5)
+        }
     }
 }
 

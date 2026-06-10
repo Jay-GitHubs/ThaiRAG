@@ -22,6 +22,20 @@ pub enum PipelineRoute {
     ComplexPipeline,
 }
 
+/// JSON schema mirroring [`LlmRouteDecision`] for grammar-constrained decoding.
+fn route_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "route": {"type": "string", "enum": [
+                "direct_llm", "simple_retrieval", "full_pipeline", "complex_pipeline"
+            ]},
+            "reason": {"type": "string"}
+        },
+        "required": ["route", "reason"]
+    })
+}
+
 /// LLM response format for routing decisions.
 #[derive(Deserialize)]
 struct LlmRouteDecision {
@@ -124,7 +138,9 @@ impl PipelineOrchestrator {
             images: vec![],
         };
 
-        let resp = llm.generate(&[system, user], Some(self.max_tokens)).await?;
+        let resp = llm
+            .generate_structured(&[system, user], Some(self.max_tokens), &route_schema())
+            .await?;
         let content = resp.content.trim();
 
         // Extract JSON
@@ -137,6 +153,7 @@ impl PipelineOrchestrator {
             }
             Err(e) => {
                 warn!(error = %e, raw = %content, "Failed to parse orchestrator response");
+                crate::degradation::record_fallback("pipeline_orchestrator");
                 Ok(heuristic_decide(analysis))
             }
         }

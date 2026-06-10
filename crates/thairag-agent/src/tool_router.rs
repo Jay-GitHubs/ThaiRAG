@@ -16,6 +16,25 @@ pub struct SearchableScope {
     pub description: Option<String>,
 }
 
+/// JSON schema for the LLM's tool plan (array of [`ToolCall`]) — grammar-
+/// constrained decoding; `minItems: 1` rules out the empty-plan fallback.
+fn tool_plan_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "workspace_id": {"type": ["string", "null"]},
+                "query": {"type": ["string", "null"]},
+                "top_k": {"type": "integer", "minimum": 1}
+            },
+            "required": ["tool"]
+        }
+    })
+}
+
 /// A tool call decided by the LLM.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCall {
@@ -167,7 +186,7 @@ Output ONLY valid JSON array.";
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &tool_plan_schema())
             .await
         {
             Ok(resp) => {
@@ -179,6 +198,7 @@ Output ONLY valid JSON array.";
                     }
                     Ok(_) | Err(_) => {
                         warn!("Tool router: LLM plan parse failed, using broad_search fallback");
+                        crate::degradation::record_fallback("tool_router");
                         Ok(vec![ToolCall {
                             tool: "broad_search".into(),
                             workspace_id: None,
@@ -190,6 +210,7 @@ Output ONLY valid JSON array.";
             }
             Err(e) => {
                 warn!(error = %e, "Tool router: LLM plan failed, using broad_search fallback");
+                crate::degradation::record_fallback("tool_router");
                 Ok(vec![ToolCall {
                     tool: "broad_search".into(),
                     workspace_id: None,
