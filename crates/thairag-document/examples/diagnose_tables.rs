@@ -56,7 +56,24 @@ fn main() {
             if nchars > 0 {
                 text_pages += 1;
             }
-            let lat = table_lattice::reconstruct(&g.chars, &g.lines);
+            // Mirror smart_pdf: feed embedded-image bounds to the lattice so
+            // in-cell images show up as [IMAGE:img<N>] markers.
+            let placed: Vec<table_lattice::PlacedImage> = engine
+                .embedded_images(&pdf, p, 16, false)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|img| {
+                    img.bounds
+                        .map(|(x0, y0, x1, y1)| table_lattice::PlacedImage {
+                            label: format!("img{}", img.index),
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                        })
+                })
+                .collect();
+            let lat = table_lattice::reconstruct(&g.chars, &g.lines, &placed);
             let stream = if lat.is_none() {
                 table_stream::reconstruct(&g.chars)
             } else {
