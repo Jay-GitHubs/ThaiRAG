@@ -362,10 +362,27 @@ struct Line {
     span: (f32, f32), // extent along the other axis (min, max)
 }
 
+/// An image placed on the page, in the same PDF point space as the glyphs.
+/// When its center falls inside a grid cell, the cell's text gains an
+/// `[IMAGE:<label>]` marker (the label is the caller's blob id, so the marker
+/// resolves through the standard image pipeline).
+#[derive(Debug, Clone)]
+pub struct PlacedImage {
+    pub label: String,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
 /// Reconstruct a bordered table from page geometry. Returns `None` when the
 /// geometry does not form a grid (fewer than 2 distinct row or column borders)
 /// — i.e. this is not a lattice (ruled) table and the caller should fall back.
-pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<ReconstructedTable> {
+pub fn reconstruct(
+    chars: &[PositionedChar],
+    lines: &[RuleLine],
+    images: &[PlacedImage],
+) -> Option<ReconstructedTable> {
     // Split ruling lines into horizontal and vertical, capturing position +
     // extent so we can later test whether an internal border covers a cell.
     let mut h: Vec<Line> = Vec::new();
@@ -503,12 +520,28 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Recon
         }
     }
 
+    // Assign each image to its containing cell by center point and surface it
+    // as an `[IMAGE:<label>]` marker appended to the cell text. Images whose
+    // center falls outside the grid are ignored (not table content).
+    let mut cell_markers: Vec<Vec<String>> = vec![Vec::new(); n_rows * n_cols];
+    for img in images {
+        let cx = (img.x0 + img.x1) / 2.0;
+        let cy = (img.y0 + img.y1) / 2.0;
+        if let (Some(c), Some(r)) = (col_of(cx), row_of(cy)) {
+            cell_markers[r * n_cols + c].push(crate::semantic::image_marker(&img.label));
+        }
+    }
+
     let base_text = |r: usize, c: usize| -> String {
-        cell_glyphs[r * n_cols + c]
-            .iter()
-            .collect::<String>()
-            .trim()
-            .to_string()
+        let i = r * n_cols + c;
+        let mut t = cell_glyphs[i].iter().collect::<String>().trim().to_string();
+        for m in &cell_markers[i] {
+            if !t.is_empty() {
+                t.push(' ');
+            }
+            t.push_str(m);
+        }
+        t
     };
 
     // Compute merged-cell spans by scanning for missing internal borders.
@@ -599,10 +632,11 @@ pub fn reconstruct(chars: &[PositionedChar], lines: &[RuleLine]) -> Option<Recon
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Confidence = fraction of base cells that received any text. Empty cells
-    // are legitimate, but a very low fill ratio signals a misdetected grid.
+    // Confidence = fraction of base cells that received any content (text or
+    // an in-cell image). Empty cells are legitimate, but a very low fill ratio
+    // signals a misdetected grid.
     let filled = (0..n_rows * n_cols)
-        .filter(|&i| !cell_glyphs[i].is_empty())
+        .filter(|&i| !cell_glyphs[i].is_empty() || !cell_markers[i].is_empty())
         .count();
     let confidence = filled as f32 / (n_rows * n_cols) as f32;
     let assigned: usize = cell_glyphs.iter().map(|c| c.len()).sum();
@@ -674,7 +708,7 @@ mod tests {
             ch('c', 40.0, 50.0),
             ch('d', 140.0, 50.0),
         ];
-        let t = reconstruct(&chars, &grid_2x2_lines()).expect("grid");
+        let t = reconstruct(&chars, &grid_2x2_lines(), &[]).expect("grid");
         assert_eq!((t.n_rows, t.n_cols), (2, 2));
         assert!(t.html.contains("<td>a</td><td>b</td>"), "html: {}", t.html);
         assert!(t.html.contains("<td>c</td><td>d</td>"), "html: {}", t.html);
@@ -702,7 +736,7 @@ mod tests {
             ch('c', 40.0, 50.0),
             ch('d', 140.0, 50.0),
         ];
-        let t = reconstruct(&chars, &lines).expect("grid");
+        let t = reconstruct(&chars, &lines, &[]).expect("grid");
         assert_eq!((t.n_rows, t.n_cols), (2, 2));
         assert!(
             t.html.contains("colspan=\"2\""),
@@ -726,7 +760,7 @@ mod tests {
             ch('c', 40.0, 50.0),
             ch('d', 140.0, 50.0),
         ];
-        let t = reconstruct(&chars, &lines).expect("grid");
+        let t = reconstruct(&chars, &lines, &[]).expect("grid");
         assert_eq!(
             (t.n_rows, t.n_cols),
             (2, 2),
@@ -763,7 +797,7 @@ mod tests {
             ch('e', 40.0, 50.0),
             ch('M', 140.0, 150.0), // anchor of the 2x2 merged block
         ];
-        let t = reconstruct(&chars, &merge_heavy_lines()).expect("grid");
+        let t = reconstruct(&chars, &merge_heavy_lines(), &[]).expect("grid");
         assert_eq!(
             (t.n_rows, t.n_cols),
             (3, 3),
@@ -799,7 +833,7 @@ mod tests {
             ch('b', 140.0, 250.0),
             ch('c', 240.0, 250.0),
         ];
-        let t = reconstruct(&chars, &lines).expect("grid");
+        let t = reconstruct(&chars, &lines, &[]).expect("grid");
         assert_eq!(
             (t.n_rows, t.n_cols),
             (3, 3),
@@ -829,7 +863,7 @@ mod tests {
             ch('b', 140.0, 150.0),
             ch('c', 40.0, 50.0),
         ];
-        let t = reconstruct(&chars, &lines).expect("grid");
+        let t = reconstruct(&chars, &lines, &[]).expect("grid");
         assert_eq!(
             (t.n_rows, t.n_cols),
             (2, 3),
@@ -840,11 +874,49 @@ mod tests {
     }
 
     #[test]
+    fn assigns_images_to_cells_as_markers() {
+        // 2x2 grid: text in the left column, an image in the top-right cell,
+        // an image outside the grid (ignored). The image-only cell counts as
+        // filled for confidence.
+        let chars = vec![ch('a', 40.0, 150.0), ch('c', 40.0, 50.0)];
+        let images = vec![
+            PlacedImage {
+                label: "logo-1".into(),
+                x0: 120.0,
+                y0: 130.0,
+                x1: 180.0,
+                y1: 170.0,
+            },
+            PlacedImage {
+                label: "outside".into(),
+                x0: 400.0,
+                y0: 400.0,
+                x1: 450.0,
+                y1: 450.0,
+            },
+        ];
+        let t = reconstruct(&chars, &grid_2x2_lines(), &images).expect("grid");
+        assert_eq!((t.n_rows, t.n_cols), (2, 2));
+        assert!(
+            t.html.contains("<td>[IMAGE:logo-1]</td>"),
+            "html: {}",
+            t.html
+        );
+        assert!(!t.html.contains("outside"), "html: {}", t.html);
+        assert_eq!(t.linearized, "a | [IMAGE:logo-1]\nc | ");
+        assert!(
+            (t.confidence - 0.75).abs() < 1e-6,
+            "image cell must count as filled, conf={}",
+            t.confidence
+        );
+    }
+
+    #[test]
     fn not_a_table_without_grid() {
         let chars = vec![ch('x', 10.0, 10.0)];
-        assert!(reconstruct(&chars, &[]).is_none());
+        assert!(reconstruct(&chars, &[], &[]).is_none());
         // Only one boundary each → still not a grid.
         let lines = vec![hline(0.0, 0.0, 100.0), vline(0.0, 0.0, 100.0)];
-        assert!(reconstruct(&chars, &lines).is_none());
+        assert!(reconstruct(&chars, &lines, &[]).is_none());
     }
 }
