@@ -50,6 +50,11 @@ const LATTICE_MIN_CELLS: usize = 4;
 /// (many empty cells → low fill-ratio) yet place nearly all their text in the
 /// grid (coverage ≈ 1.0). Gating only on fill-ratio dropped these to flat text.
 const LATTICE_HIGH_COVERAGE: f32 = 0.7;
+/// Minimum raw pixel size for an image to qualify as table-cell content. Much
+/// lower than `min_image_size` (the Mixed-page describe threshold): in-cell
+/// logos/stamps are legitimately small, while anything under this is a border
+/// artifact or tracking pixel.
+const CELL_IMAGE_MIN_SIZE: u32 = 16;
 
 /// Tunables for the smart-PDF engine. Defaults mirror Jay-RAG-Tools.
 #[derive(Debug, Clone)]
@@ -121,6 +126,20 @@ pub struct PageExtract {
     /// present the page is rendered from this HTML — no vision call, so cell
     /// content comes straight from the text layer.
     pub table: Option<crate::table_lattice::ReconstructedTable>,
+    /// Images that landed inside a reconstructed table cell. Their ids are
+    /// already embedded as `[IMAGE:<id>]` markers in `table` html/linearized;
+    /// phase 2 persists the bytes as blobs.
+    pub cell_images: Vec<CellImage>,
+}
+
+/// An embedded image assigned to a table cell during lattice reconstruction:
+/// the minted blob id plus the PNG bytes to persist.
+#[derive(Debug, Clone)]
+pub struct CellImage {
+    pub image_id: ImageId,
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// An image blob extracted during processing, with a minted id, ready for the
@@ -215,13 +234,10 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
         // to the page's normal handling (and vision for true Tabular pages).
         let has_text_layer =
             meaningful >= cfg.min_chars_per_page && !matches!(strategy, PageStrategy::Scanned);
+        let mut cell_images: Vec<CellImage> = Vec::new();
         let table = if has_text_layer {
             engine.page_geometry(pdf, sig.index).ok().and_then(|g| {
-                // Bordered first (lattice, from ruling lines); if there's no
-                // ruled grid, try borderless (stream, from whitespace columns).
-                let lattice = crate::table_lattice::reconstruct(&g.chars, &g.lines);
-                let chosen = lattice.or_else(|| crate::table_stream::reconstruct(&g.chars));
-                chosen.filter(|t| {
+                let accept = |t: &crate::table_lattice::ReconstructedTable| {
                     t.n_rows * t.n_cols >= LATTICE_MIN_CELLS
                         && t.char_coverage >= LATTICE_MIN_COVERAGE
                         // Trust a sparse grid (low fill-ratio) when nearly all of
@@ -229,7 +245,59 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
                         // floor only when coverage is merely moderate.
                         && (t.confidence >= LATTICE_MIN_CONFIDENCE
                             || t.char_coverage >= LATTICE_HIGH_COVERAGE)
-                })
+                };
+                // Bordered first (lattice, from ruling lines); if there's no
+                // ruled grid, try borderless (stream, from whitespace columns).
+                let mut lattice = crate::table_lattice::reconstruct(&g.chars, &g.lines, &[]);
+                // An accepted ruled grid may contain in-cell images (logos,
+                // photos, charts). Fetch them only now — image decode is not
+                // free and most text pages have no grid — mint blob ids, and
+                // re-run reconstruction so each cell carries its image marker.
+                if lattice.as_ref().is_some_and(accept) {
+                    let imgs = engine
+                        .embedded_images(pdf, sig.index, CELL_IMAGE_MIN_SIZE, cfg.enhance)
+                        .unwrap_or_default();
+                    let mut placed = Vec::new();
+                    let mut pending: Vec<CellImage> = Vec::new();
+                    for img in imgs.into_iter().take(cfg.max_images_per_page) {
+                        let Some((x0, y0, x1, y1)) = img.bounds else {
+                            continue;
+                        };
+                        let image_id = ImageId::new();
+                        placed.push(crate::table_lattice::PlacedImage {
+                            label: image_id.to_string(),
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                        });
+                        pending.push(CellImage {
+                            image_id,
+                            png: img.png_bytes,
+                            width: img.width,
+                            height: img.height,
+                        });
+                    }
+                    if !placed.is_empty()
+                        && let Some(t) =
+                            crate::table_lattice::reconstruct(&g.chars, &g.lines, &placed)
+                                .filter(accept)
+                    {
+                        // Keep only blobs whose marker actually landed in a cell
+                        // (an image outside the grid is not table content).
+                        cell_images = pending
+                            .into_iter()
+                            .filter(|ci| {
+                                t.html.contains(&crate::semantic::image_marker(
+                                    &ci.image_id.to_string(),
+                                ))
+                            })
+                            .collect();
+                        lattice = Some(t);
+                    }
+                }
+                let chosen = lattice.or_else(|| crate::table_stream::reconstruct(&g.chars));
+                chosen.filter(accept)
             })
         } else {
             None
@@ -256,6 +324,7 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
             page_png,
             embedded,
             table,
+            cell_images,
         });
     }
     Ok(pages)
@@ -285,6 +354,19 @@ pub async fn render_to_document(
         // fabrication). This is what fixes a bordered table that the heuristic
         // mislabelled TextOnly.
         let mut body = if let Some(lat) = ex.table.as_ref() {
+            // Persist the in-cell images whose `[IMAGE:<id>]` markers are
+            // already embedded in the table HTML/linearized text.
+            for ci in &ex.cell_images {
+                images.push(ExtractedImageBlob {
+                    image_id: ci.image_id,
+                    bytes: ci.png.clone(),
+                    mime: PNG_MIME.to_string(),
+                    width: Some(ci.width),
+                    height: Some(ci.height),
+                    page_num: Some(ex.page_num as u32),
+                    source: "pdf_embedded",
+                });
+            }
             lat.html.clone()
         } else {
             match ex.strategy {
@@ -516,6 +598,7 @@ mod tests {
             page_png: None,
             embedded: vec![],
             table: None,
+            cell_images: vec![],
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
@@ -537,6 +620,7 @@ mod tests {
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
             table: None,
+            cell_images: vec![],
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
@@ -569,6 +653,7 @@ mod tests {
             page_png: None,
             embedded: vec![],
             table: None,
+            cell_images: vec![],
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "must not call vision");
@@ -600,6 +685,7 @@ mod tests {
             page_png: None,
             embedded: vec![],
             table: Some(lat),
+            cell_images: vec![],
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "lattice must not call vision");
@@ -639,6 +725,7 @@ mod tests {
             page_png: Some(vec![1, 2, 3]),
             embedded: vec![],
             table: None,
+            cell_images: vec![],
         }];
         let doc = render_to_document("Doc", pages, &llm, &c).await;
         assert_eq!(doc.vision_pages_used, 0);

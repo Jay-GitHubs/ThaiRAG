@@ -34,6 +34,10 @@ pub struct ExtractedImage {
     pub height: u32,
     /// 1-indexed position on the page; `0` for a full-page render.
     pub index: u32,
+    /// Placement on the page as `(x0, y0, x1, y1)` in PDF point space (origin
+    /// bottom-left, same space as [`PositionedChar`]). `None` for a full-page
+    /// render or when pdfium cannot report the object bounds.
+    pub bounds: Option<(f32, f32, f32, f32)>,
 }
 
 /// A single positioned glyph: the character plus its bounding box, in PDF
@@ -210,6 +214,7 @@ impl PdfEngine {
             width,
             height,
             index: 0,
+            bounds: None,
         })
     }
 
@@ -237,6 +242,14 @@ impl PdfEngine {
             let Some(image_object) = object.as_image_object() else {
                 continue;
             };
+            let bounds = object.bounds().ok().map(|b| {
+                (
+                    b.left().value.min(b.right().value),
+                    b.bottom().value.min(b.top().value),
+                    b.left().value.max(b.right().value),
+                    b.bottom().value.max(b.top().value),
+                )
+            });
             let mut raw = match image_object.get_raw_image() {
                 Ok(img) => img,
                 Err(_) => continue,
@@ -257,6 +270,7 @@ impl PdfEngine {
                 width: w,
                 height: h,
                 index: idx,
+                bounds,
             });
         }
         Ok(images)
