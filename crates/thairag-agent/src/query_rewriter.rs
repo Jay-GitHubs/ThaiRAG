@@ -25,6 +25,21 @@ pub struct RewrittenQueries {
     pub step_back_query: Option<String>,
 }
 
+/// JSON schema mirroring [`LlmRewrite`] for grammar-constrained decoding.
+fn rewrite_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "primary": {"type": "string"},
+            "sub_queries": {"type": "array", "items": {"type": "string"}},
+            "expanded_terms": {"type": "array", "items": {"type": "string"}},
+            "hyde_query": {"type": ["string", "null"]},
+            "step_back_query": {"type": ["string", "null"]}
+        },
+        "required": ["primary", "sub_queries", "expanded_terms"]
+    })
+}
+
 #[derive(Deserialize)]
 struct LlmRewrite {
     #[serde(default)]
@@ -137,7 +152,7 @@ impl QueryRewriter {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &rewrite_schema())
             .await
         {
             Ok(resp) => {
@@ -159,12 +174,14 @@ impl QueryRewriter {
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to parse LLM rewrite, using fallback");
+                        crate::degradation::record_fallback("query_rewriter");
                         Ok(fallback_rewrite(query))
                     }
                 }
             }
             Err(e) => {
                 warn!(error = %e, "LLM rewrite failed, using fallback");
+                crate::degradation::record_fallback("query_rewriter");
                 Ok(fallback_rewrite(query))
             }
         }
@@ -197,7 +214,7 @@ impl QueryRewriter {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &rewrite_schema())
             .await
         {
             Ok(resp) => {
@@ -219,12 +236,14 @@ impl QueryRewriter {
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to parse feedback rewrite, using fallback");
+                        crate::degradation::record_fallback("query_rewriter");
                         Ok(fallback_rewrite(query))
                     }
                 }
             }
             Err(e) => {
                 warn!(error = %e, "Feedback rewrite failed, using fallback");
+                crate::degradation::record_fallback("query_rewriter");
                 Ok(fallback_rewrite(query))
             }
         }

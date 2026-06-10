@@ -36,6 +36,21 @@ pub struct QualityVerdict {
     pub feedback: Option<String>,
 }
 
+/// JSON schema mirroring [`LlmVerdict`] for grammar-constrained decoding.
+fn verdict_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "pass": {"type": "boolean"},
+            "relevance": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "hallucination": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "completeness": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "feedback": {"type": ["string", "null"]}
+        },
+        "required": ["pass", "relevance", "hallucination", "completeness"]
+    })
+}
+
 #[derive(Deserialize)]
 struct LlmVerdict {
     #[serde(default = "default_true")]
@@ -141,7 +156,7 @@ impl QualityGuard {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &verdict_schema())
             .await
         {
             Ok(resp) => {
@@ -165,6 +180,7 @@ impl QualityGuard {
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to parse quality verdict, passing");
+                        crate::degradation::record_fallback("quality_guard");
                         Ok(QualityVerdict {
                             pass: true,
                             relevance_score: 0.8,
@@ -177,6 +193,7 @@ impl QualityGuard {
             }
             Err(e) => {
                 warn!(error = %e, "Quality guard LLM failed, passing");
+                crate::degradation::record_fallback("quality_guard");
                 Ok(QualityVerdict {
                     pass: true,
                     relevance_score: 0.8,
