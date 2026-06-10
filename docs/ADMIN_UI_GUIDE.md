@@ -326,8 +326,7 @@ Manage external authentication providers:
 - **Add Provider** — Opens a form modal with:
   - Name, Type (OIDC, OAuth2, SAML, LDAP), Enabled toggle
   - Dynamic config fields based on type:
-    - **OIDC:** Issuer URL, Client ID, Client Secret, Scopes, Redirect URI
-    - **OAuth2:** Authorize URL, Token URL, UserInfo URL, Client ID, Client Secret, Scopes
+    - **OIDC/OAuth2:** Issuer URL, Client ID, Client Secret, Scopes, Redirect URI
     - **SAML:** IdP Entity ID, SSO URL, SLO URL, Certificate, SP Entity ID
     - **LDAP:** Server URL, Bind DN, Bind Password, Search Base, Search Filter, TLS toggle
   - Secrets are rendered as password inputs
