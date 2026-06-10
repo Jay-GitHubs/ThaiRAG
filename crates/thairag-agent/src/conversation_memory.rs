@@ -86,7 +86,7 @@ impl ConversationMemory {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &memory_schema())
             .await
         {
             Ok(resp) => {
@@ -102,6 +102,7 @@ impl ConversationMemory {
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to parse memory summary, using raw");
+                        crate::degradation::record_fallback("conversation_memory");
                         Ok(MemoryEntry {
                             summary: resp.content.chars().take(200).collect(),
                             topics: vec![],
@@ -150,6 +151,18 @@ impl ConversationMemory {
             images: vec![],
         })
     }
+}
+
+/// JSON schema mirroring [`LlmMemory`] for grammar-constrained decoding.
+fn memory_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "topics": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["summary", "topics"]
+    })
 }
 
 #[derive(Deserialize)]

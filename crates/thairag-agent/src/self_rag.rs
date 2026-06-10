@@ -105,7 +105,7 @@ impl SelfRag {
 
         match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &self_rag_schema())
             .await
         {
             Ok(resp) => {
@@ -143,6 +143,7 @@ impl SelfRag {
                             Ok(RetrievalDecision::NoRetrieve { confidence: 0.7 })
                         } else {
                             warn!(error = %e, text = %text, "Self-RAG parse failed, defaulting to retrieve");
+                            crate::degradation::record_fallback("self_rag");
                             Ok(RetrievalDecision::Retrieve)
                         }
                     }
@@ -154,6 +155,19 @@ impl SelfRag {
             }
         }
     }
+}
+
+/// JSON schema mirroring [`SelfRagOutput`] for grammar-constrained decoding.
+fn self_rag_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "needs_retrieval": {"type": "boolean"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "reason": {"type": "string"}
+        },
+        "required": ["needs_retrieval", "confidence", "reason"]
+    })
 }
 
 #[derive(serde::Deserialize)]

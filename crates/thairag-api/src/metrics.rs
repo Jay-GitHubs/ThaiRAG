@@ -5,7 +5,8 @@ use std::task::{Context, Poll};
 use axum::body::Body;
 use axum::http::{Request, Response};
 use prometheus::{
-    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
+    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    TextEncoder,
 };
 use tower::{Layer, Service};
 
@@ -31,6 +32,12 @@ pub struct MetricsState {
     pub attachments_total: IntCounterVec,
     /// Attachment text-extraction duration in seconds, keyed by MIME type.
     pub attachment_extraction_duration_seconds: HistogramVec,
+    /// Cumulative agent JSON-fallback count, keyed by agent name. Synced from
+    /// `thairag_agent::degradation` at scrape time (a gauge holding a
+    /// monotonically increasing value — use `delta()`/`increase()`-style
+    /// queries). A rising value means the configured model is failing that
+    /// agent's JSON contract and answers degrade to heuristics.
+    pub agent_json_fallback_total: IntGaugeVec,
 }
 
 impl Default for MetricsState {
@@ -149,6 +156,17 @@ impl MetricsState {
         registry
             .register(Box::new(attachment_extraction_duration_seconds.clone()))
             .unwrap();
+        let agent_json_fallback_total = IntGaugeVec::new(
+            Opts::new(
+                "agent_json_fallback_total",
+                "Cumulative LLM-agent JSON parse/call fallbacks (degraded heuristic used)",
+            ),
+            &["agent"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(agent_json_fallback_total.clone()))
+            .unwrap();
 
         Self {
             registry,
@@ -162,6 +180,17 @@ impl MetricsState {
             guardrail_streaming_redactions_total,
             attachments_total,
             attachment_extraction_duration_seconds,
+            agent_json_fallback_total,
+        }
+    }
+
+    /// Pull the cumulative per-agent fallback counts from `thairag-agent`
+    /// into the exported gauge (called at scrape time).
+    pub fn sync_agent_fallbacks(&self) {
+        for (agent, n) in thairag_agent::degradation::fallback_counts() {
+            self.agent_json_fallback_total
+                .with_label_values(&[agent])
+                .set(n as i64);
         }
     }
 

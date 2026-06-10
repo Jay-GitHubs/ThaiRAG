@@ -70,6 +70,17 @@ impl CuratedContext {
     }
 }
 
+/// JSON schema mirroring [`LlmCuration`] for grammar-constrained decoding.
+fn curation_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "selected": {"type": "array", "items": {"type": "integer", "minimum": 1}}
+        },
+        "required": ["selected"]
+    })
+}
+
 #[derive(Deserialize)]
 struct LlmCuration {
     /// Indices of relevant chunks (1-based), ordered by relevance.
@@ -156,7 +167,7 @@ impl ContextCurator {
 
         let selected_indices = match self
             .llm
-            .generate(&[system, user], Some(self.max_tokens))
+            .generate_structured(&[system, user], Some(self.max_tokens), &curation_schema())
             .await
         {
             Ok(resp) => {
@@ -168,12 +179,14 @@ impl ContextCurator {
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to parse LLM curation, using all chunks");
+                        crate::degradation::record_fallback("context_curator");
                         (1..=results.len()).collect()
                     }
                 }
             }
             Err(e) => {
                 warn!(error = %e, "LLM curation failed, using all chunks");
+                crate::degradation::record_fallback("context_curator");
                 (1..=results.len()).collect()
             }
         };

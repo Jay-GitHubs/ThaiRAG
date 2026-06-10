@@ -89,6 +89,7 @@ async fn metrics_handler(State(state): State<AppState>) -> String {
     state
         .metrics
         .set_active_sessions(state.session_store.count().await);
+    state.metrics.sync_agent_fallbacks();
     state.metrics.encode()
 }
 
