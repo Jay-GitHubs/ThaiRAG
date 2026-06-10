@@ -146,6 +146,11 @@ fn lattice_table_chunk(
 ) -> Option<DocumentChunk> {
     let linearized = page.table_linearized.clone()?;
     let strategy = crate::semantic::PageStrategy::Tabular.as_str().to_string();
+    let page_numbers = if page.table_pages.is_empty() {
+        vec![page.page_num]
+    } else {
+        page.table_pages.clone()
+    };
     Some(DocumentChunk {
         chunk_id: ChunkId::new(),
         doc_id,
@@ -158,7 +163,7 @@ fn lattice_table_chunk(
             chunk_type: Some(strategy.clone()),
             page_strategy: Some(strategy),
             mime_type: Some(PDF_MIME.to_string()),
-            page_numbers: Some(vec![page.page_num]),
+            page_numbers: Some(page_numbers),
             embed_text: Some(linearized),
             ..Default::default()
         }),

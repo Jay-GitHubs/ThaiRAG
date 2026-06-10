@@ -125,6 +125,9 @@ pub struct RenderedPage {
     /// The row-linearized form of `table_html`, used as the chunk's embedding
     /// text so retrieval matches on clean words rather than HTML tags.
     pub table_linearized: Option<String>,
+    /// All page numbers whose rows live in `table_html` when a multi-page
+    /// table was stitched into this page. Empty for a single-page table.
+    pub table_pages: Vec<usize>,
 }
 
 /// The stable inline marker for an image blob inside the semantic markdown.
@@ -243,6 +246,7 @@ mod tests {
                 markdown: "second".into(),
                 table_html: None,
                 table_linearized: None,
+                table_pages: vec![],
             },
             RenderedPage {
                 page_num: 1,
@@ -250,6 +254,7 @@ mod tests {
                 markdown: "| a | b |\n|---|---|\n| 1 | 2 |".into(),
                 table_html: None,
                 table_linearized: None,
+                table_pages: vec![],
             },
         ];
         let md = assemble_document_markdown("My Doc", pages);
@@ -269,6 +274,7 @@ mod tests {
             markdown: "   ".into(),
             table_html: None,
             table_linearized: None,
+            table_pages: vec![],
         }];
         let md = assemble_document_markdown("  ", pages);
         assert!(!md.starts_with('#'));

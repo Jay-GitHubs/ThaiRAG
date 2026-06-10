@@ -55,6 +55,10 @@ const LATTICE_HIGH_COVERAGE: f32 = 0.7;
 /// logos/stamps are legitimately small, while anything under this is a border
 /// artifact or tracking pixel.
 const CELL_IMAGE_MIN_SIZE: u32 = 16;
+/// Max per-boundary drift (points) for two pages' column fingerprints to count
+/// as the same grid (multi-page stitching). Matches `MIN_CELL_GAP`'s scale —
+/// a real layout reproduces its ruled boundaries far more precisely than this.
+const STITCH_COL_TOL: f32 = 6.0;
 
 /// Tunables for the smart-PDF engine. Defaults mirror Jay-RAG-Tools.
 #[derive(Debug, Clone)]
@@ -130,6 +134,13 @@ pub struct PageExtract {
     /// already embedded as `[IMAGE:<id>]` markers in `table` html/linearized;
     /// phase 2 persists the bytes as blobs.
     pub cell_images: Vec<CellImage>,
+    /// All page numbers whose rows live in `table`, when consecutive same-grid
+    /// pages were stitched into this one. Empty for a single-page table.
+    pub table_pages: Vec<usize>,
+    /// Set on a continuation page whose table rows were stitched into an
+    /// earlier page (the value is that anchor page's number). Phase 2 renders
+    /// this page empty — its content lives on the anchor.
+    pub stitched_into: Option<usize>,
 }
 
 /// An embedded image assigned to a table cell during lattice reconstruction:
@@ -325,9 +336,96 @@ pub fn extract_pages(pdf: &[u8], cfg: &SmartPdfConfig) -> Result<Vec<PageExtract
             embedded,
             table,
             cell_images,
+            table_pages: Vec::new(),
+            stitched_into: None,
         });
     }
+    stitch_multipage_tables(&mut pages);
     Ok(pages)
+}
+
+/// Column boundaries equal within [`STITCH_COL_TOL`] points position-by-position.
+fn cols_match(a: &[f32], b: &[f32]) -> bool {
+    !a.is_empty()
+        && a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| (x - y).abs() <= STITCH_COL_TOL)
+}
+
+/// Stitch a table that continues across consecutive pages into one table.
+///
+/// A multi-page table reproduces the same ruled column boundaries on every
+/// page (`ReconstructedTable::col_xs` — the geometric fingerprint), so
+/// consecutive pages whose reconstructed grids share that fingerprint are one
+/// logical table. The continuation's rows are appended to the anchor page's
+/// table (dropping a repeated header row when its cells equal the anchor's
+/// first row), its cell-image blobs move to the anchor, and the page is marked
+/// `stitched_into` so phase 2 renders it empty instead of duplicating content.
+fn stitch_multipage_tables(pages: &mut [PageExtract]) {
+    let mut anchor = 0usize;
+    for i in 1..pages.len() {
+        // `pages` holds every page in order, so index adjacency = page
+        // adjacency; a page without a matching grid starts a new run.
+        let matches = match (pages[anchor].table.as_ref(), pages[i].table.as_ref()) {
+            (Some(at), Some(bt)) => cols_match(&at.col_xs, &bt.col_xs),
+            _ => false,
+        };
+        if !matches {
+            anchor = i;
+            continue;
+        }
+        let cont = pages[i].table.take().expect("matched table");
+        let mut cont_imgs = std::mem::take(&mut pages[i].cell_images);
+        let base_page = pages[anchor].page_num;
+        let cont_page = pages[i].page_num;
+        pages[i].stitched_into = Some(base_page);
+
+        let base = pages[anchor].table.as_mut().expect("matched table");
+        let (mut cont_lin, mut cont_html, mut cont_rows) =
+            (cont.linearized, cont.html, cont.n_rows);
+        // Drop the continuation's repeated header (same first-row cells).
+        let base_header = base
+            .linearized
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        if cont_rows > 1 && cont_lin.lines().next() == Some(base_header.as_str()) {
+            cont_lin = cont_lin
+                .split_once('\n')
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or_default();
+            if let (Some(start), Some(end)) = (cont_html.find("<tr>"), cont_html.find("</tr>"))
+                && start < end
+            {
+                cont_html.replace_range(start..end + "</tr>".len(), "");
+            }
+            cont_rows -= 1;
+        }
+        // Merge the HTML row streams: strip the seam tags and concatenate.
+        let base_body = base.html.strip_suffix("</table>").unwrap_or(&base.html);
+        let cont_body = cont_html.strip_prefix("<table>").unwrap_or(&cont_html);
+        base.html = format!("{base_body}{cont_body}");
+        if !cont_lin.is_empty() {
+            base.linearized.push('\n');
+            base.linearized.push_str(&cont_lin);
+        }
+        // Cell-weighted confidence; conservative coverage.
+        let (bc, cc) = (
+            (base.n_rows * base.n_cols) as f32,
+            (cont_rows * cont.n_cols) as f32,
+        );
+        base.confidence = (base.confidence * bc + cont.confidence * cc) / (bc + cc).max(1.0);
+        base.char_coverage = base.char_coverage.min(cont.char_coverage);
+        base.n_rows += cont_rows;
+
+        if pages[anchor].table_pages.is_empty() {
+            pages[anchor].table_pages.push(base_page);
+        }
+        pages[anchor].table_pages.push(cont_page);
+        pages[anchor].cell_images.append(&mut cont_imgs);
+    }
 }
 
 /// Phase 2 (async): render each page to markdown via the vision model, then
@@ -346,6 +444,12 @@ pub async fn render_to_document(
     let mut images: Vec<ExtractedImageBlob> = Vec::new();
 
     for ex in extracts {
+        // A continuation page whose table rows were stitched into an earlier
+        // page renders empty — its content lives on the anchor page.
+        if ex.stitched_into.is_some() {
+            rendered.push(rp(&ex, String::new()));
+            continue;
+        }
         let lang = Language::detect(&ex.text);
         let over_budget = vision_pages_used >= cfg.max_vision_pages;
 
@@ -525,6 +629,7 @@ fn rp(ex: &PageExtract, markdown: String) -> RenderedPage {
         markdown,
         table_html: ex.table.as_ref().map(|l| l.html.clone()),
         table_linearized: ex.table.as_ref().map(|l| l.linearized.clone()),
+        table_pages: ex.table_pages.clone(),
     }
 }
 
@@ -585,6 +690,114 @@ mod tests {
         SmartPdfConfig::default()
     }
 
+    fn table_page(page_num: usize, header: &str, rows: &[&str], col_xs: Vec<f32>) -> PageExtract {
+        let all: Vec<&str> = std::iter::once(header)
+            .chain(rows.iter().copied())
+            .collect();
+        let html = format!(
+            "<table>{}</table>",
+            all.iter()
+                .map(|r| format!(
+                    "<tr>{}</tr>",
+                    r.split(" | ")
+                        .map(|c| format!("<td>{c}</td>"))
+                        .collect::<String>()
+                ))
+                .collect::<String>()
+        );
+        let n_cols = header.split(" | ").count();
+        PageExtract {
+            page_num,
+            strategy: PageStrategy::Tabular,
+            text: all.join("\n"),
+            page_png: None,
+            embedded: vec![],
+            table: Some(crate::table_lattice::ReconstructedTable {
+                html,
+                linearized: all.join("\n"),
+                confidence: 1.0,
+                char_coverage: 1.0,
+                n_rows: all.len(),
+                n_cols,
+                col_xs,
+            }),
+            cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
+        }
+    }
+
+    #[test]
+    fn stitches_consecutive_same_grid_pages_and_drops_repeated_header() {
+        let xs = vec![0.0, 100.0, 200.0, 300.0];
+        let mut pages = vec![
+            table_page(1, "Region | Q1 | Q2", &["North | 100 | 200"], xs.clone()),
+            // Repeated header on the continuation page must be dropped.
+            table_page(2, "Region | Q1 | Q2", &["South | 300 | 400"], xs.clone()),
+            // Different grid → NOT stitched.
+            table_page(3, "A | B", &["x | y"], vec![0.0, 50.0, 100.0]),
+        ];
+        stitch_multipage_tables(&mut pages);
+
+        let base = pages[0].table.as_ref().expect("anchor keeps its table");
+        assert_eq!(base.n_rows, 3, "1 header + 2 data rows");
+        assert_eq!(
+            base.linearized,
+            "Region | Q1 | Q2\nNorth | 100 | 200\nSouth | 300 | 400"
+        );
+        assert_eq!(
+            base.html,
+            "<table><tr><td>Region</td><td>Q1</td><td>Q2</td></tr>\
+             <tr><td>North</td><td>100</td><td>200</td></tr>\
+             <tr><td>South</td><td>300</td><td>400</td></tr></table>"
+        );
+        assert_eq!(pages[0].table_pages, vec![1, 2]);
+        assert!(pages[1].table.is_none());
+        assert_eq!(pages[1].stitched_into, Some(1));
+        // Page 3 starts its own run, untouched.
+        assert!(pages[2].table.is_some());
+        assert_eq!(pages[2].stitched_into, None);
+    }
+
+    #[test]
+    fn no_stitch_when_a_non_table_page_intervenes() {
+        let xs = vec![0.0, 100.0, 200.0];
+        let mut pages = vec![
+            table_page(1, "A | B", &["a | b"], xs.clone()),
+            PageExtract {
+                page_num: 2,
+                strategy: PageStrategy::TextOnly,
+                text: "prose page".into(),
+                page_png: None,
+                embedded: vec![],
+                table: None,
+                cell_images: vec![],
+                table_pages: vec![],
+                stitched_into: None,
+            },
+            table_page(3, "A | B", &["c | d"], xs),
+        ];
+        stitch_multipage_tables(&mut pages);
+        assert!(pages[0].table.is_some() && pages[2].table.is_some());
+        assert_eq!(pages[0].table.as_ref().unwrap().n_rows, 2);
+        assert!(pages.iter().all(|p| p.stitched_into.is_none()));
+    }
+
+    #[test]
+    fn stitch_keeps_distinct_continuation_header_row() {
+        // The continuation's first row is DATA (not a repeated header) — it
+        // must be kept.
+        let xs = vec![0.0, 100.0, 200.0];
+        let mut pages = vec![
+            table_page(1, "A | B", &["a | b"], xs.clone()),
+            table_page(2, "c | d", &["e | f"], xs),
+        ];
+        stitch_multipage_tables(&mut pages);
+        let base = pages[0].table.as_ref().unwrap();
+        assert_eq!(base.n_rows, 4);
+        assert_eq!(base.linearized, "A | B\na | b\nc | d\ne | f");
+    }
+
     #[tokio::test]
     async fn text_only_page_skips_vision() {
         let llm = StubVision {
@@ -599,6 +812,8 @@ mod tests {
             embedded: vec![],
             table: None,
             cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
@@ -621,6 +836,8 @@ mod tests {
             embedded: vec![],
             table: None,
             cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
@@ -654,6 +871,8 @@ mod tests {
             embedded: vec![],
             table: None,
             cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "must not call vision");
@@ -677,6 +896,7 @@ mod tests {
             char_coverage: 1.0,
             n_rows: 1,
             n_cols: 2,
+            col_xs: vec![],
         };
         let pages = vec![PageExtract {
             page_num: 1,
@@ -686,6 +906,8 @@ mod tests {
             embedded: vec![],
             table: Some(lat),
             cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "lattice must not call vision");
@@ -726,6 +948,8 @@ mod tests {
             embedded: vec![],
             table: None,
             cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
         }];
         let doc = render_to_document("Doc", pages, &llm, &c).await;
         assert_eq!(doc.vision_pages_used, 0);
