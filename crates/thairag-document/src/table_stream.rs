@@ -291,6 +291,7 @@ pub fn reconstruct(chars: &[PositionedChar]) -> Option<ReconstructedTable> {
         char_coverage,
         n_rows,
         n_cols,
+        col_xs: Vec::new(),
     })
 }
 

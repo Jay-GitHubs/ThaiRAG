@@ -61,6 +61,11 @@ pub struct ReconstructedTable {
     pub char_coverage: f32,
     pub n_rows: usize,
     pub n_cols: usize,
+    /// Final column boundary x-positions (ascending, page points). A table
+    /// continuing on the next page reproduces the same boundaries, so this is
+    /// the fingerprint used to stitch consecutive same-grid pages. Empty on
+    /// the stream (borderless) path, which has no measured boundaries.
+    pub col_xs: Vec<f32>,
 }
 
 /// Cluster a set of scalar coordinates into representative positions, merging
@@ -653,6 +658,7 @@ pub fn reconstruct(
         char_coverage,
         n_rows,
         n_cols,
+        col_xs: xs,
     })
 }
 
