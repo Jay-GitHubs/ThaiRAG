@@ -23,15 +23,7 @@ const idpTypes: { value: IdpType; label: string }[] = [
 ];
 
 const oidcFields = ['issuer_url', 'client_id', 'client_secret', 'scopes', 'redirect_uri'];
-const oauth2Fields = [
-  'authorize_url',
-  'token_url',
-  'userinfo_url',
-  'client_id',
-  'client_secret',
-  'scopes',
-  'redirect_uri',
-];
+const oauth2Fields = ['issuer_url', 'client_id', 'client_secret', 'scopes', 'redirect_uri'];
 const samlFields = ['idp_entity_id', 'sso_url', 'slo_url', 'certificate', 'sp_entity_id'];
 const ldapFields = ['server_url', 'bind_dn', 'bind_password', 'search_base', 'search_filter'];
 

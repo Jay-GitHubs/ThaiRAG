@@ -522,8 +522,7 @@ test.describe('Identity Providers Settings UI', () => {
         provider_type: 'oauth2',
         enabled: true,
         config: {
-          authorize_url: 'https://provider.example.com/oauth/authorize',
-          token_url: 'https://provider.example.com/oauth/token',
+          issuer_url: 'https://provider.example.com',
           client_id: 'edit-test-client',
         },
       },
