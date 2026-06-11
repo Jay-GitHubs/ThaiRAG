@@ -627,6 +627,16 @@ pub async fn ingest_document(
     require_doc(&perm, Role::can_write, "ingest document")?;
 
     validate_mime_type(&body.mime_type)?;
+    if !crate::net_guard::mime_matches_magic(&body.mime_type, body.content.as_bytes()) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Content does not match declared MIME type '{}'",
+            body.mime_type
+        ))));
+    }
+    // SSRF gate: a stored source_url will be fetched by the refresh scheduler.
+    if let Some(ref url) = body.source_url {
+        crate::net_guard::validate_external_url(url).await?;
+    }
 
     // Validate refresh_schedule if provided
     if let Some(ref schedule) = body.refresh_schedule
@@ -792,6 +802,11 @@ pub async fn upload_document(
         .unwrap_or_else(|| "text/plain".to_string());
 
     validate_mime_type(&mime_type)?;
+    if !crate::net_guard::mime_matches_magic(&mime_type, &bytes) {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "File content does not match declared MIME type '{mime_type}'"
+        ))));
+    }
 
     let workspace_id = workspace_id_typed;
     let doc_id = DocId::new();
@@ -2123,6 +2138,11 @@ pub async fn update_document_schedule(
         ))));
     }
 
+    // SSRF gate: a stored source_url will be fetched by the refresh scheduler.
+    if let Some(ref url) = body.source_url {
+        crate::net_guard::validate_external_url(url).await?;
+    }
+
     // Validate source_url if refresh_schedule is set
     if body.refresh_schedule.is_some() && body.source_url.is_none() {
         let doc = state.km_store.get_document(doc_id_typed)?;
@@ -2140,7 +2160,9 @@ pub async fn update_document_schedule(
     )?;
 
     info!(
-        %doc_id, source_url = ?body.source_url, schedule = ?body.refresh_schedule,
+        %doc_id,
+        source_url = ?body.source_url.as_deref().map(crate::net_guard::redact_url),
+        schedule = ?body.refresh_schedule,
         "Updated document refresh schedule"
     );
 
@@ -2195,7 +2217,8 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
         None => return,
     };
 
-    tracing::info!(%doc_id, %source_url, "Refreshing document from source URL");
+    let redacted = crate::net_guard::redact_url(&source_url);
+    tracing::info!(%doc_id, source_url = %redacted, "Refreshing document from source URL");
 
     let job = thairag_core::types::Job {
         id: thairag_core::types::JobId(Uuid::new_v4()),
@@ -2203,7 +2226,7 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
         status: thairag_core::types::JobStatus::Queued,
         workspace_id,
         doc_id: Some(doc_id),
-        description: format!("Refresh document {doc_id} from {source_url}"),
+        description: format!("Refresh document {doc_id} from {redacted}"),
         created_at: now_ts(),
         started_at: None,
         completed_at: None,
@@ -2215,24 +2238,47 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
     let jq = state.job_queue.clone();
     jq.mark_running(&job_id).await;
 
-    // Fetch content from source URL
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_default();
-
-    let response = match client.get(&source_url).send().await {
-        Ok(r) => r,
+    // SSRF gate (defense in depth — also enforced when the URL is stored,
+    // but rows can predate that check). Redirects are DISABLED below because
+    // a redirect hop is a fresh URL the validator never saw.
+    let validated = match crate::net_guard::validate_external_url(&source_url).await {
+        Ok(u) => u,
         Err(e) => {
-            let msg = format!("Failed to fetch from {source_url}: {e}");
+            let msg = format!("Refused source URL {redacted}: {e}");
             tracing::error!(%doc_id, %msg);
             jq.mark_failed(&job_id, msg).await;
             return;
         }
     };
 
+    // Fetch content from source URL
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default();
+
+    let response = match client.get(validated).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("Failed to fetch from {redacted}: {e}");
+            tracing::error!(%doc_id, %msg);
+            jq.mark_failed(&job_id, msg).await;
+            return;
+        }
+    };
+
+    if response.status().is_redirection() {
+        let msg = format!(
+            "HTTP {} from {redacted}: redirects are not followed for refresh URLs — point source_url at the final location",
+            response.status()
+        );
+        tracing::error!(%doc_id, %msg);
+        jq.mark_failed(&job_id, msg).await;
+        return;
+    }
     if !response.status().is_success() {
-        let msg = format!("HTTP {} from {source_url}", response.status());
+        let msg = format!("HTTP {} from {redacted}", response.status());
         tracing::error!(%doc_id, %msg);
         jq.mark_failed(&job_id, msg).await;
         return;
@@ -2241,7 +2287,7 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
     let bytes = match response.bytes().await {
         Ok(b) => b.to_vec(),
         Err(e) => {
-            let msg = format!("Failed to read response body from {source_url}: {e}");
+            let msg = format!("Failed to read response body from {redacted}: {e}");
             tracing::error!(%doc_id, %msg);
             jq.mark_failed(&job_id, msg).await;
             return;
