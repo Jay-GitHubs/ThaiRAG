@@ -230,7 +230,8 @@ def main():
                 "q08-loanshark-reason-th", "q10-aggregate-licence", "q11-negative-gambling"}
         questions = [q for q in questions if q["id"] in keep]
 
-    fixture = os.path.join(ROOT, eval_set["fixture"])
+    fixtures = [eval_set["fixture"]] + eval_set.get("extra_fixtures", [])
+    fixtures = [os.path.join(ROOT, f) for f in fixtures]
     cells = grid(args.quick)
     print(f"[bench] {len(cells)} cells x {len(questions)} questions "
           f"({'quick' if args.quick else 'full'} mode)")
@@ -275,17 +276,19 @@ def main():
         api.put(f"/api/km/settings/document?scope_type=org&scope_id={org_id}",
                 {"max_chunk_size": 8000})
 
-        # Upload fixture (multipart).
-        with open(fixture, "rb") as fh:
-            up = api.s.post(
-                f"{API_BASE}/api/km/workspaces/{ws_id}/documents/upload",
-                files={"file": (os.path.basename(fixture), fh, "application/pdf")},
-                timeout=120,
-            )
-        up.raise_for_status()
-        doc_id = up.json()["doc_id"]
-        chunks = wait_ready(api, ws_id, doc_id)
-        print(f"[bench] ingested fixture: {chunks} chunk(s)")
+        # Upload fixtures (multipart). All land in ONE workspace so every
+        # question is also an implicit multi-document ranking test.
+        for fixture in fixtures:
+            with open(fixture, "rb") as fh:
+                up = api.s.post(
+                    f"{API_BASE}/api/km/workspaces/{ws_id}/documents/upload",
+                    files={"file": (os.path.basename(fixture), fh, "application/pdf")},
+                    timeout=120,
+                )
+            up.raise_for_status()
+            doc_id = up.json()["doc_id"]
+            chunks = wait_ready(api, ws_id, doc_id, timeout=600)
+            print(f"[bench] ingested {os.path.basename(fixture)}: {chunks} chunk(s)")
 
         def query(q_text):
             """Resilient test-query: retry transient 500s (model swap/OOM) a few
