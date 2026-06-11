@@ -120,6 +120,21 @@ pub async fn test_query(
 ) -> Result<Json<TestQueryResponse>, ApiError> {
     let total_start = Instant::now();
 
+    // Per-user token-bucket rate limit — test-query runs full search + LLM
+    // generation, the most expensive request in the API (chat has the same
+    // guard; this endpoint was the unmetered side door).
+    if claims.sub != "anonymous" {
+        state
+            .user_rate_limiter
+            .try_acquire(&claims.sub)
+            .map_err(|retry_after| {
+                ApiError(ThaiRagError::Validation(format!(
+                    "User rate limit exceeded. Retry after {:.0} seconds.",
+                    retry_after.ceil()
+                )))
+            })?;
+    }
+
     // Validate query
     if req.query.trim().is_empty() {
         return Err(ApiError(ThaiRagError::Validation(
@@ -526,6 +541,19 @@ pub async fn test_query_stream(
     ApiError,
 > {
     let total_start = Instant::now();
+
+    // Per-user token-bucket rate limit (same guard as the non-stream handler).
+    if claims.sub != "anonymous" {
+        state
+            .user_rate_limiter
+            .try_acquire(&claims.sub)
+            .map_err(|retry_after| {
+                ApiError(ThaiRagError::Validation(format!(
+                    "User rate limit exceeded. Retry after {:.0} seconds.",
+                    retry_after.ceil()
+                )))
+            })?;
+    }
 
     // Validate
     if req.query.trim().is_empty() {
