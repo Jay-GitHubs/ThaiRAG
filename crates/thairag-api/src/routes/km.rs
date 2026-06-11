@@ -314,7 +314,14 @@ pub async fn delete_org(
     require(&perm, Role::can_delete, "delete org")?;
     let doc_ids = state.km_store.cascade_delete_org(org_id)?;
     for doc_id in doc_ids {
-        let _ = state.providers().search_engine.delete_doc(doc_id).await;
+        if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+            tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+            state
+                .metrics
+                .vector_delete_errors_total
+                .with_label_values(&["org_cascade"])
+                .inc();
+        }
     }
     tracing::info!(%org_id, "Organization deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -418,7 +425,14 @@ pub async fn delete_dept(
     require(&perm, Role::can_delete, "delete department")?;
     let doc_ids = state.km_store.cascade_delete_dept(dept_id)?;
     for doc_id in doc_ids {
-        let _ = state.providers().search_engine.delete_doc(doc_id).await;
+        if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+            tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+            state
+                .metrics
+                .vector_delete_errors_total
+                .with_label_values(&["dept_cascade"])
+                .inc();
+        }
     }
     tracing::info!(%dept_id, "Department deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -521,7 +535,14 @@ pub async fn delete_workspace(
         .km_store
         .cascade_delete_workspace(WorkspaceId(ws_id))?;
     for doc_id in doc_ids {
-        let _ = state.providers().search_engine.delete_doc(doc_id).await;
+        if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+            tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+            state
+                .metrics
+                .vector_delete_errors_total
+                .with_label_values(&["workspace_cascade"])
+                .inc();
+        }
     }
     tracing::info!(%ws_id, "Workspace deleted");
     Ok(StatusCode::NO_CONTENT)

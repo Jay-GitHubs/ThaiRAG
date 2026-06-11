@@ -1373,7 +1373,9 @@ impl AppState {
             test_vault_dir.to_str().unwrap_or("/tmp/thairag-test-vault"),
         ));
 
-        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
+        let metrics = Arc::new(MetricsState::new());
+        let webhook_dispatcher =
+            crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store), Some(metrics.clone()));
 
         let plugin_registry = Arc::new(crate::plugin_registry::PluginRegistry::new());
         crate::builtin_plugins::register_builtin_plugins(&plugin_registry);
@@ -1384,7 +1386,7 @@ impl AppState {
             api_keys: Arc::new(std::collections::HashSet::new()),
             km_store,
             session_store: Arc::new(InMemorySessionStore::new()),
-            metrics: Arc::new(MetricsState::new()),
+            metrics,
             oidc_state_cache: OidcStateCache::new(),
             login_tracker,
             prompt_registry: Arc::new(PromptRegistry::new()),
@@ -1664,7 +1666,8 @@ impl AppState {
         );
         km_store.set_setting("_embedding_fingerprint", &emb_fp);
 
-        let webhook_dispatcher = crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store));
+        let webhook_dispatcher =
+            crate::webhook::WebhookDispatcher::new(Arc::clone(&km_store), Some(metrics.clone()));
 
         // Recover interrupted finetune jobs
         let training_runner = Arc::new(crate::training_runner::TrainingRunner::new());
