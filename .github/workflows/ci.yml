@@ -193,6 +193,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker images (amd64 only — PR validation)
         run: docker compose build
+      # Building proves the image compiles; booting proves it RUNS. Free tier
+      # is fully in-memory (empty database url -> MemoryKmStore), so the image
+      # starts standalone with no postgres/redis/qdrant and /health must go ok.
+      - name: Boot smoke test (free tier, in-memory)
+        run: |
+          docker build -q -t thairag-ci . # cache-hit retag of the compose build
+          docker run -d --name thairag-smoke -p 18080:8080 \
+            -e THAIRAG_TIER=free \
+            -e THAIRAG__DATABASE__URL= \
+            -e THAIRAG__AUTH__ENABLED=false \
+            thairag-ci
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:18080/health 2>/dev/null | grep -q '"status":"ok"'; then
+              echo "image is healthy"
+              docker rm -f thairag-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::ThaiRAG image failed to become healthy within 90s"
+          docker logs thairag-smoke || true
+          docker rm -f thairag-smoke || true
+          exit 1
 
   # ── On merge to main: matrix-build per platform on native runners. ──
   # ── amd64 runs on ubuntu-latest, arm64 runs on the free ubuntu-24.04-arm ──
