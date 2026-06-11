@@ -17,15 +17,25 @@ const WEBHOOK_KEY_PREFIX: &str = "_webhook.";
 pub struct WebhookDispatcher {
     client: reqwest::Client,
     km_store: Arc<dyn KmStoreTrait>,
+    /// Delivery-failure counter (`webhook_dispatch_errors_total`). Optional so
+    /// unit constructions don't need a metrics registry.
+    metrics: Option<Arc<crate::metrics::MetricsState>>,
 }
 
 impl WebhookDispatcher {
-    pub fn new(km_store: Arc<dyn KmStoreTrait>) -> Self {
+    pub fn new(
+        km_store: Arc<dyn KmStoreTrait>,
+        metrics: Option<Arc<crate::metrics::MetricsState>>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();
-        Self { client, km_store }
+        Self {
+            client,
+            km_store,
+            metrics,
+        }
     }
 
     /// Register a new webhook.
@@ -110,6 +120,7 @@ impl WebhookDispatcher {
             let body = payload_json.clone();
             let url = webhook.url.clone();
             let secret = webhook.secret.clone();
+            let metrics = self.metrics.clone();
 
             tokio::spawn(async move {
                 let signature = compute_signature(&secret, &body);
@@ -127,6 +138,9 @@ impl WebhookDispatcher {
                     }
                     Err(e) => {
                         warn!(url, error = %e, "Webhook delivery failed");
+                        if let Some(m) = metrics {
+                            m.webhook_dispatch_errors_total.inc();
+                        }
                     }
                 }
             });

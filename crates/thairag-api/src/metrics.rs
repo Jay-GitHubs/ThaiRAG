@@ -5,8 +5,8 @@ use std::task::{Context, Poll};
 use axum::body::Body;
 use axum::http::{Request, Response};
 use prometheus::{
-    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
-    TextEncoder,
+    Encoder, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts,
+    Registry, TextEncoder,
 };
 use tower::{Layer, Service};
 
@@ -32,6 +32,17 @@ pub struct MetricsState {
     pub attachments_total: IntCounterVec,
     /// Attachment text-extraction duration in seconds, keyed by MIME type.
     pub attachment_extraction_duration_seconds: HistogramVec,
+    /// Vector-index delete failures, keyed by the operation that attempted
+    /// the delete. Every increment means Qdrant may now hold orphaned vectors
+    /// for a document Postgres no longer has — the exact failure mode behind
+    /// the ~1632-orphan incident, previously discarded with `let _ =`.
+    pub vector_delete_errors_total: IntCounterVec,
+    /// Document ingestion failures (any path: upload, background job,
+    /// reprocess, refresh). The job/doc records the error string; this is the
+    /// aggregate signal to alert on.
+    pub document_ingestion_errors_total: IntCounter,
+    /// Webhook deliveries that failed after dispatch (HTTP error / timeout).
+    pub webhook_dispatch_errors_total: IntCounter,
     /// Cumulative agent JSON-fallback count, keyed by agent name. Synced from
     /// `thairag_agent::degradation` at scrape time (a gauge holding a
     /// monotonically increasing value — use `delta()`/`increase()`-style
@@ -156,6 +167,33 @@ impl MetricsState {
         registry
             .register(Box::new(attachment_extraction_duration_seconds.clone()))
             .unwrap();
+        let vector_delete_errors_total = IntCounterVec::new(
+            Opts::new(
+                "vector_delete_errors_total",
+                "Vector-index delete failures (possible orphaned vectors), by operation",
+            ),
+            &["operation"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(vector_delete_errors_total.clone()))
+            .unwrap();
+        let document_ingestion_errors_total = IntCounter::new(
+            "document_ingestion_errors_total",
+            "Document ingestion failures (upload/job/reprocess/refresh)",
+        )
+        .unwrap();
+        registry
+            .register(Box::new(document_ingestion_errors_total.clone()))
+            .unwrap();
+        let webhook_dispatch_errors_total = IntCounter::new(
+            "webhook_dispatch_errors_total",
+            "Webhook deliveries that failed (HTTP error or timeout)",
+        )
+        .unwrap();
+        registry
+            .register(Box::new(webhook_dispatch_errors_total.clone()))
+            .unwrap();
         let agent_json_fallback_total = IntGaugeVec::new(
             Opts::new(
                 "agent_json_fallback_total",
@@ -180,6 +218,9 @@ impl MetricsState {
             guardrail_streaming_redactions_total,
             attachments_total,
             attachment_extraction_duration_seconds,
+            vector_delete_errors_total,
+            document_ingestion_errors_total,
+            webhook_dispatch_errors_total,
             agent_json_fallback_total,
         }
     }
@@ -372,6 +413,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_counters_register_and_export() {
+        let m = MetricsState::new();
+        m.vector_delete_errors_total
+            .with_label_values(&["document_delete"])
+            .inc();
+        m.document_ingestion_errors_total.inc();
+        m.webhook_dispatch_errors_total.inc();
+        let out = m.encode();
+        assert!(out.contains(r#"operation="document_delete""#), "{out}");
+        assert!(out.contains("document_ingestion_errors_total 1"), "{out}");
+        assert!(out.contains("webhook_dispatch_errors_total 1"), "{out}");
+    }
 
     #[test]
     fn normalize_path_known_routes() {

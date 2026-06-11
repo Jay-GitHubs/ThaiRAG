@@ -217,7 +217,7 @@ async fn process_document_inner(
         mime_type,
     ));
 
-    match handle.await {
+    let pair = match handle.await {
         Ok(pair) => pair,
         Err(join_err) if join_err.is_panic() => {
             let panic_msg = panic_payload_to_string(join_err.into_panic());
@@ -235,7 +235,14 @@ async fn process_document_inner(
             mark_doc_failed_best_effort(&state_for_panic, doc_id, &err).await;
             (0, Some(err))
         }
+    };
+    if pair.1.is_some() {
+        state_for_panic
+            .metrics
+            .document_ingestion_errors_total
+            .inc();
     }
+    pair
 }
 
 /// Format a panic payload (from `JoinError::into_panic`) into a string
@@ -889,7 +896,14 @@ pub async fn delete_document(
     let doc_id = DocId(doc_id);
     let _ = state.km_store.delete_chunks_by_doc(doc_id);
     state.km_store.delete_document(doc_id)?;
-    let _ = state.providers().search_engine.delete_doc(doc_id).await;
+    if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+        tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+        state
+            .metrics
+            .vector_delete_errors_total
+            .with_label_values(&["document_delete"])
+            .inc();
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1279,7 +1293,14 @@ pub async fn reprocess_all_documents(
 
         // Delete old chunks from search index AND SQL store. See
         // single-doc reprocess for why both deletes are required.
-        let _ = state.providers().search_engine.delete_doc(doc_id).await;
+        if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+            tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+            state
+                .metrics
+                .vector_delete_errors_total
+                .with_label_values(&["reprocess"])
+                .inc();
+        }
         let _ = state.km_store.delete_chunks_by_doc(doc_id);
 
         // Mark as processing
@@ -2241,7 +2262,14 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
 
     // Delete old chunks from search index AND SQL store. See
     // single-doc reprocess for why both deletes are required.
-    let _ = state.providers().search_engine.delete_doc(doc_id).await;
+    if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+        tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
+        state
+            .metrics
+            .vector_delete_errors_total
+            .with_label_values(&["refresh"])
+            .inc();
+    }
     let _ = state.km_store.delete_chunks_by_doc(doc_id);
 
     // Mark as processing
