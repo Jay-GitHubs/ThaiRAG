@@ -575,6 +575,64 @@ impl DocumentPipeline {
         on_step: Option<StepCallback>,
         overrides: ChunkOverrides,
     ) -> Result<ProcessedDocument> {
+        let mut doc = self
+            .process_to_document_inner(raw, mime_type, doc_id, workspace_id, on_step, overrides)
+            .await?;
+
+        // Conversion-fidelity assessment: deterministic comparison of the
+        // converted text against an independent extraction of the original
+        // (numbers dropped/fabricated + char coverage). Measurement only —
+        // a scoring failure must never fail ingestion.
+        if let Some(ref mut prov) = doc.provenance
+            && prov.fidelity.is_none()
+        {
+            let converted = doc.markdown.clone().unwrap_or_else(|| {
+                doc.chunks
+                    .iter()
+                    .map(|c| c.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            let raw_owned = raw.to_vec();
+            let mime = mime_type.to_string();
+            // assess() may call native extractors (pdfium) — keep it off the
+            // async runtime.
+            match tokio::task::spawn_blocking(move || {
+                crate::conversion_fidelity::assess(&raw_owned, &mime, &converted)
+            })
+            .await
+            {
+                Ok(fid) => {
+                    if fid.status == "review" {
+                        tracing::warn!(
+                            %doc_id,
+                            score = fid.score,
+                            numbers_matched = fid.numbers_matched,
+                            numbers_total = fid.numbers_total,
+                            numbers_fabricated = fid.numbers_fabricated,
+                            char_coverage = fid.char_coverage,
+                            "Conversion fidelity flagged for review"
+                        );
+                    }
+                    prov.fidelity = Some(fid);
+                }
+                Err(e) => {
+                    tracing::warn!(%doc_id, error = %e, "Fidelity assessment task failed");
+                }
+            }
+        }
+        Ok(doc)
+    }
+
+    async fn process_to_document_inner(
+        &self,
+        raw: &[u8],
+        mime_type: &str,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        on_step: Option<StepCallback>,
+        overrides: ChunkOverrides,
+    ) -> Result<ProcessedDocument> {
         if self.smart_pdf_eligible(mime_type) && crate::pdfium_engine::is_available() {
             match self
                 .process_pdf_smart(raw, doc_id, workspace_id, overrides)
@@ -2003,6 +2061,31 @@ mod tests {
         );
         assert_eq!(meta.chunk_type.as_deref(), Some("image_description"));
         assert_eq!(meta.mime_type.as_deref(), Some("image/png"));
+    }
+
+    #[tokio::test]
+    async fn fidelity_is_populated_on_provenance() {
+        let pipeline = DocumentPipeline::new(1000, 0);
+        let text = "Quarterly revenue was 1500 baht in 2024 and 2300 baht in 2025.";
+        let doc = pipeline
+            .process_to_document(
+                text.as_bytes(),
+                "text/plain",
+                DocId::new(),
+                WorkspaceId::new(),
+                None,
+                ChunkOverrides::default(),
+            )
+            .await
+            .unwrap();
+        let prov = doc.provenance.expect("provenance present");
+        let fid = prov.fidelity.expect("fidelity populated at ingest");
+        // Mechanical text path is lossless: every number survives, nothing
+        // fabricated.
+        assert_eq!(fid.status, "verified", "{fid:?}");
+        assert_eq!(fid.numbers_total, fid.numbers_matched);
+        assert_eq!(fid.numbers_fabricated, 0);
+        assert!(fid.char_coverage > 0.9);
     }
 
     #[tokio::test]
