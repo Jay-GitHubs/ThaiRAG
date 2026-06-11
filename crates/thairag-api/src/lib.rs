@@ -13,6 +13,7 @@ pub mod knowledge_graph;
 pub mod login_tracker;
 pub mod metrics;
 pub mod model_catalog;
+pub mod net_guard;
 pub mod oidc;
 pub mod owui_feedback_sync;
 pub mod plugin_hooks;
