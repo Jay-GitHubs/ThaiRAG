@@ -64,9 +64,62 @@ const MAX_VISION_IMAGES_PER_ANSWER: usize = 4;
 /// the answer LLM. Pass the RAW client messages (before any ThaiRAG-side memory
 /// or golden-example injection) so internal additions never trip the signal.
 pub fn has_client_supplied_context(messages: &[ChatMessage]) -> bool {
-    messages
+    messages.iter().any(|m| {
+        (m.role == "system" && !m.content.trim().is_empty())
+            // Open WebUI's RAG template injects the retrieved file/KB snippets
+            // into the USER message wrapped in <context> tags (observed live:
+            // a file-upload chat arrives as a single user message containing
+            // the template + context). Treat that as client-supplied context
+            // too, or uploads get the empty-KB refusal.
+            || (m.role == "user" && m.content.contains("<context>"))
+    })
+}
+
+/// Layer-1 context guard shared by the streaming AND non-streaming paths:
+/// `Some(message)` when retrieval produced nothing (or only irrelevant
+/// chunks) and the client supplied no context of its own — answering from
+/// general knowledge there is a false positive, so the pipeline refuses
+/// identically regardless of the `stream` flag.
+pub(crate) fn insufficient_context_message(
+    context: &CuratedContext,
+    has_external_context: bool,
+) -> Option<String> {
+    // When the client supplied its own context (e.g. an Open WebUI file
+    // upload injects the retrieved file text as a system message), an empty
+    // knowledge base is NOT a dead end — the answer LLM can work from that
+    // injected context. Suppress the short-circuit so the request reaches
+    // the response generator.
+    if has_external_context {
+        return None;
+    }
+    if context.chunks.is_empty() {
+        info!("Pipeline: no context, returning insufficient-info response");
+        return Some(
+            "I don't have enough information in the knowledge base to answer this question. \
+             Please try rephrasing your query or check if the relevant documents have been uploaded."
+                .to_string(),
+        );
+    }
+
+    let avg_score = context
+        .chunks
         .iter()
-        .any(|m| m.role == "system" && !m.content.trim().is_empty())
+        .map(|c| c.relevance_score)
+        .sum::<f32>()
+        / context.chunks.len() as f32;
+    if avg_score < 0.15 {
+        info!(
+            avg_score,
+            "Pipeline: context too low quality, returning insufficient-info response"
+        );
+        return Some(
+            "I found some documents but they don't appear to be relevant to your question. \
+             Could you rephrase your query or provide more details?"
+                .to_string(),
+        );
+    }
+
+    None
 }
 
 /// Per-request LLM call budget. Shared across pipeline stages to enforce
@@ -701,6 +754,7 @@ impl ChatPipeline {
     }
 
     /// Non-streaming pipeline: orchestrator decides which agents to run.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process(
         &self,
         messages: &[ChatMessage],
@@ -709,6 +763,7 @@ impl ChatPipeline {
         available_scopes: &[SearchableScope],
         progress: Option<ProgressSender>,
         metadata: Option<MetadataCell>,
+        has_external_context: bool,
     ) -> Result<LlmResponse> {
         let pipeline_start = Instant::now();
         let budget = LlmBudget::new(self.config.max_llm_calls_per_request);
@@ -969,6 +1024,17 @@ impl ChatPipeline {
                     context
                 };
 
+                // ── Layer-1 context guard (parity with the streaming path):
+                // refuse on empty/irrelevant retrieval instead of answering
+                // from general knowledge. ──
+                if let Some(msg) = self.context_insufficient_message(&context, has_external_context)
+                {
+                    return Ok(LlmResponse {
+                        content: msg,
+                        usage: LlmUsage::default(),
+                    });
+                }
+
                 self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
                 let t = Instant::now();
                 budget.try_spend();
@@ -1006,6 +1072,15 @@ impl ChatPipeline {
                 Self::update_metadata(&metadata, |m| {
                     m.generation_ms = Some(gen_ms);
                 });
+                // Quality guard applies here too — previously the simple
+                // route skipped it, so enabling the guard was a no-op for
+                // every lean-mode query.
+                let response = self
+                    .run_quality_guard(
+                        user_query, &analysis, &context, messages, response, false, &progress,
+                        &budget, &metadata,
+                    )
+                    .await?;
                 self.maybe_record_citations(&response.content, &context, &metadata);
                 self.maybe_adapt(response, &analysis).await
             }
@@ -1020,6 +1095,7 @@ impl ChatPipeline {
                     &progress,
                     &budget,
                     &metadata,
+                    has_external_context,
                 )
                 .await
             }
@@ -1034,6 +1110,7 @@ impl ChatPipeline {
                     &progress,
                     &budget,
                     &metadata,
+                    has_external_context,
                 )
                 .await
             }
@@ -1059,6 +1136,7 @@ impl ChatPipeline {
         progress: &Option<ProgressSender>,
         budget: &LlmBudget,
         metadata: &Option<MetadataCell>,
+        has_external_context: bool,
     ) -> Result<LlmResponse> {
         // ── Agent 2: Query Rewriter ──
         self.emit_progress(progress, "query_rewriter", StageStatus::Started, None);
@@ -1267,11 +1345,82 @@ impl ChatPipeline {
             progress,
             budget,
             metadata,
+            has_external_context,
         )
         .await
     }
 
-    /// Post-retrieval pipeline stages (CRAG, live retrieval, RAPTOR, compression, generation, quality guard).
+    #[allow(clippy::too_many_arguments)]
+    /// Quality-guard retry loop shared by every generating route (full,
+    /// complex, AND simple retrieval — the simple route used to skip it,
+    /// making the `quality_guard_enabled` toggle a silent no-op in lean
+    /// mode). Checks the response against the curated context, regenerating
+    /// with feedback up to `quality_guard_max_retries` times. No-op when the
+    /// guard is disabled or the call budget is exhausted.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_quality_guard(
+        &self,
+        user_query: &str,
+        analysis: &QueryAnalysis,
+        context: &CuratedContext,
+        messages: &[ChatMessage],
+        mut response: LlmResponse,
+        force_quality_guard: bool,
+        progress: &Option<ProgressSender>,
+        budget: &LlmBudget,
+        metadata: &Option<MetadataCell>,
+    ) -> Result<LlmResponse> {
+        let threshold = self.effective_threshold();
+        let run_guard = force_quality_guard || self.quality_guard.is_some();
+        if run_guard
+            && let Some(ref guard) = self.quality_guard
+            && budget.try_spend()
+        {
+            self.emit_progress(progress, "quality_guard", StageStatus::Started, None);
+            let t = Instant::now();
+            for attempt in 0..=self.config.quality_guard_max_retries {
+                let verdict = guard
+                    .check_with_threshold(user_query, &response.content, context, threshold)
+                    .await?;
+                if verdict.pass {
+                    Self::update_metadata(metadata, |m| {
+                        m.quality_guard_pass = Some(true);
+                    });
+                    debug!(attempt, "Pipeline: quality passed");
+                    break;
+                }
+                if attempt < self.config.quality_guard_max_retries && budget.try_spend() {
+                    let feedback = verdict
+                        .feedback
+                        .unwrap_or_else(|| "Improve relevance and reduce hallucination.".into());
+                    warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
+                    response = self
+                        .response_generator
+                        .generate_with_feedback(analysis, context, messages, &feedback, None)
+                        .await?;
+                } else {
+                    Self::update_metadata(metadata, |m| {
+                        m.quality_guard_pass = Some(false);
+                    });
+                    warn!(
+                        "Pipeline: quality guard exhausted retries or budget, using last response"
+                    );
+                    break;
+                }
+            }
+            let guard_ms = t.elapsed().as_millis() as u64;
+            self.emit_progress(progress, "quality_guard", StageStatus::Done, Some(guard_ms));
+            info!(
+                stage = "quality_guard",
+                duration_ms = guard_ms,
+                "Pipeline stage complete"
+            );
+        }
+        Ok(response)
+    }
+
+    /// Post-retrieval pipeline stages (CRAG, live retrieval, RAPTOR,
+    /// compression, generation, quality guard).
     #[allow(clippy::too_many_arguments)]
     async fn execute_post_retrieval(
         &self,
@@ -1285,6 +1434,7 @@ impl ChatPipeline {
         progress: &Option<ProgressSender>,
         budget: &LlmBudget,
         metadata: &Option<MetadataCell>,
+        has_external_context: bool,
     ) -> Result<LlmResponse> {
         // ── CRAG: check context quality (skip if budget low) ──
         let context =
@@ -1405,6 +1555,18 @@ impl ChatPipeline {
             context
         };
 
+        // ── Layer-1 context guard (parity with the streaming path): all
+        // context-augmenting stages (CRAG, live retrieval, RAPTOR) have had
+        // their chance — if there is still nothing relevant and the client
+        // supplied no context of its own, refuse instead of letting the
+        // generator answer from general knowledge. ──
+        if let Some(msg) = self.context_insufficient_message(&context, has_external_context) {
+            return Ok(LlmResponse {
+                content: msg,
+                usage: LlmUsage::default(),
+            });
+        }
+
         // ── Map-Reduce (skip if budget low) ──
         if let Some(ref mr) = self.map_reduce
             && mr.should_use(analysis, results)
@@ -1458,52 +1620,19 @@ impl ChatPipeline {
         });
 
         // ── Agent 5: Quality Guard (budget-aware retry loop) ──
-        let threshold = self.effective_threshold();
-        let run_guard = force_quality_guard || self.quality_guard.is_some();
-        if run_guard
-            && let Some(ref guard) = self.quality_guard
-            && budget.try_spend()
-        {
-            self.emit_progress(progress, "quality_guard", StageStatus::Started, None);
-            let t = Instant::now();
-            for attempt in 0..=self.config.quality_guard_max_retries {
-                let verdict = guard
-                    .check_with_threshold(user_query, &response.content, &context, threshold)
-                    .await?;
-                if verdict.pass {
-                    Self::update_metadata(metadata, |m| {
-                        m.quality_guard_pass = Some(true);
-                    });
-                    debug!(attempt, "Pipeline: quality passed");
-                    break;
-                }
-                if attempt < self.config.quality_guard_max_retries && budget.try_spend() {
-                    let feedback = verdict
-                        .feedback
-                        .unwrap_or_else(|| "Improve relevance and reduce hallucination.".into());
-                    warn!(attempt, feedback = %feedback, "Pipeline: quality failed, retrying");
-                    response = self
-                        .response_generator
-                        .generate_with_feedback(analysis, &context, messages, &feedback, None)
-                        .await?;
-                } else {
-                    Self::update_metadata(metadata, |m| {
-                        m.quality_guard_pass = Some(false);
-                    });
-                    warn!(
-                        "Pipeline: quality guard exhausted retries or budget, using last response"
-                    );
-                    break;
-                }
-            }
-            let guard_ms = t.elapsed().as_millis() as u64;
-            self.emit_progress(progress, "quality_guard", StageStatus::Done, Some(guard_ms));
-            info!(
-                stage = "quality_guard",
-                duration_ms = guard_ms,
-                "Pipeline stage complete"
-            );
-        }
+        response = self
+            .run_quality_guard(
+                user_query,
+                analysis,
+                &context,
+                messages,
+                response,
+                force_quality_guard,
+                progress,
+                budget,
+                metadata,
+            )
+            .await?;
 
         // ── Structured citations: parse [N] markers against the context ──
         self.maybe_record_citations(&response.content, &context, metadata);
@@ -2168,52 +2297,26 @@ impl ChatPipeline {
     }
 
     /// Layer 1: Pre-stream context guard.
+    /// See [`insufficient_context_message`] — method wrapper for call-site
+    /// symmetry with the other pipeline stages.
+    fn context_insufficient_message(
+        &self,
+        context: &CuratedContext,
+        has_external_context: bool,
+    ) -> Option<String> {
+        insufficient_context_message(context, has_external_context)
+    }
+
     fn context_insufficient_response(
         &self,
         context: &CuratedContext,
         has_external_context: bool,
     ) -> Option<LlmStreamResponse> {
-        // When the client supplied its own context (e.g. an Open WebUI file
-        // upload injects the retrieved file text as a system message), an empty
-        // knowledge base is NOT a dead end — the answer LLM can work from that
-        // injected context. Suppressing the short-circuit here lets the request
-        // reach the response generator, matching the non-streaming path.
-        if has_external_context {
-            return None;
-        }
-        if context.chunks.is_empty() {
-            let msg = "I don't have enough information in the knowledge base to answer this question. \
-                       Please try rephrasing your query or check if the relevant documents have been uploaded."
-                .to_string();
-            info!("Pipeline(stream): no context, returning insufficient-info response");
-            return Some(LlmStreamResponse {
+        self.context_insufficient_message(context, has_external_context)
+            .map(|msg| LlmStreamResponse {
                 stream: Box::pin(tokio_stream::once(Ok(msg))),
                 usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
-            });
-        }
-
-        let avg_score = context
-            .chunks
-            .iter()
-            .map(|c| c.relevance_score)
-            .sum::<f32>()
-            / context.chunks.len() as f32;
-        if avg_score < 0.15 {
-            let msg =
-                "I found some documents but they don't appear to be relevant to your question. \
-                       Could you rephrase your query or provide more details?"
-                    .to_string();
-            info!(
-                avg_score,
-                "Pipeline(stream): context too low quality, returning insufficient-info response"
-            );
-            return Some(LlmStreamResponse {
-                stream: Box::pin(tokio_stream::once(Ok(msg))),
-                usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
-            });
-        }
-
-        None
+            })
     }
 
     /// Layer 3: Post-stream quality check.
@@ -2730,6 +2833,41 @@ fn deduplicate_results(results: &mut Vec<thairag_core::types::SearchResult>) {
 #[cfg(test)]
 mod tests {
     use super::has_client_supplied_context;
+    use super::insufficient_context_message;
+    use crate::context_curator::{CuratedChunk, CuratedContext};
+    use thairag_core::types::{ChunkId, DocId};
+
+    fn ctx(scores: &[f32]) -> CuratedContext {
+        CuratedContext {
+            chunks: scores
+                .iter()
+                .map(|&s| CuratedChunk {
+                    index: 0,
+                    content: "c".into(),
+                    relevance_score: s,
+                    source_doc_id: DocId::new(),
+                    source_chunk_id: ChunkId::new(),
+                    source_doc_title: None,
+                    image_blob_id: None,
+                    images: vec![],
+                })
+                .collect(),
+            total_tokens_est: 0,
+        }
+    }
+
+    #[test]
+    fn empty_context_refuses_unless_client_supplied_context() {
+        assert!(insufficient_context_message(&ctx(&[]), false).is_some());
+        // OWUI-style injected file context suppresses the short-circuit.
+        assert!(insufficient_context_message(&ctx(&[]), true).is_none());
+    }
+
+    #[test]
+    fn low_relevance_context_refuses() {
+        assert!(insufficient_context_message(&ctx(&[0.05, 0.1]), false).is_some());
+        assert!(insufficient_context_message(&ctx(&[0.6, 0.8]), false).is_none());
+    }
     use thairag_core::types::ChatMessage;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
@@ -2763,6 +2901,22 @@ mod tests {
     fn blank_system_message_does_not_count() {
         let msgs = vec![msg("system", "   "), msg("user", "hi")];
         assert!(!has_client_supplied_context(&msgs));
+    }
+
+    #[test]
+    fn owui_rag_template_in_user_message_counts_as_context() {
+        // OWUI's RAG template injects retrieved snippets into the USER message
+        // wrapped in <context> tags (no system message at all).
+        let msgs = vec![msg(
+            "user",
+            "### Task:\nRespond using the context.\n<context>\nZorblax memo...\n</context>\nQuestion: how many hours?",
+        )];
+        assert!(has_client_supplied_context(&msgs));
+        // A plain user question must not trip it.
+        assert!(!has_client_supplied_context(&[msg(
+            "user",
+            "how many hours?"
+        )]));
     }
 
     #[test]

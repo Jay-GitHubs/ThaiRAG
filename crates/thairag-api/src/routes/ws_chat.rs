@@ -488,6 +488,9 @@ async fn handle_ws_non_stream(
                 &available_scopes,
                 Some(progress_tx),
                 Some(metadata_cell.clone()),
+                // From the RAW client messages, so internal system additions
+                // never disarm the empty-context guard.
+                thairag_agent::chat_pipeline::has_client_supplied_context(original_messages),
             )
             .await
     } else {

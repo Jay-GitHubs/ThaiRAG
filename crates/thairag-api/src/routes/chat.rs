@@ -253,6 +253,7 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
+            is_openwebui,
         )
         .await
     }
@@ -1120,6 +1121,7 @@ async fn handle_non_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
+    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     // Inject personal memory context
     let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
@@ -1152,6 +1154,18 @@ async fn handle_non_stream(
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
+    // Computed from the RAW client messages (before memory / golden-example
+    // injection) so internal system additions never disarm the empty-context
+    // guard — same signal the streaming path threads into process_stream.
+    // OWUI traffic is exempt from the non-stream guard entirely: besides chats
+    // (whose injected context is detected), OWUI fires auxiliary NON-STREAM
+    // task calls (title/tag/follow-up generation) that carry no context and
+    // must get plain LLM behavior — a canned refusal would become the chat
+    // title. API clients (curl/bench/scripts) keep the guard, fixing the
+    // stream-vs-non-stream divergence where stream refused but non-stream
+    // answered from general knowledge.
+    let has_external_context =
+        is_openwebui || thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages);
     let mut llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         if attachments.is_empty() {
             pipeline
@@ -1162,6 +1176,7 @@ async fn handle_non_stream(
                     &available_scopes,
                     Some(progress_tx),
                     Some(metadata_cell.clone()),
+                    has_external_context,
                 )
                 .await
                 .map_err(ApiError::from)?
@@ -1492,8 +1507,11 @@ async fn handle_stream(
     let memories_clone = memories.clone();
     let available_scopes_clone = available_scopes.clone();
     // Computed from the RAW request: when the client injects its own context
-    // (e.g. an OWUI file upload arrives as a system message), the empty-KB
-    // short-circuit must not fire — the answer LLM should use that context.
+    // (an OWUI file upload arrives as a <context> block in the user message,
+    // or a client sets its own system prompt), the empty-KB short-circuit
+    // must not fire — the answer LLM should use that context. Streaming OWUI
+    // chats WITHOUT context keep the guard (refusing on an empty KB is the
+    // desired RAG behavior in chat).
     let has_external_context =
         thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages);
 

@@ -301,6 +301,9 @@ pub async fn test_query(
                     &available_scopes,
                     Some(progress_tx),
                     Some(metadata_cell.clone()),
+                    // A test query carries no client-supplied context, so the
+                    // empty-context guard message is the desired diagnostic.
+                    false,
                 )
                 .await
                 .map_err(ApiError::from)?
@@ -742,7 +745,7 @@ pub async fn test_query_stream(
             let meta_cell_task = metadata_cell.clone();
             tokio::spawn(async move {
                 if attachments.is_empty() {
-                    pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), Some(meta_cell_task)).await
+                    pipeline.process(&messages, &scope, &[], &scopes, Some(progress_tx), Some(meta_cell_task), false).await
                 } else {
                     pipeline
                         .process_with_attachments(&messages, &attachments, &[], &scope, Some(progress_tx), Some(meta_cell_task))
