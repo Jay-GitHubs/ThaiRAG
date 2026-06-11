@@ -1,13 +1,16 @@
 {
   "fixture": "tests/fixtures/micro_sme_prohibited_business.pdf",
-  "notes": "Ground truth is the 12-row bilingual prohibited-business table. expected_tokens: each element is a group of acceptable alternates (match if ANY alternate appears, case-insensitive substring). token_score = matched_groups / total_groups. The judge scores the answer 0-1 against reference_answer.",
+  "notes": "Ground truth is the 12-row bilingual prohibited-business table. expected_tokens: each element is a group of acceptable alternates (match if ANY alternate appears, case-insensitive substring). token_score = matched_groups / total_groups. The judge scores the answer 0-1 against reference_answer. extra_fixtures are ingested into the same workspace, making every question an implicit multi-document ranking test. q13-q18 target the real Thai government tables (merge-heavy + multipage classes fixed in PRs #165-#169).",
   "questions": [
     {
       "id": "q01-ml-caution",
       "lang": "en",
       "type": "direct-caution",
       "question": "According to the prohibited-business table, what cautions apply to money-laundering businesses?",
-      "expected_tokens": ["KYC/CDD|KYC|CDD", "strict|เข้มงวด|every step|ทุกขั้นตอน"],
+      "expected_tokens": [
+        "KYC/CDD|KYC|CDD",
+        "strict|เข้มงวด|every step|ทุกขั้นตอน"
+      ],
       "reference_answer": "Apply strict KYC/CDD procedures at every step (money laundering is a serious offence under AML law)."
     },
     {
@@ -15,7 +18,10 @@
       "lang": "th",
       "type": "direct-caution",
       "question": "ธุรกิจการค้าสัตว์ป่าคุ้มครองมีข้อควรระวังอย่างไร?",
-      "expected_tokens": ["CITES", "ถิ่นกำเนิด|origin|ใบอนุญาตส่งออก|export permit"],
+      "expected_tokens": [
+        "CITES",
+        "ถิ่นกำเนิด|origin|ใบอนุญาตส่งออก|export permit"
+      ],
       "reference_answer": "ขอเอกสารถิ่นกำเนิดและใบอนุญาตส่งออก เนื่องจากผิดอนุสัญญา CITES และกฎหมายสงวนพันธุ์."
     },
     {
@@ -23,7 +29,9 @@
       "lang": "en",
       "type": "regulator-precision",
       "question": "For an unlicensed crypto exchange, which regulator's licence status must be checked?",
-      "expected_tokens": ["SEC|ก.ล.ต."],
+      "expected_tokens": [
+        "SEC|ก.ล.ต."
+      ],
       "reference_answer": "The SEC (ก.ล.ต.) — always check licence status with the SEC before proceeding."
     },
     {
@@ -31,7 +39,10 @@
       "lang": "th",
       "type": "direct-reason",
       "question": "ทำไมธนาคารจึงห้ามปล่อยสินเชื่อให้ธุรกิจอาวุธและยุทโธปกรณ์?",
-      "expected_tokens": ["ควบคุมอาวุธ|arms-control|ผิดกฎหมาย", "ห้ามปล่อยสินเชื่อ|no lending|ทุกกรณี"],
+      "expected_tokens": [
+        "ควบคุมอาวุธ|arms-control|ผิดกฎหมาย",
+        "ห้ามปล่อยสินเชื่อ|no lending|ทุกกรณี"
+      ],
       "reference_answer": "ผิดกฎหมายควบคุมอาวุธ จึงห้ามปล่อยสินเชื่อทุกกรณี."
     },
     {
@@ -39,7 +50,9 @@
       "lang": "en",
       "type": "regulator-precision",
       "question": "Which agency should suspicious narcotics-related transactions be reported to?",
-      "expected_tokens": ["AMLO|ปปง"],
+      "expected_tokens": [
+        "AMLO|ปปง"
+      ],
       "reference_answer": "AMLO (ปปง.) — report suspicious transactions to AMLO."
     },
     {
@@ -47,7 +60,10 @@
       "lang": "th",
       "type": "direct-caution",
       "question": "ธุรกิจดอกไม้เพลิงและวัตถุระเบิดควรจัดการอย่างไรเพื่อลดความเสี่ยง?",
-      "expected_tokens": ["จำกัดวงเงิน|cap|limit", "สถานที่จัดเก็บ|storage|inspect|ตรวจ"],
+      "expected_tokens": [
+        "จำกัดวงเงิน|cap|limit",
+        "สถานที่จัดเก็บ|storage|inspect|ตรวจ"
+      ],
       "reference_answer": "จำกัดวงเงินและตรวจสถานที่จัดเก็บ เพราะต้องมีใบอนุญาตพิเศษและมีความเสี่ยงด้านความปลอดภัยสูง."
     },
     {
@@ -55,7 +71,10 @@
       "lang": "en",
       "type": "reason-plus-caution",
       "question": "Why are pyramid or Ponzi schemes prohibited, and what is the warning sign to watch for?",
-      "expected_tokens": ["defraud|หลอกลวง|direct-sales|ขายตรง", "high|abnormal|สูงผิดปกติ|returns|ผลตอบแทน"],
+      "expected_tokens": [
+        "defraud|หลอกลวง|direct-sales|ขายตรง",
+        "high|abnormal|สูงผิดปกติ|returns|ผลตอบแทน"
+      ],
       "reference_answer": "They defraud the public and violate direct-sales law; beware abnormally high promised returns."
     },
     {
@@ -63,7 +82,10 @@
       "lang": "th",
       "type": "direct-reason",
       "question": "ธุรกิจกู้นอกระบบผิดกฎหมายอย่างไร?",
-      "expected_tokens": ["ดอกเบี้ย|interest", "เกินอัตรา|legal ceiling|กฎหมายกำหนด|above"],
+      "expected_tokens": [
+        "ดอกเบี้ย|interest",
+        "เกินอัตรา|legal ceiling|กฎหมายกำหนด|above"
+      ],
       "reference_answer": "คิดดอกเบี้ยเกินอัตราที่กฎหมายกำหนด."
     },
     {
@@ -71,7 +93,10 @@
       "lang": "en",
       "type": "direct-caution",
       "question": "What must be required and verified before considering a supplements or drug business?",
-      "expected_tokens": ["FDA|อย", "registration|ทะเบียน|verify|ตรวจสอบ"],
+      "expected_tokens": [
+        "FDA|อย",
+        "registration|ทะเบียน|verify|ตรวจสอบ"
+      ],
       "reference_answer": "Require the FDA (อย.) registration number and verify it."
     },
     {
@@ -79,7 +104,12 @@
       "lang": "en",
       "type": "aggregation",
       "question": "List the business types from the table that require verifying a licence, permit, or watchlist before proceeding.",
-      "expected_tokens": ["weapon|อาวุธ", "crypto|ดิจิทัล|สกุลเงิน", "wildlife|สัตว์ป่า", "firework|ดอกไม้เพลิง|explosive"],
+      "expected_tokens": [
+        "weapon|อาวุธ",
+        "crypto|ดิจิทัล|สกุลเงิน",
+        "wildlife|สัตว์ป่า",
+        "firework|ดอกไม้เพลิง|explosive"
+      ],
       "reference_answer": "Weapons & munitions (verify licences/watchlists), unlicensed crypto exchange (SEC licence), protected-wildlife trade (export permits), and fireworks & explosives (special permit)."
     },
     {
@@ -87,17 +117,95 @@
       "lang": "en",
       "type": "anti-hallucination",
       "question": "What is the maximum loan amount the bank allows for gambling and casino businesses?",
-      "expected_tokens": ["decline|ปฏิเสธ|not|no lending|not specified|ไม่"],
+      "expected_tokens": [
+        "decline|ปฏิเสธ|not|no lending|not specified|ไม่"
+      ],
       "reference_answer": "The table specifies no maximum amount — gambling/casino requests must be declined (illegal domestically, high reputational risk). A correct answer must NOT invent a figure.",
-      "must_not_contain": ["บาท", "THB", "million", "ล้าน"]
+      "must_not_contain": [
+        "บาท",
+        "THB",
+        "million",
+        "ล้าน"
+      ]
     },
     {
       "id": "q12-counterfeit-evidence-th",
       "lang": "th",
       "type": "direct-caution",
       "question": "ก่อนพิจารณาธุรกิจที่เกี่ยวกับสินค้าละเมิดลิขสิทธิ์ ต้องขอหลักฐานอะไร?",
-      "expected_tokens": ["สิทธิ์ในตราสินค้า|brand-rights|brand rights|หลักฐาน"],
+      "expected_tokens": [
+        "สิทธิ์ในตราสินค้า|brand-rights|brand rights|หลักฐาน"
+      ],
       "reference_answer": "ขอหลักฐานสิทธิ์ในตราสินค้าก่อนพิจารณา เนื่องจากเสี่ยงต่อการฟ้องร้องและยึดทรัพย์."
+    },
+    {
+      "id": "q13-rdw-exemption-th",
+      "lang": "th",
+      "type": "table-numeric",
+      "question": "ตามตารางภาษีหัก ณ ที่จ่าย เงินได้สุทธิจำนวนเท่าใดแรกที่ได้รับการยกเว้นภาษี?",
+      "expected_tokens": [
+        "150,000|150000",
+        "ยกเว้น|exempt"
+      ],
+      "reference_answer": "เงินได้สุทธิ 150,000 บาทแรกได้รับการยกเว้นภาษี"
+    },
+    {
+      "id": "q14-rdw-pnd1-deadline-th",
+      "lang": "th",
+      "type": "table-deadline",
+      "question": "แบบ ภ.ง.ด.1 ต้องนำส่งภาษีภายในช่วงเวลาใด?",
+      "expected_tokens": [
+        "1-7|1 - 7|วันที่ 1 ถึง 7",
+        "เดือนถัดไป|following month"
+      ],
+      "reference_answer": "นำส่งภายในวันที่ 1-7 ของเดือนถัดไปจากเดือนที่จ่ายเงินได้"
+    },
+    {
+      "id": "q15-rdw-land-th",
+      "lang": "th",
+      "type": "table-merged-cell",
+      "question": "การขายอสังหาริมทรัพย์ต้องเสียภาษีหัก ณ ที่จ่ายเมื่อใดและที่หน่วยงานใด?",
+      "expected_tokens": [
+        "กรมที่ดิน|Land Department",
+        "จดทะเบียน"
+      ],
+      "reference_answer": "เสียภาษีขณะจดทะเบียนสิทธิและนิติกรรมที่กรมที่ดิน"
+    },
+    {
+      "id": "q16-rdw-severance-th",
+      "lang": "th",
+      "type": "table-numeric",
+      "question": "กรณีเงินได้ครั้งเดียวเพราะเหตุออกจากงาน หักค่าใช้จ่ายได้เท่าใดต่อจำนวนปีที่ทำงาน?",
+      "expected_tokens": [
+        "7,000|7000",
+        "ปีที่ทำงาน|จำนวนปี|years"
+      ],
+      "reference_answer": "หักค่าใช้จ่ายเท่ากับ 7,000 บาท คูณด้วยจำนวนปีที่ทำงาน"
+    },
+    {
+      "id": "q17-tp4-deadline-th",
+      "lang": "th",
+      "type": "table-deadline",
+      "question": "ตามตารางคำสั่ง ท.ป.4/2528 ผู้จ่ายเงินต้องนำส่งภาษีที่หักไว้ภายในกี่วัน?",
+      "expected_tokens": [
+        "7",
+        "สิ้นเดือน|end of the month|end of month"
+      ],
+      "reference_answer": "นำส่งภายใน 7 วันนับแต่วันสิ้นเดือนของเดือนที่จ่ายเงิน"
+    },
+    {
+      "id": "q18-tp4-form-en",
+      "lang": "en",
+      "type": "table-form-crossdoc",
+      "question": "According to the TP4 withholding table, which filing form is used when the payee is a juristic company or partnership?",
+      "expected_tokens": [
+        "ภ.ง.ด.53|P.N.D.53|PND53|ภงด53|ภ.ง.ด. 53"
+      ],
+      "reference_answer": "แบบ ภ.ง.ด.53 (P.N.D.53)"
     }
+  ],
+  "extra_fixtures": [
+    "tests/fixtures/thai-real/rd_withholding_table.pdf",
+    "tests/fixtures/thai-real/rd_tp4_table.pdf"
   ]
 }
