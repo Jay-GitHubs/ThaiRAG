@@ -211,13 +211,26 @@ impl ContextCurator {
 }
 
 /// Estimate token count (rough: 4 chars/token English, 2 chars/token Thai).
+/// Estimate LLM token count for budget enforcement.
+///
+/// Calibrated against real tokenizers via Ollama `prompt_eval_count`
+/// (2026-06-11): Thai ≈ 3.2 chars/token on gemma4, ≈ 2.0 on qwen3 — we use
+/// 2.5 as the model-agnostic middle. The previous code assumed 2 chars/token
+/// AND subtracted the Thai CHAR count from the BYTE length (Thai is 3
+/// bytes/char), counting 2 phantom "other" chars per Thai char — together
+/// overestimating Thai token counts ~2×, which silently dropped relevant
+/// chunks at the context-budget boundary.
 fn estimate_tokens(text: &str) -> usize {
-    let thai_chars = text
-        .chars()
-        .filter(|c| ('\u{0E01}'..='\u{0E5B}').contains(c))
-        .count();
-    let other_chars = text.len() - thai_chars;
-    (thai_chars / 2) + (other_chars / 4) + 1
+    let mut thai_chars = 0usize;
+    let mut other_chars = 0usize;
+    for c in text.chars() {
+        if ('\u{0E01}'..='\u{0E5B}').contains(&c) {
+            thai_chars += 1;
+        } else {
+            other_chars += 1;
+        }
+    }
+    (thai_chars * 2).div_ceil(5) + other_chars / 4 + 1
 }
 
 fn build_curated_context(
@@ -297,6 +310,19 @@ mod tests {
             base64_data: "AAAA".into(),
             media_type: "image/png".into(),
         }
+    }
+
+    #[test]
+    fn token_estimate_calibrated_for_thai() {
+        // 100 Thai chars ≈ 40 tokens (2.5 chars/token), NOT 100+ as the old
+        // bytes-based formula produced.
+        let thai: String = "ธ".repeat(100);
+        let est = estimate_tokens(&thai);
+        assert!((38..=45).contains(&est), "thai estimate {est}");
+        // 100 ASCII chars ≈ 25 tokens.
+        let en = "a".repeat(100);
+        let est = estimate_tokens(&en);
+        assert!((24..=27).contains(&est), "english estimate {est}");
     }
 
     #[test]
