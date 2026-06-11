@@ -244,7 +244,7 @@ def main():
         # Snapshot chat-pipeline config to restore later.
         cp = api.get("/api/km/settings/chat-pipeline")
         snap = dict(
-            llm_mode=cp["llm_mode"], llm=ollama(cp["llm"]["model"]),
+            llm_mode=cp["llm_mode"],
             query_analyzer_enabled=cp["query_analyzer_enabled"],
             query_rewriter_enabled=cp["query_rewriter_enabled"],
             context_curator_enabled=cp["context_curator_enabled"],
@@ -255,9 +255,12 @@ def main():
             request_timeout_secs=cp.get("request_timeout_secs", 300),
             **REMOVE_ALL_AGENT_LLMS,
         )
-        snap_temp = cp["llm"].get("temperature")
-        if snap_temp is not None:
-            snap["llm"]["temperature"] = snap_temp
+        # llm may be null (llm_mode "chat" = inherit the main chat LLM).
+        if cp.get("llm"):
+            snap["llm"] = ollama(cp["llm"]["model"])
+            snap_temp = cp["llm"].get("temperature")
+            if snap_temp is not None:
+                snap["llm"]["temperature"] = snap_temp
 
         # Throwaway org/dept/workspace.
         org_id = api.post("/api/km/orgs", {"name": f"BenchOrg-{suffix}"})["id"]
