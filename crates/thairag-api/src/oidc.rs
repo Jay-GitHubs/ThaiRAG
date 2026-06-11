@@ -232,11 +232,30 @@ pub async fn exchange_code_for_user(
                 .decode(parts[1])
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .and_then(|payload| {
-                    payload
+                .map(|payload| {
+                    // Try Keycloak format first: realm_access.roles
+                    if let Some(roles) = payload
                         .get("realm_access")
                         .and_then(|ra| ra.get("roles"))
                         .and_then(|r| serde_json::from_value::<Vec<String>>(r.clone()).ok())
+                    {
+                        return roles;
+                    }
+
+                    // Try IdentityServer format: role (can be string or array)
+                    if let Some(role_claim) = payload.get("role") {
+                        // Case 1: role is an array ["role1", "role2"]
+                        if let Ok(roles) = serde_json::from_value::<Vec<String>>(role_claim.clone())
+                        {
+                            return roles;
+                        }
+                        // Case 2: role is a single string "role_name"
+                        if let Some(role) = role_claim.as_str() {
+                            return vec![role.to_string()];
+                        }
+                    }
+
+                    vec![]
                 })
                 .unwrap_or_default()
         } else {
