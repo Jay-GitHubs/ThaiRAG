@@ -9,6 +9,68 @@ fn is_thai(c: char) -> bool {
     ('\u{0E00}'..='\u{0E7F}').contains(&c)
 }
 
+/// Thai stopwords filtered out of the BM25 token stream. The tokenizer is
+/// registered on the index field, so the SAME filtering applies at index and
+/// query time — consistency is structural, not by convention.
+///
+/// Deliberately conservative: pure function words only (relativizers,
+/// prepositions, conjunctions, aspect particles, politeness particles).
+/// NOT included, on purpose:
+/// - "ไม่" (negation — reverses meaning),
+/// - verbs like "มี/เป็น/คือ/ทำ/อยู่" (content-bearing in factual queries),
+/// - demonstratives "นี้/นั้น",
+/// - nominalizer prefixes "การ/ความ" (nlpo3 keeps real compounds like
+///   "การเงิน" as one token; a standalone token is rare enough that IDF
+///   handles it).
+const THAI_STOPWORDS: &[&str] = &[
+    "ที่",
+    "ซึ่ง",
+    "ของ",
+    "ใน",
+    "กับ",
+    "แก่",
+    "ต่อ",
+    "โดย",
+    "ด้วย",
+    "จาก",
+    "ถึง",
+    "เพื่อ",
+    "และ",
+    "หรือ",
+    "แต่",
+    "ก็",
+    "จึง",
+    "เมื่อ",
+    "ว่า",
+    "ให้",
+    "จะ",
+    "ได้",
+    "แล้ว",
+    "ณ",
+    "ๆ",
+    "นะ",
+    "ครับ",
+    "ค่ะ",
+    "คะ",
+];
+
+fn is_thai_stopword(word: &str) -> bool {
+    THAI_STOPWORDS.contains(&word)
+}
+
+/// Normalize a Thai token's text for matching. Tone marks are NOT stripped —
+/// they are phonemic in Thai (มา/ม้า differ by tone mark alone). The only safe
+/// normalization is unifying the decomposed SARA AM sequence
+/// (NIKHAHIT U+0E4D + SARA AA U+0E32) with the precomposed SARA AM (U+0E33),
+/// which PDF extractors emit inconsistently.
+fn normalize_thai_token(word: &str) -> String {
+    if word.contains('\u{0E4D}') {
+        word.replace("\u{0E4D}\u{0E32}", "\u{0E33}")
+    } else {
+        word.to_string()
+    }
+}
+
 /// A Tantivy tokenizer that uses nlpo3 for Thai text and simple
 /// whitespace/punctuation splitting for non-Thai text.
 #[derive(Clone)]
@@ -100,15 +162,20 @@ fn tokenize_mixed(text: &str, segmenter: &NewmmTokenizer) -> Vec<Token> {
                 // nlpo3 returns tokens in order matching the original text.
                 let word_byte_start = offset;
                 let word_byte_end = offset + word.len();
+                offset = word_byte_end;
+                if is_thai_stopword(trimmed) {
+                    // Keep the position gap so phrase distances stay honest.
+                    position += 1;
+                    continue;
+                }
                 tokens.push(Token {
                     offset_from: word_byte_start,
                     offset_to: word_byte_end,
                     position,
-                    text: trimmed.to_string(),
+                    text: normalize_thai_token(trimmed),
                     position_length: 1,
                 });
                 position += 1;
-                offset = word_byte_end;
             }
         } else {
             // Non-Thai: split on whitespace and punctuation.
@@ -206,6 +273,43 @@ mod tests {
             words.contains(&"library".to_string()),
             "Expected 'library' in: {words:?}"
         );
+    }
+
+    fn collect(text: &str) -> Vec<String> {
+        let mut tok = make_tokenizer();
+        let mut stream = tok.token_stream(text);
+        let mut words = Vec::new();
+        while stream.advance() {
+            words.push(stream.token().text.clone());
+        }
+        words
+    }
+
+    #[test]
+    fn thai_stopwords_are_filtered() {
+        // "ข้อควรระวังของธุรกิจที่ให้บริการ" — ของ/ที่/ให้ are function words.
+        let words = collect("ข้อควรระวังของธุรกิจที่ให้บริการ");
+        assert!(!words.contains(&"ของ".to_string()), "{words:?}");
+        assert!(!words.contains(&"ที่".to_string()), "{words:?}");
+        assert!(words.contains(&"ธุรกิจ".to_string()), "{words:?}");
+        // nlpo3 keeps the compound verb "ให้บริการ" as one token — the
+        // stoplist only removes STANDALONE function words.
+        assert!(words.contains(&"ให้บริการ".to_string()), "{words:?}");
+    }
+
+    #[test]
+    fn negation_is_never_a_stopword() {
+        let words = collect("ธุรกิจไม่อนุญาต");
+        assert!(words.contains(&"ไม่".to_string()), "{words:?}");
+    }
+
+    #[test]
+    fn decomposed_sara_am_normalizes_to_precomposed() {
+        // "นํา" (NIKHAHIT + SARA AA) must index identically to "นำ" (SARA AM).
+        let decomposed = collect("น\u{0E4D}\u{0E32}");
+        let precomposed = collect("น\u{0E33}");
+        assert_eq!(decomposed, precomposed, "SARA AM forms must unify");
+        assert_eq!(precomposed, vec!["น\u{0E33}".to_string()]);
     }
 
     #[test]
