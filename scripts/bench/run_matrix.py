@@ -35,6 +35,7 @@ PASSWORD = os.environ.get("THAIRAG_PASSWORD", "Test1234!")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "qwen3.6:35b")
 EVAL_PATH = os.path.join(ROOT, "tests", "eval", "eval_set.json")
 RESULTS_PATH = os.path.join(HERE, "results.json")
+HISTORY_PATH = os.path.join(HERE, "history.jsonl")
 
 # ── chat-pipeline toggle presets ────────────────────────────────────────────
 REMOVE_ALL_AGENT_LLMS = {
@@ -217,6 +218,47 @@ def wait_ready(api, ws_id, doc_id, timeout=180):
     raise TimeoutError("document ingest timed out")
 
 
+def append_history(rows, quick):
+    """Append a per-run summary line so regressions are visible across runs
+    (results.json is overwritten every run). Includes the git revision so a
+    score change can be tied to the code that produced it."""
+    import subprocess
+    from collections import defaultdict
+    per_cell = defaultdict(list)
+    for r in rows:
+        if r.get("judge_score") is not None:
+            per_cell[r["cell"]].append(r["judge_score"])
+    try:
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        rev = "unknown"
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "git_rev": rev,
+        "mode": "quick" if quick else "full",
+        "n_rows": len(rows),
+        "judge_mean_by_cell": {c: round(sum(v) / len(v), 4) for c, v in sorted(per_cell.items())},
+    }
+    prev = None
+    try:
+        with open(HISTORY_PATH) as fh:
+            for line in fh:
+                if line.strip():
+                    prev = json.loads(line)
+    except FileNotFoundError:
+        pass
+    with open(HISTORY_PATH, "a") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    print(f"[bench] appended run summary to {HISTORY_PATH}")
+    if prev and prev.get("mode") == entry["mode"]:
+        print(f"[bench] vs previous {prev['mode']} run ({prev['ts']}, {prev.get('git_rev')}):")
+        for cell, score in entry["judge_mean_by_cell"].items():
+            old = prev.get("judge_mean_by_cell", {}).get(cell)
+            delta = f"{score - old:+.3f}" if old is not None else "new"
+            print(f"[bench]   {cell:<32} {score:.3f} ({delta})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="subset of questions + cells")
@@ -355,6 +397,7 @@ def main():
                 print(f"[bench]   judged {i}/{len(rows)}")
         save()
         print(f"[bench] wrote {RESULTS_PATH}")
+        append_history(rows, args.quick)
     finally:
         # Restore config + clean up throwaway data.
         if snap is not None:
