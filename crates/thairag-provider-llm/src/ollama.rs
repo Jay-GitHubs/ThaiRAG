@@ -31,6 +31,7 @@ pub fn is_ollama_vision_model(model: &str) -> bool {
         || m.contains("cogvlm")
         || m.contains("internvl")
         || m.contains("gemma3")
+        || m.contains("gemma4")
         || m.contains("mistral-small3")
         || m.contains("llama4")
 }
@@ -506,6 +507,30 @@ fn format_ollama_error(base_url: &str, err: reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vision_model_matcher_covers_known_families() {
+        use super::is_ollama_vision_model;
+        for m in [
+            "gemma3:12b",
+            "gemma4:12b-it-bf16",
+            "gemma4:e4b-it-bf16",
+            "qwen3-vl:8b",
+            "qwen2.5vl:7b",
+            "llama3.2-vision",
+            "llava:13b",
+            "minicpm-v",
+        ] {
+            assert!(is_ollama_vision_model(m), "{m} must be detected as vision");
+        }
+        // Text-only models must NOT pass — a wrong positive sends images to a
+        // model that rejects them; a wrong negative silently skips OCR (the
+        // gemma4 bug: every scanned page became a metadata placeholder while
+        // the document was still marked ready).
+        for m in ["qwen3:14b", "iapp/chinda-qwen3-4b", "qwen3.6:35b"] {
+            assert!(!is_ollama_vision_model(m), "{m} must not be vision");
+        }
+    }
+
     use super::is_ollama_vision_model as v;
     use super::{MIN_NUM_CTX, OllamaProvider, bucket_num_ctx, estimate_message_tokens};
     use thairag_core::types::ChatMessage;
