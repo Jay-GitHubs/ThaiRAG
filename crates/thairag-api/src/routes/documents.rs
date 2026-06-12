@@ -270,6 +270,28 @@ async fn mark_doc_failed_best_effort(state: &AppState, doc_id: DocId, error_mess
         0,
         Some(error_message.to_string()),
     );
+    purge_doc_index_state(state, doc_id, "failed_ingest").await;
+}
+
+/// Enforce the ingest atomicity invariant: a Failed document owns ZERO
+/// chunks anywhere. A failure after `save_chunks`/partial `index_chunks`
+/// would otherwise leave SQL chunks and orphaned vectors behind a Failed
+/// doc (the original bytes are preserved — only derived state is purged,
+/// so reprocessing remains possible). Best-effort, but failures are
+/// logged and counted — never silent.
+pub async fn purge_doc_index_state(state: &AppState, doc_id: DocId, operation: &str) {
+    if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
+        tracing::warn!(%doc_id, error = %e, operation,
+            "Vector purge after failed ingest failed — Qdrant may retain orphaned vectors");
+        state
+            .metrics
+            .vector_delete_errors_total
+            .with_label_values(&[operation])
+            .inc();
+    }
+    if let Err(e) = state.km_store.delete_chunks_by_doc(doc_id) {
+        tracing::warn!(%doc_id, error = %e, operation, "SQL chunk purge after failed ingest failed");
+    }
 }
 
 async fn process_document_inner_impl(
@@ -411,30 +433,12 @@ async fn process_document_inner_impl(
         );
     }
 
-    // Conversion fidelity: compare the converted text (what feeds the vector DB)
-    // against an independent extraction of the original — deterministic, no LLM.
-    // Runs in spawn_blocking because the ground-truth extractors (pdfium etc.)
-    // are sync/!Send. Folded into provenance for the admin UI.
-    let converted_text = state
-        .km_store
-        .get_document_content(doc_id)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let fidelity = {
-        let bytes_f = bytes.clone();
-        let mime_f = mime_type.clone();
-        tokio::task::spawn_blocking(move || {
-            thairag_document::conversion_fidelity::assess(&bytes_f, &mime_f, &converted_text)
-        })
-        .await
-        .ok()
-    };
-
-    // Persist processing provenance (path, agents, models, fallback, fidelity)
-    // so the admin UI can show a per-document transparency summary.
-    if let Some(mut provenance) = processed.provenance.clone() {
-        provenance.fidelity = fidelity;
+    // Persist processing provenance (path, agents, models, fallback) so the
+    // admin UI can show a per-document transparency summary. Conversion
+    // fidelity is already assessed INSIDE process_to_document (one site for
+    // every ingest path) and arrives on the provenance — re-assessing here
+    // would run a second full ground-truth extraction per ingest.
+    if let Some(provenance) = processed.provenance.clone() {
         let _ = state
             .km_store
             .update_document_provenance(doc_id, Some(provenance));
@@ -518,6 +522,10 @@ async fn process_document_inner_impl(
             state
                 .km_store
                 .update_document_status(doc_id, DocStatus::Failed, 0, Some(msg.clone()));
+        // index_chunks may have PARTIALLY indexed before failing, and the SQL
+        // chunks were already saved — purge both so the Failed doc owns no
+        // derived state (original bytes are kept for reprocessing).
+        purge_doc_index_state(&state, doc_id, "failed_ingest").await;
         return (0, Some(msg));
     }
 
