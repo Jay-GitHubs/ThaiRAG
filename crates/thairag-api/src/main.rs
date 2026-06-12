@@ -133,6 +133,17 @@ async fn main() {
                 count = reconciled.len(),
                 "Reconciled orphaned Processing documents after restart"
             );
+            // The interrupted ingest may have saved SQL chunks and partially
+            // indexed vectors before the restart — purge that derived state
+            // so a Failed doc owns no chunks anywhere (originals are kept).
+            for doc_id in reconciled {
+                thairag_api::routes::documents::purge_doc_index_state(
+                    &state,
+                    doc_id,
+                    "restart_reconcile",
+                )
+                .await;
+            }
         }
         Ok(_) => {
             tracing::info!("No orphaned Processing documents at startup");
