@@ -87,6 +87,7 @@ fn build_ai_provenance(
         chunk_count: chunk_count as i64,
         fidelity: None,
         tables_kept_as_text: tables_kept_as_text as i64,
+        facets: Vec::new(),
     }
 }
 
@@ -730,6 +731,7 @@ impl DocumentPipeline {
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
                 tables_kept_as_text: 0,
+                facets: Vec::new(),
             };
             return Ok((chunks, prov));
         }
@@ -751,6 +753,7 @@ impl DocumentPipeline {
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
                 tables_kept_as_text: 0,
+                facets: Vec::new(),
             };
             return Ok((chunks, prov));
         }
@@ -828,6 +831,7 @@ impl DocumentPipeline {
             chunk_count: chunks.len() as i64,
             fidelity: None,
             tables_kept_as_text: 0,
+            facets: Vec::new(),
         };
         Ok((chunks, prov))
     }
@@ -1150,6 +1154,7 @@ impl DocumentPipeline {
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
                 tables_kept_as_text: doc.tables_kept_as_text as i64,
+                facets: Vec::new(),
             };
             (chunks, Some(prov))
         };
@@ -1253,6 +1258,7 @@ impl DocumentPipeline {
                 chunk_count: chunks.len() as i64,
                 fidelity: None,
                 tables_kept_as_text: 0,
+                facets: Vec::new(),
             };
             (chunks, Some(prov))
         };
@@ -1429,6 +1435,7 @@ impl DocumentPipeline {
             chunk_count: 1,
             fidelity: None,
             tables_kept_as_text: 0,
+            facets: Vec::new(),
         };
         Ok(ProcessedDocument {
             chunks: vec![chunk],

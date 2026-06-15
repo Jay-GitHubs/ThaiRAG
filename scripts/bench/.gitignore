@@ -1,0 +1,7 @@
+# Eval question sets / outputs are derived from real customer documents — never commit.
+clean_set.json
+doc_named_set.json
+sme_eval*.json
+sme_eval*.html
+sme_dashboard*.html
+*.partial.json

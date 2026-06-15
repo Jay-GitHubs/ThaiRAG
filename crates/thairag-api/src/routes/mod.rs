@@ -336,6 +336,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(documents::get_document_content),
         )
         .route(
+            "/workspaces/{workspace_id}/documents/extract-facets",
+            post(documents::extract_workspace_facets),
+        )
+        .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/download",
             get(documents::download_document),
         )
