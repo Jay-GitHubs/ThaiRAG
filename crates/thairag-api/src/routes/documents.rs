@@ -967,6 +967,109 @@ pub async fn get_document_content(
     }))
 }
 
+/// Extract a document's distinguishing facets via the chat LLM. Returns up to
+/// ~8 "key: value" strings naming the attributes that tell this document apart
+/// from similar ones. Best-effort: any failure yields an empty list. Capped
+/// input keeps the call cheap and within context.
+async fn extract_facets(p: &crate::app_state::ProviderBundle, text: &str) -> Vec<String> {
+    use thairag_core::traits::LlmProvider;
+    if text.trim().len() < 200 {
+        return Vec::new();
+    }
+    let llm: std::sync::Arc<dyn LlmProvider> = std::sync::Arc::from(
+        thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
+    );
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "facets": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+        },
+        "required": ["facets"]
+    });
+    let prompt = format!(
+        "Extract this document's DISTINGUISHING attributes: the few facts that tell \
+         it apart from other similar documents, as 4 to 8 short facets in the form \
+         key: value (for example program: NAME, type: KIND, amount: NUMBER, party: \
+         WHO). Use the document's own language for values. Output JSON only, like \
+         {{\"facets\": [\"key: value\"]}}.\n\nDocument:\n{}",
+        text.chars().take(7000).collect::<String>()
+    );
+    let msgs = [thairag_core::types::ChatMessage {
+        role: "user".into(),
+        content: prompt,
+        images: vec![],
+    }];
+    let resp = match llm.generate_structured(&msgs, Some(512), &schema).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "Facet extraction failed");
+            return Vec::new();
+        }
+    };
+    #[derive(serde::Deserialize)]
+    struct F {
+        #[serde(default)]
+        facets: Vec<String>,
+    }
+    serde_json::from_str::<F>(thairag_core::extract_json(resp.content.trim()))
+        .map(|f| f.facets)
+        .unwrap_or_default()
+}
+
+/// Populate distinguishing facets for every ready document in a workspace from
+/// the **already-stored** converted text — one LLM call per document, no re-OCR
+/// and no re-chunking. Reprocessing re-runs the conversion pipeline, which for
+/// scanned/vision-OCR'd corpora is destructive and nondeterministic (each run
+/// OCRs a different page subset); this path leaves the stored text untouched and
+/// only writes `processing_provenance.facets`. Idempotent — re-running
+/// overwrites facets in place.
+pub async fn extract_workspace_facets(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "extract document facets")?;
+
+    let p = state.providers();
+    let docs = state.km_store.list_documents_in_workspace(workspace_id);
+    let mut updated = 0usize;
+    let mut skipped = 0usize;
+    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
+        // The stored converted text — never re-derived here, so a corpus an eval
+        // set was built against stays bit-identical.
+        let text = state
+            .km_store
+            .get_document_content(d.id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let Some(mut provenance) = d.processing_provenance.clone() else {
+            skipped += 1;
+            continue;
+        };
+        if text.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        provenance.facets = extract_facets(&p, &text).await;
+        if provenance.facets.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let _ = state
+            .km_store
+            .update_document_provenance(d.id, Some(provenance));
+        updated += 1;
+    }
+    tracing::info!(%workspace_id, updated, skipped, "Workspace facet extraction (no re-OCR) complete");
+    Ok(Json(serde_json::json!({
+        "docs_updated": updated,
+        "docs_skipped": skipped,
+    })))
+}
+
 pub async fn download_document(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
