@@ -256,6 +256,7 @@ pub async fn run_evaluation(
             workspace_ids: vec![],
             unrestricted: true,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
 
         let search_results = p
@@ -481,6 +482,7 @@ pub async fn run_regression_check(
             workspace_ids: vec![],
             unrestricted: true,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
         let search_results = p
             .search_engine

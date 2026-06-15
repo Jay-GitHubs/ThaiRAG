@@ -208,6 +208,7 @@ pub async fn test_query(
             workspace_ids: vec![ws_id],
             unrestricted: false,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
         let mut search_results = p
             .search_engine
@@ -640,6 +641,8 @@ pub async fn test_query_stream(
                 workspace_ids: vec![ws_id],
                 unrestricted: false,
                 query_images: Vec::new(),
+                doc_ids: Vec::new(),
+
             };
             let search_result = p.search_engine.search(&search_query).await;
             search_ms = search_start.elapsed().as_millis() as u64;
@@ -1089,6 +1092,8 @@ pub async fn search_stream(
             workspace_ids: vec![ws_id],
             unrestricted: false,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
+
         };
         let search_result = p.search_engine.search(&search_query).await;
         let search_ms = search_start.elapsed().as_millis() as u64;

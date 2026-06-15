@@ -336,10 +336,6 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(documents::get_document_content),
         )
         .route(
-            "/workspaces/{workspace_id}/documents/extract-facets",
-            post(documents::extract_workspace_facets),
-        )
-        .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/download",
             get(documents::download_document),
         )
@@ -362,6 +358,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/workspaces/{workspace_id}/documents/reprocess-all",
             post(documents::reprocess_all_documents),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/reindex",
+            post(documents::reindex_workspace),
+        )
+        .route(
+            "/workspaces/{workspace_id}/documents/extract-facets",
+            post(documents::extract_workspace_facets),
         )
         // Document Versioning
         .route(

@@ -370,6 +370,7 @@ async fn run_variant_query(
         workspace_ids: vec![],
         unrestricted: true,
         query_images: Vec::new(),
+        doc_ids: Vec::new(),
     };
 
     let search_results = p

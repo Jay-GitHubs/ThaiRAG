@@ -166,6 +166,7 @@ pub async fn v2_search(
         workspace_ids: search_ws_ids,
         unrestricted,
         query_images: Vec::new(),
+        doc_ids: Vec::new(),
     };
 
     let mut search_results = p

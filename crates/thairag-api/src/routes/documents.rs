@@ -245,6 +245,56 @@ async fn process_document_inner(
     pair
 }
 
+/// Extract a document's distinguishing facets via the chat LLM. Returns
+/// up to ~8 "key: value" strings naming the attributes that tell this document
+/// apart from similar ones. Best-effort: any failure yields an empty list (the
+/// selector then simply can't scope to this document). Capped input keeps the
+/// call cheap and within context.
+async fn extract_facets(p: &crate::app_state::ProviderBundle, text: &str) -> Vec<String> {
+    use thairag_core::traits::LlmProvider;
+    if text.trim().len() < 200 {
+        return Vec::new();
+    }
+    let llm: std::sync::Arc<dyn LlmProvider> = std::sync::Arc::from(
+        thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
+    );
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "facets": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+        },
+        "required": ["facets"]
+    });
+    let prompt = format!(
+        "Extract this document's DISTINGUISHING attributes: the few facts that tell \
+         it apart from other similar documents, as 4 to 8 short facets in the form \
+         key: value (for example program: NAME, type: KIND, amount: NUMBER, party: \
+         WHO). Use the document's own language for values. Output JSON only, like \
+         {{\"facets\": [\"key: value\"]}}.\n\nDocument:\n{}",
+        text.chars().take(7000).collect::<String>()
+    );
+    let msgs = [thairag_core::types::ChatMessage {
+        role: "user".into(),
+        content: prompt,
+        images: vec![],
+    }];
+    let resp = match llm.generate_structured(&msgs, Some(512), &schema).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "Facet extraction failed");
+            return Vec::new();
+        }
+    };
+    #[derive(serde::Deserialize)]
+    struct F {
+        #[serde(default)]
+        facets: Vec<String>,
+    }
+    serde_json::from_str::<F>(thairag_core::extract_json(resp.content.trim()))
+        .map(|f| f.facets)
+        .unwrap_or_default()
+}
+
 /// Format a panic payload (from `JoinError::into_panic`) into a string
 /// safe to store in the document's `error_message`. Panics typically
 /// carry a `String` or `&'static str`; anything else falls back to a
@@ -433,12 +483,38 @@ async fn process_document_inner_impl(
         );
     }
 
-    // Persist processing provenance (path, agents, models, fallback) so the
-    // admin UI can show a per-document transparency summary. Conversion
+    // Distinguishing-facet extraction for deterministic document selection.
+    // One LLM call per document, gated on `doc_selection_enabled` for this
+    // workspace's scope so it costs nothing unless the feature is on. The
+    // facets ("program: …", "limit: …") ride the provenance and let the
+    // selector pick the right document among near-identical siblings by exact
+    // value match (see thairag_agent::doc_selector).
+    let facets = if crate::store::resolve_setting(
+        state.km_store.as_ref(),
+        "chat_pipeline.doc_selection_enabled",
+        &scope,
+    )
+    .and_then(|v| v.parse::<bool>().ok())
+    .unwrap_or(false)
+    {
+        let text = state
+            .km_store
+            .get_document_content(doc_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        extract_facets(&p, &text).await
+    } else {
+        Vec::new()
+    };
+
+    // Persist processing provenance (path, agents, models, fallback, facets) so
+    // the admin UI can show a per-document transparency summary. Conversion
     // fidelity is already assessed INSIDE process_to_document (one site for
     // every ingest path) and arrives on the provenance — re-assessing here
     // would run a second full ground-truth extraction per ingest.
-    if let Some(provenance) = processed.provenance.clone() {
+    if let Some(mut provenance) = processed.provenance.clone() {
+        provenance.facets = facets;
         let _ = state
             .km_store
             .update_document_provenance(doc_id, Some(provenance));
@@ -449,6 +525,23 @@ async fn process_document_inner_impl(
     // Apply chunk plugins (e.g., summary headers) after splitting
     let mut chunks = chunks;
     crate::plugin_hooks::apply_chunk_plugins(&state.plugin_registry, &mut chunks);
+
+    // Stamp every chunk with its document's identity. In corpora of
+    // near-identical documents (e.g. 14 variants of the same bank loan
+    // program) the chunk text alone cannot disambiguate which variant it
+    // belongs to — queries naming the document retrieve a sibling's numbers.
+    // The title rides `context_prefix`, which the embedding path prepends
+    // (hybrid::enriched_text) and the text index now includes; the AI
+    // enricher's own prefix wins when present.
+    if let Ok(doc_rec) = state.km_store.get_document(doc_id) {
+        let prefix = format!("เอกสาร: {}", doc_rec.title);
+        for c in &mut chunks {
+            let meta = c.metadata.get_or_insert_with(Default::default);
+            if meta.context_prefix.is_none() {
+                meta.context_prefix = Some(prefix.clone());
+            }
+        }
+    }
 
     let chunk_count = chunks.len();
 
@@ -967,109 +1060,6 @@ pub async fn get_document_content(
     }))
 }
 
-/// Extract a document's distinguishing facets via the chat LLM. Returns up to
-/// ~8 "key: value" strings naming the attributes that tell this document apart
-/// from similar ones. Best-effort: any failure yields an empty list. Capped
-/// input keeps the call cheap and within context.
-async fn extract_facets(p: &crate::app_state::ProviderBundle, text: &str) -> Vec<String> {
-    use thairag_core::traits::LlmProvider;
-    if text.trim().len() < 200 {
-        return Vec::new();
-    }
-    let llm: std::sync::Arc<dyn LlmProvider> = std::sync::Arc::from(
-        thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
-    );
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "facets": {"type": "array", "items": {"type": "string"}, "maxItems": 8}
-        },
-        "required": ["facets"]
-    });
-    let prompt = format!(
-        "Extract this document's DISTINGUISHING attributes: the few facts that tell \
-         it apart from other similar documents, as 4 to 8 short facets in the form \
-         key: value (for example program: NAME, type: KIND, amount: NUMBER, party: \
-         WHO). Use the document's own language for values. Output JSON only, like \
-         {{\"facets\": [\"key: value\"]}}.\n\nDocument:\n{}",
-        text.chars().take(7000).collect::<String>()
-    );
-    let msgs = [thairag_core::types::ChatMessage {
-        role: "user".into(),
-        content: prompt,
-        images: vec![],
-    }];
-    let resp = match llm.generate_structured(&msgs, Some(512), &schema).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "Facet extraction failed");
-            return Vec::new();
-        }
-    };
-    #[derive(serde::Deserialize)]
-    struct F {
-        #[serde(default)]
-        facets: Vec<String>,
-    }
-    serde_json::from_str::<F>(thairag_core::extract_json(resp.content.trim()))
-        .map(|f| f.facets)
-        .unwrap_or_default()
-}
-
-/// Populate distinguishing facets for every ready document in a workspace from
-/// the **already-stored** converted text — one LLM call per document, no re-OCR
-/// and no re-chunking. Reprocessing re-runs the conversion pipeline, which for
-/// scanned/vision-OCR'd corpora is destructive and nondeterministic (each run
-/// OCRs a different page subset); this path leaves the stored text untouched and
-/// only writes `processing_provenance.facets`. Idempotent — re-running
-/// overwrites facets in place.
-pub async fn extract_workspace_facets(
-    State(state): State<AppState>,
-    Extension(claims): Extension<AuthClaims>,
-    Path(workspace_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let workspace_id = WorkspaceId(workspace_id);
-    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
-    require_doc(&perm, Role::can_write, "extract document facets")?;
-
-    let p = state.providers();
-    let docs = state.km_store.list_documents_in_workspace(workspace_id);
-    let mut updated = 0usize;
-    let mut skipped = 0usize;
-    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
-        // The stored converted text — never re-derived here, so a corpus an eval
-        // set was built against stays bit-identical.
-        let text = state
-            .km_store
-            .get_document_content(d.id)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let Some(mut provenance) = d.processing_provenance.clone() else {
-            skipped += 1;
-            continue;
-        };
-        if text.trim().is_empty() {
-            skipped += 1;
-            continue;
-        }
-        provenance.facets = extract_facets(&p, &text).await;
-        if provenance.facets.is_empty() {
-            skipped += 1;
-            continue;
-        }
-        let _ = state
-            .km_store
-            .update_document_provenance(d.id, Some(provenance));
-        updated += 1;
-    }
-    tracing::info!(%workspace_id, updated, skipped, "Workspace facet extraction (no re-OCR) complete");
-    Ok(Json(serde_json::json!({
-        "docs_updated": updated,
-        "docs_skipped": skipped,
-    })))
-}
-
 pub async fn download_document(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -1362,6 +1352,104 @@ pub async fn reprocess_document(
 
 /// Reprocess all ready documents in a workspace (e.g., after embedding model change).
 /// Clears all vectors first, then re-embeds each document in the background.
+/// Re-embed and re-index every READY document's STORED chunks — no
+/// re-conversion, no re-OCR. This is the mandatory companion to changing the
+/// embedding model (the vector collection is recreated on dimension change,
+/// orphaning all vectors) and is deterministic: the chunk text is exactly
+/// what was ingested.
+pub async fn reindex_workspace(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "reindex documents")?;
+
+    let docs = state.km_store.list_documents_in_workspace(workspace_id);
+    let mut docs_done = 0usize;
+    let mut chunks_done = 0usize;
+    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
+        let chunks = state.km_store.load_chunks_by_doc(d.id);
+        if chunks.is_empty() {
+            continue;
+        }
+        // Replace, don't append: clear old vectors/postings for the doc first.
+        if let Err(e) = state.providers().search_engine.delete_doc(d.id).await {
+            tracing::warn!(doc_id = %d.id, error = %e, "reindex: stale-vector delete failed");
+        }
+        for batch in chunks.chunks(64) {
+            state
+                .providers()
+                .search_engine
+                .index_chunks(batch)
+                .await
+                .map_err(ApiError::from)?;
+            chunks_done += batch.len();
+        }
+        docs_done += 1;
+    }
+    tracing::info!(%workspace_id, docs_done, chunks_done, "Workspace reindex complete");
+    Ok(Json(serde_json::json!({
+        "docs_reindexed": docs_done,
+        "chunks_reindexed": chunks_done,
+    })))
+}
+
+/// Populate distinguishing facets for every ready document in a workspace from
+/// the **already-stored** converted text — one LLM call per document, no re-OCR
+/// and no re-chunking. Reprocessing re-runs the conversion pipeline, which for
+/// scanned/vision-OCR'd corpora is destructive and nondeterministic (each run
+/// OCRs a different page subset); this path leaves the stored text untouched and
+/// only writes `processing_provenance.facets`, which the deterministic
+/// doc-selector consumes. Idempotent — re-running overwrites facets in place.
+pub async fn extract_workspace_facets(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "extract document facets")?;
+
+    let p = state.providers();
+    let docs = state.km_store.list_documents_in_workspace(workspace_id);
+    let mut updated = 0usize;
+    let mut skipped = 0usize;
+    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
+        // The stored converted text (vision OCR / mechanical output) — never
+        // re-derived here, so the corpus an eval set was built against stays bit-identical.
+        let text = state
+            .km_store
+            .get_document_content(d.id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let Some(mut provenance) = d.processing_provenance.clone() else {
+            skipped += 1;
+            continue;
+        };
+        if text.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        provenance.facets = extract_facets(&p, &text).await;
+        if provenance.facets.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let _ = state
+            .km_store
+            .update_document_provenance(d.id, Some(provenance));
+        updated += 1;
+    }
+    tracing::info!(%workspace_id, updated, skipped, "Workspace facet extraction (no re-OCR) complete");
+    Ok(Json(serde_json::json!({
+        "docs_updated": updated,
+        "docs_skipped": skipped,
+    })))
+}
+
 pub async fn reprocess_all_documents(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,

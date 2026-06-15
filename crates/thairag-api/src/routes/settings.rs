@@ -2754,6 +2754,9 @@ pub struct ChatPipelineConfigResponse {
     pub adaptive_threshold_enabled: bool,
     pub feedback_decay_days: u32,
     pub adaptive_min_samples: u32,
+    // Agentic doc-selection
+    pub doc_selection_enabled: bool,
+    pub doc_selection_max_catalog: usize,
     // Self-RAG
     pub self_rag_enabled: bool,
     pub self_rag_threshold: f32,
@@ -2890,6 +2893,9 @@ pub struct UpdateChatPipelineRequest {
     pub adaptive_threshold_enabled: Option<bool>,
     pub feedback_decay_days: Option<u32>,
     pub adaptive_min_samples: Option<u32>,
+    // Agentic doc-selection
+    pub doc_selection_enabled: Option<bool>,
+    pub doc_selection_max_catalog: Option<usize>,
     // Self-RAG
     pub self_rag_enabled: Option<bool>,
     pub self_rag_threshold: Option<f32>,
@@ -3147,6 +3153,13 @@ where
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.adaptive_min_samples),
         // Self-RAG
+        doc_selection_enabled: s("chat_pipeline.doc_selection_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.doc_selection_enabled),
+        doc_selection_max_catalog: s("chat_pipeline.doc_selection_max_catalog")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.doc_selection_max_catalog),
+        doc_selection_llm: cp.doc_selection_llm.clone(),
         self_rag_enabled: s("chat_pipeline.self_rag_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.self_rag_enabled),
@@ -3406,6 +3419,8 @@ fn build_chat_pipeline_response_from_config(
         adaptive_threshold_enabled: eff.adaptive_threshold_enabled,
         feedback_decay_days: eff.feedback_decay_days,
         adaptive_min_samples: eff.adaptive_min_samples,
+        doc_selection_enabled: eff.doc_selection_enabled,
+        doc_selection_max_catalog: eff.doc_selection_max_catalog,
         self_rag_enabled: eff.self_rag_enabled,
         self_rag_threshold: eff.self_rag_threshold,
         self_rag_llm: eff.self_rag_llm.as_ref().map(llm_config_to_info),
@@ -3597,6 +3612,12 @@ pub async fn update_chat_pipeline_config(
     );
     persist_num!(feedback_decay_days, "chat_pipeline.feedback_decay_days");
     persist_num!(adaptive_min_samples, "chat_pipeline.adaptive_min_samples");
+    // Agentic doc-selection
+    persist_bool!(doc_selection_enabled, "chat_pipeline.doc_selection_enabled");
+    persist_num!(
+        doc_selection_max_catalog,
+        "chat_pipeline.doc_selection_max_catalog"
+    );
     // Self-RAG
     persist_bool!(self_rag_enabled, "chat_pipeline.self_rag_enabled");
     persist_num!(self_rag_threshold, "chat_pipeline.self_rag_threshold");
