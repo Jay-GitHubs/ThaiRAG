@@ -179,6 +179,13 @@ pub struct ProcessingProvenance {
     /// A non-zero value flags pages an analyst may want to review by hand.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tables_kept_as_text: i64,
+    /// Distinguishing facets extracted from the document ("key: value" strings,
+    /// e.g. "program: SME กล้าสู้", "collateral: เงินฝาก", "limit: 10 ล้านบาท").
+    /// Populated on demand by the workspace facet-extraction endpoint; empty
+    /// otherwise. Serialized into the existing JSON provenance column — no
+    /// schema change, and old records without the field deserialize fine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facets: Vec<String>,
 }
 
 fn is_zero(n: &i64) -> bool {
