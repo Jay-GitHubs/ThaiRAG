@@ -731,6 +731,9 @@ pub struct SearchQuery {
     /// query against the CLIP image-vector collection. Empty for text-only
     /// queries; only consulted when CLIP visual search is enabled.
     pub query_images: Vec<Vec<u8>>,
+    /// Restrict retrieval to these documents (agentic doc-selection). Empty
+    /// = no document filter (workspace scope only).
+    pub doc_ids: Vec<DocId>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -833,6 +833,19 @@ pub struct ChatPipelineConfig {
     #[serde(default = "default_adaptive_min_samples")]
     pub adaptive_min_samples: u32,
 
+    // ── Feature: Agentic document selection ──
+    /// When on, an LLM stage reads the workspace's document catalogue (titles)
+    /// and scopes retrieval to the document(s) the query is about — the fix for
+    /// corpora of near-identical documents where vector similarity cannot tell
+    /// siblings apart. Self-gating: no-op when the query names no document or
+    /// the catalogue is larger than `doc_selection_max_catalog`.
+    #[serde(default)]
+    pub doc_selection_enabled: bool,
+    #[serde(default = "default_doc_selection_max_catalog")]
+    pub doc_selection_max_catalog: usize,
+    #[serde(default)]
+    pub doc_selection_llm: Option<LlmConfig>,
+
     // ── Feature: Self-RAG ──
     #[serde(default)]
     pub self_rag_enabled: bool,
@@ -1097,6 +1110,10 @@ fn default_feedback_decay_days() -> u32 {
 fn default_adaptive_min_samples() -> u32 {
     20
 }
+fn default_doc_selection_max_catalog() -> usize {
+    60
+}
+
 fn default_self_rag_threshold() -> f32 {
     0.7
 }
@@ -1222,6 +1239,10 @@ impl Default for ChatPipelineConfig {
             adaptive_threshold_enabled: false,
             feedback_decay_days: default_feedback_decay_days(),
             adaptive_min_samples: default_adaptive_min_samples(),
+            // Agentic document selection
+            doc_selection_enabled: false,
+            doc_selection_max_catalog: default_doc_selection_max_catalog(),
+            doc_selection_llm: None,
             // Self-RAG
             self_rag_enabled: false,
             self_rag_threshold: default_self_rag_threshold(),

@@ -798,6 +798,28 @@ impl ProviderBundle {
                     as Arc<dyn Fn(thairag_core::types::DocId) -> Option<String> + Send + Sync>
             });
 
+            // Agentic doc-selection: workspace document catalogue (id + title).
+            let doc_catalog_resolver: Option<thairag_agent::chat_pipeline::DocCatalogResolver> =
+                km_store.as_ref().map(|store| {
+                    let store = Arc::clone(store);
+                    Arc::new(move |ws_ids: &[thairag_core::types::WorkspaceId]| {
+                        ws_ids
+                            .iter()
+                            .flat_map(|ws| store.list_documents_in_workspace(*ws))
+                            .filter(|d| d.status == thairag_core::models::DocStatus::Ready)
+                            .map(|d| thairag_agent::doc_selector::CatalogEntry {
+                                doc_id: d.id,
+                                facets: d
+                                    .processing_provenance
+                                    .as_ref()
+                                    .map(|p| p.facets.clone())
+                                    .unwrap_or_default(),
+                                title: d.title,
+                            })
+                            .collect()
+                    }) as thairag_agent::chat_pipeline::DocCatalogResolver
+                });
+
             // PR-δ multimodal retrieval: resolve a chunk's image_blob_id to the
             // stored image bytes (base64) for the answer LLM's vision input. The
             // pipeline only invokes this when the answer LLM supports_vision().
@@ -900,6 +922,10 @@ impl ProviderBundle {
             };
             let pipeline = match metadata_resolver {
                 Some(resolver) => pipeline.with_metadata_resolver(resolver),
+                None => pipeline,
+            };
+            let pipeline = match doc_catalog_resolver {
+                Some(resolver) => pipeline.with_doc_catalog_resolver(resolver),
                 None => pipeline,
             };
             Some(Arc::new(pipeline))

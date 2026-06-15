@@ -53,9 +53,28 @@ type ConnectorProvider =
 pub type MetadataResolver =
     Arc<dyn Fn(&[String]) -> std::collections::HashMap<String, ChunkMetadata> + Send + Sync>;
 
+/// Closure that returns a workspace's document catalogue ((doc_id, title)) for
+/// the agentic doc-selection stage. Built from the store; `None` disables the
+/// feature regardless of config.
+pub type DocCatalogResolver = Arc<
+    dyn Fn(&[thairag_core::types::WorkspaceId]) -> Vec<crate::doc_selector::CatalogEntry>
+        + Send
+        + Sync,
+>;
+
 /// PR-δ: upper bound on source images hydrated into a single answer-LLM request.
 /// Vision blobs are large (base64 page renders) — cap to bound payload/latency.
 const MAX_VISION_IMAGES_PER_ANSWER: usize = 4;
+
+/// top_k used for a doc-scoped retrieval: large enough to return the whole of a
+/// typical small document so the answer LLM sees full context (the curator
+/// still caps by token budget). See `run_search`.
+const FULL_DOC_TOP_K: usize = 50;
+
+/// Token budget floor when keeping a whole scoped document in context. Sized
+/// to fit a typical small document (the oracle used ~4.5K tokens of full-doc
+/// context). Only raises the configured `max_context_tokens` for this path.
+const FULL_DOC_CONTEXT_TOKENS: usize = 6000;
 
 /// True when the client request itself carries answer-bearing context — e.g. an
 /// Open WebUI file upload injects the retrieved file text as a `system` message,
@@ -221,6 +240,7 @@ pub struct ChatPipeline {
     /// providers get it hydrated from the store, so citation provenance (page
     /// numbers, section title) survives to the answer surface.
     metadata_resolver: Option<MetadataResolver>,
+    doc_catalog_resolver: Option<DocCatalogResolver>,
 }
 
 impl ChatPipeline {
@@ -296,6 +316,7 @@ impl ChatPipeline {
             search_plugin_engine: None,
             guardrail_metrics: None,
             metadata_resolver: None,
+            doc_catalog_resolver: None,
         }
     }
 
@@ -320,6 +341,14 @@ impl ChatPipeline {
     /// Omit to leave results as the search providers returned them.
     pub fn with_metadata_resolver(mut self, resolver: MetadataResolver) -> Self {
         self.metadata_resolver = Some(resolver);
+        self
+    }
+
+    /// Builder: install the workspace document-catalogue resolver that powers
+    /// agentic doc-selection. Without it (or with `doc_selection_enabled` off)
+    /// the stage is skipped and retrieval is unscoped.
+    pub fn with_doc_catalog_resolver(mut self, resolver: DocCatalogResolver) -> Self {
+        self.doc_catalog_resolver = Some(resolver);
         self
     }
 
@@ -619,6 +648,7 @@ impl ChatPipeline {
             workspace_ids: scope.workspace_ids.clone(),
             unrestricted: scope.is_unrestricted(),
             query_images,
+            doc_ids: Vec::new(),
         };
 
         let results = match self.search_engine.search(&query).await {
@@ -2524,6 +2554,24 @@ impl ChatPipeline {
         results: &[thairag_core::types::SearchResult],
         budget: &LlmBudget,
     ) -> Result<CuratedContext> {
+        // When retrieval has already narrowed to one or two documents (agentic
+        // doc-selection scoped it, or the workspace simply holds few docs),
+        // there is nothing for the LLM curator to disambiguate — its
+        // relevance judgement only risks dropping the answer-bearing chunk
+        // (the measured gap between full-document context, 0.74, and curated
+        // top-k within that document, ~0.46). Keep the whole scoped document
+        // deterministically up to the token budget instead.
+        let distinct_docs = results
+            .iter()
+            .map(|r| r.chunk.doc_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        if distinct_docs <= 2 && distinct_docs < results.len() {
+            return Ok(context_curator::fallback_curate(
+                results,
+                self.config.max_context_tokens.max(FULL_DOC_CONTEXT_TOKENS),
+            ));
+        }
         if self.context_curator.is_some() && budget.try_spend() {
             self.run_curator(query, results).await
         } else {
@@ -2550,31 +2598,136 @@ impl ChatPipeline {
                 .plan_and_execute(original_query, available_scopes, scope.is_unrestricted())
                 .await?
         } else {
-            // Standard search path
-            self.run_search(rewritten, scope).await?
+            // Agentic doc-selection: when on, scope retrieval to the
+            // document(s) the query is about (fixes near-identical corpora).
+            // Self-gating — empty filter leaves search unscoped.
+            let doc_filter = self.select_docs_for(original_query, scope);
+            self.run_search(rewritten, scope, &doc_filter).await?
         };
         // Restore citation provenance (page/section) that the vector/BM25
         // providers drop on read; no-op when no resolver is installed.
         self.hydrate_chunk_metadata(&mut results);
+        self.boost_by_doc_title_match(original_query, &mut results);
         Ok(results)
+    }
+
+    /// Re-rank results by how strongly the QUERY names each result's source
+    /// document. In corpora of near-identical documents (e.g. 14 variants of
+    /// one loan program) chunk text cannot disambiguate the variant, but the
+    /// user's question usually names it ("โครงการ SME กล้าสู้ …หลักประกันเงินฝาก") —
+    /// character-trigram recall of the title inside the query promotes the
+    /// named document's chunks above its siblings. Queries that name no
+    /// document boost all docs near-uniformly (shared-prefix trigrams), so
+    /// ordering is unchanged. No-op without a title resolver.
+    fn boost_by_doc_title_match(
+        &self,
+        query: &str,
+        results: &mut [thairag_core::types::SearchResult],
+    ) {
+        use std::collections::{HashMap, HashSet};
+        let Some(ref resolver) = self.doc_title_resolver else {
+            return;
+        };
+        fn trigrams(s: &str) -> HashSet<[char; 3]> {
+            let cs: Vec<char> = s
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            cs.windows(3).map(|w| [w[0], w[1], w[2]]).collect()
+        }
+        let q = trigrams(query);
+        if q.is_empty() {
+            return;
+        }
+        let mut sim_cache: HashMap<thairag_core::types::DocId, f32> = HashMap::new();
+        for r in results.iter_mut() {
+            let doc_id = r.chunk.doc_id;
+            let sim = *sim_cache.entry(doc_id).or_insert_with(|| {
+                resolver(doc_id)
+                    .map(|title| {
+                        let t = trigrams(&title);
+                        if t.is_empty() {
+                            0.0
+                        } else {
+                            t.intersection(&q).count() as f32 / t.len() as f32
+                        }
+                    })
+                    .unwrap_or(0.0)
+            });
+            r.score *= 1.0 + sim;
+        }
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    /// Resolve which documents (if any) the query should be scoped to.
+    /// Empty = no scoping. No-op unless `doc_selection_enabled` and a catalogue
+    /// resolver are both present.
+    fn select_docs_for(&self, query: &str, scope: &AccessScope) -> Vec<DocId> {
+        if !self.config.doc_selection_enabled {
+            return vec![];
+        }
+        let Some(ref catalog_fn) = self.doc_catalog_resolver else {
+            return vec![];
+        };
+        let catalog = catalog_fn(&scope.workspace_ids);
+        let docs = crate::doc_selector::select_docs(
+            query,
+            &catalog,
+            self.config.doc_selection_max_catalog,
+        );
+        if !docs.is_empty() {
+            info!(
+                scoped_docs = docs.len(),
+                catalog = catalog.len(),
+                "Doc-selection scoped retrieval"
+            );
+        }
+        docs
     }
 
     async fn run_search(
         &self,
         rewritten: &RewrittenQueries,
         scope: &AccessScope,
+        doc_filter: &[DocId],
     ) -> Result<Vec<thairag_core::types::SearchResult>> {
         let mut all_results = Vec::new();
 
+        // When retrieval is scoped to a small set of documents (agentic
+        // doc-selection), pull a LARGE top_k under the doc filter so the whole
+        // of each (small) scoped document is retrieved, not just its top few
+        // chunks. The answer then sees the full document — matching the
+        // measured oracle (full-document context → 0.74 vs ~0.45 for top-k
+        // within the same document). The curator still trims to the token
+        // budget, so a large scoped document degrades gracefully to its most
+        // relevant chunks. Unscoped search keeps the normal top_k.
+        let primary_top_k = if doc_filter.is_empty() {
+            5
+        } else {
+            FULL_DOC_TOP_K
+        };
         let primary_query = SearchQuery {
             text: self.pre_search_transform(&rewritten.primary),
-            top_k: 5,
+            top_k: primary_top_k,
             workspace_ids: scope.workspace_ids.clone(),
             unrestricted: scope.is_unrestricted(),
             query_images: Vec::new(),
+            doc_ids: doc_filter.to_vec(),
         };
         let mut results = self.search_engine.search(&primary_query).await?;
         all_results.append(&mut results);
+        // With a doc-scoped full retrieval the primary query already returns
+        // the whole document; the sub/HyDE/step-back expansions only add noise
+        // and latency, so skip them when scoped.
+        if !doc_filter.is_empty() {
+            self.hydrate_chunk_metadata(&mut all_results);
+            return Ok(all_results);
+        }
 
         for sq in &rewritten.sub_queries {
             let sub_query = SearchQuery {
@@ -2583,6 +2736,7 @@ impl ChatPipeline {
                 workspace_ids: scope.workspace_ids.clone(),
                 unrestricted: scope.is_unrestricted(),
                 query_images: Vec::new(),
+                doc_ids: doc_filter.to_vec(),
             };
             if let Ok(mut r) = self.search_engine.search(&sub_query).await {
                 all_results.append(&mut r);
@@ -2596,6 +2750,7 @@ impl ChatPipeline {
                 workspace_ids: scope.workspace_ids.clone(),
                 unrestricted: scope.is_unrestricted(),
                 query_images: Vec::new(),
+                doc_ids: doc_filter.to_vec(),
             };
             if let Ok(mut r) = self.search_engine.search(&hyde_query).await {
                 all_results.append(&mut r);
@@ -2613,6 +2768,7 @@ impl ChatPipeline {
                 workspace_ids: scope.workspace_ids.clone(),
                 unrestricted: scope.is_unrestricted(),
                 query_images: Vec::new(),
+                doc_ids: doc_filter.to_vec(),
             };
             if let Ok(mut r) = self.search_engine.search(&step_back_query).await {
                 debug!(results = r.len(), "Step-back retrieval merged");

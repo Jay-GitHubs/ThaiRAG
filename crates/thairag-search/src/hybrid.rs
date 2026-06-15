@@ -236,6 +236,7 @@ impl HybridSearchEngine {
             workspace_ids: query.workspace_ids.clone(),
             unrestricted: query.unrestricted,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
         let text_query = vector_query.clone();
 
