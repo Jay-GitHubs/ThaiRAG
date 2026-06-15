@@ -169,7 +169,19 @@ impl TextSearch for TantivySearch {
             doc.add_text(self.fields.chunk_id, chunk.chunk_id.to_string());
             doc.add_text(self.fields.doc_id, chunk.doc_id.to_string());
             doc.add_text(self.fields.workspace_id, chunk.workspace_id.to_string());
-            doc.add_text(self.fields.content, &chunk.content);
+            // Index the context prefix (document identity / enrichment
+            // context) together with the content so lexical search can match
+            // document-level terms (e.g. a program name) that the chunk body
+            // never repeats.
+            let indexed_text = match chunk
+                .metadata
+                .as_ref()
+                .and_then(|m| m.context_prefix.as_ref())
+            {
+                Some(prefix) => format!("{prefix}\n{}", chunk.content),
+                None => chunk.content.clone(),
+            };
+            doc.add_text(self.fields.content, &indexed_text);
             doc.add_u64(self.fields.chunk_index, chunk.chunk_index as u64);
             writer
                 .add_document(doc)
@@ -222,11 +234,12 @@ impl TextSearch for TantivySearch {
 
         let (text_query, _parse_errors) = query_parser.parse_query_lenient(&query.text);
 
-        // Build final query: text + workspace filter
-        let final_query = if query.unrestricted || query.workspace_ids.is_empty() {
-            text_query
-        } else {
-            // OR of workspace_id terms
+        // Build final query: text MUST, with optional workspace and document
+        // filters ANDed on. doc_ids restricts to specific documents (agentic
+        // doc-selection).
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
+            vec![(Occur::Must, text_query)];
+        if !query.unrestricted && !query.workspace_ids.is_empty() {
             let ws_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = query
                 .workspace_ids
                 .iter()
@@ -240,12 +253,27 @@ impl TextSearch for TantivySearch {
                     )
                 })
                 .collect();
-            let ws_query = BooleanQuery::new(ws_clauses);
-
-            Box::new(BooleanQuery::new(vec![
-                (Occur::Must, text_query),
-                (Occur::Must, Box::new(ws_query)),
-            ]))
+            clauses.push((Occur::Must, Box::new(BooleanQuery::new(ws_clauses))));
+        }
+        if !query.doc_ids.is_empty() {
+            let doc_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = query
+                .doc_ids
+                .iter()
+                .map(|d| {
+                    let term = tantivy::Term::from_field_text(self.fields.doc_id, &d.to_string());
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+                            as Box<dyn tantivy::query::Query>,
+                    )
+                })
+                .collect();
+            clauses.push((Occur::Must, Box::new(BooleanQuery::new(doc_clauses))));
+        }
+        let final_query: Box<dyn tantivy::query::Query> = if clauses.len() == 1 {
+            clauses.pop().unwrap().1
+        } else {
+            Box::new(BooleanQuery::new(clauses))
         };
 
         let top_docs = searcher
@@ -330,6 +358,7 @@ mod tests {
             top_k: 10,
             unrestricted: true,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
         let results = search.search(&query).await.unwrap();
         assert!(
@@ -351,6 +380,7 @@ mod tests {
             top_k: 10,
             unrestricted: true,
             query_images: Vec::new(),
+            doc_ids: Vec::new(),
         };
         let results = search.search(&query).await.unwrap();
         assert!(

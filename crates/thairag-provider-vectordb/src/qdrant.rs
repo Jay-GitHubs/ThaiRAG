@@ -211,17 +211,23 @@ impl VectorStore for QdrantVectorStore {
             .limit(query.top_k as u64)
             .with_payload(true);
 
-        // Apply workspace filter unless unrestricted
+        // Apply workspace + optional document filters. doc_ids restricts
+        // retrieval to a specific set of documents (agentic doc-selection).
+        let mut conditions: Vec<Condition> = Vec::new();
         if !query.unrestricted && !query.workspace_ids.is_empty() {
             let workspace_strings: Vec<String> = query
                 .workspace_ids
                 .iter()
                 .map(|id| id.to_string())
                 .collect();
-            request = request.filter(Filter::must([Condition::matches(
-                "workspace_id",
-                workspace_strings,
-            )]));
+            conditions.push(Condition::matches("workspace_id", workspace_strings));
+        }
+        if !query.doc_ids.is_empty() {
+            let doc_strings: Vec<String> = query.doc_ids.iter().map(|id| id.to_string()).collect();
+            conditions.push(Condition::matches("doc_id", doc_strings));
+        }
+        if !conditions.is_empty() {
+            request = request.filter(Filter::must(conditions));
         }
 
         let response = self
