@@ -619,16 +619,18 @@ pub fn reconstruct(
     }
     html.push_str("</table>");
 
-    // Linearized, merge-filled text for embedding: each row a "a | b | c" line,
-    // with a merged cell's value repeated across every column/row it covers so
-    // each row is self-contained for retrieval.
+    // Linearized text for embedding: each row a "a | b | c" line. A colspan'd
+    // value is emitted ONCE at its anchor column (the spanned columns stay
+    // empty); repeating it across every spanned column bloats the row — a cell
+    // spanning 21 columns became 21 copies — and, worse, misaligns the row
+    // against rows whose cells span differently, defeating cell→header lookup
+    // (e.g. "rate for item N"). A rowspan'd value still fills down every row it
+    // covers so each row remains self-contained for retrieval.
     let mut fill: Vec<Vec<String>> = vec![vec![String::new(); n_cols]; n_rows];
     for a in &anchors {
         let t = anchor_text(a);
         for dr in 0..a.rs {
-            for dc in 0..a.cs {
-                fill[a.r + dr][a.c + dc] = t.clone();
-            }
+            fill[a.r + dr][a.c] = t.clone();
         }
     }
     let linearized = fill
@@ -816,7 +818,10 @@ mod tests {
             "expected the 2x2 merged block, html: {}",
             t.html
         );
-        assert_eq!(t.linearized, "a | b | c\nd | M | M\ne | M | M");
+        // The 2x2 merge emits its value once at the anchor column (col 1) and
+        // fills down its rows; the colspan'd column (col 2) stays empty rather
+        // than repeating M.
+        assert_eq!(t.linearized, "a | b | c\nd | M | \ne | M | ");
     }
 
     #[test]
