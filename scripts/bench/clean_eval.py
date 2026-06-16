@@ -211,16 +211,50 @@ def token_score(expected, answer):
     return hits / len(groups)
 
 
-def ask(s, ws, q):
-    for _ in range(3):
+def ask(s, ws, q, retries=6):
+    """Query the pipeline, returning (answer, ok).
+
+    ok=False marks an *unrecoverable transient* backend failure — non-200, no
+    JSON, an empty answer, or an incomplete pipeline stage — which happens when
+    a query contends with gemma model-load (e.g. right after a reprocess) and
+    yields 500s or truncated generations. These are NOT genuine wrong answers,
+    so the caller excludes them from accuracy rather than scoring them 0 (which
+    would silently corrupt the measurement). A healthy response has a non-empty
+    answer and every `pipeline_stages` entry == "done".
+    """
+    for attempt in range(retries):
+        reason = "?"
         try:
             r = s.post(f"{API}/api/km/workspaces/{ws}/test-query", json={"query": q}, timeout=600)
-            r.raise_for_status()
-            return r.json().get("answer", "")
+            if r.status_code == 200:
+                j = r.json()
+                ans = j.get("answer", "")
+                stages = j.get("pipeline_stages", [])
+                done = (
+                    all(st.get("status") == "done" for st in stages) if stages else bool(ans.strip())
+                )
+                if ans.strip() and done:
+                    return ans, True
+                reason = "empty answer" if not ans.strip() else "incomplete stages"
+            else:
+                reason = f"http {r.status_code}"
         except Exception as e:  # noqa: BLE001
-            print(f"[run]   query retry: {e}", file=sys.stderr)
-            time.sleep(8)
-    return ""
+            reason = str(e)[:60]
+        print(f"[run]   transient ({reason}); retry {attempt + 1}/{retries}", file=sys.stderr)
+        time.sleep(min(4 * (attempt + 1), 20))
+    return "", False
+
+
+def warm_up(s, ws, q):
+    """Send throwaway queries until one comes back clean, so the answer model is
+    loaded and stable before measurement — the model-load window is exactly when
+    transients cluster."""
+    for _ in range(8):
+        _, ok = ask(s, ws, q, retries=2)
+        if ok:
+            return True
+        time.sleep(5)
+    return False
 
 
 def get_cp(s):
@@ -254,6 +288,11 @@ def cmd_run(args):
     if args.org:
         conditions.append(("ON", True))
 
+    # Warm the model before measuring so the load window's transients don't land
+    # on real questions.
+    if not warm_up(s, args.ws, qs[0]["question"]):
+        print("[run] WARNING: warm-up never got a clean response — backend may be unstable")
+
     results = {}
     try:
         for cond, on in conditions:
@@ -261,23 +300,31 @@ def cmd_run(args):
                 put_cp(s, {"doc_selection_enabled": on}, scope=args.org)
             # per-question pass across runs → stability
             passes = [0.0] * len(qs)
+            transient_q = set()
             run_means = []
             for run in range(args.runs):
                 scores = []
                 for i, q in enumerate(qs):
-                    sc = token_score(q["expected_tokens"], ask(s, args.ws, q["question"]))
+                    ans, ok = ask(s, args.ws, q["question"])
+                    if not ok:
+                        # Unrecoverable backend transient — exclude from accuracy
+                        # (scoring it 0 would corrupt the number), flag the question.
+                        transient_q.add(i)
+                        continue
+                    sc = token_score(q["expected_tokens"], ans)
                     scores.append(sc)
                     passes[i] += sc
-                run_means.append(sum(scores) / len(scores))
-                print(f"[run] {cond} run {run + 1}/{args.runs}: {run_means[-1]:.3f}", flush=True)
+                run_means.append(sum(scores) / len(scores) if scores else 0.0)
+                print(f"[run] {cond} run {run + 1}/{args.runs}: {run_means[-1]:.3f}"
+                      f"  (scored {len(scores)}/{len(qs)})", flush=True)
             mean = sum(run_means) / len(run_means)
             spread = max(run_means) - min(run_means)
             # questions that flip between runs = the unstable tail
             unstable = sum(1 for p in passes if 0 < p < args.runs)
             results[cond] = {"mean": mean, "run_means": run_means, "spread": spread,
-                             "unstable_questions": unstable}
+                             "unstable_questions": unstable, "transient_questions": len(transient_q)}
             print(f"[run] {cond}: mean={mean:.3f}  run-to-run spread={spread:.3f}  "
-                  f"unstable={unstable}/{len(qs)}")
+                  f"unstable={unstable}/{len(qs)}  transient-excluded={len(transient_q)}")
     finally:
         if args.org:
             put_cp(s, {"doc_selection_enabled": False}, scope=args.org)
@@ -289,8 +336,13 @@ def cmd_run(args):
 
     print("\n=== SUMMARY (deterministic token-match) ===")
     for cond, r in results.items():
+        tq = r.get("transient_questions", 0)
+        tnote = f", {tq} transient-excluded" if tq else ""
         print(f"  {cond:<4} accuracy {100 * r['mean']:.1f}%  "
-              f"(noise floor ±{100 * r['spread'] / 2:.1f}%, {r['unstable_questions']} unstable Q)")
+              f"(noise floor ±{100 * r['spread'] / 2:.1f}%, {r['unstable_questions']} unstable Q{tnote})")
+        if tq:
+            print(f"       ⚠ {tq} question(s) hit unrecoverable backend transients and were "
+                  f"EXCLUDED from accuracy (not scored as misses). Re-run if this is non-trivial.")
     if "ON" in results and "OFF" in results:
         lift = results["ON"]["mean"] - results["OFF"]["mean"]
         noise = max(results["ON"]["spread"], results["OFF"]["spread"])
