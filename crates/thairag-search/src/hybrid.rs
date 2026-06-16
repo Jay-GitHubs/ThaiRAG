@@ -288,6 +288,46 @@ impl HybridSearchEngine {
         Ok(results)
     }
 
+    /// Lexical-only retrieval (BM25 via the text-search backend) for the
+    /// `Vectorless` retrieval mode. Skips query embedding and the dense-vector
+    /// arm entirely — no embedding call, no vector store — then applies the same
+    /// rerank + search-plugin post-processing as [`search`] so downstream
+    /// behavior is consistent. The `doc_ids` filter is preserved.
+    pub async fn search_lexical(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        let effective_query_text = if self.search_plugins.is_empty() {
+            query.text.clone()
+        } else {
+            let mut q = query.text.clone();
+            for plugin in &self.search_plugins {
+                q = plugin.pre_search(&q);
+            }
+            q
+        };
+
+        let text_query = SearchQuery {
+            text: effective_query_text,
+            top_k: self.config.top_k,
+            workspace_ids: query.workspace_ids.clone(),
+            unrestricted: query.unrestricted,
+            query_images: Vec::new(),
+            doc_ids: query.doc_ids.clone(),
+        };
+        let text_results = self.text_search.search(&text_query).await?;
+
+        let top = text_results
+            .into_iter()
+            .take(self.config.rerank_top_k)
+            .collect();
+        let mut results = self.reranker.rerank(&query.text, top).await?;
+
+        if !self.search_plugins.is_empty() {
+            for plugin in &self.search_plugins {
+                results = plugin.post_search(results);
+            }
+        }
+        Ok(results)
+    }
+
     /// Delete a document from both vector store and text search.
     pub async fn delete_doc(&self, doc_id: DocId) -> Result<()> {
         let (v_res, t_res) = tokio::join!(

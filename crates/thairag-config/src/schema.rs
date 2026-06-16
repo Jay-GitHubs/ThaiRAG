@@ -730,6 +730,37 @@ impl Default for AiPreprocessingConfig {
 
 // ── Chat Pipeline Config ─────────────────────────────────────────────
 
+/// Retrieval strategy for the chat pipeline. Selectable per scope (per org).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalMode {
+    /// Hybrid dense-vector + BM25 retrieval with RRF fusion (current behavior).
+    #[default]
+    Vector,
+    /// Lexical-only (BM25) retrieval — no dense vectors, no query-time embedding.
+    Vectorless,
+}
+
+impl std::fmt::Display for RetrievalMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RetrievalMode::Vector => "vector",
+            RetrievalMode::Vectorless => "vectorless",
+        })
+    }
+}
+
+impl std::str::FromStr for RetrievalMode {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "vector" => Ok(RetrievalMode::Vector),
+            "vectorless" => Ok(RetrievalMode::Vectorless),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct ChatPipelineConfig {
     /// Master switch. When false, uses legacy 2-agent flow.
@@ -845,6 +876,14 @@ pub struct ChatPipelineConfig {
     pub doc_selection_max_catalog: usize,
     #[serde(default)]
     pub doc_selection_llm: Option<LlmConfig>,
+
+    // ── Feature: Retrieval mode (per-org pipeline selection) ──
+    /// Which retrieval strategy the pipeline uses. `Vector` (default) is the
+    /// hybrid dense-vector + BM25 path. `Vectorless` skips dense vectors and
+    /// retrieves lexically (BM25 only) — no embedding call at query time. Set
+    /// per scope (e.g. per org) so admins can A/B the two without code changes.
+    #[serde(default)]
+    pub retrieval_mode: RetrievalMode,
 
     // ── Feature: Self-RAG ──
     #[serde(default)]
@@ -1243,6 +1282,7 @@ impl Default for ChatPipelineConfig {
             doc_selection_enabled: false,
             doc_selection_max_catalog: default_doc_selection_max_catalog(),
             doc_selection_llm: None,
+            retrieval_mode: RetrievalMode::Vector,
             // Self-RAG
             self_rag_enabled: false,
             self_rag_threshold: default_self_rag_threshold(),
