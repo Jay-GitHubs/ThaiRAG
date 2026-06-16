@@ -55,6 +55,27 @@ pub struct ProcessedDocument {
     pub provenance: Option<thairag_core::models::ProcessingProvenance>,
 }
 
+impl ProcessedDocument {
+    /// Repair legacy Thai-PDF text encoding in the extracted content: map
+    /// Private-Use-Area glyph codepoints back to proper Thai marks (U+F70x →
+    /// tone marks / upper vowels) and recompose the split SARA AM
+    /// (nikhahit + sara aa → ◌ำ). Applied once at the end of every extraction
+    /// path (text-layer, table cells, mechanical fallback) so stored chunks,
+    /// embeddings, BM25, and the answer-LLM context all see clean Thai that
+    /// matches normal Thai input. No-op for already-clean text (vision OCR,
+    /// non-Thai).
+    fn normalize_thai_text(mut self) -> Self {
+        let fix = |t: &str| thairag_thai::recompose_sara_am(&thairag_thai::map_thai_pua(t));
+        for chunk in &mut self.chunks {
+            chunk.content = fix(&chunk.content);
+        }
+        if let Some(md) = self.markdown.take() {
+            self.markdown = Some(fix(&md));
+        }
+        self
+    }
+}
+
 /// Assemble a [`ProcessingProvenance`] for an AI-compose path (smart-PDF /
 /// embedded-media). The analyzer/chunker/enricher records come from
 /// [`AiChunkOutcome`]; the converter and quality-checker are deliberately
@@ -673,7 +694,8 @@ impl DocumentPipeline {
             images: Vec::new(),
             markdown: None,
             provenance: Some(provenance),
-        })
+        }
+        .normalize_thai_text())
     }
 
     /// Whether the pdfium smart-PDF engine should be attempted for this input.
@@ -1163,7 +1185,8 @@ impl DocumentPipeline {
             images: doc.images,
             markdown: Some(doc.markdown),
             provenance,
-        })
+        }
+        .normalize_thai_text())
     }
 
     /// Convert a DOCX/XLSX/HTML file to markdown, then describe and persist its
