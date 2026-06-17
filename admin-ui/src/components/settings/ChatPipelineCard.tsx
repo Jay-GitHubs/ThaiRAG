@@ -1294,6 +1294,12 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                     { value: 'vectorless', label: 'Vectorless (BM25)' },
                   ]}
                 />
+                <Text type="secondary" style={{ fontSize: 11, maxWidth: 320 }}>
+                  Applies to queries that resolve to this scope (a user's
+                  primary workspace). Shared API-key traffic with no forwarded
+                  user resolves to Global — change the Global scope and restart
+                  to affect it.
+                </Text>
               </Space>
             </Tooltip>
             <Tooltip title="Maximum estimated tokens for the context window passed to the response generator. Larger values give more context but cost more.">
