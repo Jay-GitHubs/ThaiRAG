@@ -191,6 +191,56 @@ fn is_zero(n: &i64) -> bool {
     *n == 0
 }
 
+/// A reasoning-based ("PageIndex") table-of-contents tree for a document.
+///
+/// Built once at ingest (or via explicit backfill) by an LLM reading the whole
+/// converted text, then persisted as JSON. At query time, the reasoning-based
+/// retrieval mode hands the LLM this tree's node titles + summaries and asks it
+/// to *navigate* to the relevant nodes instead of relying on vector/lexical
+/// similarity — a better fit for structured/tabular Thai docs and near-clone
+/// corpora where the right section can be reasoned about from its summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocTree {
+    /// The document this tree describes.
+    pub doc_id: DocId,
+    /// Document title (denormalized for self-contained navigation outlines).
+    pub title: String,
+    /// Root node — its `children` are the document's top-level sections. The
+    /// root itself carries the document-level summary used for coarse,
+    /// cross-document selection before drilling in.
+    pub root: DocTreeNode,
+    /// Model that built the tree (provenance; pure-LLM trees are
+    /// non-deterministic across rebuilds, so we record which model produced this one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+}
+
+/// One node in a [`DocTree`] — a section/subsection of the document.
+///
+/// `node_id`s are assigned deterministically by the tree builder (a stable
+/// path-like id, e.g. `"n0"`, `"n0.1"`), not taken from the LLM, so navigation
+/// can reference nodes unambiguously and content can be re-resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocTreeNode {
+    /// Stable, builder-assigned id (path-like, e.g. `"n0.1.2"`).
+    pub node_id: String,
+    /// Section heading / title.
+    pub title: String,
+    /// One-to-two sentence summary of what this section covers, used to drive
+    /// LLM navigation without sending the full section text.
+    pub summary: String,
+    /// 1-indexed page the section starts on, when derivable (PDFs). Used to map
+    /// a selected node back to its chunks via `ChunkMetadata.page_numbers`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_start: Option<usize>,
+    /// 1-indexed page the section ends on (inclusive), when derivable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_end: Option<usize>,
+    /// Child sections, in document order.
+    #[serde(default)]
+    pub children: Vec<DocTreeNode>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub id: DocId,
@@ -359,5 +409,61 @@ mod stage_timing_tests {
         // A clock that goes backwards must not yield a negative duration.
         StageTiming::advance(&mut tl, Some("b"), 500, None);
         assert_eq!(tl[0].duration_ms, Some(0));
+    }
+}
+
+#[cfg(test)]
+mod doc_tree_tests {
+    use super::{DocTree, DocTreeNode};
+    use crate::types::DocId;
+
+    fn sample_tree() -> DocTree {
+        DocTree {
+            doc_id: DocId(uuid::Uuid::nil()),
+            title: "สินเชื่อ SME".to_string(),
+            root: DocTreeNode {
+                node_id: "n0".to_string(),
+                title: "สินเชื่อ SME".to_string(),
+                summary: "Document covering SME loan terms.".to_string(),
+                page_start: Some(1),
+                page_end: Some(4),
+                children: vec![DocTreeNode {
+                    node_id: "n0.0".to_string(),
+                    title: "วงเงิน".to_string(),
+                    summary: "Credit limit and collateral.".to_string(),
+                    page_start: Some(2),
+                    page_end: Some(2),
+                    children: vec![],
+                }],
+            },
+            model_name: Some("qwen3:14b".to_string()),
+        }
+    }
+
+    #[test]
+    fn round_trips_through_json() {
+        let tree = sample_tree();
+        let json = serde_json::to_string(&tree).unwrap();
+        let back: DocTree = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.doc_id, tree.doc_id);
+        assert_eq!(back.title, tree.title);
+        assert_eq!(back.root.children.len(), 1);
+        assert_eq!(back.root.children[0].node_id, "n0.0");
+        assert_eq!(back.root.children[0].page_start, Some(2));
+        assert_eq!(back.model_name.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn optional_fields_default_when_absent() {
+        // A minimal node with no pages / no children and a tree with no model.
+        let json = r#"{
+            "doc_id": "00000000-0000-0000-0000-000000000000",
+            "title": "t",
+            "root": {"node_id": "n0", "title": "t", "summary": "s"}
+        }"#;
+        let tree: DocTree = serde_json::from_str(json).unwrap();
+        assert!(tree.model_name.is_none());
+        assert!(tree.root.page_start.is_none());
+        assert!(tree.root.children.is_empty());
     }
 }
