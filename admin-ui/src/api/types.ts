@@ -580,6 +580,11 @@ export interface ChatPipelineConfigResponse {
   quality_guard_max_retries: number;
   quality_guard_threshold: number;
   retrieval_mode: 'vector' | 'vectorless';
+  // Reasoning-based ("PageIndex") retrieval
+  reasoning_nav_llm?: LlmProviderInfo;
+  reasoning_max_docs: number;
+  reasoning_max_nodes: number;
+  reasoning_build_on_ingest: boolean;
   language_adapter_enabled: boolean;
   language_adapter_llm?: LlmProviderInfo;
   orchestrator_enabled: boolean;
@@ -719,6 +724,12 @@ export interface UpdateChatPipelineRequest {
   quality_guard_max_retries?: number;
   quality_guard_threshold?: number;
   retrieval_mode?: 'vector' | 'vectorless';
+  // Reasoning-based ("PageIndex") retrieval
+  reasoning_nav_llm?: LlmConfigUpdate;
+  remove_reasoning_nav_llm?: boolean;
+  reasoning_max_docs?: number;
+  reasoning_max_nodes?: number;
+  reasoning_build_on_ingest?: boolean;
   language_adapter_enabled?: boolean;
   language_adapter_llm?: LlmConfigUpdate;
   remove_language_adapter_llm?: boolean;
