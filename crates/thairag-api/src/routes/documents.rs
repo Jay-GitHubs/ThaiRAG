@@ -674,6 +674,67 @@ async fn process_document_inner_impl(
         });
     }
 
+    // Reasoning-based ("PageIndex") tree build (background task — never blocks or
+    // fails document indexing; the document is already Ready). Gated per scope by
+    // `chat_pipeline.reasoning_build_on_ingest`; existing corpora are filled via
+    // the build-trees backfill endpoint instead. The build LLM runs at
+    // temperature 0 (see `reasoning_tree_provider`) for reproducibility.
+    if crate::store::resolve_setting(
+        state.km_store.as_ref(),
+        "chat_pipeline.reasoning_build_on_ingest",
+        &scope,
+    )
+    .and_then(|v| v.parse::<bool>().ok())
+    .unwrap_or(false)
+    {
+        let km_store = state.km_store.clone();
+        let llm = reasoning_tree_provider(&p);
+        let max_tokens = p.chat_pipeline_config.agent_max_tokens;
+        let title = state
+            .km_store
+            .get_document(doc_id)
+            .map(|d| d.title)
+            .unwrap_or_default();
+        let text = state
+            .km_store
+            .get_document_content(doc_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !text.trim().is_empty() {
+            info!(%doc_id, "Spawning PageIndex tree build on ingest");
+            tokio::spawn(async move {
+                match thairag_document::tree_builder::build_tree(
+                    llm.as_ref(),
+                    doc_id,
+                    &title,
+                    &text,
+                    max_tokens,
+                )
+                .await
+                {
+                    Ok(tree) => match serde_json::to_string(&tree) {
+                        Ok(json) => {
+                            let _ = km_store.save_document_tree(
+                                doc_id,
+                                workspace_id,
+                                &json,
+                                tree.model_name.as_deref(),
+                            );
+                            info!(%doc_id, "PageIndex tree built on ingest");
+                        }
+                        Err(e) => {
+                            tracing::warn!(%doc_id, error = %e, "PageIndex tree serialize failed")
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(%doc_id, error = %e, "PageIndex tree build on ingest failed (non-fatal)")
+                    }
+                }
+            });
+        }
+    }
+
     info!(%doc_id, chunk_count, "Document processed successfully");
     (chunk_count, None)
 }
@@ -1286,6 +1347,10 @@ pub async fn reprocess_document(
         .delete_doc(doc_id_typed)
         .await;
     let _ = state.km_store.delete_chunks_by_doc(doc_id_typed);
+    // Drop the stale PageIndex tree: it described the old chunks/pages. It is
+    // rebuilt on this re-ingest when reasoning_build_on_ingest is on, or via the
+    // build-trees backfill otherwise.
+    let _ = state.km_store.delete_document_tree(doc_id_typed);
 
     // Mark as processing
     let _ = state
@@ -1602,6 +1667,8 @@ pub async fn reprocess_all_documents(
                 .inc();
         }
         let _ = state.km_store.delete_chunks_by_doc(doc_id);
+        // Drop the stale PageIndex tree (rebuilt on re-ingest if enabled).
+        let _ = state.km_store.delete_document_tree(doc_id);
 
         // Mark as processing
         let _ = state
@@ -2602,6 +2669,8 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
             .inc();
     }
     let _ = state.km_store.delete_chunks_by_doc(doc_id);
+    // Drop the stale PageIndex tree (rebuilt on re-ingest if enabled).
+    let _ = state.km_store.delete_document_tree(doc_id);
 
     // Mark as processing
     let _ = state
