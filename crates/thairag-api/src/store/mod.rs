@@ -827,6 +827,25 @@ pub trait KmStoreTrait: Send + Sync {
     /// Get image and table counts for a document.
     fn get_document_blob_stats(&self, doc_id: DocId) -> Result<(i32, i32)>;
 
+    // ── Reasoning-based ("PageIndex") document trees ──
+    /// Persist (upsert) a document's navigation tree as JSON
+    /// (`thairag_core::models::DocTree`). `model_name` records which LLM built
+    /// it (pure-LLM trees are non-deterministic across rebuilds).
+    fn save_document_tree(
+        &self,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        tree_json: &str,
+        model_name: Option<&str>,
+    ) -> Result<()>;
+    /// Fetch a document's tree JSON, or `None` if no tree has been built.
+    fn get_document_tree(&self, doc_id: DocId) -> Result<Option<String>>;
+    /// List `(doc_id, tree_json)` for every document with a tree in any of the
+    /// given workspaces — the candidate set for reasoning-based navigation.
+    fn list_document_trees(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<(DocId, String)>>;
+    /// Drop a document's tree (e.g. before a reprocess rebuilds it). Idempotent.
+    fn delete_document_tree(&self, doc_id: DocId) -> Result<()>;
+
     // ── Image blob storage (smart PDF / DOCX / XLSX / HTML / direct uploads) ──
     /// Persist an extracted image (page render, embedded image, or direct
     /// upload). The image is referenced from chunks via

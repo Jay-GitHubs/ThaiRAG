@@ -853,6 +853,71 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(row.unwrap_or((0, 0)))
     }
 
+    fn save_document_tree(
+        &self,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        tree_json: &str,
+        model_name: Option<&str>,
+    ) -> Result<()> {
+        block_on(
+            sqlx::query(
+                "INSERT INTO document_trees (doc_id, workspace_id, tree_json, model_name, created_at)
+                 VALUES ($1, $2, $3, $4, NOW())
+                 ON CONFLICT (doc_id) DO UPDATE SET
+                   workspace_id = $2,
+                   tree_json = $3,
+                   model_name = $4,
+                   created_at = NOW()",
+            )
+            .bind(doc_id.0)
+            .bind(workspace_id.0)
+            .bind(tree_json)
+            .bind(model_name)
+            .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres save tree: {e}")))?;
+        Ok(())
+    }
+
+    fn get_document_tree(&self, doc_id: DocId) -> Result<Option<String>> {
+        let row = block_on(
+            sqlx::query_as::<_, (String,)>(
+                "SELECT tree_json FROM document_trees WHERE doc_id = $1",
+            )
+            .bind(doc_id.0)
+            .fetch_optional(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres get tree: {e}")))?;
+        Ok(row.map(|(t,)| t))
+    }
+
+    fn list_document_trees(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<(DocId, String)>> {
+        if workspace_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<uuid::Uuid> = workspace_ids.iter().map(|w| w.0).collect();
+        let rows = block_on(
+            sqlx::query_as::<_, (uuid::Uuid, String)>(
+                "SELECT doc_id, tree_json FROM document_trees WHERE workspace_id = ANY($1)",
+            )
+            .bind(&ids)
+            .fetch_all(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres list trees: {e}")))?;
+        Ok(rows.into_iter().map(|(d, t)| (DocId(d), t)).collect())
+    }
+
+    fn delete_document_tree(&self, doc_id: DocId) -> Result<()> {
+        block_on(
+            sqlx::query("DELETE FROM document_trees WHERE doc_id = $1")
+                .bind(doc_id.0)
+                .execute(&self.pool),
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("Postgres delete tree: {e}")))?;
+        Ok(())
+    }
+
     fn update_document_version_info(
         &self,
         id: DocId,
