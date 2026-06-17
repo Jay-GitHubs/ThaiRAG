@@ -880,10 +880,32 @@ pub struct ChatPipelineConfig {
     // ── Feature: Retrieval mode (per-org pipeline selection) ──
     /// Which retrieval strategy the pipeline uses. `Vector` (default) is the
     /// hybrid dense-vector + BM25 path. `Vectorless` skips dense vectors and
-    /// retrieves lexically (BM25 only) — no embedding call at query time. Set
-    /// per scope (e.g. per org) so admins can A/B the two without code changes.
+    /// retrieves by *reasoning* over per-document PageIndex trees — an LLM
+    /// navigates section summaries to the relevant nodes (no embedding call at
+    /// query time). Set per scope (e.g. per org) so admins can A/B without code
+    /// changes.
     #[serde(default)]
     pub retrieval_mode: RetrievalMode,
+
+    // ── Feature: Reasoning-based ("PageIndex") retrieval ──
+    /// LLM used to build document trees (at ingest/backfill) and to navigate
+    /// them at query time. `None` falls back to the default pipeline LLM. Drive
+    /// it at `temperature: 0` for reproducible tree builds.
+    #[serde(default)]
+    pub reasoning_nav_llm: Option<LlmConfig>,
+    /// Max in-scope documents whose trees are offered to the navigator per query
+    /// (after the deterministic doc prefilter). Bounds nav prompt size and cost.
+    #[serde(default = "default_reasoning_max_docs")]
+    pub reasoning_max_docs: usize,
+    /// Max tree nodes the navigator may select per query. Bounds the amount of
+    /// section content pulled into context.
+    #[serde(default = "default_reasoning_max_nodes")]
+    pub reasoning_max_nodes: usize,
+    /// Build a document's tree automatically at ingest (best-effort, after the
+    /// doc goes Ready). Off by default; existing corpora are filled via the
+    /// backfill endpoint, which never re-OCRs/re-chunks.
+    #[serde(default)]
+    pub reasoning_build_on_ingest: bool,
 
     // ── Feature: Self-RAG ──
     #[serde(default)]
@@ -1156,6 +1178,12 @@ fn default_doc_selection_max_catalog() -> usize {
 fn default_self_rag_threshold() -> f32 {
     0.7
 }
+fn default_reasoning_max_docs() -> usize {
+    5
+}
+fn default_reasoning_max_nodes() -> usize {
+    12
+}
 fn default_graph_rag_max_entities() -> u32 {
     10
 }
@@ -1283,6 +1311,11 @@ impl Default for ChatPipelineConfig {
             doc_selection_max_catalog: default_doc_selection_max_catalog(),
             doc_selection_llm: None,
             retrieval_mode: RetrievalMode::Vector,
+            // Reasoning-based ("PageIndex") retrieval
+            reasoning_nav_llm: None,
+            reasoning_max_docs: default_reasoning_max_docs(),
+            reasoning_max_nodes: default_reasoning_max_nodes(),
+            reasoning_build_on_ingest: false,
             // Self-RAG
             self_rag_enabled: false,
             self_rag_threshold: default_self_rag_threshold(),
