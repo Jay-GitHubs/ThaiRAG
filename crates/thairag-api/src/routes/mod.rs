@@ -367,6 +367,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/workspaces/{workspace_id}/documents/extract-facets",
             post(documents::extract_workspace_facets),
         )
+        .route(
+            "/workspaces/{workspace_id}/documents/build-trees",
+            post(documents::build_workspace_trees),
+        )
         // Document Versioning
         .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/versions",

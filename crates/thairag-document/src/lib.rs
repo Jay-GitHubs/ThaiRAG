@@ -16,6 +16,7 @@ pub mod table_lattice;
 pub mod table_stream;
 pub mod text_utils;
 pub mod thai_chunker;
+pub mod tree_builder;
 pub mod window_chunker;
 
 pub use image::{

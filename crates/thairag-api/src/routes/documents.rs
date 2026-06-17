@@ -1450,6 +1450,92 @@ pub async fn extract_workspace_facets(
     })))
 }
 
+/// Build the LLM used to construct reasoning-based ("PageIndex") trees:
+/// `chat_pipeline.reasoning_nav_llm` if configured, else the default pipeline
+/// LLM. Temperature is forced to 0 so a re-run produces a stable tree (pure-LLM
+/// trees are otherwise non-deterministic across rebuilds).
+fn reasoning_tree_provider(
+    p: &crate::app_state::ProviderBundle,
+) -> std::sync::Arc<dyn thairag_core::traits::LlmProvider> {
+    let mut cfg = p
+        .chat_pipeline_config
+        .reasoning_nav_llm
+        .clone()
+        .unwrap_or_else(|| p.providers_config.llm.clone());
+    cfg.temperature = Some(0.0);
+    std::sync::Arc::from(thairag_provider_llm::create_llm_provider(&cfg))
+}
+
+/// Backfill reasoning-based ("PageIndex") trees for every Ready document in a
+/// workspace. Reads the stored `converted_text` ONLY — it never re-OCRs,
+/// re-chunks, re-embeds, or touches Qdrant, so an existing corpus (and any eval
+/// set built against it) stays bit-identical. Re-running overwrites each tree
+/// (the build is non-deterministic; see [`reasoning_tree_provider`]).
+pub async fn build_workspace_trees(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "build document trees")?;
+
+    let p = state.providers();
+    let llm = reasoning_tree_provider(&p);
+    let max_tokens = p.chat_pipeline_config.agent_max_tokens;
+    let docs = state.km_store.list_documents_in_workspace(workspace_id);
+    let mut built = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
+        let text = state
+            .km_store
+            .get_document_content(d.id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        match thairag_document::tree_builder::build_tree(
+            llm.as_ref(),
+            d.id,
+            &d.title,
+            &text,
+            max_tokens,
+        )
+        .await
+        {
+            Ok(tree) => match serde_json::to_string(&tree) {
+                Ok(json) => {
+                    let _ = state.km_store.save_document_tree(
+                        d.id,
+                        workspace_id,
+                        &json,
+                        tree.model_name.as_deref(),
+                    );
+                    built += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(doc_id = %d.id, error = %e, "tree serialize failed");
+                    failed += 1;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(doc_id = %d.id, error = %e, "tree build failed");
+                failed += 1;
+            }
+        }
+    }
+    tracing::info!(%workspace_id, built, skipped, failed, "Workspace tree build (no re-OCR) complete");
+    Ok(Json(serde_json::json!({
+        "trees_built": built,
+        "docs_skipped": skipped,
+        "docs_failed": failed,
+    })))
+}
+
 pub async fn reprocess_all_documents(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,

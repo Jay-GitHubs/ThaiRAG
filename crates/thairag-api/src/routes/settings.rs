@@ -2760,6 +2760,11 @@ pub struct ChatPipelineConfigResponse {
     // Retrieval mode (per-org: Vector | Vectorless)
     #[serde(default)]
     pub retrieval_mode: thairag_config::schema::RetrievalMode,
+    // Reasoning-based ("PageIndex") retrieval
+    pub reasoning_nav_llm: Option<LlmProviderInfo>,
+    pub reasoning_max_docs: usize,
+    pub reasoning_max_nodes: usize,
+    pub reasoning_build_on_ingest: bool,
     // Self-RAG
     pub self_rag_enabled: bool,
     pub self_rag_threshold: f32,
@@ -2901,6 +2906,12 @@ pub struct UpdateChatPipelineRequest {
     pub doc_selection_max_catalog: Option<usize>,
     // Retrieval mode (per-org: Vector | Vectorless)
     pub retrieval_mode: Option<thairag_config::schema::RetrievalMode>,
+    // Reasoning-based ("PageIndex") retrieval
+    pub reasoning_nav_llm: Option<UpdateLlmConfig>,
+    pub remove_reasoning_nav_llm: Option<bool>,
+    pub reasoning_max_docs: Option<usize>,
+    pub reasoning_max_nodes: Option<usize>,
+    pub reasoning_build_on_ingest: Option<bool>,
     // Self-RAG
     pub self_rag_enabled: Option<bool>,
     pub self_rag_threshold: Option<f32>,
@@ -3168,6 +3179,19 @@ where
         retrieval_mode: s("chat_pipeline.retrieval_mode")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.retrieval_mode),
+        // Reasoning-based ("PageIndex") retrieval
+        reasoning_nav_llm: s("chat_pipeline.reasoning_nav_llm")
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .or_else(|| cp.reasoning_nav_llm.clone()),
+        reasoning_max_docs: s("chat_pipeline.reasoning_max_docs")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.reasoning_max_docs),
+        reasoning_max_nodes: s("chat_pipeline.reasoning_max_nodes")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.reasoning_max_nodes),
+        reasoning_build_on_ingest: s("chat_pipeline.reasoning_build_on_ingest")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.reasoning_build_on_ingest),
         self_rag_enabled: s("chat_pipeline.self_rag_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.self_rag_enabled),
@@ -3430,6 +3454,10 @@ fn build_chat_pipeline_response_from_config(
         doc_selection_enabled: eff.doc_selection_enabled,
         doc_selection_max_catalog: eff.doc_selection_max_catalog,
         retrieval_mode: eff.retrieval_mode,
+        reasoning_nav_llm: eff.reasoning_nav_llm.as_ref().map(llm_config_to_info),
+        reasoning_max_docs: eff.reasoning_max_docs,
+        reasoning_max_nodes: eff.reasoning_max_nodes,
+        reasoning_build_on_ingest: eff.reasoning_build_on_ingest,
         self_rag_enabled: eff.self_rag_enabled,
         self_rag_threshold: eff.self_rag_threshold,
         self_rag_llm: eff.self_rag_llm.as_ref().map(llm_config_to_info),
@@ -3636,6 +3664,13 @@ pub async fn update_chat_pipeline_config(
             &rm.to_string(),
         );
     }
+    // Reasoning-based ("PageIndex") retrieval
+    persist_num!(reasoning_max_docs, "chat_pipeline.reasoning_max_docs");
+    persist_num!(reasoning_max_nodes, "chat_pipeline.reasoning_max_nodes");
+    persist_bool!(
+        reasoning_build_on_ingest,
+        "chat_pipeline.reasoning_build_on_ingest"
+    );
     // Self-RAG
     persist_bool!(self_rag_enabled, "chat_pipeline.self_rag_enabled");
     persist_num!(self_rag_threshold, "chat_pipeline.self_rag_threshold");
@@ -3912,6 +3947,11 @@ pub async fn update_chat_pipeline_config(
         eff.self_rag_llm.clone()
     );
     persist_llm!(
+        reasoning_nav_llm,
+        "chat_pipeline.reasoning_nav_llm",
+        eff.reasoning_nav_llm.clone()
+    );
+    persist_llm!(
         graph_rag_llm,
         "chat_pipeline.graph_rag_llm",
         eff.graph_rag_llm.clone()
@@ -4019,6 +4059,11 @@ pub async fn update_chat_pipeline_config(
         self_rag_llm,
         remove_self_rag_llm,
         "chat_pipeline.self_rag_llm"
+    );
+    remove_llm!(
+        reasoning_nav_llm,
+        remove_reasoning_nav_llm,
+        "chat_pipeline.reasoning_nav_llm"
     );
     remove_llm!(
         graph_rag_llm,
@@ -6235,5 +6280,35 @@ mod document_scope_tests {
         let eff = build_effective_document_config_from_getter(&doc, |k| map.get(k).cloned());
         // Garbage override is ignored, not fatal — falls back to the config value.
         assert!(eff.ai_preprocessing.llm.is_none());
+    }
+
+    #[test]
+    fn reasoning_fields_default_then_scoped_override_wins() {
+        let cp = thairag_config::schema::ChatPipelineConfig::default();
+        // Defaults flow through untouched.
+        let base = get_effective_chat_pipeline_from_getter(&cp, |_| None);
+        assert_eq!(base.reasoning_max_docs, 5);
+        assert_eq!(base.reasoning_max_nodes, 12);
+        assert!(!base.reasoning_build_on_ingest);
+        assert!(base.reasoning_nav_llm.is_none());
+
+        let map: HashMap<String, String> = [
+            ("chat_pipeline.reasoning_max_docs", "9"),
+            ("chat_pipeline.reasoning_max_nodes", "20"),
+            ("chat_pipeline.reasoning_build_on_ingest", "true"),
+            (
+                "chat_pipeline.reasoning_nav_llm",
+                r#"{"kind":"ollama","model":"nav-model"}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let eff = get_effective_chat_pipeline_from_getter(&cp, |k| map.get(k).cloned());
+        assert_eq!(eff.reasoning_max_docs, 9);
+        assert_eq!(eff.reasoning_max_nodes, 20);
+        assert!(eff.reasoning_build_on_ingest);
+        assert_eq!(eff.reasoning_nav_llm.unwrap().model, "nav-model");
     }
 }
