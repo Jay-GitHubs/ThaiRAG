@@ -241,6 +241,10 @@ pub struct ChatPipeline {
     /// numbers, section title) survives to the answer surface.
     metadata_resolver: Option<MetadataResolver>,
     doc_catalog_resolver: Option<DocCatalogResolver>,
+    /// Reasoning-based ("PageIndex") retriever. When set, the `Vectorless`
+    /// retrieval mode navigates document trees with an LLM instead of BM25;
+    /// absent (or yielding nothing) it falls back to lexical search.
+    reasoning_retriever: Option<Arc<crate::reasoning_retriever::ReasoningRetriever>>,
 }
 
 impl ChatPipeline {
@@ -317,6 +321,7 @@ impl ChatPipeline {
             guardrail_metrics: None,
             metadata_resolver: None,
             doc_catalog_resolver: None,
+            reasoning_retriever: None,
         }
     }
 
@@ -349,6 +354,17 @@ impl ChatPipeline {
     /// the stage is skipped and retrieval is unscoped.
     pub fn with_doc_catalog_resolver(mut self, resolver: DocCatalogResolver) -> Self {
         self.doc_catalog_resolver = Some(resolver);
+        self
+    }
+
+    /// Builder: install the reasoning-based ("PageIndex") retriever used by the
+    /// `Vectorless` retrieval mode. Without it, `Vectorless` falls back to
+    /// lexical (BM25) search.
+    pub fn with_reasoning_retriever(
+        mut self,
+        retriever: Arc<crate::reasoning_retriever::ReasoningRetriever>,
+    ) -> Self {
+        self.reasoning_retriever = Some(retriever);
         self
     }
 
@@ -2691,16 +2707,34 @@ impl ChatPipeline {
     }
 
     /// Retrieve candidates honoring the org's configured retrieval mode:
-    /// `Vectorless` → lexical-only (BM25, no embedding/vectors); otherwise the
-    /// hybrid vector+BM25 path. Resolved from `self.config`, which the scoped
-    /// pipeline rebuilds per effective (org-scoped) config, so flipping the
-    /// admin setting takes effect without code changes.
+    /// `Vectorless` → reasoning-based navigation over per-document PageIndex
+    /// trees (an LLM picks the relevant sections), falling back to lexical
+    /// (BM25) search when no tree is in scope or navigation yields nothing;
+    /// otherwise the hybrid vector+BM25 path. Resolved from `self.config`, which
+    /// the scoped pipeline rebuilds per effective (org-scoped) config, so
+    /// flipping the admin setting takes effect without code changes.
+    ///
+    /// The navigation LLM call is core retrieval (the analogue of the
+    /// query-embedding call in vector mode), so it is not subject to the
+    /// optional-agent LLM budget — gating it could skip retrieval entirely.
     async fn retrieve(
         &self,
         query: &SearchQuery,
     ) -> Result<Vec<thairag_core::types::SearchResult>> {
         match self.config.retrieval_mode {
             thairag_config::schema::RetrievalMode::Vectorless => {
+                if let Some(ref rr) = self.reasoning_retriever {
+                    match rr.retrieve(query).await {
+                        Ok(results) if !results.is_empty() => return Ok(results),
+                        Ok(_) => {
+                            debug!("reasoning retrieval empty; falling back to lexical");
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "reasoning retrieval failed; falling back to lexical");
+                        }
+                    }
+                    crate::degradation::record_fallback("reasoning_retriever");
+                }
                 self.search_engine.search_lexical(query).await
             }
             _ => self.search_engine.search(query).await,

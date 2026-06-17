@@ -863,6 +863,41 @@ impl ProviderBundle {
                         as thairag_agent::MetadataResolver
                 });
 
+            // Reasoning-based ("PageIndex") retriever for the Vectorless mode: an
+            // LLM navigates per-document trees to the relevant sections. Store-
+            // agnostic via the same resolver pattern as doc-selection — a tree
+            // resolver (workspaces → DocTrees) and a chunk resolver (doc → chunks).
+            let reasoning_retriever: Option<Arc<thairag_agent::ReasoningRetriever>> =
+                km_store.as_ref().map(|store| {
+                    let tree_store = Arc::clone(store);
+                    let tree_resolver: thairag_agent::TreeResolver =
+                        Arc::new(move |ws_ids: &[thairag_core::types::WorkspaceId]| {
+                            tree_store
+                                .list_document_trees(ws_ids)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter_map(|(_, json)| {
+                                    serde_json::from_str::<thairag_core::models::DocTree>(&json)
+                                        .ok()
+                                })
+                                .collect()
+                        });
+                    let chunk_store = Arc::clone(store);
+                    let chunk_resolver: thairag_agent::ChunkResolver =
+                        Arc::new(move |doc_id: thairag_core::types::DocId| {
+                            chunk_store.load_chunks_by_doc(doc_id)
+                        });
+                    let nav_llm = resolve_chat_agent_llm("reasoning_nav", &chat.reasoning_nav_llm);
+                    Arc::new(thairag_agent::ReasoningRetriever::new(
+                        nav_llm,
+                        tree_resolver,
+                        chunk_resolver,
+                        chat.reasoning_max_docs,
+                        chat.reasoning_max_nodes,
+                        chat.agent_max_tokens,
+                    ))
+                });
+
             // ── Guardrails (PR1): build only when respective master switch is on ──
             let input_guardrails = if chat.input_guardrails_enabled {
                 Some(Arc::new(thairag_agent::guardrails::InputGuardrails::new(
@@ -926,6 +961,10 @@ impl ProviderBundle {
             };
             let pipeline = match doc_catalog_resolver {
                 Some(resolver) => pipeline.with_doc_catalog_resolver(resolver),
+                None => pipeline,
+            };
+            let pipeline = match reasoning_retriever {
+                Some(rr) => pipeline.with_reasoning_retriever(rr),
                 None => pipeline,
             };
             Some(Arc::new(pipeline))
