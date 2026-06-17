@@ -729,6 +729,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
   const [chatVisionLlm, setChatVisionLlm] = useState<LlmFormState>({ ...defaultLlmForm });
   const [qualityMaxRetries, setQualityMaxRetries] = useState(1);
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
+  const [retrievalMode, setRetrievalMode] = useState<'vector' | 'vectorless'>('vector');
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
   const [agentMaxTokens, setAgentMaxTokens] = useState(2048);
   const [requestTimeoutSecs, setRequestTimeoutSecs] = useState(120);
@@ -837,6 +838,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
       setEnabled(data.enabled);
       setQualityMaxRetries(data.quality_guard_max_retries);
       setQualityThreshold(data.quality_guard_threshold);
+      setRetrievalMode(data.retrieval_mode ?? 'vector');
       setMaxContextTokens(data.max_context_tokens);
       setAgentMaxTokens(data.agent_max_tokens);
       setRequestTimeoutSecs(data.request_timeout_secs);
@@ -1005,6 +1007,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         language_adapter_enabled: agentToggles.language_adapter,
         quality_guard_max_retries: qualityMaxRetries,
         quality_guard_threshold: qualityThreshold,
+        retrieval_mode: retrievalMode,
         max_context_tokens: maxContextTokens,
         agent_max_tokens: agentMaxTokens,
         request_timeout_secs: requestTimeoutSecs,
@@ -1279,6 +1282,20 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
 
           {/* Pipeline Parameters */}
           <Space size="large" wrap>
+            <Tooltip title="Retrieval strategy. Vector: hybrid dense-vector + BM25 (default). Vectorless: lexical BM25 only — no query-time embedding. Set per scope (e.g. per org).">
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">Retrieval Mode <QuestionCircleOutlined /></Text>
+                <Select
+                  value={retrievalMode}
+                  onChange={(v) => setRetrievalMode(v)}
+                  style={{ width: 160 }}
+                  options={[
+                    { value: 'vector', label: 'Vector (hybrid)' },
+                    { value: 'vectorless', label: 'Vectorless (BM25)' },
+                  ]}
+                />
+              </Space>
+            </Tooltip>
             <Tooltip title="Maximum estimated tokens for the context window passed to the response generator. Larger values give more context but cost more.">
               <Space direction="vertical" size={2}>
                 <Text type="secondary">Max Context Tokens <QuestionCircleOutlined /></Text>

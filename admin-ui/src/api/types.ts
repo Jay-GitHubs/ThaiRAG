@@ -579,6 +579,7 @@ export interface ChatPipelineConfigResponse {
   quality_guard_llm?: LlmProviderInfo;
   quality_guard_max_retries: number;
   quality_guard_threshold: number;
+  retrieval_mode: 'vector' | 'vectorless';
   language_adapter_enabled: boolean;
   language_adapter_llm?: LlmProviderInfo;
   orchestrator_enabled: boolean;
@@ -717,6 +718,7 @@ export interface UpdateChatPipelineRequest {
   remove_quality_guard_llm?: boolean;
   quality_guard_max_retries?: number;
   quality_guard_threshold?: number;
+  retrieval_mode?: 'vector' | 'vectorless';
   language_adapter_enabled?: boolean;
   language_adapter_llm?: LlmConfigUpdate;
   remove_language_adapter_llm?: boolean;
