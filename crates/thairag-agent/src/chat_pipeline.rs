@@ -2690,6 +2690,23 @@ impl ChatPipeline {
         docs
     }
 
+    /// Retrieve candidates honoring the org's configured retrieval mode:
+    /// `Vectorless` → lexical-only (BM25, no embedding/vectors); otherwise the
+    /// hybrid vector+BM25 path. Resolved from `self.config`, which the scoped
+    /// pipeline rebuilds per effective (org-scoped) config, so flipping the
+    /// admin setting takes effect without code changes.
+    async fn retrieve(
+        &self,
+        query: &SearchQuery,
+    ) -> Result<Vec<thairag_core::types::SearchResult>> {
+        match self.config.retrieval_mode {
+            thairag_config::schema::RetrievalMode::Vectorless => {
+                self.search_engine.search_lexical(query).await
+            }
+            _ => self.search_engine.search(query).await,
+        }
+    }
+
     async fn run_search(
         &self,
         rewritten: &RewrittenQueries,
@@ -2719,7 +2736,7 @@ impl ChatPipeline {
             query_images: Vec::new(),
             doc_ids: doc_filter.to_vec(),
         };
-        let mut results = self.search_engine.search(&primary_query).await?;
+        let mut results = self.retrieve(&primary_query).await?;
         all_results.append(&mut results);
         // With a doc-scoped full retrieval the primary query already returns
         // the whole document; the sub/HyDE/step-back expansions only add noise
@@ -2738,7 +2755,7 @@ impl ChatPipeline {
                 query_images: Vec::new(),
                 doc_ids: doc_filter.to_vec(),
             };
-            if let Ok(mut r) = self.search_engine.search(&sub_query).await {
+            if let Ok(mut r) = self.retrieve(&sub_query).await {
                 all_results.append(&mut r);
             }
         }
@@ -2752,7 +2769,7 @@ impl ChatPipeline {
                 query_images: Vec::new(),
                 doc_ids: doc_filter.to_vec(),
             };
-            if let Ok(mut r) = self.search_engine.search(&hyde_query).await {
+            if let Ok(mut r) = self.retrieve(&hyde_query).await {
                 all_results.append(&mut r);
             }
         }
@@ -2770,7 +2787,7 @@ impl ChatPipeline {
                 query_images: Vec::new(),
                 doc_ids: doc_filter.to_vec(),
             };
-            if let Ok(mut r) = self.search_engine.search(&step_back_query).await {
+            if let Ok(mut r) = self.retrieve(&step_back_query).await {
                 debug!(results = r.len(), "Step-back retrieval merged");
                 all_results.append(&mut r);
             }

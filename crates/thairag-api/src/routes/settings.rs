@@ -2757,6 +2757,9 @@ pub struct ChatPipelineConfigResponse {
     // Agentic doc-selection
     pub doc_selection_enabled: bool,
     pub doc_selection_max_catalog: usize,
+    // Retrieval mode (per-org: Vector | Vectorless)
+    #[serde(default)]
+    pub retrieval_mode: thairag_config::schema::RetrievalMode,
     // Self-RAG
     pub self_rag_enabled: bool,
     pub self_rag_threshold: f32,
@@ -2896,6 +2899,8 @@ pub struct UpdateChatPipelineRequest {
     // Agentic doc-selection
     pub doc_selection_enabled: Option<bool>,
     pub doc_selection_max_catalog: Option<usize>,
+    // Retrieval mode (per-org: Vector | Vectorless)
+    pub retrieval_mode: Option<thairag_config::schema::RetrievalMode>,
     // Self-RAG
     pub self_rag_enabled: Option<bool>,
     pub self_rag_threshold: Option<f32>,
@@ -3160,6 +3165,9 @@ where
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.doc_selection_max_catalog),
         doc_selection_llm: cp.doc_selection_llm.clone(),
+        retrieval_mode: s("chat_pipeline.retrieval_mode")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.retrieval_mode),
         self_rag_enabled: s("chat_pipeline.self_rag_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.self_rag_enabled),
@@ -3421,6 +3429,7 @@ fn build_chat_pipeline_response_from_config(
         adaptive_min_samples: eff.adaptive_min_samples,
         doc_selection_enabled: eff.doc_selection_enabled,
         doc_selection_max_catalog: eff.doc_selection_max_catalog,
+        retrieval_mode: eff.retrieval_mode,
         self_rag_enabled: eff.self_rag_enabled,
         self_rag_threshold: eff.self_rag_threshold,
         self_rag_llm: eff.self_rag_llm.as_ref().map(llm_config_to_info),
@@ -3618,6 +3627,15 @@ pub async fn update_chat_pipeline_config(
         doc_selection_max_catalog,
         "chat_pipeline.doc_selection_max_catalog"
     );
+    // Retrieval mode (per-org: Vector | Vectorless)
+    if let Some(rm) = req.retrieval_mode {
+        state.km_store.set_scoped_setting(
+            "chat_pipeline.retrieval_mode",
+            scope_type,
+            &scope_id,
+            &rm.to_string(),
+        );
+    }
     // Self-RAG
     persist_bool!(self_rag_enabled, "chat_pipeline.self_rag_enabled");
     persist_num!(self_rag_threshold, "chat_pipeline.self_rag_threshold");
