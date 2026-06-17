@@ -1282,16 +1282,16 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
 
           {/* Pipeline Parameters */}
           <Space size="large" wrap>
-            <Tooltip title="Retrieval strategy. Vector: hybrid dense-vector + BM25 (default). Vectorless: lexical BM25 only — no query-time embedding. Set per scope (e.g. per org).">
+            <Tooltip title="Retrieval strategy. Vector: hybrid dense-vector + BM25 (default). Vectorless (Reasoning): an LLM navigates per-document PageIndex trees to the relevant sections — no query-time embedding; needs trees built (ingest toggle or the Build Trees backfill). Falls back to lexical BM25 for any document without a tree. Set per scope (e.g. per org).">
               <Space direction="vertical" size={2}>
                 <Text type="secondary">Retrieval Mode <QuestionCircleOutlined /></Text>
                 <Select
                   value={retrievalMode}
                   onChange={(v) => setRetrievalMode(v)}
-                  style={{ width: 160 }}
+                  style={{ width: 200 }}
                   options={[
                     { value: 'vector', label: 'Vector (hybrid)' },
-                    { value: 'vectorless', label: 'Vectorless (BM25)' },
+                    { value: 'vectorless', label: 'Vectorless (Reasoning)' },
                   ]}
                 />
                 <Text type="secondary" style={{ fontSize: 11, maxWidth: 320 }}>
