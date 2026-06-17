@@ -30,6 +30,8 @@ pub struct MemoryKmStore {
     workspaces: RwLock<HashMap<WorkspaceId, Workspace>>,
     documents: RwLock<HashMap<DocId, Document>>,
     document_blobs: RwLock<HashMap<DocId, BlobData>>,
+    /// Reasoning-based document trees: doc_id -> (workspace_id, tree_json).
+    document_trees: RwLock<HashMap<DocId, (WorkspaceId, String)>>,
     users: RwLock<HashMap<UserId, UserRecord>>,
     user_by_email: RwLock<HashMap<String, UserId>>,
     permissions: RwLock<Vec<UserPermission>>,
@@ -82,6 +84,7 @@ impl MemoryKmStore {
             workspaces: RwLock::new(HashMap::new()),
             documents: RwLock::new(HashMap::new()),
             document_blobs: RwLock::new(HashMap::new()),
+            document_trees: RwLock::new(HashMap::new()),
             users: RwLock::new(HashMap::new()),
             user_by_email: RwLock::new(HashMap::new()),
             permissions: RwLock::new(Vec::new()),
@@ -344,6 +347,9 @@ impl KmStoreTrait for MemoryKmStore {
             .write()
             .unwrap()
             .retain(|_, s| s.doc_id != Some(id));
+        // Postgres/SQLite cascade tree rows via FK; the in-memory store must
+        // drop them explicitly.
+        self.document_trees.write().unwrap().remove(&id);
         Ok(())
     }
 
@@ -405,6 +411,43 @@ impl KmStoreTrait for MemoryKmStore {
             .get(&doc_id)
             .map(|b| (b.image_count, b.table_count))
             .unwrap_or((0, 0)))
+    }
+
+    fn save_document_tree(
+        &self,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        tree_json: &str,
+        _model_name: Option<&str>,
+    ) -> Result<()> {
+        self.document_trees
+            .write()
+            .unwrap()
+            .insert(doc_id, (workspace_id, tree_json.to_string()));
+        Ok(())
+    }
+
+    fn get_document_tree(&self, doc_id: DocId) -> Result<Option<String>> {
+        Ok(self
+            .document_trees
+            .read()
+            .unwrap()
+            .get(&doc_id)
+            .map(|(_, json)| json.clone()))
+    }
+
+    fn list_document_trees(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<(DocId, String)>> {
+        let trees = self.document_trees.read().unwrap();
+        Ok(trees
+            .iter()
+            .filter(|(_, (ws, _))| workspace_ids.contains(ws))
+            .map(|(doc_id, (_, json))| (*doc_id, json.clone()))
+            .collect())
+    }
+
+    fn delete_document_tree(&self, doc_id: DocId) -> Result<()> {
+        self.document_trees.write().unwrap().remove(&doc_id);
+        Ok(())
     }
 
     fn update_document_version_info(
@@ -3665,5 +3708,73 @@ mod tests {
                 .get_chunk_metadata(&[uuid::Uuid::new_v4().to_string()])
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn document_tree_save_list_delete_and_cascade() {
+        let store = MemoryKmStore::new();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let ws2 = store.insert_workspace(dept.id, "Other".into()).unwrap();
+        let now = Utc::now();
+        let mk = |ws_id: WorkspaceId, title: &str| Document {
+            id: DocId::new(),
+            workspace_id: ws_id,
+            title: title.into(),
+            mime_type: "application/pdf".into(),
+            size_bytes: 1,
+            status: DocStatus::Ready,
+            chunk_count: 0,
+            error_message: None,
+            processing_step: None,
+            processing_provenance: None,
+            processing_timeline: None,
+            version: 1,
+            content_hash: None,
+            source_url: None,
+            refresh_schedule: None,
+            last_refreshed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let d1 = store.insert_document(mk(ws.id, "d1")).unwrap().id;
+        let d2 = store.insert_document(mk(ws.id, "d2")).unwrap().id;
+        let d3 = store.insert_document(mk(ws2.id, "d3")).unwrap().id;
+
+        assert!(store.get_document_tree(d1).unwrap().is_none());
+        store
+            .save_document_tree(d1, ws.id, r#"{"a":1}"#, None)
+            .unwrap();
+        store
+            .save_document_tree(d2, ws.id, r#"{"b":2}"#, None)
+            .unwrap();
+        store
+            .save_document_tree(d3, ws2.id, r#"{"c":3}"#, None)
+            .unwrap();
+
+        // Upsert overwrites in place.
+        store
+            .save_document_tree(d1, ws.id, r#"{"a":9}"#, None)
+            .unwrap();
+        assert_eq!(
+            store.get_document_tree(d1).unwrap().as_deref(),
+            Some(r#"{"a":9}"#)
+        );
+
+        assert_eq!(store.list_document_trees(&[ws.id]).unwrap().len(), 2);
+        assert_eq!(
+            store.list_document_trees(&[ws.id, ws2.id]).unwrap().len(),
+            3
+        );
+        assert!(store.list_document_trees(&[]).unwrap().is_empty());
+
+        store.delete_document_tree(d1).unwrap();
+        store.delete_document_tree(d1).unwrap(); // idempotent
+        assert!(store.get_document_tree(d1).unwrap().is_none());
+
+        // delete_document drops the tree too.
+        store.delete_document(d2).unwrap();
+        assert!(store.get_document_tree(d2).unwrap().is_none());
     }
 }

@@ -98,6 +98,19 @@ CREATE TABLE IF NOT EXISTS document_blobs (
     created_at       TEXT NOT NULL
 );
 
+-- Reasoning-based ("PageIndex") table-of-contents tree, one per document.
+-- Built once at ingest (gated) or via explicit backfill; tree_json holds a
+-- thairag_core::models::DocTree. Kept out of the documents row so the hot
+-- listing SELECT stays lean. Cascade-deletes with the doc.
+CREATE TABLE IF NOT EXISTS document_trees (
+    doc_id        TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    workspace_id  TEXT NOT NULL,
+    tree_json     TEXT NOT NULL,
+    model_name    TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_document_trees_ws ON document_trees(workspace_id);
+
 -- Extracted image storage for smart-PDF / DOCX / XLSX / HTML / direct image uploads.
 -- Each row holds one image (page render, embedded image, or upload), referenced
 -- from document_chunks via metadata->image_blob_id. Cascade-deletes with the doc.

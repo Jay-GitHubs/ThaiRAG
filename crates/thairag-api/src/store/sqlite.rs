@@ -886,6 +886,87 @@ impl KmStoreTrait for SqliteKmStore {
         .map_err(|_| ThaiRagError::NotFound(format!("No blob for document {doc_id}")))
     }
 
+    fn save_document_tree(
+        &self,
+        doc_id: DocId,
+        workspace_id: WorkspaceId,
+        tree_json: &str,
+        model_name: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&Utc::now());
+        conn.execute(
+            "INSERT INTO document_trees (doc_id, workspace_id, tree_json, model_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(doc_id) DO UPDATE SET workspace_id = ?2, tree_json = ?3, model_name = ?4, created_at = ?5",
+            params![
+                doc_id.0.to_string(),
+                workspace_id.0.to_string(),
+                tree_json,
+                model_name,
+                now,
+            ],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite save document tree: {e}")))?;
+        Ok(())
+    }
+
+    fn get_document_tree(&self, doc_id: DocId) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT tree_json FROM document_trees WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite get document tree: {e}")))
+    }
+
+    fn list_document_trees(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<(DocId, String)>> {
+        if workspace_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = (1..=workspace_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT doc_id, tree_json FROM document_trees WHERE workspace_id IN ({placeholders})"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite prepare list trees: {e}")))?;
+        let bind: Vec<String> = workspace_ids.iter().map(|w| w.0.to_string()).collect();
+        let params = rusqlite::params_from_iter(bind.iter());
+        let rows = stmt
+            .query_map(params, |row| {
+                let id: String = row.get(0)?;
+                let json: String = row.get(1)?;
+                Ok((id, json))
+            })
+            .map_err(|e| ThaiRagError::Internal(format!("SQLite query list trees: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id, json) =
+                r.map_err(|e| ThaiRagError::Internal(format!("SQLite row list trees: {e}")))?;
+            if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+                out.push((DocId(uuid), json));
+            }
+        }
+        Ok(out)
+    }
+
+    fn delete_document_tree(&self, doc_id: DocId) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM document_trees WHERE doc_id = ?1",
+            params![doc_id.0.to_string()],
+        )
+        .map_err(|e| ThaiRagError::Internal(format!("SQLite delete document tree: {e}")))?;
+        Ok(())
+    }
+
     fn update_document_version_info(
         &self,
         id: DocId,
@@ -5300,6 +5381,93 @@ mod tests {
         store.delete_image_blobs_for_doc(doc.id).unwrap();
         assert!(store.list_image_blobs_for_doc(doc.id).unwrap().is_empty());
         assert!(store.get_image_blob(img1.image_id).unwrap().is_none());
+    }
+
+    fn ready_doc(store: &SqliteKmStore, ws: WorkspaceId, title: &str) -> DocId {
+        let now = Utc::now();
+        store
+            .insert_document(Document {
+                id: DocId::new(),
+                workspace_id: ws,
+                title: title.into(),
+                mime_type: "application/pdf".into(),
+                size_bytes: 1,
+                status: DocStatus::Ready,
+                chunk_count: 0,
+                error_message: None,
+                processing_step: None,
+                processing_provenance: None,
+                processing_timeline: None,
+                version: 1,
+                content_hash: None,
+                source_url: None,
+                refresh_schedule: None,
+                last_refreshed_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn document_tree_save_get_list_delete_roundtrip() {
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let ws2 = store.insert_workspace(dept.id, "Other".into()).unwrap();
+        let d1 = ready_doc(&store, ws.id, "d1");
+        let d2 = ready_doc(&store, ws.id, "d2");
+        let d3 = ready_doc(&store, ws2.id, "d3");
+
+        // No tree yet.
+        assert!(store.get_document_tree(d1).unwrap().is_none());
+
+        store
+            .save_document_tree(d1, ws.id, r#"{"a":1}"#, Some("qwen3:14b"))
+            .unwrap();
+        store
+            .save_document_tree(d2, ws.id, r#"{"b":2}"#, None)
+            .unwrap();
+        store
+            .save_document_tree(d3, ws2.id, r#"{"c":3}"#, None)
+            .unwrap();
+
+        assert_eq!(
+            store.get_document_tree(d1).unwrap().as_deref(),
+            Some(r#"{"a":1}"#)
+        );
+
+        // Upsert overwrites.
+        store
+            .save_document_tree(d1, ws.id, r#"{"a":99}"#, Some("qwen3:14b"))
+            .unwrap();
+        assert_eq!(
+            store.get_document_tree(d1).unwrap().as_deref(),
+            Some(r#"{"a":99}"#)
+        );
+
+        // list scopes by workspace.
+        let mut in_ws = store.list_document_trees(&[ws.id]).unwrap();
+        in_ws.sort_by_key(|(id, _)| *id);
+        assert_eq!(in_ws.len(), 2);
+        assert!(in_ws.iter().all(|(id, _)| *id == d1 || *id == d2));
+        assert_eq!(store.list_document_trees(&[ws2.id]).unwrap().len(), 1);
+        assert_eq!(
+            store.list_document_trees(&[ws.id, ws2.id]).unwrap().len(),
+            3
+        );
+        assert!(store.list_document_trees(&[]).unwrap().is_empty());
+
+        // Explicit delete is idempotent.
+        store.delete_document_tree(d1).unwrap();
+        store.delete_document_tree(d1).unwrap();
+        assert!(store.get_document_tree(d1).unwrap().is_none());
+
+        // Deleting the document cascades its tree away.
+        store.delete_document(d2).unwrap();
+        assert!(store.get_document_tree(d2).unwrap().is_none());
     }
 
     #[test]
