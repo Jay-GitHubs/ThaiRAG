@@ -1177,9 +1177,12 @@ impl KmStoreTrait for PostgresKmStore {
 
     fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk> {
         use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
-        let rows: Vec<(Uuid, Uuid, Uuid, String, i32)> = block_on(
+        // Include `metadata` (page_numbers, section_title, …): reasoning-based
+        // retrieval maps tree nodes back to chunks by page range / section, so a
+        // bare-content load would leave every chunk unmappable.
+        let rows: Vec<(Uuid, Uuid, Uuid, String, i32, Option<String>)> = block_on(
             sqlx::query_as(
-                "SELECT chunk_id, doc_id, workspace_id, content, chunk_index
+                "SELECT chunk_id, doc_id, workspace_id, content, chunk_index, metadata
                  FROM document_chunks WHERE doc_id = $1 ORDER BY chunk_index",
             )
             .bind(doc_id.0)
@@ -1189,14 +1192,14 @@ impl KmStoreTrait for PostgresKmStore {
 
         rows.into_iter()
             .map(
-                |(chunk_id, doc_id, workspace_id, content, chunk_index)| DocumentChunk {
+                |(chunk_id, doc_id, workspace_id, content, chunk_index, metadata)| DocumentChunk {
                     chunk_id: ChunkId(chunk_id),
                     doc_id: DocId(doc_id),
                     workspace_id: WorkspaceId(workspace_id),
                     content,
                     chunk_index: chunk_index as usize,
                     embedding: None,
-                    metadata: None,
+                    metadata: metadata.and_then(|s| serde_json::from_str(&s).ok()),
                 },
             )
             .collect()
