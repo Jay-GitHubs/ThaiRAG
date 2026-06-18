@@ -22,6 +22,7 @@ const kindLabels: Record<JobKind, string> = {
   document_ingestion: 'Ingestion',
   document_reprocess: 'Reprocess',
   batch_reprocess: 'Batch Reprocess',
+  batch_tree_build: 'Build PageIndex Trees',
 };
 
 interface Props {

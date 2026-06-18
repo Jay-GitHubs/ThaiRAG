@@ -1536,69 +1536,127 @@ fn reasoning_tree_provider(
 /// re-chunks, re-embeds, or touches Qdrant, so an existing corpus (and any eval
 /// set built against it) stays bit-identical. Re-running overwrites each tree
 /// (the build is non-deterministic; see [`reasoning_tree_provider`]).
+///
+/// Runs in the **background**: each tree build is an LLM call, so a multi-doc
+/// corpus easily exceeds the server request timeout. The handler enqueues a
+/// `BatchTreeBuild` job, spawns the build loop, and returns `202 Accepted` with
+/// the `job_id` immediately. Poll `GET /workspaces/{ws}/jobs/{job_id}` for
+/// progress (`items_processed`/`items_total`) and terminal status.
 pub async fn build_workspace_trees(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(workspace_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let workspace_id = WorkspaceId(workspace_id);
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_write, "build document trees")?;
 
-    let p = state.providers();
-    let llm = reasoning_tree_provider(&p);
-    let max_tokens = p.chat_pipeline_config.agent_max_tokens;
-    let docs = state.km_store.list_documents_in_workspace(workspace_id);
-    let mut built = 0usize;
-    let mut skipped = 0usize;
-    let mut failed = 0usize;
-    for d in docs.into_iter().filter(|d| d.status == DocStatus::Ready) {
-        let text = state
-            .km_store
-            .get_document_content(d.id)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        if text.trim().is_empty() {
-            skipped += 1;
-            continue;
-        }
-        match thairag_document::tree_builder::build_tree(
-            llm.as_ref(),
-            d.id,
-            &d.title,
-            &text,
-            max_tokens,
-        )
-        .await
-        {
-            Ok(tree) => match serde_json::to_string(&tree) {
-                Ok(json) => {
-                    let _ = state.km_store.save_document_tree(
-                        d.id,
-                        workspace_id,
-                        &json,
-                        tree.model_name.as_deref(),
-                    );
-                    built += 1;
-                }
+    let ready: Vec<_> = state
+        .km_store
+        .list_documents_in_workspace(workspace_id)
+        .into_iter()
+        .filter(|d| d.status == DocStatus::Ready)
+        .collect();
+    let total = ready.len();
+    if total == 0 {
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "job_id": null,
+                "ready_docs": 0,
+                "message": "No Ready documents to build trees for",
+            })),
+        ));
+    }
+
+    let job = Job {
+        id: JobId(Uuid::new_v4()),
+        kind: JobKind::BatchTreeBuild,
+        status: JobStatus::Queued,
+        workspace_id,
+        doc_id: None,
+        description: format!("Build PageIndex trees for {total} documents"),
+        created_at: now_ts(),
+        started_at: None,
+        completed_at: None,
+        error: None,
+        items_processed: 0,
+        items_total: Some(total),
+    };
+    let job_id = state.job_queue.enqueue(job).await;
+
+    let s = state.clone();
+    let jq = state.job_queue.clone();
+    let bg_job = job_id;
+    tokio::spawn(async move {
+        jq.mark_running(&bg_job).await;
+        // Build the deterministic (temp-0) tree LLM once for the whole batch.
+        let p = s.providers();
+        let llm = reasoning_tree_provider(&p);
+        let max_tokens = p.chat_pipeline_config.agent_max_tokens;
+        let mut built = 0usize;
+        let mut skipped = 0usize;
+        let mut failed = 0usize;
+        for d in ready {
+            // Progress counts every document considered (built, skipped, or
+            // failed), so items_processed reaches items_total when done.
+            let text = s
+                .km_store
+                .get_document_content(d.id)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if text.trim().is_empty() {
+                skipped += 1;
+                jq.increment_progress(&bg_job).await;
+                continue;
+            }
+            match thairag_document::tree_builder::build_tree(
+                llm.as_ref(),
+                d.id,
+                &d.title,
+                &text,
+                max_tokens,
+            )
+            .await
+            {
+                Ok(tree) => match serde_json::to_string(&tree) {
+                    Ok(json) => {
+                        let _ = s.km_store.save_document_tree(
+                            d.id,
+                            workspace_id,
+                            &json,
+                            tree.model_name.as_deref(),
+                        );
+                        built += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(doc_id = %d.id, error = %e, "tree serialize failed");
+                        failed += 1;
+                    }
+                },
                 Err(e) => {
-                    tracing::warn!(doc_id = %d.id, error = %e, "tree serialize failed");
+                    tracing::warn!(doc_id = %d.id, error = %e, "tree build failed");
                     failed += 1;
                 }
-            },
-            Err(e) => {
-                tracing::warn!(doc_id = %d.id, error = %e, "tree build failed");
-                failed += 1;
             }
+            jq.increment_progress(&bg_job).await;
         }
-    }
-    tracing::info!(%workspace_id, built, skipped, failed, "Workspace tree build (no re-OCR) complete");
-    Ok(Json(serde_json::json!({
-        "trees_built": built,
-        "docs_skipped": skipped,
-        "docs_failed": failed,
-    })))
+        jq.mark_completed(&bg_job, built).await;
+        tracing::info!(
+            %workspace_id, built, skipped, failed,
+            "Workspace tree build (background, no re-OCR) complete"
+        );
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "job_id": job_id.0,
+            "ready_docs": total,
+            "message": format!("Building PageIndex trees for {total} documents"),
+        })),
+    ))
 }
 
 pub async fn reprocess_all_documents(

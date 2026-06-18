@@ -41,13 +41,41 @@ def set_ws_retrieval_mode(s, ws: str, mode: str) -> None:
     time.sleep(2)
 
 
-def build_trees(s, ws: str) -> dict:
-    """Backfill PageIndex trees for every Ready doc in the workspace."""
+def build_trees(s, ws: str, poll_timeout: int = 3600) -> dict:
+    """Backfill PageIndex trees for every Ready doc in the workspace.
+
+    The endpoint runs in the background (each tree is an LLM call), returning a
+    job_id immediately; we poll GET .../jobs/{id} until it reaches a terminal
+    status so the sweep doesn't start before the trees exist.
+    """
     r = s.post(
-        f"{ce.API}/api/km/workspaces/{ws}/documents/build-trees", json={}, timeout=3600
+        f"{ce.API}/api/km/workspaces/{ws}/documents/build-trees", json={}, timeout=60
     )
     r.raise_for_status()
-    return r.json()
+    started = r.json()
+    job_id = started.get("job_id")
+    if not job_id:
+        return started  # nothing to build (no Ready docs)
+
+    deadline = time.time() + poll_timeout
+    while time.time() < deadline:
+        time.sleep(5)
+        jr = s.get(f"{ce.API}/api/km/workspaces/{ws}/jobs/{job_id}", timeout=30)
+        jr.raise_for_status()
+        job = jr.json()
+        st = job.get("status")
+        print(
+            f"[compare]   trees: {st} {job.get('items_processed', 0)}/{job.get('items_total')}",
+            file=sys.stderr,
+        )
+        if st in ("completed", "failed", "cancelled"):
+            return {
+                "status": st,
+                "items_processed": job.get("items_processed"),
+                "items_total": job.get("items_total"),
+                "error": job.get("error"),
+            }
+    return {"status": "timeout", "job_id": job_id}
 
 
 def sweep(s, ws: str, questions: list, runs: int) -> dict:
