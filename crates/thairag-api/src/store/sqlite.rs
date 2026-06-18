@@ -1223,8 +1223,11 @@ impl KmStoreTrait for SqliteKmStore {
     fn load_chunks_by_doc(&self, doc_id: DocId) -> Vec<thairag_core::types::DocumentChunk> {
         use thairag_core::types::{ChunkId, DocumentChunk, WorkspaceId};
         let conn = self.conn.lock().unwrap();
+        // Include `metadata` (page_numbers, section_title, …): reasoning-based
+        // retrieval maps tree nodes back to chunks by page range / section, so a
+        // bare-content load would leave every chunk unmappable.
         let mut stmt = match conn.prepare(
-            "SELECT chunk_id, doc_id, workspace_id, content, chunk_index
+            "SELECT chunk_id, doc_id, workspace_id, content, chunk_index, metadata
              FROM document_chunks WHERE doc_id = ?1 ORDER BY chunk_index",
         ) {
             Ok(s) => s,
@@ -1236,6 +1239,7 @@ impl KmStoreTrait for SqliteKmStore {
             let ws_id_str: String = row.get(2)?;
             let content: String = row.get(3)?;
             let chunk_index: i32 = row.get(4)?;
+            let metadata: Option<String> = row.get(5)?;
             Ok(DocumentChunk {
                 chunk_id: ChunkId(chunk_id_str.parse().unwrap_or_default()),
                 doc_id: DocId(doc_id_str.parse().unwrap_or_default()),
@@ -1243,7 +1247,7 @@ impl KmStoreTrait for SqliteKmStore {
                 content,
                 chunk_index: chunk_index as usize,
                 embedding: None,
-                metadata: None,
+                metadata: metadata.and_then(|s| serde_json::from_str(&s).ok()),
             })
         });
         match rows {
@@ -5609,6 +5613,42 @@ mod tests {
             4,
             "post-fix behaviour: delete_chunks_by_doc clears old rows"
         );
+    }
+
+    /// load_chunks_by_doc must hydrate ChunkMetadata (page_numbers,
+    /// section_title) from the stored JSON — reasoning-based retrieval maps tree
+    /// nodes to chunks by page/section, and a None metadata silently breaks it.
+    #[test]
+    fn load_chunks_by_doc_hydrates_metadata() {
+        use thairag_core::types::{ChunkId, ChunkMetadata, DocumentChunk};
+
+        let store = mem_store();
+        let org = store.insert_org("Acme".into()).unwrap();
+        let dept = store.insert_dept(org.id, "Eng".into()).unwrap();
+        let ws = store.insert_workspace(dept.id, "Main".into()).unwrap();
+        let doc = ready_doc(&store, ws.id, "d");
+
+        store
+            .save_chunks(&[DocumentChunk {
+                chunk_id: ChunkId::new(),
+                doc_id: doc,
+                workspace_id: ws.id,
+                content: "limit is 10M".into(),
+                chunk_index: 0,
+                embedding: None,
+                metadata: Some(ChunkMetadata {
+                    page_numbers: Some(vec![2, 3]),
+                    section_title: Some("Limits".into()),
+                    ..Default::default()
+                }),
+            }])
+            .unwrap();
+
+        let loaded = store.load_chunks_by_doc(doc);
+        assert_eq!(loaded.len(), 1);
+        let md = loaded[0].metadata.as_ref().expect("metadata hydrated");
+        assert_eq!(md.page_numbers.as_deref(), Some(&[2usize, 3][..]));
+        assert_eq!(md.section_title.as_deref(), Some("Limits"));
     }
 
     #[test]
