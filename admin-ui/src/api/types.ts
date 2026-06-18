@@ -1161,7 +1161,11 @@ export interface ConnectorTemplate {
 
 // ── Jobs ────────────────────────────────────────────────────────────
 export type JobId = string;
-export type JobKind = 'document_ingestion' | 'document_reprocess' | 'batch_reprocess';
+export type JobKind =
+  | 'document_ingestion'
+  | 'document_reprocess'
+  | 'batch_reprocess'
+  | 'batch_tree_build';
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface Job {

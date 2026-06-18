@@ -1025,6 +1025,8 @@ pub enum JobKind {
     DocumentReprocess,
     /// Reprocess all documents in a workspace.
     BatchReprocess,
+    /// Build reasoning-based ("PageIndex") trees for all documents in a workspace.
+    BatchTreeBuild,
     /// Batch upload of multiple documents (CSV or ZIP).
     BatchUpload,
     /// Refresh a document from its source URL on schedule.
@@ -1037,6 +1039,7 @@ impl std::fmt::Display for JobKind {
             Self::DocumentIngestion => write!(f, "document_ingestion"),
             Self::DocumentReprocess => write!(f, "document_reprocess"),
             Self::BatchReprocess => write!(f, "batch_reprocess"),
+            Self::BatchTreeBuild => write!(f, "batch_tree_build"),
             Self::BatchUpload => write!(f, "batch_upload"),
             Self::DocumentRefresh => write!(f, "document_refresh"),
         }
