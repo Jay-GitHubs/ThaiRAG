@@ -15,8 +15,9 @@
 //! caller falls back to lexical retrieval.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
+use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
@@ -73,13 +74,25 @@ impl ReasoningRetriever {
     /// back to lexical retrieval.
     pub async fn retrieve(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         // Candidate trees: those in the query's workspaces, narrowed to the
-        // deterministic doc prefilter (`query.doc_ids`) when present, then capped.
+        // deterministic doc prefilter (`query.doc_ids`) when present.
         let mut trees = (self.tree_resolver)(&query.workspace_ids);
         if !query.doc_ids.is_empty() {
             let keep: HashSet<DocId> = query.doc_ids.iter().copied().collect();
             trees.retain(|t| keep.contains(&t.doc_id));
         }
-        trees.truncate(self.max_docs);
+        // Cap how many doc outlines the navigator sees. When more docs are in
+        // scope than the cap (and no prefilter already narrowed them), pick the
+        // most query-relevant trees rather than an arbitrary first-N — otherwise
+        // the answer's document might never be offered to the navigator at all.
+        if trees.len() > self.max_docs {
+            let before = trees.len();
+            trees = select_relevant_trees(trees, &query.text, self.max_docs);
+            debug!(
+                kept = trees.len(),
+                dropped = before - trees.len(),
+                "reasoning retrieval: ranked in-scope trees by query relevance and capped"
+            );
+        }
         if trees.is_empty() {
             debug!("reasoning retrieval: no trees in scope; caller will fall back");
             return Ok(Vec::new());
@@ -195,6 +208,63 @@ do not pad the list. Output JSON only.\n\n\
 Question: {query}\n\n\
 === DOCUMENT OUTLINES ===\n{outline}"
     )
+}
+
+/// Keep the `max_docs` trees most relevant to the query, ranked by how many of
+/// the query's key terms appear in the tree's outline text (title + every node
+/// title + summary). Deterministic, LLM-free, and stable on ties — so the cap
+/// drops the *least* relevant docs instead of an arbitrary suffix. If the query
+/// has no usable terms (or nothing overlaps), falls back to the first `max_docs`.
+fn select_relevant_trees(trees: Vec<DocTree>, query: &str, max_docs: usize) -> Vec<DocTree> {
+    let terms = key_terms(query);
+    if terms.is_empty() {
+        let mut t = trees;
+        t.truncate(max_docs);
+        return t;
+    }
+    let mut scored: Vec<(usize, DocTree)> = trees
+        .into_iter()
+        .map(|t| {
+            let bag = tree_text(&t).to_lowercase();
+            let score = terms.iter().filter(|term| bag.contains(*term)).count();
+            (score, t)
+        })
+        .collect();
+    // Stable sort by score desc keeps the resolver's original order on ties.
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored.into_iter().take(max_docs).map(|(_, t)| t).collect()
+}
+
+/// Concatenate a tree's searchable text: title + every node's title + summary.
+fn tree_text(tree: &DocTree) -> String {
+    fn walk(n: &DocTreeNode, out: &mut String) {
+        out.push(' ');
+        out.push_str(&n.title);
+        out.push(' ');
+        out.push_str(&n.summary);
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut s = tree.title.clone();
+    walk(&tree.root, &mut s);
+    s
+}
+
+/// Extract distinct query key terms: numbers, Latin words (2+ chars), and Thai
+/// runs (3+ chars — Thai has no word spaces). Mirrors the bench scorer so the
+/// relevance signal is consistent with how accuracy is measured.
+fn key_terms(query: &str) -> Vec<String> {
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\d+|[a-z]{2,}|[\u{0e01}-\u{0e5b}]{3,}").unwrap());
+    let lower = query.to_lowercase();
+    let mut terms: Vec<String> = RE
+        .find_iter(&lower)
+        .map(|m| m.as_str().to_string())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
 }
 
 /// Render the candidate trees as a compact outline keyed by short doc ids
@@ -587,5 +657,65 @@ mod tests {
         );
         let out = rr.retrieve(&query(ws, vec![])).await.unwrap();
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn select_relevant_trees_surfaces_match_outside_first_n() {
+        // The doc whose tree mentions the query terms is 3rd of 4; with a cap of
+        // 2 it must still be offered (and rank first) — not arbitrarily dropped.
+        let mk = |title: &str, kid_title: &str, kid_summary: &str| -> DocTree {
+            tree(
+                DocId::new(),
+                title,
+                vec![DocTreeNode {
+                    node_id: "n0.0".into(),
+                    title: kid_title.into(),
+                    summary: kid_summary.into(),
+                    page_start: Some(1),
+                    page_end: Some(1),
+                    children: vec![],
+                }],
+            )
+        };
+        let t0 = mk("Loan A", "Terms", "general terms");
+        let t1 = mk("Loan B", "Terms", "general terms");
+        let t2 = mk(
+            "Loan C",
+            "Collateral",
+            "requires fixed deposit as collateral",
+        );
+        let t3 = mk("Loan D", "Terms", "general terms");
+        let want = t2.doc_id;
+
+        let picked = select_relevant_trees(vec![t0, t1, t2, t3], "what collateral is required?", 2);
+        assert_eq!(picked.len(), 2);
+        assert_eq!(
+            picked[0].doc_id, want,
+            "most query-relevant tree ranks first"
+        );
+        assert!(
+            picked.iter().any(|t| t.doc_id == want),
+            "the matching doc must be offered despite the cap"
+        );
+    }
+
+    #[test]
+    fn select_relevant_trees_falls_back_to_first_n_without_overlap() {
+        let t0 = tree(
+            DocId::new(),
+            "A",
+            vec![node("n0.0", "x", Some(1), Some(1), vec![])],
+        );
+        let first = t0.doc_id;
+        let t1 = tree(
+            DocId::new(),
+            "B",
+            vec![node("n0.0", "y", Some(1), Some(1), vec![])],
+        );
+        // Query terms ("zzzz") appear in neither tree → score 0 for all → keep
+        // the first N in original order.
+        let picked = select_relevant_trees(vec![t0, t1], "zzzz", 1);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].doc_id, first);
     }
 }
