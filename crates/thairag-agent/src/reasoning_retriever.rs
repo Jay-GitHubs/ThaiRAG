@@ -173,7 +173,10 @@ impl ReasoningRetriever {
                     .or_insert_with(|| (self.content_resolver)(doc_id))
                     .as_deref()
                     .and_then(|text| slice_section(text, s, e))
-                    .map(|content| (content, s, e))
+                    // Linearize HTML tables into a clean rectangular grid so the
+                    // answer model can read cell↔header alignment (the dominant
+                    // cause of table-QA failure — see `table_linearize`).
+                    .map(|content| (crate::table_linearize::linearize_tables(&content), s, e))
             });
             if let Some((content, s, e)) = section {
                 let score = 1.0 / (1.0 + results.len() as f32);
@@ -880,9 +883,11 @@ mod tests {
         );
         let out = rr.retrieve(&query(ws, vec![])).await.unwrap();
         assert_eq!(out.len(), 1);
-        // Full intact table, including the cell the chunk fragment dropped (10.0).
-        assert!(out[0].chunk.content.contains("<table>"));
+        // Full table, linearized (no raw <table>), incl. the cell the chunk
+        // fragment dropped (10.0).
         assert!(out[0].chunk.content.contains("10.0"));
+        assert!(out[0].chunk.content.contains("3.0"));
+        assert!(!out[0].chunk.content.contains("<table>")); // linearized
         assert!(!out[0].chunk.content.contains("fragment"));
         assert!(!out[0].chunk.content.contains("footnotes")); // page 2 excluded
         // Citation metadata preserved.
