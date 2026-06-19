@@ -3,16 +3,22 @@
 //! Instead of embedding the query and ranking by vector/lexical similarity, this
 //! retriever hands an LLM the *table-of-contents trees* of the in-scope documents
 //! (section titles + one-line summaries, never the full text) and asks it to
-//! **navigate** to the sections that answer the question. The selected nodes are
-//! mapped back to their chunks (by page range, falling back to section title) and
-//! returned as ordinary [`SearchResult`]s, so the rest of the pipeline — answer
-//! generation, citations — is unchanged.
+//! **navigate** to the sections that answer the question. The selected nodes'
+//! **full section text** — sliced intact from the document's converted text by
+//! page range, never re-chunked — is returned as ordinary [`SearchResult`]s, so
+//! the rest of the pipeline (answer generation, citations) is unchanged.
 //!
-//! It is store-agnostic: the trees and chunks arrive via injected closures
-//! ([`TreeResolver`], [`ChunkResolver`]), mirroring the pipeline's other
-//! resolvers. When it can't produce anything (no trees in scope, navigation
-//! yields nothing, or no node maps to a chunk) it returns an empty vec and the
-//! caller falls back to lexical retrieval.
+//! Feeding the *whole selected section* (not chunks) is the core of the
+//! PageIndex approach: a table or cross-referenced passage reaches the answer
+//! model intact, instead of being shredded by fixed-size chunking — the very
+//! thing vectorless RAG exists to avoid. Re-chunked content is only a fallback
+//! for documents whose converted text has no sliceable page structure.
+//!
+//! It is store-agnostic: trees, full text, and chunks arrive via injected
+//! closures ([`TreeResolver`], [`ContentResolver`], [`ChunkResolver`]). When it
+//! can't produce anything (no trees in scope, navigation yields nothing, or no
+//! node maps to content) it returns an empty vec and the caller falls back to
+//! lexical retrieval.
 
 use std::collections::HashSet;
 use std::sync::{Arc, LazyLock};
@@ -30,17 +36,21 @@ use thairag_core::types::{
 
 /// Resolves the document trees available in a set of workspaces.
 pub type TreeResolver = Arc<dyn Fn(&[WorkspaceId]) -> Vec<DocTree> + Send + Sync>;
-/// Resolves a document's chunks (in `chunk_index` order).
+/// Resolves a document's converted full text (with `## Page N` markers).
+pub type ContentResolver = Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>;
+/// Resolves a document's chunks (in `chunk_index` order). Fallback for docs
+/// whose converted text can't be sliced into the selected section.
 pub type ChunkResolver = Arc<dyn Fn(DocId) -> Vec<DocumentChunk> + Send + Sync>;
 
-/// Hard cap on chunks returned, so a broad selection can't dump an entire
-/// corpus into context (the curator trims further by token budget downstream).
+/// Hard cap on sections/chunks returned, so a broad selection can't dump an
+/// entire corpus into context (the curator trims further by token budget).
 const MAX_RESULT_CHUNKS: usize = 60;
 
 /// LLM-navigated retriever over per-document PageIndex trees.
 pub struct ReasoningRetriever {
     nav_llm: Arc<dyn LlmProvider>,
     tree_resolver: TreeResolver,
+    content_resolver: ContentResolver,
     chunk_resolver: ChunkResolver,
     /// Max in-scope docs whose trees are offered to the navigator.
     max_docs: usize,
@@ -54,6 +64,7 @@ impl ReasoningRetriever {
     pub fn new(
         nav_llm: Arc<dyn LlmProvider>,
         tree_resolver: TreeResolver,
+        content_resolver: ContentResolver,
         chunk_resolver: ChunkResolver,
         max_docs: usize,
         max_nodes: usize,
@@ -62,6 +73,7 @@ impl ReasoningRetriever {
         Self {
             nav_llm,
             tree_resolver,
+            content_resolver,
             chunk_resolver,
             max_docs: max_docs.max(1),
             max_nodes: max_nodes.max(1),
@@ -127,9 +139,15 @@ impl ReasoningRetriever {
             return Ok(Vec::new());
         }
 
-        // Map each selected "d{i}:{node_id}" key back to its node, then to chunks.
+        // Map each selected "d{i}:{node_id}" key back to its node, then to the
+        // node's FULL section text (sliced intact from the document's converted
+        // text by page range). Re-chunked content is only a fallback for docs
+        // whose converted text has no `## Page N` structure to slice.
         let mut results: Vec<SearchResult> = Vec::new();
+        let mut seen_sections: HashSet<(DocId, usize, usize)> = HashSet::new();
         let mut seen_chunks: HashSet<String> = HashSet::new();
+        let mut content_cache: std::collections::HashMap<DocId, Option<String>> =
+            std::collections::HashMap::new();
         let mut chunk_cache: std::collections::HashMap<DocId, Vec<DocumentChunk>> =
             std::collections::HashMap::new();
 
@@ -143,19 +161,37 @@ impl ReasoningRetriever {
             let Some(node) = find_node(&tree.root, node_id) else {
                 continue;
             };
+            let doc_id = tree.doc_id;
 
-            let chunks = chunk_cache
-                .entry(tree.doc_id)
-                .or_insert_with(|| (self.chunk_resolver)(tree.doc_id));
-            let matched = chunks_for_node(node, chunks);
-
-            for chunk in matched {
-                let cid = chunk.chunk_id.to_string();
-                if !seen_chunks.insert(cid) {
-                    continue; // already emitted via another node
+            // Primary path: the node's full section text, intact.
+            let section = node_page_span(node).and_then(|(s, e)| {
+                if !seen_sections.insert((doc_id, s, e)) {
+                    return None; // this section already emitted (e.g. parent+child)
                 }
-                // Descending synthetic score by emission order — preserves the
-                // navigator's relevance ordering for downstream ranking.
+                content_cache
+                    .entry(doc_id)
+                    .or_insert_with(|| (self.content_resolver)(doc_id))
+                    .as_deref()
+                    .and_then(|text| slice_section(text, s, e))
+                    .map(|content| (content, s, e))
+            });
+            if let Some((content, s, e)) = section {
+                let score = 1.0 / (1.0 + results.len() as f32);
+                results.push(section_result(doc_id, node, content, s, e, score));
+                if results.len() >= MAX_RESULT_CHUNKS {
+                    return Ok(results);
+                }
+                continue;
+            }
+
+            // Fallback: re-chunked content for docs without sliceable pages.
+            let chunks = chunk_cache
+                .entry(doc_id)
+                .or_insert_with(|| (self.chunk_resolver)(doc_id));
+            for chunk in chunks_for_node(node, chunks) {
+                if !seen_chunks.insert(chunk.chunk_id.to_string()) {
+                    continue;
+                }
                 let score = 1.0 / (1.0 + results.len() as f32);
                 results.push(SearchResult {
                     chunk: chunk.clone(),
@@ -356,6 +392,68 @@ fn node_page_span(node: &DocTreeNode) -> Option<(usize, usize)> {
 /// Select the chunks belonging to a node: those whose page numbers fall in the
 /// node's span; if none match (or the node has no pages), fall back to chunks
 /// whose `section_title` equals the node title.
+/// Slice the converted text for the (inclusive) page range `[start, end]`,
+/// intact, using the `## Page N` markers `assemble_document_markdown` emits.
+/// Returns `None` when the document has no page markers (caller falls back to
+/// chunk mapping) or the range is empty.
+fn slice_section(converted_text: &str, start: usize, end: usize) -> Option<String> {
+    let mut out = String::new();
+    let mut cur: Option<usize> = None;
+    let mut any = false;
+    for line in converted_text.lines() {
+        if let Some(rest) = line.strip_prefix("## Page ")
+            && let Ok(p) = rest.trim().parse::<usize>()
+        {
+            cur = Some(p);
+            if p >= start && p <= end {
+                out.push_str(line);
+                out.push('\n');
+                any = true;
+            }
+            continue;
+        }
+        if cur.is_some_and(|p| p >= start && p <= end) {
+            out.push_str(line);
+            out.push('\n');
+            any = true;
+        }
+    }
+    if any {
+        Some(out.trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// Wrap a node's full section text as a `SearchResult`, carrying the page range
+/// and section title as metadata so downstream citations stay accurate.
+fn section_result(
+    doc_id: DocId,
+    node: &DocTreeNode,
+    content: String,
+    page_start: usize,
+    page_end: usize,
+    score: f32,
+) -> SearchResult {
+    use thairag_core::types::{ChunkId, ChunkMetadata, WorkspaceId};
+    SearchResult {
+        chunk: DocumentChunk {
+            chunk_id: ChunkId::new(),
+            doc_id,
+            workspace_id: WorkspaceId::default(),
+            content,
+            chunk_index: 0,
+            embedding: None,
+            metadata: Some(ChunkMetadata {
+                section_title: Some(node.title.clone()),
+                page_numbers: Some((page_start..=page_end).collect()),
+                ..Default::default()
+            }),
+        },
+        score,
+    }
+}
+
 fn chunks_for_node<'a>(node: &DocTreeNode, chunks: &'a [DocumentChunk]) -> Vec<&'a DocumentChunk> {
     if let Some((s, e)) = node_page_span(node) {
         let by_page: Vec<&DocumentChunk> = chunks
@@ -477,10 +575,21 @@ mod tests {
         }
     }
 
+    /// Build a retriever whose content resolver always returns `None`, so the
+    /// chunk-fallback path is exercised (these tests predate full-section text).
     fn retriever(
         reply: &str,
         trees: Vec<DocTree>,
         chunks: Vec<DocumentChunk>,
+    ) -> (ReasoningRetriever, Arc<Mutex<Option<String>>>) {
+        retriever_with_content(reply, trees, chunks, |_| None)
+    }
+
+    fn retriever_with_content(
+        reply: &str,
+        trees: Vec<DocTree>,
+        chunks: Vec<DocumentChunk>,
+        content: fn(DocId) -> Option<String>,
     ) -> (ReasoningRetriever, Arc<Mutex<Option<String>>>) {
         let prompt = Arc::new(Mutex::new(None));
         let llm = Arc::new(StubLlm {
@@ -488,11 +597,20 @@ mod tests {
             prompt: Arc::clone(&prompt),
         });
         let tree_resolver: TreeResolver = Arc::new(move |_ws: &[WorkspaceId]| trees.clone());
+        let content_resolver: ContentResolver = Arc::new(move |doc: DocId| content(doc));
         let chunk_resolver: ChunkResolver = Arc::new(move |doc: DocId| {
             chunks.iter().filter(|c| c.doc_id == doc).cloned().collect()
         });
         (
-            ReasoningRetriever::new(llm, tree_resolver, chunk_resolver, 5, 12, 1024),
+            ReasoningRetriever::new(
+                llm,
+                tree_resolver,
+                content_resolver,
+                chunk_resolver,
+                5,
+                12,
+                1024,
+            ),
             prompt,
         )
     }
@@ -717,5 +835,59 @@ mod tests {
         let picked = select_relevant_trees(vec![t0, t1], "zzzz", 1);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].doc_id, first);
+    }
+
+    #[test]
+    fn slice_section_returns_full_intact_pages() {
+        let doc = "# Title\n\n---\n## Page 1\n<table><tr><td>rate</td><td>3.0</td></tr></table>\n\n---\n## Page 2\nother content\n";
+        // Page 1 returns the whole intact table, not a fragment; page 2 excluded.
+        let p1 = slice_section(doc, 1, 1).unwrap();
+        assert!(p1.contains("<table>") && p1.contains("3.0") && p1.contains("</table>"));
+        assert!(!p1.contains("other content"));
+        // No page markers → None (caller falls back to chunks).
+        assert!(slice_section("plain text no markers", 1, 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn feeds_full_section_text_not_chunks() {
+        // The doc's converted text holds the WHOLE table intact; a chunk would
+        // only carry a fragment. Reasoning must feed the full section.
+        let ws = WorkspaceId::new();
+        let doc = DocId::new();
+        let t = tree(
+            doc,
+            "Rates",
+            vec![node("n0.0", "Rate table", Some(1), Some(1), vec![])],
+        );
+        // A chunk exists too, but with only a fragment — the section path must win.
+        let frag = chunk(
+            doc,
+            0,
+            "อัตราภาษี 3.0 (fragment)",
+            Some(vec![1]),
+            Some("Rate table"),
+        );
+        let (rr, _) = retriever_with_content(
+            r#"{"selected_node_ids":["d0:n0.0"]}"#,
+            vec![t],
+            vec![frag],
+            |_| {
+                Some(
+                    "# Rates\n\n---\n## Page 1\n<table><tr><td>อัตราภาษี</td><td>3.0</td><td>10.0</td></tr></table>\n\n---\n## Page 2\nfootnotes\n"
+                        .to_string(),
+                )
+            },
+        );
+        let out = rr.retrieve(&query(ws, vec![])).await.unwrap();
+        assert_eq!(out.len(), 1);
+        // Full intact table, including the cell the chunk fragment dropped (10.0).
+        assert!(out[0].chunk.content.contains("<table>"));
+        assert!(out[0].chunk.content.contains("10.0"));
+        assert!(!out[0].chunk.content.contains("fragment"));
+        assert!(!out[0].chunk.content.contains("footnotes")); // page 2 excluded
+        // Citation metadata preserved.
+        let md = out[0].chunk.metadata.as_ref().unwrap();
+        assert_eq!(md.section_title.as_deref(), Some("Rate table"));
+        assert_eq!(md.page_numbers.as_deref(), Some(&[1usize][..]));
     }
 }

@@ -35,4 +35,4 @@ pub use chat_pipeline::{ChatPipeline, MetadataResolver};
 pub use orchestrator::QueryOrchestrator;
 pub use pipeline_orchestrator::PipelineOrchestrator;
 pub use rag_engine::RagEngine;
-pub use reasoning_retriever::{ChunkResolver, ReasoningRetriever, TreeResolver};
+pub use reasoning_retriever::{ChunkResolver, ContentResolver, ReasoningRetriever, TreeResolver};

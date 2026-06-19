@@ -882,6 +882,14 @@ impl ProviderBundle {
                                 })
                                 .collect()
                         });
+                    // Full section text (PageIndex feeds whole selected sections,
+                    // not re-chunked pieces): resolve the doc's converted markdown
+                    // so the retriever can slice the selected node's pages intact.
+                    let content_store = Arc::clone(store);
+                    let content_resolver: thairag_agent::ContentResolver =
+                        Arc::new(move |doc_id: thairag_core::types::DocId| {
+                            content_store.get_document_content(doc_id).ok().flatten()
+                        });
                     let chunk_store = Arc::clone(store);
                     let chunk_resolver: thairag_agent::ChunkResolver =
                         Arc::new(move |doc_id: thairag_core::types::DocId| {
@@ -891,6 +899,7 @@ impl ProviderBundle {
                     Arc::new(thairag_agent::ReasoningRetriever::new(
                         nav_llm,
                         tree_resolver,
+                        content_resolver,
                         chunk_resolver,
                         chat.reasoning_max_docs,
                         chat.reasoning_max_nodes,
