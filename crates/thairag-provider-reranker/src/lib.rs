@@ -16,6 +16,7 @@ pub fn create_reranker(config: &RerankerConfig) -> Box<dyn Reranker> {
             &config.api_key,
             &config.model,
             &config.base_url,
+            config.normalize_scores,
         )),
     }
 }
