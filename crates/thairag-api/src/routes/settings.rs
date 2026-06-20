@@ -882,12 +882,16 @@ pub async fn update_provider_config(
         .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?;
     state.km_store.set_setting("provider_config", &json);
 
-    // Hot-reload providers
+    // Hot-reload providers. Layer km_store overrides onto the document config
+    // (matching the boot path in main.rs) so persisted ai_preprocessing
+    // settings — chunker/analyzer/etc. LLMs, `enabled`, … — survive a provider
+    // settings save instead of silently reverting to file defaults.
     let eff_chat = crate::routes::settings::get_effective_chat_pipeline(&state);
+    let eff_doc = build_effective_document_config(&state.config, &*state.km_store);
     let bundle = state.build_provider_bundle(
         &pc,
         &build_effective_search_config(&state.config, &*state.km_store),
-        &state.config.document,
+        &eff_doc,
         &eff_chat,
     );
     state.reload_providers(bundle);
@@ -4185,7 +4189,7 @@ pub async fn update_chat_pipeline_config(
             state.build_provider_bundle(
                 &state.providers().providers_config,
                 &effective_search,
-                &state.config.document,
+                &build_effective_document_config(&state.config, &*state.km_store),
                 &eff_chat,
             )
         })) {
@@ -5457,7 +5461,7 @@ pub async fn apply_preset(
     let bundle = state.build_provider_bundle(
         &pc,
         &build_effective_search_config(&state.config, &*state.km_store),
-        &state.config.document,
+        &build_effective_document_config(&state.config, &*state.km_store),
         &eff_chat,
     );
     state.reload_providers(bundle);
@@ -6120,7 +6124,7 @@ pub async fn restore_snapshot(
     let bundle = state.build_provider_bundle(
         &pc,
         &build_effective_search_config(&state.config, &*state.km_store),
-        &state.config.document,
+        &build_effective_document_config(&state.config, &*state.km_store),
         &eff_chat,
     );
     state.reload_providers(bundle);
