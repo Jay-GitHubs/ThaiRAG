@@ -2,6 +2,7 @@ pub mod claude;
 pub mod gemini;
 pub mod ollama;
 pub mod openai;
+pub mod retry;
 
 use thairag_config::schema::LlmConfig;
 use thairag_core::traits::LlmProvider;
