@@ -120,15 +120,18 @@ pub(crate) fn insufficient_context_message(
         );
     }
 
-    let avg_score = context
+    // Gate on the BEST chunk, not the average. A discriminative reranker (e.g.
+    // a cross-encoder like `rerank-bge`) drives irrelevant chunks toward 0, so
+    // averaging would veto a genuinely relevant top hit just because the tail is
+    // low. If even the best chunk is below the floor, the context is all junk.
+    let best_score = context
         .chunks
         .iter()
         .map(|c| c.relevance_score)
-        .sum::<f32>()
-        / context.chunks.len() as f32;
-    if avg_score < 0.15 {
+        .fold(f32::MIN, f32::max);
+    if best_score < 0.15 {
         info!(
-            avg_score,
+            best_score,
             "Pipeline: context too low quality, returning insufficient-info response"
         );
         return Some(
