@@ -83,14 +83,18 @@ impl LlmProvider for OpenAiLlmProvider {
             body["max_tokens"] = serde_json::json!(max);
         }
 
-        let resp = self
-            .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI request failed: {e}")))?;
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = crate::retry::send_with_retry(
+            || {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+            },
+            "openai.generate",
+        )
+        .await
+        .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -136,14 +140,20 @@ impl LlmProvider for OpenAiLlmProvider {
             body["max_tokens"] = serde_json::json!(max);
         }
 
-        let resp = self
-            .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI stream request failed: {e}")))?;
+        // Retry only the initial request/connection — once we start consuming
+        // the byte stream a retry would duplicate partial output.
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = crate::retry::send_with_retry(
+            || {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+            },
+            "openai.generate_stream",
+        )
+        .await
+        .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI stream request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -266,14 +276,18 @@ impl LlmProvider for OpenAiLlmProvider {
             body["max_tokens"] = serde_json::json!(max);
         }
 
-        let resp = self
-            .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI vision request failed: {e}")))?;
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = crate::retry::send_with_retry(
+            || {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+            },
+            "openai.generate_vision",
+        )
+        .await
+        .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI vision request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
