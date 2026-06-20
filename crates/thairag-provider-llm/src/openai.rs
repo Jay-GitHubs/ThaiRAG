@@ -14,6 +14,9 @@ pub struct OpenAiLlmProvider {
     api_key: String,
     model: String,
     base_url: String,
+    /// Explicit vision-capability override. `None` falls back to the
+    /// model-name heuristic in `supports_vision()`.
+    vision_override: Option<bool>,
 }
 
 impl OpenAiLlmProvider {
@@ -22,6 +25,16 @@ impl OpenAiLlmProvider {
     }
 
     pub fn with_timeout(api_key: &str, model: &str, base_url: &str, timeout_secs: u64) -> Self {
+        Self::with_options(api_key, model, base_url, timeout_secs, None)
+    }
+
+    pub fn with_options(
+        api_key: &str,
+        model: &str,
+        base_url: &str,
+        timeout_secs: u64,
+        vision_override: Option<bool>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(timeout_secs))
@@ -48,6 +61,7 @@ impl OpenAiLlmProvider {
             api_key: api_key.to_string(),
             model: model.to_string(),
             base_url,
+            vision_override,
         }
     }
 }
@@ -199,6 +213,11 @@ impl LlmProvider for OpenAiLlmProvider {
     }
 
     fn supports_vision(&self) -> bool {
+        // Explicit config override wins (e.g. an OpenAI-compatible gateway's
+        // `qwen2.5-vl-7b`, which the name heuristic below wouldn't recognize).
+        if let Some(v) = self.vision_override {
+            return v;
+        }
         let m = &self.model;
         m.contains("gpt-4o")
             || m.contains("gpt-4.1")

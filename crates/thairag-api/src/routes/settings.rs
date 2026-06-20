@@ -409,7 +409,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: p.llm.model.clone(),
             base_url: non_empty(&p.llm.base_url),
             has_api_key: !p.llm.api_key.is_empty(),
-            supports_vision: is_vision_model(&p.llm.kind, &p.llm.model),
+            supports_vision: effective_supports_vision(&p.llm),
             max_tokens: None,
             profile_id: p.llm.profile_id.clone(),
             ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
@@ -444,7 +444,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: v.model.clone(),
             base_url: non_empty(&v.base_url),
             has_api_key: !v.api_key.is_empty(),
-            supports_vision: is_vision_model(&v.kind, &v.model),
+            supports_vision: effective_supports_vision(v),
             max_tokens: v.max_tokens,
             profile_id: v.profile_id.clone(),
             ollama_num_ctx_max: v.ollama_num_ctx_max,
@@ -520,6 +520,13 @@ pub struct UpdateLlmConfig {
     /// `Some(true)` preserves the model's native thinking. `None` leaves the
     /// current setting unchanged. Ollama-only.
     pub thinking_enabled: Option<bool>,
+    /// Explicit vision-capability override for OpenAI/OpenAI-compatible
+    /// providers. `Some(true)`/`Some(false)` forces the capability (e.g. a
+    /// gateway's `qwen2.5-vl-7b`); `None` leaves it unchanged. Use
+    /// `clear_supports_vision` to reset to the model-name heuristic.
+    pub supports_vision: Option<bool>,
+    /// When true, clear the vision override (fall back to the name heuristic).
+    pub clear_supports_vision: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -584,6 +591,11 @@ pub async fn update_provider_config(
         }
         if let Some(te) = llm.thinking_enabled {
             pc.llm.thinking_enabled = te;
+        }
+        if llm.clear_supports_vision.unwrap_or(false) {
+            pc.llm.supports_vision = None;
+        } else if let Some(sv) = llm.supports_vision {
+            pc.llm.supports_vision = Some(sv);
         }
         // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
         // clear base_url so it doesn't keep the old Ollama URL
@@ -686,6 +698,7 @@ pub async fn update_provider_config(
                 ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
                 temperature: pc.llm.temperature,
                 thinking_enabled: pc.llm.thinking_enabled,
+                supports_vision: None,
             }
         });
         if let Some(kind) = vis.kind {
@@ -714,6 +727,11 @@ pub async fn update_provider_config(
         }
         if let Some(te) = vis.thinking_enabled {
             current.thinking_enabled = te;
+        }
+        if vis.clear_supports_vision.unwrap_or(false) {
+            current.supports_vision = None;
+        } else if let Some(sv) = vis.supports_vision {
+            current.supports_vision = Some(sv);
         }
         if vis.clear_profile.unwrap_or(false) {
             current.profile_id = None;
@@ -1951,7 +1969,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         model: llm.model.clone(),
         base_url: non_empty(&llm.base_url),
         has_api_key: !llm.api_key.is_empty(),
-        supports_vision: is_vision_model(&llm.kind, &llm.model),
+        supports_vision: effective_supports_vision(llm),
         max_tokens: llm.max_tokens,
         profile_id: llm.profile_id.clone(),
         ollama_num_ctx_max: llm.ollama_num_ctx_max,
@@ -1982,6 +2000,15 @@ fn is_vision_model(kind: &thairag_core::types::LlmKind, model: &str) -> bool {
         // capability check and the runtime check never drift.
         LlmKind::Ollama => thairag_provider_llm::ollama::is_ollama_vision_model(model),
     }
+}
+
+/// Effective vision capability for an LLM config: the explicit
+/// `supports_vision` override if set, else the model-name heuristic. Mirrors
+/// the OpenAI provider's runtime `supports_vision()` so the admin-facing
+/// capability flag and the runtime behavior stay in sync.
+fn effective_supports_vision(cfg: &thairag_config::schema::LlmConfig) -> bool {
+    cfg.supports_vision
+        .unwrap_or_else(|| is_vision_model(&cfg.kind, &cfg.model))
 }
 
 /// Read effective preprocessing LLM config from KM store, falling back to file config.
