@@ -346,6 +346,14 @@ pub struct LlmConfig {
     /// chat answer. Ollama-only; ignored by other providers.
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// Explicit vision-capability override. `Some(true)`/`Some(false)` forces
+    /// whether this provider is treated as vision-capable, overriding the
+    /// model-name heuristic. Use for OpenAI-compatible gateways whose vision
+    /// model name isn't a recognized pattern (e.g. a gateway's `qwen2.5-vl-7b`).
+    /// `None` = fall back to the model-name heuristic. Honored by the
+    /// OpenAI/OpenAI-compatible provider.
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
 }
 
 impl std::fmt::Debug for LlmConfig {
@@ -367,6 +375,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
             .field("temperature", &self.temperature)
             .field("thinking_enabled", &self.thinking_enabled)
+            .field("supports_vision", &self.supports_vision)
             .finish()
     }
 }
@@ -2044,6 +2053,7 @@ mod tests {
                     ollama_num_ctx_max: default_ollama_num_ctx_max(),
                     temperature: None,
                     thinking_enabled: false,
+                    supports_vision: None,
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,

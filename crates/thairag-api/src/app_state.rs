@@ -87,6 +87,7 @@ fn resolve_profile(
             ollama_num_ctx_max: config.ollama_num_ctx_max,
             temperature: config.temperature,
             thinking_enabled: config.thinking_enabled,
+            supports_vision: config.supports_vision,
         };
     }
     config.clone()

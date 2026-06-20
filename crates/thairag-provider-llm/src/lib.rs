@@ -39,11 +39,12 @@ pub fn create_llm_provider_with_options(
             timeout_secs,
         )),
         LlmKind::OpenAi | LlmKind::OpenAiCompatible => {
-            Box::new(openai::OpenAiLlmProvider::with_timeout(
+            Box::new(openai::OpenAiLlmProvider::with_options(
                 &config.api_key,
                 &config.model,
                 &config.base_url,
                 timeout_secs,
+                config.supports_vision,
             ))
         }
         LlmKind::Gemini => Box::new(gemini::GeminiProvider::with_timeout(

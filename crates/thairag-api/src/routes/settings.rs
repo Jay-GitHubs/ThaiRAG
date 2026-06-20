@@ -409,7 +409,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: p.llm.model.clone(),
             base_url: non_empty(&p.llm.base_url),
             has_api_key: !p.llm.api_key.is_empty(),
-            supports_vision: is_vision_model(&p.llm.kind, &p.llm.model),
+            supports_vision: effective_supports_vision(&p.llm),
             max_tokens: None,
             profile_id: p.llm.profile_id.clone(),
             ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
@@ -444,7 +444,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             model: v.model.clone(),
             base_url: non_empty(&v.base_url),
             has_api_key: !v.api_key.is_empty(),
-            supports_vision: is_vision_model(&v.kind, &v.model),
+            supports_vision: effective_supports_vision(v),
             max_tokens: v.max_tokens,
             profile_id: v.profile_id.clone(),
             ollama_num_ctx_max: v.ollama_num_ctx_max,
@@ -520,6 +520,13 @@ pub struct UpdateLlmConfig {
     /// `Some(true)` preserves the model's native thinking. `None` leaves the
     /// current setting unchanged. Ollama-only.
     pub thinking_enabled: Option<bool>,
+    /// Explicit vision-capability override for OpenAI/OpenAI-compatible
+    /// providers. `Some(true)`/`Some(false)` forces the capability (e.g. a
+    /// gateway's `qwen2.5-vl-7b`); `None` leaves it unchanged. Use
+    /// `clear_supports_vision` to reset to the model-name heuristic.
+    pub supports_vision: Option<bool>,
+    /// When true, clear the vision override (fall back to the name heuristic).
+    pub clear_supports_vision: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -584,6 +591,11 @@ pub async fn update_provider_config(
         }
         if let Some(te) = llm.thinking_enabled {
             pc.llm.thinking_enabled = te;
+        }
+        if llm.clear_supports_vision.unwrap_or(false) {
+            pc.llm.supports_vision = None;
+        } else if let Some(sv) = llm.supports_vision {
+            pc.llm.supports_vision = Some(sv);
         }
         // When switching to a provider that uses its own default URL (Claude, OpenAI, Gemini),
         // clear base_url so it doesn't keep the old Ollama URL
@@ -686,6 +698,7 @@ pub async fn update_provider_config(
                 ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
                 temperature: pc.llm.temperature,
                 thinking_enabled: pc.llm.thinking_enabled,
+                supports_vision: None,
             }
         });
         if let Some(kind) = vis.kind {
@@ -714,6 +727,11 @@ pub async fn update_provider_config(
         }
         if let Some(te) = vis.thinking_enabled {
             current.thinking_enabled = te;
+        }
+        if vis.clear_supports_vision.unwrap_or(false) {
+            current.supports_vision = None;
+        } else if let Some(sv) = vis.supports_vision {
+            current.supports_vision = Some(sv);
         }
         if vis.clear_profile.unwrap_or(false) {
             current.profile_id = None;
@@ -871,6 +889,18 @@ pub async fn update_provider_config(
     Ok(Json(config_to_response(&pc)))
 }
 
+/// Build the `/v1/models` discovery URL for an OpenAI-compatible base URL.
+///
+/// The user-supplied base may or may not already include the `/v1` suffix
+/// (e.g. `https://host`, `https://host/v1`, `https://host/v1/`). Trim any
+/// trailing slash and a single trailing `/v1` segment before re-appending
+/// `/v1/models`, so we never produce a duplicated `/v1/v1/models`.
+fn openai_compatible_models_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    let base = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    format!("{base}/v1/models")
+}
+
 /// Fetch models for a given LLM kind/base_url/api_key combination.
 async fn fetch_models_for_provider(
     kind: &thairag_core::types::LlmKind,
@@ -1025,15 +1055,27 @@ async fn fetch_models_for_provider(
                     models: vec![],
                 };
             }
-            let base = base_url.trim_end_matches('/');
+            let url = openai_compatible_models_url(base_url);
             match client
-                .get(format!("{base}/v1/models"))
+                .get(&url)
                 .bearer_auth(api_key)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
             {
                 Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        tracing::warn!(
+                            %url,
+                            %status,
+                            "OpenAI-compatible model discovery returned non-success status"
+                        );
+                        return ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        };
+                    }
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         let models = body["data"]
                             .as_array()
@@ -1053,16 +1095,20 @@ async fn fetch_models_for_provider(
                             models,
                         }
                     } else {
+                        tracing::warn!(%url, "OpenAI-compatible model discovery returned a non-JSON body");
                         ModelsResponse {
                             provider: kind_str,
                             models: vec![],
                         }
                     }
                 }
-                Err(_) => ModelsResponse {
-                    provider: kind_str,
-                    models: vec![],
-                },
+                Err(e) => {
+                    tracing::warn!(%url, error = %e, "OpenAI-compatible model discovery request failed");
+                    ModelsResponse {
+                        provider: kind_str,
+                        models: vec![],
+                    }
+                }
             }
         }
         LlmKind::Gemini => {
@@ -1557,13 +1603,13 @@ async fn fetch_models_for_embedding_provider(
                     models: vec![],
                 };
             }
-            let base = if base_url.is_empty() {
-                "https://api.openai.com"
+            let url = if base_url.is_empty() {
+                "https://api.openai.com/v1/models".to_string()
             } else {
-                base_url.trim_end_matches('/')
+                openai_compatible_models_url(base_url)
             };
             match client
-                .get(format!("{base}/v1/models"))
+                .get(&url)
                 .bearer_auth(api_key)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
@@ -1923,7 +1969,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         model: llm.model.clone(),
         base_url: non_empty(&llm.base_url),
         has_api_key: !llm.api_key.is_empty(),
-        supports_vision: is_vision_model(&llm.kind, &llm.model),
+        supports_vision: effective_supports_vision(llm),
         max_tokens: llm.max_tokens,
         profile_id: llm.profile_id.clone(),
         ollama_num_ctx_max: llm.ollama_num_ctx_max,
@@ -1954,6 +2000,15 @@ fn is_vision_model(kind: &thairag_core::types::LlmKind, model: &str) -> bool {
         // capability check and the runtime check never drift.
         LlmKind::Ollama => thairag_provider_llm::ollama::is_ollama_vision_model(model),
     }
+}
+
+/// Effective vision capability for an LLM config: the explicit
+/// `supports_vision` override if set, else the model-name heuristic. Mirrors
+/// the OpenAI provider's runtime `supports_vision()` so the admin-facing
+/// capability flag and the runtime behavior stay in sync.
+fn effective_supports_vision(cfg: &thairag_config::schema::LlmConfig) -> bool {
+    cfg.supports_vision
+        .unwrap_or_else(|| is_vision_model(&cfg.kind, &cfg.model))
 }
 
 /// Read effective preprocessing LLM config from KM store, falling back to file config.
@@ -6217,6 +6272,35 @@ pub async fn get_audit_analytics(
     require_super_admin(&claims, &state)?;
     let analytics = state.km_store.get_audit_analytics(&filter);
     Ok(Json(analytics))
+}
+
+#[cfg(test)]
+mod models_url_tests {
+    use super::*;
+
+    #[test]
+    fn does_not_duplicate_v1_segment() {
+        // Base already ends in `/v1/` — the reported jay-tech-ai gateway shape.
+        assert_eq!(
+            openai_compatible_models_url("https://llm.jay-tech-ai.com/v1/"),
+            "https://llm.jay-tech-ai.com/v1/models"
+        );
+        // Without trailing slash.
+        assert_eq!(
+            openai_compatible_models_url("https://llm.jay-tech-ai.com/v1"),
+            "https://llm.jay-tech-ai.com/v1/models"
+        );
+        // No `/v1` suffix — appended normally.
+        assert_eq!(
+            openai_compatible_models_url("https://api.groq.com/openai"),
+            "https://api.groq.com/openai/v1/models"
+        );
+        // Bare host with trailing slash.
+        assert_eq!(
+            openai_compatible_models_url("https://host/"),
+            "https://host/v1/models"
+        );
+    }
 }
 
 #[cfg(test)]
