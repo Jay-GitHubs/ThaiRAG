@@ -216,6 +216,8 @@ pub struct RerankerProviderInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub has_api_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -438,6 +440,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             kind: kind_str(&p.reranker.kind),
             model: non_empty(&p.reranker.model),
             has_api_key: !p.reranker.api_key.is_empty(),
+            base_url: non_empty(&p.reranker.base_url),
         },
         doc_vision_llm: p.doc_vision_llm.as_ref().map(|v| LlmProviderInfo {
             kind: kind_str(&v.kind),
@@ -552,6 +555,7 @@ pub struct UpdateRerankerConfig {
     pub kind: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    pub base_url: Option<String>,
 }
 
 pub async fn update_provider_config(
@@ -661,6 +665,9 @@ pub async fn update_provider_config(
         }
         if let Some(api_key) = rr.api_key {
             pc.reranker.api_key = api_key;
+        }
+        if let Some(base_url) = rr.base_url {
+            pc.reranker.base_url = base_url;
         }
     }
 
