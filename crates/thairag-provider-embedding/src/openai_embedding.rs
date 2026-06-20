@@ -22,10 +22,14 @@ impl OpenAiEmbeddingProvider {
             .build()
             .expect("Failed to build reqwest client");
 
+        // Accept base URLs with or without a trailing `/v1` (e.g.
+        // `https://host` or `https://host/v1/`) without producing a duplicated
+        // `/v1/v1/embeddings`.
         let base = if base_url.is_empty() {
             "https://api.openai.com"
         } else {
-            base_url.trim_end_matches('/')
+            let trimmed = base_url.trim_end_matches('/');
+            trimmed.strip_suffix("/v1").unwrap_or(trimmed)
         };
         let endpoint = format!("{base}/v1/embeddings");
 
@@ -113,6 +117,23 @@ mod tests {
     use super::*;
     use thairag_core::traits::EmbeddingModel;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn endpoint_does_not_double_v1() {
+        let p = OpenAiEmbeddingProvider::new(
+            "k",
+            "embed-qwen3",
+            1024,
+            "https://llm.jay-tech-ai.com/v1/",
+        );
+        assert_eq!(p.endpoint, "https://llm.jay-tech-ai.com/v1/embeddings");
+
+        let p = OpenAiEmbeddingProvider::new("k", "m", 1024, "https://host");
+        assert_eq!(p.endpoint, "https://host/v1/embeddings");
+
+        let p = OpenAiEmbeddingProvider::new("k", "m", 1024, "");
+        assert_eq!(p.endpoint, "https://api.openai.com/v1/embeddings");
+    }
 
     /// A flaky upstream that returns 503 twice then a valid 200 must be
     /// transparently retried so `embed()` still succeeds.
