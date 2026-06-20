@@ -871,6 +871,18 @@ pub async fn update_provider_config(
     Ok(Json(config_to_response(&pc)))
 }
 
+/// Build the `/v1/models` discovery URL for an OpenAI-compatible base URL.
+///
+/// The user-supplied base may or may not already include the `/v1` suffix
+/// (e.g. `https://host`, `https://host/v1`, `https://host/v1/`). Trim any
+/// trailing slash and a single trailing `/v1` segment before re-appending
+/// `/v1/models`, so we never produce a duplicated `/v1/v1/models`.
+fn openai_compatible_models_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    let base = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    format!("{base}/v1/models")
+}
+
 /// Fetch models for a given LLM kind/base_url/api_key combination.
 async fn fetch_models_for_provider(
     kind: &thairag_core::types::LlmKind,
@@ -1025,15 +1037,27 @@ async fn fetch_models_for_provider(
                     models: vec![],
                 };
             }
-            let base = base_url.trim_end_matches('/');
+            let url = openai_compatible_models_url(base_url);
             match client
-                .get(format!("{base}/v1/models"))
+                .get(&url)
                 .bearer_auth(api_key)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
             {
                 Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        tracing::warn!(
+                            %url,
+                            %status,
+                            "OpenAI-compatible model discovery returned non-success status"
+                        );
+                        return ModelsResponse {
+                            provider: kind_str,
+                            models: vec![],
+                        };
+                    }
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         let models = body["data"]
                             .as_array()
@@ -1053,16 +1077,20 @@ async fn fetch_models_for_provider(
                             models,
                         }
                     } else {
+                        tracing::warn!(%url, "OpenAI-compatible model discovery returned a non-JSON body");
                         ModelsResponse {
                             provider: kind_str,
                             models: vec![],
                         }
                     }
                 }
-                Err(_) => ModelsResponse {
-                    provider: kind_str,
-                    models: vec![],
-                },
+                Err(e) => {
+                    tracing::warn!(%url, error = %e, "OpenAI-compatible model discovery request failed");
+                    ModelsResponse {
+                        provider: kind_str,
+                        models: vec![],
+                    }
+                }
             }
         }
         LlmKind::Gemini => {
@@ -1557,13 +1585,13 @@ async fn fetch_models_for_embedding_provider(
                     models: vec![],
                 };
             }
-            let base = if base_url.is_empty() {
-                "https://api.openai.com"
+            let url = if base_url.is_empty() {
+                "https://api.openai.com/v1/models".to_string()
             } else {
-                base_url.trim_end_matches('/')
+                openai_compatible_models_url(base_url)
             };
             match client
-                .get(format!("{base}/v1/models"))
+                .get(&url)
                 .bearer_auth(api_key)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
@@ -6217,6 +6245,35 @@ pub async fn get_audit_analytics(
     require_super_admin(&claims, &state)?;
     let analytics = state.km_store.get_audit_analytics(&filter);
     Ok(Json(analytics))
+}
+
+#[cfg(test)]
+mod models_url_tests {
+    use super::*;
+
+    #[test]
+    fn does_not_duplicate_v1_segment() {
+        // Base already ends in `/v1/` — the reported jay-tech-ai gateway shape.
+        assert_eq!(
+            openai_compatible_models_url("https://llm.jay-tech-ai.com/v1/"),
+            "https://llm.jay-tech-ai.com/v1/models"
+        );
+        // Without trailing slash.
+        assert_eq!(
+            openai_compatible_models_url("https://llm.jay-tech-ai.com/v1"),
+            "https://llm.jay-tech-ai.com/v1/models"
+        );
+        // No `/v1` suffix — appended normally.
+        assert_eq!(
+            openai_compatible_models_url("https://api.groq.com/openai"),
+            "https://api.groq.com/openai/v1/models"
+        );
+        // Bare host with trailing slash.
+        assert_eq!(
+            openai_compatible_models_url("https://host/"),
+            "https://host/v1/models"
+        );
+    }
 }
 
 #[cfg(test)]
