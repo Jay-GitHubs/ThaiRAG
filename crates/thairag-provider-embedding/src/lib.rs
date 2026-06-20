@@ -3,6 +3,7 @@ pub mod cohere_embedding;
 pub mod fastembed_provider;
 pub mod ollama_embedding;
 pub mod openai_embedding;
+pub mod retry;
 
 use thairag_config::schema::{EmbeddingConfig, ImageEmbeddingConfig};
 use thairag_core::traits::{EmbeddingModel, ImageEmbeddingModel};

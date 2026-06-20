@@ -55,16 +55,17 @@ impl EmbeddingModel for OpenAiEmbeddingProvider {
             "dimensions": self.dimension,
         });
 
-        let resp = self
-            .client
-            .post(&self.endpoint)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                ThaiRagError::Embedding(format!("OpenAI embedding request failed: {e}"))
-            })?;
+        let resp = crate::retry::send_with_retry(
+            || {
+                self.client
+                    .post(&self.endpoint)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+            },
+            "openai_embedding.embed",
+        )
+        .await
+        .map_err(|e| ThaiRagError::Embedding(format!("OpenAI embedding request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -104,5 +105,47 @@ impl EmbeddingModel for OpenAiEmbeddingProvider {
 
     fn dimension(&self) -> usize {
         self.dimension
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::traits::EmbeddingModel;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A flaky upstream that returns 503 twice then a valid 200 must be
+    /// transparently retried so `embed()` still succeeds.
+    #[tokio::test]
+    async fn retries_transient_5xx_then_succeeds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            for i in 0..3u32 {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await; // drain the request
+                let (status, body) = if i < 2 {
+                    ("503 Service Unavailable", "{}".to_string())
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"data":[{"index":0,"embedding":[0.5,0.25,0.125]}]}"#.to_string(),
+                    )
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let provider = OpenAiEmbeddingProvider::new("k", "m", 3, &format!("http://{addr}"));
+        let out = provider.embed(&["hello".to_string()]).await.unwrap();
+        assert_eq!(out, vec![vec![0.5f32, 0.25, 0.125]]);
+        server.await.unwrap();
     }
 }
