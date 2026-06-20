@@ -460,6 +460,12 @@ pub struct RerankerConfig {
     /// endpoint (e.g. an OpenAI-compatible gateway's `rerank-bge`).
     #[serde(default)]
     pub base_url: String,
+    /// Sigmoid-normalize raw reranker scores into `(0, 1)`. Leave off for
+    /// Jina's cloud API (already 0–1); turn on for raw cross-encoder rerankers
+    /// (e.g. `rerank-bge`) whose unbounded logits would otherwise trip the
+    /// relevance threshold. Ranking order is unaffected.
+    #[serde(default)]
+    pub normalize_scores: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -2083,6 +2089,7 @@ mod tests {
                     model: String::new(),
                     api_key: String::new(),
                     base_url: String::new(),
+                    normalize_scores: false,
                 },
                 doc_vision_llm: None,
                 image_embedding: None,
