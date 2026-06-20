@@ -12,6 +12,10 @@ pub fn create_reranker(config: &RerankerConfig) -> Box<dyn Reranker> {
         RerankerKind::Cohere => {
             Box::new(cohere::CohereReranker::new(&config.api_key, &config.model))
         }
-        RerankerKind::Jina => Box::new(jina::JinaReranker::new(&config.api_key, &config.model)),
+        RerankerKind::Jina => Box::new(jina::JinaReranker::with_base_url(
+            &config.api_key,
+            &config.model,
+            &config.base_url,
+        )),
     }
 }

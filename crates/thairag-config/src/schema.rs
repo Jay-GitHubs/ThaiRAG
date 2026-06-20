@@ -455,6 +455,11 @@ pub struct RerankerConfig {
     pub model: String,
     #[serde(default)]
     pub api_key: String,
+    /// Base URL for the rerank endpoint. Empty = the provider's default host.
+    /// Lets the Jina-protocol reranker target any compatible `/v1/rerank`
+    /// endpoint (e.g. an OpenAI-compatible gateway's `rerank-bge`).
+    #[serde(default)]
+    pub base_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -2077,6 +2082,7 @@ mod tests {
                     kind: RerankerKind::Passthrough,
                     model: String::new(),
                     api_key: String::new(),
+                    base_url: String::new(),
                 },
                 doc_vision_llm: None,
                 image_embedding: None,
