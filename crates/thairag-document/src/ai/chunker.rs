@@ -56,102 +56,110 @@ impl LlmSmartChunker {
         max_chunk_size: usize,
         issues: &[String],
     ) -> Result<Vec<EnrichedChunk>> {
+        Ok(self
+            .chunk_windowed(converted, max_chunk_size, Some(issues))
+            .await)
+    }
+
+    /// Shared chunking core. The line-numbered markdown is split into windows
+    /// that each stay well under the upstream request-body limit: a large doc
+    /// otherwise makes one oversized LLM request that gateways reject with 502,
+    /// forcing a mechanical fallback for the *whole* document. Line numbers are
+    /// GLOBAL across windows, so the boundaries the LLM returns slice the full
+    /// line list directly. A window whose LLM call fails or returns nothing
+    /// degrades to mechanical chunking for that window's lines only — content
+    /// is never dropped, and one transient flap doesn't discard the rest of the
+    /// document's enrichment.
+    async fn chunk_windowed(
+        &self,
+        converted: &ConvertedDocument,
+        max_chunk_size: usize,
+        feedback: Option<&[String]>,
+    ) -> Vec<EnrichedChunk> {
         let markdown = &converted.markdown;
         let lines: Vec<&str> = markdown.lines().collect();
-
         if lines.is_empty() {
-            return Ok(vec![]);
+            return vec![];
         }
 
-        let numbered: String = lines
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{}: {}", i + 1, line))
+        let page_map = build_page_map(&lines);
+        let windows = window_line_ranges(&lines, MAX_CHUNKER_INPUT_CHARS);
+        let mut enriched = Vec::new();
+
+        for win in &windows {
+            match self.sections_for_window(&lines, win, feedback).await {
+                Some(sections) if !sections.is_empty() => {
+                    for section in &sections {
+                        push_section_chunks(
+                            &mut enriched,
+                            &lines,
+                            &page_map,
+                            section,
+                            converted,
+                            max_chunk_size,
+                            &self.fallback_chunker,
+                        );
+                    }
+                }
+                _ => push_mechanical_window(
+                    &mut enriched,
+                    &lines,
+                    &page_map,
+                    win,
+                    max_chunk_size,
+                    &self.fallback_chunker,
+                ),
+            }
+        }
+
+        if enriched.is_empty() {
+            return mechanical_fallback(markdown, max_chunk_size, &self.fallback_chunker);
+        }
+        enriched
+    }
+
+    /// Ask the LLM for section boundaries over one window's globally-numbered
+    /// lines. `None` = the call or JSON parse failed; the caller then
+    /// mechanically chunks the window so its content is preserved.
+    async fn sections_for_window(
+        &self,
+        lines: &[&str],
+        win: &LineWindow,
+        feedback: Option<&[String]>,
+    ) -> Option<Vec<SectionBoundary>> {
+        let numbered: String = (win.start..win.end)
+            .map(|i| format!("{}: {}", i + 1, lines[i]))
             .collect::<Vec<_>>()
             .join("\n");
 
-        let prompt = prompts::smart_chunker_feedback_prompt(&self.prompts, &numbered, issues);
+        let prompt = match feedback {
+            Some(issues) => {
+                prompts::smart_chunker_feedback_prompt(&self.prompts, &numbered, issues)
+            }
+            None => prompts::smart_chunker_prompt(&self.prompts, &numbered),
+        };
         let messages = vec![ChatMessage {
             role: "user".into(),
             content: prompt,
             images: vec![],
         }];
 
-        let response = self.llm.generate(&messages, Some(self.max_tokens)).await?;
-        let json_str = strip_json_fences(response.content.trim());
-
-        let sections: Vec<SectionBoundary> = match serde_json::from_str(json_str) {
-            Ok(s) => s,
+        let response = match self.llm.generate(&messages, Some(self.max_tokens)).await {
+            Ok(r) => r,
             Err(e) => {
-                warn!(error = %e, "Failed to parse chunker feedback response, falling back");
-                return Ok(mechanical_fallback(
-                    markdown,
-                    max_chunk_size,
-                    &self.fallback_chunker,
-                ));
+                warn!(error = %e, win_start = win.start, win_end = win.end,
+                    "Chunker LLM call failed for window; mechanical fallback for this window");
+                return None;
             }
         };
-
-        if sections.is_empty() {
-            return Ok(mechanical_fallback(
-                markdown,
-                max_chunk_size,
-                &self.fallback_chunker,
-            ));
-        }
-
-        let page_map = build_page_map(&lines);
-        let mut enriched = Vec::new();
-
-        for section in &sections {
-            let start = section.start_line.saturating_sub(1).min(lines.len());
-            let end = section.end_line.min(lines.len());
-            if start >= end {
-                continue;
-            }
-
-            let section_pages = pages_for_range(&page_map, start, end);
-
-            let content: String = lines[start..end]
-                .iter()
-                .filter(|line| !is_page_marker(line))
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            if content.len() > max_chunk_size {
-                let sub_chunks = self.fallback_chunker.chunk(&content, max_chunk_size, 0);
-                for sub in sub_chunks {
-                    enriched.push(EnrichedChunk {
-                        content: sub,
-                        topic: section.topic.clone(),
-                        section_title: section.section_title.clone(),
-                        language: Some(converted.analysis.primary_language.clone()),
-                        chunk_type: section.chunk_type.clone(),
-                        page_numbers: section_pages.clone(),
-                    });
-                }
-            } else if !content.trim().is_empty() {
-                enriched.push(EnrichedChunk {
-                    content,
-                    topic: section.topic.clone(),
-                    section_title: section.section_title.clone(),
-                    language: Some(converted.analysis.primary_language.clone()),
-                    chunk_type: section.chunk_type.clone(),
-                    page_numbers: section_pages,
-                });
+        let json_str = strip_json_fences(response.content.trim());
+        match serde_json::from_str::<Vec<SectionBoundary>>(json_str) {
+            Ok(sections) => Some(sections),
+            Err(e) => {
+                warn!(error = %e, "Failed to parse chunker window response; mechanical fallback for this window");
+                None
             }
         }
-
-        if enriched.is_empty() {
-            return Ok(mechanical_fallback(
-                markdown,
-                max_chunk_size,
-                &self.fallback_chunker,
-            ));
-        }
-
-        Ok(enriched)
     }
 }
 
@@ -221,108 +229,7 @@ impl SmartChunker for LlmSmartChunker {
         converted: &ConvertedDocument,
         max_chunk_size: usize,
     ) -> Result<Vec<EnrichedChunk>> {
-        let markdown = &converted.markdown;
-        let lines: Vec<&str> = markdown.lines().collect();
-
-        if lines.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Number lines for the LLM
-        let numbered: String = lines
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{}: {}", i + 1, line))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let prompt = prompts::smart_chunker_prompt(&self.prompts, &numbered);
-        let messages = vec![ChatMessage {
-            role: "user".into(),
-            content: prompt,
-            images: vec![],
-        }];
-
-        let response = self.llm.generate(&messages, Some(self.max_tokens)).await?;
-        let json_str = strip_json_fences(response.content.trim());
-
-        let sections: Vec<SectionBoundary> = match serde_json::from_str(json_str) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to parse chunker response, falling back to mechanical");
-                return Ok(mechanical_fallback(
-                    markdown,
-                    max_chunk_size,
-                    &self.fallback_chunker,
-                ));
-            }
-        };
-
-        if sections.is_empty() {
-            return Ok(mechanical_fallback(
-                markdown,
-                max_chunk_size,
-                &self.fallback_chunker,
-            ));
-        }
-
-        // Build a line_number → page_number map from page markers
-        let page_map = build_page_map(&lines);
-
-        let mut enriched = Vec::new();
-
-        for section in &sections {
-            let start = section.start_line.saturating_sub(1).min(lines.len());
-            let end = section.end_line.min(lines.len());
-            if start >= end {
-                continue;
-            }
-
-            // Collect page numbers for this section's line range
-            let section_pages = pages_for_range(&page_map, start, end);
-
-            // Filter out page marker lines from content
-            let content: String = lines[start..end]
-                .iter()
-                .filter(|line| !is_page_marker(line))
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            // If section is too large, sub-split mechanically
-            if content.len() > max_chunk_size {
-                let sub_chunks = self.fallback_chunker.chunk(&content, max_chunk_size, 0);
-                for sub in sub_chunks {
-                    enriched.push(EnrichedChunk {
-                        content: sub,
-                        topic: section.topic.clone(),
-                        section_title: section.section_title.clone(),
-                        language: Some(converted.analysis.primary_language.clone()),
-                        chunk_type: section.chunk_type.clone(),
-                        page_numbers: section_pages.clone(),
-                    });
-                }
-            } else if !content.trim().is_empty() {
-                enriched.push(EnrichedChunk {
-                    content,
-                    topic: section.topic.clone(),
-                    section_title: section.section_title.clone(),
-                    language: Some(converted.analysis.primary_language.clone()),
-                    chunk_type: section.chunk_type.clone(),
-                    page_numbers: section_pages,
-                });
-            }
-        }
-
-        if enriched.is_empty() {
-            return Ok(mechanical_fallback(
-                markdown,
-                max_chunk_size,
-                &self.fallback_chunker,
-            ));
-        }
-
-        Ok(enriched)
+        Ok(self.chunk_windowed(converted, max_chunk_size, None).await)
     }
 }
 
@@ -336,6 +243,123 @@ struct SectionBoundary {
     section_title: Option<String>,
     #[serde(default)]
     chunk_type: Option<String>,
+}
+
+/// Max characters of line-numbered markdown sent to the chunker LLM per call.
+/// Kept well under typical upstream request-body limits — large gateways return
+/// 502 on oversized bodies — so the document is windowed to this budget. Line
+/// numbers stay global across windows, so returned boundaries index the full
+/// line list directly.
+const MAX_CHUNKER_INPUT_CHARS: usize = 40_000;
+
+/// A half-open `[start, end)` range of global line indices.
+struct LineWindow {
+    start: usize,
+    end: usize,
+}
+
+/// Split the line list into windows whose numbered text stays under `budget`
+/// characters. Always returns at least one window for a non-empty input; a
+/// single line longer than `budget` becomes its own (oversized) window.
+fn window_line_ranges(lines: &[&str], budget: usize) -> Vec<LineWindow> {
+    let mut windows = Vec::new();
+    let mut start = 0usize;
+    let mut size = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        // Approximate the rendered "<n>: <line>\n" cost; the number width is
+        // negligible next to the line content.
+        let entry = line.len() + 8;
+        if i > start && size + entry > budget {
+            windows.push(LineWindow { start, end: i });
+            start = i;
+            size = 0;
+        }
+        size += entry;
+    }
+    windows.push(LineWindow {
+        start,
+        end: lines.len(),
+    });
+    windows
+}
+
+/// Append enriched chunk(s) for one LLM-identified section, sub-splitting
+/// mechanically when the section exceeds `max_chunk_size`.
+fn push_section_chunks(
+    out: &mut Vec<EnrichedChunk>,
+    lines: &[&str],
+    page_map: &[Option<usize>],
+    section: &SectionBoundary,
+    converted: &ConvertedDocument,
+    max_chunk_size: usize,
+    fallback: &MarkdownChunker,
+) {
+    let start = section.start_line.saturating_sub(1).min(lines.len());
+    let end = section.end_line.min(lines.len());
+    if start >= end {
+        return;
+    }
+    let section_pages = pages_for_range(page_map, start, end);
+    let content: String = lines[start..end]
+        .iter()
+        .filter(|line| !is_page_marker(line))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if content.len() > max_chunk_size {
+        for sub in fallback.chunk(&content, max_chunk_size, 0) {
+            out.push(EnrichedChunk {
+                content: sub,
+                topic: section.topic.clone(),
+                section_title: section.section_title.clone(),
+                language: Some(converted.analysis.primary_language.clone()),
+                chunk_type: section.chunk_type.clone(),
+                page_numbers: section_pages.clone(),
+            });
+        }
+    } else if !content.trim().is_empty() {
+        out.push(EnrichedChunk {
+            content,
+            topic: section.topic.clone(),
+            section_title: section.section_title.clone(),
+            language: Some(converted.analysis.primary_language.clone()),
+            chunk_type: section.chunk_type.clone(),
+            page_numbers: section_pages,
+        });
+    }
+}
+
+/// Mechanically chunk one window's lines (used when its LLM call/parse fails),
+/// with no enrichment but preserving page numbers.
+fn push_mechanical_window(
+    out: &mut Vec<EnrichedChunk>,
+    lines: &[&str],
+    page_map: &[Option<usize>],
+    win: &LineWindow,
+    max_chunk_size: usize,
+    fallback: &MarkdownChunker,
+) {
+    let content: String = lines[win.start..win.end]
+        .iter()
+        .filter(|line| !is_page_marker(line))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content.trim().is_empty() {
+        return;
+    }
+    let pages = pages_for_range(page_map, win.start, win.end);
+    for sub in fallback.chunk(&content, max_chunk_size, 0) {
+        out.push(EnrichedChunk {
+            content: sub,
+            topic: None,
+            section_title: None,
+            language: None,
+            chunk_type: None,
+            page_numbers: pages.clone(),
+        });
+    }
 }
 
 fn mechanical_fallback(
@@ -394,4 +418,56 @@ fn pages_for_range(page_map: &[Option<usize>], start: usize, end: usize) -> Opti
     pages.sort_unstable();
     pages.dedup();
     if pages.is_empty() { None } else { Some(pages) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_input_is_a_single_window() {
+        let lines = vec!["alpha", "beta", "gamma"];
+        let w = window_line_ranges(&lines, 40_000);
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0].start, w[0].end), (0, 3));
+    }
+
+    #[test]
+    fn large_input_partitions_contiguously_under_budget() {
+        // ~50 chars/line * 5000 lines ≈ 250KB → several windows at a 40KB budget.
+        let owned: Vec<String> = (0..5000)
+            .map(|i| format!("line {i} {}", "x".repeat(40)))
+            .collect();
+        let lines: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+        let budget = 40_000;
+        let windows = window_line_ranges(&lines, budget);
+
+        assert!(windows.len() > 1, "expected the doc to be split");
+        // Contiguous partition: no gaps, no overlaps, full coverage.
+        assert_eq!(windows.first().unwrap().start, 0);
+        assert_eq!(windows.last().unwrap().end, lines.len());
+        for pair in windows.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start, "windows must be contiguous");
+        }
+        // Each window (except a forced single oversized line) stays near budget.
+        for win in &windows {
+            let size: usize = (win.start..win.end).map(|i| lines[i].len() + 8).sum();
+            assert!(
+                size <= budget || win.end - win.start == 1,
+                "window {}..{} size {size} exceeds budget {budget}",
+                win.start,
+                win.end
+            );
+        }
+    }
+
+    #[test]
+    fn line_longer_than_budget_is_its_own_window() {
+        let big = "z".repeat(100_000);
+        let lines = vec!["short", big.as_str(), "short2"];
+        let windows = window_line_ranges(&lines, 40_000);
+        // Coverage preserved despite the oversized middle line.
+        assert_eq!(windows.first().unwrap().start, 0);
+        assert_eq!(windows.last().unwrap().end, 3);
+    }
 }
