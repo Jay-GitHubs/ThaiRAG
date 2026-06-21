@@ -125,6 +125,15 @@ test.describe('OWUI → ThaiRAG feedback sync (round-trip)', () => {
       !ADMIN_KEY,
       'OWUI_ADMIN_API_KEY not set — needed to read OWUI’s admin-gated feedback export',
     );
+    // The round-trip requires the OWUI→ThaiRAG feedback-sync feature to be
+    // ENABLED at deploy (THAIRAG__OWUI_FEEDBACK_SYNC__ENABLED=true). It's off by
+    // default, so without it no entry ever syncs and the poll would time out.
+    // The companion owui-feedback-sync-disabled spec covers the default (off)
+    // state. Set RUN_FEEDBACK_SYNC=1 when the deploy has sync enabled.
+    test.skip(
+      !process.env.RUN_FEEDBACK_SYNC,
+      'OWUI feedback sync disabled by default; set RUN_FEEDBACK_SYNC=1 with the feature enabled to run.',
+    );
 
     const api = await pwRequest.newContext();
     const fetchEntries = async (): Promise<FeedbackEntry[]> => {
