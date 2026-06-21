@@ -13,23 +13,6 @@ export const API_BASE = 'http://localhost:8080';
  */
 export const GOOD_CHAT_MODEL = process.env.E2E_CHAT_MODEL ?? 'qwen3.6-27b-fast';
 
-/**
- * Base URL of the OpenAI-compatible gateway the stack is configured against.
- * Used when a spec re-points the shared chat model so it stays on the gateway
- * provider (not the file-default Ollama). Override with E2E_GATEWAY_URL.
- */
-export const GATEWAY_BASE_URL =
-  process.env.E2E_GATEWAY_URL ?? 'https://llm.jay-tech-ai.com/v1';
-
-/**
- * API key for the gateway. Sent when a spec re-points the shared chat model so
- * the credential survives a provider-kind change (the API resets api_key to the
- * empty file default when the kind changes, e.g. Ollama → OpenAiCompatible).
- * Kept out of the repo — set E2E_GATEWAY_API_KEY in the environment that runs
- * the live-stack specs. Empty is ignored by the API (existing key preserved).
- */
-export const GATEWAY_API_KEY = process.env.E2E_GATEWAY_API_KEY ?? '';
-
 /** Read the current global shared chat-pipeline LLM model (or undefined). */
 export async function getSharedModel(
   request: APIRequestContext,
@@ -43,10 +26,11 @@ export async function getSharedModel(
 }
 
 /**
- * Set the global shared chat-pipeline LLM model (merges; hot-reloaded by the
- * API). Sends the gateway kind + base_url alongside the model so the provider
- * stays OpenAI-compatible; keeping the kind unchanged preserves the configured
- * api_key (the API only resets credentials when the provider kind changes).
+ * Set the global shared chat-pipeline LLM model. Sends ONLY the model: the API
+ * merges it into the existing provider config, so the configured kind, base_url
+ * and api_key are left intact (no provider-kind change → no credential reset).
+ * This keeps the specs provider-agnostic — they just pick a model on whatever
+ * provider the stack is configured with — and needs no gateway secret in CI.
  */
 export async function setSharedModel(
   request: APIRequestContext,
@@ -55,14 +39,7 @@ export async function setSharedModel(
 ): Promise<void> {
   const headers = { Authorization: `Bearer ${token}` };
   await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, {
-    data: {
-      llm: {
-        kind: 'OpenAiCompatible',
-        base_url: GATEWAY_BASE_URL,
-        api_key: GATEWAY_API_KEY,
-        model,
-      },
-    },
+    data: { llm: { model } },
     headers,
   });
 }
