@@ -79,22 +79,53 @@ impl Reranker for JinaReranker {
             "top_n": results.len(),
         });
 
-        let resp = self
-            .client
-            .post(&self.endpoint)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ThaiRagError::Internal(format!("Jina rerank request failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let error_body = resp.text().await.unwrap_or_default();
-            return Err(ThaiRagError::Internal(format!(
-                "Jina rerank returned HTTP {status}: {error_body}"
-            )));
-        }
+        // Retry transient upstream failures (a flaky gateway rerank endpoint
+        // 502s while a backend restarts). Exponential backoff; non-retryable
+        // statuses and the final attempt surface the error.
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 300;
+        let mut attempt = 0u32;
+        let resp = loop {
+            let send = self
+                .client
+                .post(&self.endpoint)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await;
+            match send {
+                Ok(r) if r.status().is_success() => break r,
+                Ok(r) => {
+                    let status = r.status();
+                    let retryable =
+                        matches!(status.as_u16(), 408 | 425 | 429 | 500 | 502 | 503 | 504);
+                    if retryable && attempt < MAX_RETRIES {
+                        attempt += 1;
+                        tracing::warn!(%status, attempt, "Jina rerank transient status; retrying");
+                        tokio::time::sleep(Duration::from_millis(BASE_DELAY_MS << (attempt - 1)))
+                            .await;
+                        continue;
+                    }
+                    let error_body = r.text().await.unwrap_or_default();
+                    return Err(ThaiRagError::Internal(format!(
+                        "Jina rerank returned HTTP {status}: {error_body}"
+                    )));
+                }
+                Err(e) => {
+                    if (e.is_timeout() || e.is_connect() || e.is_request()) && attempt < MAX_RETRIES
+                    {
+                        attempt += 1;
+                        tracing::warn!(error = %e, attempt, "Jina rerank transport error; retrying");
+                        tokio::time::sleep(Duration::from_millis(BASE_DELAY_MS << (attempt - 1)))
+                            .await;
+                        continue;
+                    }
+                    return Err(ThaiRagError::Internal(format!(
+                        "Jina rerank request failed: {e}"
+                    )));
+                }
+            }
+        };
 
         let json: serde_json::Value = resp.json().await.map_err(|e| {
             ThaiRagError::Internal(format!("Failed to parse Jina rerank response: {e}"))

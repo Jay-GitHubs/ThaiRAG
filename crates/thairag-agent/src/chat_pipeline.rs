@@ -1259,7 +1259,15 @@ impl ChatPipeline {
             if budget.try_spend() {
                 self.emit_progress(progress, "colbert_reranker", StageStatus::Started, None);
                 let t = Instant::now();
-                results = colbert.rerank(user_query, &results).await?;
+                // Reranking is a quality enhancer, not a correctness dependency:
+                // on a transient failure (e.g. a flaky reranker/LLM upstream),
+                // keep the prior results instead of failing the whole chat.
+                match colbert.rerank(user_query, &results).await {
+                    Ok(r) => results = r,
+                    Err(e) => {
+                        warn!(error = %e, "colbert reranker failed; keeping un-reranked results")
+                    }
+                }
                 let colbert_ms = t.elapsed().as_millis() as u64;
                 self.emit_progress(
                     progress,
