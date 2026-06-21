@@ -55,6 +55,9 @@ test.describe('Open WebUI citation rendering (observation)', () => {
   // (section_title) — the provenance the citation modal must render.
   let adminToken = '';
   let provenanceDocId = '';
+  // Restore the global AI-preprocessing flag in afterAll (this spec needs it on
+  // for section-provenance, but it's off by default for fast ingest elsewhere).
+  let prevAiPreprocEnabled = false;
 
   test.beforeAll(async ({ request }) => {
     // Ingest can run the slow AI smart-chunker; allow plenty of headroom.
@@ -66,6 +69,19 @@ test.describe('Open WebUI citation rendering (observation)', () => {
     expect(loginRes.ok(), 'admin API login should succeed').toBeTruthy();
     adminToken = (await loginRes.json()).token;
     const headers = { Authorization: `Bearer ${adminToken}` };
+
+    // Section provenance comes from the AI smart-chunker's `section_title`,
+    // which requires AI preprocessing ON and a model capable of structured
+    // output (the fast 7B vision model doesn't emit it; the 27B does). Enable it
+    // for this spec's ingest regardless of the global default (off for speed
+    // elsewhere); restored in afterAll. Model-only update preserves the
+    // configured gateway provider + key.
+    const docCfg = await (await request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
+    prevAiPreprocEnabled = docCfg.ai_preprocessing?.enabled ?? false;
+    await request.put(`${API_BASE}/api/km/settings/document`, {
+      data: { ai_preprocessing: { enabled: true, chunker_llm: { model: 'qwen3.6-27b-fast' } } },
+      headers,
+    });
 
     const uploadRes = await request.post(
       `${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/upload`,
@@ -106,12 +122,22 @@ test.describe('Open WebUI citation rendering (observation)', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    if (!provenanceDocId || !adminToken) return;
+    if (!adminToken) return;
+    const headers = { Authorization: `Bearer ${adminToken}` };
+    // Restore the global AI-preprocessing flag so we don't slow down other specs.
     await request
-      .delete(`${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/${provenanceDocId}`, {
-        headers: { Authorization: `Bearer ${adminToken}` },
+      .put(`${API_BASE}/api/km/settings/document`, {
+        data: { ai_preprocessing: { enabled: prevAiPreprocEnabled } },
+        headers,
       })
       .catch(() => {});
+    if (provenanceDocId) {
+      await request
+        .delete(`${API_BASE}/api/km/workspaces/${INGEST_WS}/documents/${provenanceDocId}`, {
+          headers,
+        })
+        .catch(() => {});
+    }
   });
 
   test('capture how ThaiRAG citations render in Open WebUI today', async ({ page }) => {

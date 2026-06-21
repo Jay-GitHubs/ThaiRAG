@@ -30,6 +30,10 @@ export default defineConfig({
       name: 'e2e',
       dependencies: ['setup'],
       testMatch: /.*\.spec\.ts/,
+      // `*.local.spec.ts` are slow local accuracy/benchmark sweeps (e.g. the
+      // vectorless-accuracy sweep runs ~2h) — not part of the headless gate.
+      // Run them explicitly by name when needed.
+      testIgnore: /\.local\.spec\.ts$/,
     },
   ],
 });
