@@ -4701,6 +4701,14 @@ pub async fn apply_preset(
     let gw_embed_base = state.config.providers.embedding.base_url.clone();
     let gw_embed_model = state.config.providers.embedding.model.clone();
     let gw_embed_dim = state.config.providers.embedding.dimension.to_string();
+    // Pin the embedding *kind* too, not just model/url/dim. A leftover
+    // `providers.embedding.kind=ollama` otherwise survives a preset apply and
+    // produces a broken hybrid (Ollama provider pointed at the gateway URL →
+    // 404 on ingest). Use the configured provider's serde kind (e.g. open_ai).
+    let gw_embed_kind = serde_json::to_value(&state.config.providers.embedding.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "open_ai".to_string());
 
     let ollama_llm = |model: &str, _url: &str| -> String {
         // Map curated Ollama role models → gateway models: the small/vision
@@ -4845,6 +4853,7 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.orchestrator_enabled", "false");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
+            store.set_setting("providers.embedding.kind", &gw_embed_kind);
             store.set_setting("providers.embedding.model", &gw_embed_model);
             store.set_setting("providers.embedding.base_url", &gw_embed_base);
             store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
@@ -4890,6 +4899,7 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.orchestrator_enabled", "true");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
+            store.set_setting("providers.embedding.kind", &gw_embed_kind);
             store.set_setting("providers.embedding.model", &gw_embed_model);
             store.set_setting("providers.embedding.base_url", &gw_embed_base);
             store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
@@ -4991,6 +5001,7 @@ pub async fn apply_preset(
             );
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
+            store.set_setting("providers.embedding.kind", &gw_embed_kind);
             store.set_setting("providers.embedding.model", &gw_embed_model);
             store.set_setting("providers.embedding.base_url", &gw_embed_base);
             store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
@@ -5098,6 +5109,7 @@ pub async fn apply_preset(
             store.set_setting("document.chunk_overlap", "64");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
+            store.set_setting("providers.embedding.kind", &gw_embed_kind);
             store.set_setting("providers.embedding.model", &gw_embed_model);
             store.set_setting("providers.embedding.base_url", &gw_embed_base);
             store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
@@ -5144,6 +5156,7 @@ pub async fn apply_preset(
             store.set_setting("document.chunk_overlap", "128");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
+            store.set_setting("providers.embedding.kind", &gw_embed_kind);
             store.set_setting("providers.embedding.model", &gw_embed_model);
             store.set_setting("providers.embedding.base_url", &gw_embed_base);
             store.set_setting("providers.embedding.dimensions", &gw_embed_dim);

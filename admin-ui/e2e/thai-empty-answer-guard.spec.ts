@@ -62,7 +62,12 @@ async function waitForReady(request: APIRequestContext, token: string, wsId: str
   throw new Error('Timed out waiting for document');
 }
 
-test.describe('Thai empty-answer guard (lean shared, default model)', () => {
+// Exercises Ollama-specific think-suppression behavior (ollama.rs strips
+// `<think>` output; gemma4:e4b trips the blank-answer guard, qwen3:14b doesn't).
+// Meaningless on an all-gateway deployment where Ollama isn't running. Skipped
+// by default; set RUN_OLLAMA_BENCH=1 to run it with local Ollama.
+const guardDescribe = process.env.RUN_OLLAMA_BENCH ? test.describe : test.describe.skip;
+guardDescribe('Thai empty-answer guard (lean shared, default model)', () => {
   const suffix = Date.now();
   const orgName = `GuardOrg-${suffix}`;
   const deptName = `GuardDept-${suffix}`;
