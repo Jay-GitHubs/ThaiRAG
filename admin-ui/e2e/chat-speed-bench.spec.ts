@@ -148,7 +148,11 @@ async function waitForReady(
   throw new Error('Timed out waiting for document to finish processing');
 }
 
-test.describe('Chat pipeline speed benchmark (model + mode sweep)', () => {
+// Benchmarks a sweep of INSTALLED LOCAL OLLAMA models — meaningless (and hangs
+// for the full timeout) on an all-gateway deployment where Ollama isn't running.
+// Skipped by default; set RUN_OLLAMA_BENCH=1 to run it with local Ollama.
+const benchDescribe = process.env.RUN_OLLAMA_BENCH ? test.describe : test.describe.skip;
+benchDescribe('Chat pipeline speed benchmark (model + mode sweep)', () => {
   const suffix = Date.now();
   const orgName = `SpeedOrg-${suffix}`;
   const deptName = `SpeedDept-${suffix}`;
