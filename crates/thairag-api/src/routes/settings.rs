@@ -4355,8 +4355,8 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             description: "Essential Thai RAG with Chinda — a Thai-optimized 4B model by iApp. Low resource usage, great for getting started.".into(),
             category: "chat".into(),
             required_models: vec![
-                PresetModelInfo { model: "iapp/chinda-qwen3-4b".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "Thai-optimized Qwen3-4B — chat, curation, quality guard".into() },
-                PresetModelInfo { model: "qwen3-embedding:0.6b".into(), role: "Embedding".into(), task_weight: "light".into(), description: "Multilingual embeddings with Thai support (dim=1024)".into() },
+                PresetModelInfo { model: "qwen2.5-vl-7b".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "Thai-optimized Qwen3-4B — chat, curation, quality guard".into() },
+                PresetModelInfo { model: "embed-qwen3".into(), role: "Embedding".into(), task_weight: "light".into(), description: "Multilingual embeddings with Thai support (dim=1024)".into() },
             ],
             settings_summary: vec![
                 s("LLM Mode", "Shared (single model)"),
@@ -4380,8 +4380,8 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             description: "Best balance of quality and speed. Qwen3-14B with Thai comprehension, orchestrator, memory, and ColBERT.".into(),
             category: "chat".into(),
             required_models: vec![
-                PresetModelInfo { model: "qwen3:14b".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "119 languages incl. Thai — chat, curation, quality guard".into() },
-                PresetModelInfo { model: "qwen3-embedding:8b".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
+                PresetModelInfo { model: "qwen3.6-27b-fast".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "119 languages incl. Thai — chat, curation, quality guard".into() },
+                PresetModelInfo { model: "embed-qwen3".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
             ],
             settings_summary: vec![
                 s("LLM Mode", "Shared (single model)"),
@@ -4410,11 +4410,11 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             description: "All features with dedicated models per task. Best quality, highest resource usage. Requires 128GB+ VRAM.".into(),
             category: "chat".into(),
             required_models: vec![
-                PresetModelInfo { model: "qwen3:32b".into(), role: "Main LLM (Heavy)".into(), task_weight: "heavy".into(), description: "Best Thai quality — response generation, quality guard, curation".into() },
-                PresetModelInfo { model: "qwen3:14b".into(), role: "Agent LLM (Medium)".into(), task_weight: "medium".into(), description: "Graph RAG, CRAG, RAPTOR, ColBERT, compression, memory".into() },
-                PresetModelInfo { model: "iapp/chinda-qwen3-4b".into(), role: "Light LLM".into(), task_weight: "light".into(), description: "Thai-optimized fast model — query analysis, rewriting".into() },
-                PresetModelInfo { model: "llama4:scout".into(), role: "Vision LLM".into(), task_weight: "medium".into(), description: "Multimodal with Thai support — image descriptions".into() },
-                PresetModelInfo { model: "qwen3-embedding:8b".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
+                PresetModelInfo { model: "qwen3.6-27b-fast".into(), role: "Main LLM (Heavy)".into(), task_weight: "heavy".into(), description: "Best Thai quality — response generation, quality guard, curation".into() },
+                PresetModelInfo { model: "qwen3.6-27b-fast".into(), role: "Agent LLM (Medium)".into(), task_weight: "medium".into(), description: "Graph RAG, CRAG, RAPTOR, ColBERT, compression, memory".into() },
+                PresetModelInfo { model: "qwen2.5-vl-7b".into(), role: "Light LLM".into(), task_weight: "light".into(), description: "Thai-optimized fast model — query analysis, rewriting".into() },
+                PresetModelInfo { model: "qwen2.5-vl-7b".into(), role: "Vision LLM".into(), task_weight: "medium".into(), description: "Multimodal with Thai support — image descriptions".into() },
+                PresetModelInfo { model: "embed-qwen3".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
             ],
             settings_summary: vec![
                 s("LLM Mode", "Per-agent (dedicated models)"),
@@ -4556,8 +4556,8 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             description: "Lightweight document processing with Chinda for Thai text analysis, chunking, and enrichment.".into(),
             category: "document".into(),
             required_models: vec![
-                PresetModelInfo { model: "iapp/chinda-qwen3-4b".into(), role: "Document AI + Enricher".into(), task_weight: "light".into(), description: "Thai-optimized analysis, chunking, enrichment".into() },
-                PresetModelInfo { model: "qwen3-embedding:0.6b".into(), role: "Embedding".into(), task_weight: "light".into(), description: "Multilingual embeddings with Thai support (dim=1024)".into() },
+                PresetModelInfo { model: "qwen2.5-vl-7b".into(), role: "Document AI + Enricher".into(), task_weight: "light".into(), description: "Thai-optimized analysis, chunking, enrichment".into() },
+                PresetModelInfo { model: "embed-qwen3".into(), role: "Embedding".into(), task_weight: "light".into(), description: "Multilingual embeddings with Thai support (dim=1024)".into() },
             ],
             settings_summary: vec![
                 s("Chunk Size", "512 chars / 64 overlap"),
@@ -4583,9 +4583,9 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             description: "Best document processing — Qwen3-14B for analysis + Chinda for enrichment + full embedding.".into(),
             category: "document".into(),
             required_models: vec![
-                PresetModelInfo { model: "qwen3:14b".into(), role: "Document AI".into(), task_weight: "heavy".into(), description: "Thai-capable analysis, conversion, quality check, chunking".into() },
-                PresetModelInfo { model: "iapp/chinda-qwen3-4b".into(), role: "Enricher".into(), task_weight: "light".into(), description: "Thai-optimized metadata enrichment".into() },
-                PresetModelInfo { model: "qwen3-embedding:8b".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
+                PresetModelInfo { model: "qwen3.6-27b-fast".into(), role: "Document AI".into(), task_weight: "heavy".into(), description: "Thai-capable analysis, conversion, quality check, chunking".into() },
+                PresetModelInfo { model: "qwen2.5-vl-7b".into(), role: "Enricher".into(), task_weight: "light".into(), description: "Thai-optimized metadata enrichment".into() },
+                PresetModelInfo { model: "embed-qwen3".into(), role: "Embedding".into(), task_weight: "light".into(), description: "#1 MTEB multilingual, Thai-capable (dim=4096)".into() },
             ],
             settings_summary: vec![
                 s("Chunk Size", "1,024 chars / 128 overlap"),
@@ -4691,15 +4691,32 @@ pub async fn apply_preset(
     let api_key = req.api_key.clone();
     let store = &state.km_store;
 
-    fn ollama_llm(model: &str, url: &str) -> String {
+    // This deployment is configured against an OpenAI-compatible provider (the
+    // gateway), not local Ollama. Presets target that configured provider: take
+    // its base_url + api_key, and map each curated role model to a gateway
+    // model. So applying any "thai-*" preset produces OpenAI-compatible configs,
+    // never Ollama. (`url` from the request is ignored for the LLM provider.)
+    let gw_base = state.config.providers.llm.base_url.clone();
+    let gw_key = state.config.providers.llm.api_key.clone();
+    let gw_embed_base = state.config.providers.embedding.base_url.clone();
+    let gw_embed_model = state.config.providers.embedding.model.clone();
+    let gw_embed_dim = state.config.providers.embedding.dimension.to_string();
+
+    let ollama_llm = |model: &str, _url: &str| -> String {
+        // Map curated Ollama role models → gateway models: the small/vision
+        // models go to the fast VL model, everything else to the main model.
+        let gw_model = match model {
+            "iapp/chinda-qwen3-4b" | "llama4:scout" => "qwen2.5-vl-7b",
+            _ => "qwen3.6-27b-fast",
+        };
         serde_json::json!({
-            "kind": "ollama",
-            "model": model,
-            "base_url": url,
-            "api_key": ""
+            "kind": "open_ai_compatible",
+            "model": gw_model,
+            "base_url": gw_base,
+            "api_key": gw_key,
         })
         .to_string()
-    }
+    };
 
     #[allow(dead_code)] // kept for backward compatibility
     fn cloud_llm(model: &str, api_key: &str) -> String {
@@ -4828,9 +4845,9 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.orchestrator_enabled", "false");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
-            store.set_setting("providers.embedding.model", "qwen3-embedding:0.6b");
-            store.set_setting("providers.embedding.base_url", &url);
-            store.set_setting("providers.embedding.dimensions", "1024");
+            store.set_setting("providers.embedding.model", &gw_embed_model);
+            store.set_setting("providers.embedding.base_url", &gw_embed_base);
+            store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
             // ── Reranker: passthrough (no external service needed) ──
             store.set_setting("providers.reranker.kind", "passthrough");
             // ── Tuning: conservative for 4B model ──
@@ -4873,9 +4890,9 @@ pub async fn apply_preset(
             store.set_setting("chat_pipeline.orchestrator_enabled", "true");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
-            store.set_setting("providers.embedding.model", "qwen3-embedding:8b");
-            store.set_setting("providers.embedding.base_url", &url);
-            store.set_setting("providers.embedding.dimensions", "4096");
+            store.set_setting("providers.embedding.model", &gw_embed_model);
+            store.set_setting("providers.embedding.base_url", &gw_embed_base);
+            store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
             // ── Reranker: passthrough ──
             store.set_setting("providers.reranker.kind", "passthrough");
             // ── Tuning: balanced for 14B model ──
@@ -4974,9 +4991,9 @@ pub async fn apply_preset(
             );
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
-            store.set_setting("providers.embedding.model", "qwen3-embedding:8b");
-            store.set_setting("providers.embedding.base_url", &url);
-            store.set_setting("providers.embedding.dimensions", "4096");
+            store.set_setting("providers.embedding.model", &gw_embed_model);
+            store.set_setting("providers.embedding.base_url", &gw_embed_base);
+            store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
             // ── Reranker: passthrough ──
             store.set_setting("providers.reranker.kind", "passthrough");
             // ── Tuning: aggressive for 32B model ──
@@ -5081,9 +5098,9 @@ pub async fn apply_preset(
             store.set_setting("document.chunk_overlap", "64");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
-            store.set_setting("providers.embedding.model", "qwen3-embedding:0.6b");
-            store.set_setting("providers.embedding.base_url", &url);
-            store.set_setting("providers.embedding.dimensions", "1024");
+            store.set_setting("providers.embedding.model", &gw_embed_model);
+            store.set_setting("providers.embedding.base_url", &gw_embed_base);
+            store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
         }
         "thai-doc-recommended" => {
             // ── AI Preprocessing: Qwen3-14B + Chinda enricher ──
@@ -5127,9 +5144,9 @@ pub async fn apply_preset(
             store.set_setting("document.chunk_overlap", "128");
             // ── Embedding ──
             store.set_setting("providers.embedding.kind", "ollama");
-            store.set_setting("providers.embedding.model", "qwen3-embedding:8b");
-            store.set_setting("providers.embedding.base_url", &url);
-            store.set_setting("providers.embedding.dimensions", "4096");
+            store.set_setting("providers.embedding.model", &gw_embed_model);
+            store.set_setting("providers.embedding.base_url", &gw_embed_base);
+            store.set_setting("providers.embedding.dimensions", &gw_embed_dim);
         }
         // ── Cloud Chat presets ──
         "cloud-basic" => {

@@ -75,7 +75,11 @@ async function waitForReady(request: APIRequestContext, token: string, wsId: str
   throw new Error('Timed out waiting for document');
 }
 
-test.describe('Chat model speed sweep (lean shared, latest Thai models)', () => {
+// Benchmarks a sweep of INSTALLED LOCAL OLLAMA models — meaningless (and hangs
+// for the full timeout) on an all-gateway deployment where Ollama isn't running.
+// Skipped by default; set RUN_OLLAMA_BENCH=1 to run it with local Ollama.
+const benchDescribe = process.env.RUN_OLLAMA_BENCH ? test.describe : test.describe.skip;
+benchDescribe('Chat model speed sweep (lean shared, latest Thai models)', () => {
   const suffix = Date.now();
   const orgName = `ModelOrg-${suffix}`;
   const deptName = `ModelDept-${suffix}`;

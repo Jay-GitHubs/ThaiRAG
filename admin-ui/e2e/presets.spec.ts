@@ -40,13 +40,13 @@ test.describe('Quick Setup Presets', () => {
     await expect(basicCard.getByRole('columnheader', { name: 'Model' })).toBeVisible();
     await expect(basicCard.getByRole('columnheader', { name: 'Role' })).toBeVisible();
     await expect(basicCard.getByRole('columnheader', { name: 'Weight' })).toBeVisible();
-    await expect(basicCard.getByText('iapp/chinda-qwen3-4b')).toBeVisible();
+    await expect(basicCard.getByText('qwen2.5-vl-7b')).toBeVisible();
   });
 
   test('Thai model names appear in presets', async ({ page }) => {
     const panel = page.getByRole('tabpanel');
-    await expect(panel.getByText('iapp/chinda-qwen3-4b').first()).toBeVisible();
-    await expect(panel.getByText('qwen3:14b').first()).toBeVisible();
+    await expect(panel.getByText('qwen2.5-vl-7b').first()).toBeVisible();
+    await expect(panel.getByText('qwen3.6-27b-fast').first()).toBeVisible();
   });
 
   test('apply chat preset updates Chat Pipeline settings via API', async ({ page }) => {
@@ -68,12 +68,12 @@ test.describe('Quick Setup Presets', () => {
     const chatConfig = await (await page.request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
     expect(chatConfig.enabled).toBe(true);
     expect(chatConfig.llm_mode).toBe('shared');
-    expect(chatConfig.llm?.model).toBe('qwen3:14b');
+    expect(chatConfig.llm?.model).toBe('qwen3.6-27b-fast');
 
     // Verify embedding updated
     const provConfig = await (await page.request.get(`${API_BASE}/api/km/settings/providers`, { headers })).json();
-    expect(provConfig.embedding.model).toBe('qwen3-embedding:8b');
-    expect(provConfig.embedding.kind).toBe('Ollama');
+    expect(provConfig.embedding.model).toBe('embed-qwen3');
+    expect(provConfig.embedding.kind).toBe('OpenAi');
 
     // Verify UI: pipeline should be enabled
     await page.getByRole('tab', { name: 'Chat & Response Pipeline' }).click();
@@ -98,10 +98,10 @@ test.describe('Quick Setup Presets', () => {
     const docConfig = await (await page.request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
     expect(docConfig.ai_preprocessing.enabled).toBe(true);
     expect(docConfig.ai_preprocessing.enricher_enabled).toBe(true);
-    // Main LLM should be qwen3:14b
-    expect(docConfig.ai_preprocessing.llm?.model).toBe('qwen3:14b');
-    // Enricher LLM should be iapp/chinda-qwen3-4b (THIS was the key bug)
-    expect(docConfig.ai_preprocessing.enricher_llm?.model).toBe('iapp/chinda-qwen3-4b');
+    // Main LLM maps to the gateway main model
+    expect(docConfig.ai_preprocessing.llm?.model).toBe('qwen3.6-27b-fast');
+    // Enricher maps to the gateway fast model (distinct-agent check)
+    expect(docConfig.ai_preprocessing.enricher_llm?.model).toBe('qwen2.5-vl-7b');
 
     // Verify UI
     await page.getByRole('tab', { name: 'Document Processing' }).click();
