@@ -274,9 +274,18 @@ impl HybridSearchEngine {
         // RRF merge (image_result_sets empty when visual search is disabled)
         let merged = self.rrf_merge(&vector_results, &text_results, &image_result_sets);
 
-        // Rerank
-        let top = merged.into_iter().take(self.config.rerank_top_k).collect();
-        let mut results = self.reranker.rerank(&query.text, top).await?;
+        // Rerank. The reranker is a quality enhancer, not a correctness
+        // dependency — if it fails (e.g. a flaky upstream rerank endpoint
+        // returning 502), degrade to the un-reranked merged results rather than
+        // failing the whole search/chat request.
+        let top: Vec<SearchResult> = merged.into_iter().take(self.config.rerank_top_k).collect();
+        let mut results = match self.reranker.rerank(&query.text, top.clone()).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "reranker failed; using un-reranked results");
+                top
+            }
+        };
 
         // Apply search plugin post-processing (filtering, re-ranking, etc.)
         if !self.search_plugins.is_empty() {
@@ -314,11 +323,17 @@ impl HybridSearchEngine {
         };
         let text_results = self.text_search.search(&text_query).await?;
 
-        let top = text_results
+        let top: Vec<SearchResult> = text_results
             .into_iter()
             .take(self.config.rerank_top_k)
             .collect();
-        let mut results = self.reranker.rerank(&query.text, top).await?;
+        let mut results = match self.reranker.rerank(&query.text, top.clone()).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "reranker failed; using un-reranked results");
+                top
+            }
+        };
 
         if !self.search_plugins.is_empty() {
             for plugin in &self.search_plugins {
