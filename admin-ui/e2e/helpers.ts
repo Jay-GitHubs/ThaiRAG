@@ -5,12 +5,13 @@ export const TEST_PASSWORD = 'Test1234!';
 export const API_BASE = 'http://localhost:8080';
 
 /**
- * A chat/generation model that is reliably pulled in the local dev Ollama.
- * Chat-dependent specs pin to this so they don't inherit a leaked/unpulled
- * model (e.g. a model-bench spec that left an oversized model selected), and
+ * A known-good chat/generation model on the configured provider. The stack runs
+ * against an OpenAI-compatible gateway, so this defaults to a gateway model;
+ * override with E2E_CHAT_MODEL for a different deployment. Chat-dependent specs
+ * pin to this so they don't inherit a leaked model from an earlier spec, and
  * model-mutating specs restore to it so they never leave a bad model behind.
  */
-export const GOOD_CHAT_MODEL = 'qwen3:14b';
+export const GOOD_CHAT_MODEL = process.env.E2E_CHAT_MODEL ?? 'qwen3.6-27b-fast';
 
 /** Read the current global shared chat-pipeline LLM model (or undefined). */
 export async function getSharedModel(
@@ -24,7 +25,13 @@ export async function getSharedModel(
   return cp.llm?.model as string | undefined;
 }
 
-/** Set the global shared chat-pipeline LLM model (merges; hot-reloaded by the API). */
+/**
+ * Set the global shared chat-pipeline LLM model. Sends ONLY the model: the API
+ * merges it into the existing provider config, so the configured kind, base_url
+ * and api_key are left intact (no provider-kind change → no credential reset).
+ * This keeps the specs provider-agnostic — they just pick a model on whatever
+ * provider the stack is configured with — and needs no gateway secret in CI.
+ */
 export async function setSharedModel(
   request: APIRequestContext,
   token: string,
@@ -32,7 +39,7 @@ export async function setSharedModel(
 ): Promise<void> {
   const headers = { Authorization: `Bearer ${token}` };
   await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, {
-    data: { llm: { kind: 'Ollama', model } },
+    data: { llm: { model } },
     headers,
   });
 }
