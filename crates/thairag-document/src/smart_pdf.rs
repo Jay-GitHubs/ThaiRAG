@@ -106,7 +106,7 @@ impl Default for SmartPdfConfig {
             max_vision_pages: 100,
             high_quality: false,
             enhance: false,
-            vision_concurrency: 4,
+            vision_concurrency: 2,
         }
     }
 }
