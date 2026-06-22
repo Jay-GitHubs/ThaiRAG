@@ -607,7 +607,7 @@ fn default_pdf_max_images_per_page() -> usize {
 }
 
 fn default_pdf_vision_concurrency() -> usize {
-    4
+    2
 }
 
 fn default_sentence_window_size() -> usize {
