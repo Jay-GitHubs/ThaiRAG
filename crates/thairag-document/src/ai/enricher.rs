@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use thairag_core::PromptRegistry;
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
@@ -42,6 +42,7 @@ pub struct LlmChunkEnricher {
 
 #[derive(Debug, Deserialize)]
 struct EnrichmentResult {
+    #[serde(deserialize_with = "deserialize_chunk_index")]
     chunk_index: usize,
     context_prefix: Option<String>,
     summary: Option<String>,
@@ -49,6 +50,32 @@ struct EnrichmentResult {
     keywords: Option<Vec<String>>,
     #[serde(default)]
     hypothetical_queries: Option<Vec<String>>,
+}
+
+/// Deserialize `chunk_index`, tolerating the quoted-number form some VL models
+/// emit despite the integer schema (e.g. qwen2.5-vl-7b returns `"chunk_index":
+/// "6"`). serde's default `usize` decoder rejects the string with `invalid type:
+/// string "6", expected usize` and the whole enrichment batch is dropped. Accept
+/// both an integer and a numeric string so a schema-loose model doesn't cost us
+/// the batch.
+fn deserialize_chunk_index<'de, D>(deserializer: D) -> std::result::Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntOrString {
+        Int(usize),
+        Str(String),
+    }
+
+    match IntOrString::deserialize(deserializer)? {
+        IntOrString::Int(n) => Ok(n),
+        IntOrString::Str(s) => s
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| serde::de::Error::custom(format!("invalid chunk_index string: {s:?}"))),
+    }
 }
 
 impl LlmChunkEnricher {
@@ -354,5 +381,25 @@ mod tests {
     fn returns_empty_when_nothing_complete() {
         let garbage = r#"[{"chunk_index": 0, "summary": "incompl"#;
         assert!(salvage_enrichment_objects(garbage).is_empty());
+    }
+
+    #[test]
+    fn parses_quoted_chunk_index_from_vl_models() {
+        // qwen2.5-vl-7b emits chunk_index as a quoted string despite the integer
+        // schema. Strict usize decoding dropped the whole batch with
+        // `invalid type: string "6", expected usize`; we now accept both forms.
+        let quoted = r#"[
+            {"chunk_index": "6", "summary": "six"},
+            {"chunk_index": 7, "summary": "seven"}
+        ]"#;
+        let parsed: Vec<EnrichmentResult> = serde_json::from_str(quoted).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].chunk_index, 6);
+        assert_eq!(parsed[1].chunk_index, 7);
+
+        // Salvage path must tolerate it too (partial batches from VL models).
+        let salvaged = salvage_enrichment_objects(quoted);
+        assert_eq!(salvaged.len(), 2);
+        assert_eq!(salvaged[0].chunk_index, 6);
     }
 }
