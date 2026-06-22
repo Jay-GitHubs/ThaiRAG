@@ -421,12 +421,15 @@ impl DocumentPipeline {
         }
     }
 
-    /// Set the vision LLM and enable image description.
+    /// Attach the vision LLM. The model is always stored so the enforced
+    /// smart-PDF path can OCR pages that genuinely need it (image/scanned, or a
+    /// page whose text layer is corrupted). The `enabled` flag gates only the
+    /// opt-in description of DOCX/XLSX/HTML embedded images and direct image
+    /// uploads (see [`vision_capable`](Self::vision_capable)) — it does NOT gate
+    /// PDF OCR, which is enforced.
     pub fn with_image_description(mut self, llm: Arc<dyn LlmProvider>, enabled: bool) -> Self {
-        if enabled {
-            self.vision_llm = Some(llm);
-            self.image_description_enabled = true;
-        }
+        self.vision_llm = Some(llm);
+        self.image_description_enabled = enabled;
         self
     }
 
@@ -699,11 +702,19 @@ impl DocumentPipeline {
     }
 
     /// Whether the pdfium smart-PDF engine should be attempted for this input.
+    ///
+    /// Enforced for *every* PDF (pdfium availability is checked at the call
+    /// site): a PDF must never be dropped onto the raw `pdf-extract` mechanical
+    /// path, which mangles Thai (e.g. `เรืĻอง`). The smart path is adaptive — it
+    /// uses the pdfium text layer for text/tabular pages (zero vision cost) and
+    /// only invokes the vision model for image/scanned pages — and it degrades
+    /// gracefully when no vision model is configured (text pages stay clean;
+    /// image pages keep their text layer and are flagged). This deliberately
+    /// ignores the `pdf_vision_fallback_enabled` / `image_description_enabled`
+    /// toggles for *routing*; those toggles still gate whether vision OCR
+    /// actually runs (see `effective_vision_llm` in `process_pdf_smart`).
     fn smart_pdf_eligible(&self, mime_type: &str) -> bool {
         mime_type == PDF_MIME
-            && self.pdf_vision_fallback_enabled
-            && self.image_description_enabled
-            && self.vision_llm.is_some()
     }
 
     /// Whether a DOCX/XLSX/HTML file should go through the embedded-media path
@@ -968,8 +979,10 @@ impl DocumentPipeline {
     /// thousands of vision-LLM calls.
     /// Smart per-page PDF extraction (pdfium): pick a strategy per page, build
     /// one semantic-markdown document, and chunk it per page with strategy /
-    /// page metadata. The caller has already confirmed pdfium is available and
-    /// a vision LLM is configured.
+    /// page metadata. The caller has already confirmed pdfium is available. A
+    /// vision LLM is optional: without one, text/tabular pages still extract
+    /// cleanly via the pdfium text layer and image/scanned pages keep their text
+    /// (flagged via `pages_vision_skipped`).
     async fn process_pdf_smart(
         &self,
         raw: &[u8],
@@ -980,16 +993,24 @@ impl DocumentPipeline {
         use crate::semantic::PageStrategy;
         use crate::smart_pdf::SmartPdfConfig;
 
-        let llm = self
-            .vision_llm
-            .as_ref()
-            .expect("process_pdf_smart called without vision_llm — caller must check")
-            .clone();
+        // Vision OCR is ENFORCED for PDFs: whenever a vision model is configured
+        // it is used, independent of the opt-in `image_description_enabled`
+        // toggle (that toggle still gates DOCX/XLSX/image description). This is
+        // safe because routing is adaptive — vision only actually fires on pages
+        // that need it (ImageHeavy/Scanned, or a page whose text layer is
+        // corrupted), never on clean text or deterministically-reconstructed
+        // tables — so it cannot fabricate numbers on a clean table. When no
+        // vision model is configured at all, text/tabular pages still extract
+        // cleanly via the pdfium text layer; image/scanned pages keep their text
+        // and are flagged via `pages_vision_skipped`.
+        let effective_vision_llm: Option<Arc<dyn LlmProvider>> = self.vision_llm.clone();
 
         // Advisory heads-up: the model isn't in our recommended-vision list. We
         // still attempt OCR (it may be vision-capable anyway); this only flags a
         // likely misconfiguration if pages come back as placeholders.
-        if !llm.supports_vision() {
+        if let Some(llm) = effective_vision_llm.as_ref()
+            && !llm.supports_vision()
+        {
             tracing::warn!(
                 %doc_id,
                 vision_model = llm.model_name(),
@@ -1016,17 +1037,27 @@ impl DocumentPipeline {
         .await
         .map_err(|e| ThaiRagError::Validation(format!("smart-pdf extract task join: {e}")))??;
 
-        // Phase 2 (async): vision per page + assemble the document.
-        let doc = crate::smart_pdf::render_to_document("", extracts, llm.as_ref(), &cfg).await;
+        // Phase 2 (async): vision per page (if a model is configured) + assemble.
+        let doc = crate::smart_pdf::render_to_document(
+            "",
+            extracts,
+            effective_vision_llm.as_deref(),
+            &cfg,
+        )
+        .await;
 
         info!(
             %doc_id,
             total_pages = doc.total_pages,
             vision_pages_used = doc.vision_pages_used,
             pages_vision_failed = doc.pages_vision_failed,
+            pages_vision_skipped = doc.pages_vision_skipped,
             tables_kept_as_text = doc.tables_kept_as_text,
             markdown_bytes = doc.markdown.len(),
-            vision_model = llm.model_name(),
+            vision_model = effective_vision_llm
+                .as_ref()
+                .map(|l| l.model_name().to_string())
+                .unwrap_or_else(|| "none (text-layer only)".to_string()),
             "Smart PDF (pdfium) processing complete"
         );
 
