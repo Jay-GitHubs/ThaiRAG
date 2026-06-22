@@ -463,6 +463,7 @@ impl DocumentPipeline {
         max_images_per_page: usize,
         high_quality: bool,
         enhance: bool,
+        vision_concurrency: usize,
     ) -> Self {
         self.smart_pdf.image_dpi = image_dpi;
         self.smart_pdf.max_image_edge = max_image_edge;
@@ -471,6 +472,7 @@ impl DocumentPipeline {
         self.smart_pdf.max_images_per_page = max_images_per_page;
         self.smart_pdf.high_quality = high_quality;
         self.smart_pdf.enhance = enhance;
+        self.smart_pdf.vision_concurrency = vision_concurrency.max(1);
         self
     }
 
