@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+futures-util = { workspace = true }
 
 # Build-time provisioning of the native libpdfium binary.
 [build-dependencies]

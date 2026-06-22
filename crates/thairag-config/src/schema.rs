@@ -565,6 +565,13 @@ pub struct DocumentConfig {
     /// Apply sharpen/contrast enhancement before OCR (helps Thai diacritics).
     #[serde(default)]
     pub pdf_image_enhance: bool,
+    /// Max per-page vision OCR calls in flight at once. Pages OCR concurrently up
+    /// to this bound, then reassemble in order — cutting wall-clock from
+    /// sum-of-pages to ~ceil(pages/N)·latency. Keep modest: a heavy model on a
+    /// shared/flaky gateway 5xxs under too much parallelism (failures are
+    /// retried). `1` = sequential.
+    #[serde(default = "default_pdf_vision_concurrency")]
+    pub pdf_vision_concurrency: usize,
 }
 
 fn default_true() -> bool {
@@ -597,6 +604,10 @@ fn default_pdf_min_image_size() -> u32 {
 
 fn default_pdf_max_images_per_page() -> usize {
     5
+}
+
+fn default_pdf_vision_concurrency() -> usize {
+    4
 }
 
 fn default_sentence_window_size() -> usize {
@@ -2123,6 +2134,7 @@ mod tests {
                 pdf_max_images_per_page: default_pdf_max_images_per_page(),
                 pdf_high_quality: false,
                 pdf_image_enhance: false,
+                pdf_vision_concurrency: default_pdf_vision_concurrency(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),

@@ -1,13 +1,85 @@
 use std::borrow::Cow;
+use std::time::Duration;
 
 use base64::Engine;
-use thairag_core::error::Result;
+use thairag_core::error::{Result, ThaiRagError};
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::{ImageContent, ImageMetadata, VisionMessage};
 use tracing::{info, warn};
 
 /// MIME types recognized as images for multi-modal processing.
 pub const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+/// Max retries for a transient vision-call failure (so up to N+1 attempts).
+const VISION_MAX_RETRIES: u32 = 2;
+/// Base backoff before the first retry; doubles each attempt (800ms, 1600ms).
+const VISION_RETRY_BASE_MS: u64 = 800;
+
+/// Whether a vision-call error looks transient and worth retrying. Upstream
+/// gateways (e.g. a flaky llama.cpp/vLLM proxy) return 5xx / 429 / connection
+/// resets under load — especially with concurrent page OCR. The OpenAI-compatible
+/// provider formats these as `OpenAI returned HTTP 502 Bad Gateway: …` or
+/// `OpenAI request failed: …`. We do NOT retry 4xx client errors (400/401/422):
+/// a malformed request or bad key won't fix itself.
+fn vision_error_is_transient(e: &ThaiRagError) -> bool {
+    let s = e.to_string().to_lowercase();
+    s.contains("http 502")
+        || s.contains("http 503")
+        || s.contains("http 500")
+        || s.contains("http 504")
+        || s.contains("http 429")
+        || s.contains("bad gateway")
+        || s.contains("service unavailable")
+        || s.contains("gateway timeout")
+        || s.contains("timed out")
+        || s.contains("timeout")
+        || s.contains("request failed") // reqwest connect/reset/send errors
+        || s.contains("connection")
+}
+
+/// Run one vision call with bounded retry on transient upstream failures.
+/// Surfaces the final error to the caller (unlike [`describe_image_with_prompt`],
+/// which degrades to a placeholder) so OCR callers can fall back to extracted
+/// text instead of embedding a placeholder string as page content.
+pub async fn describe_image_with_prompt_strict(
+    llm: &dyn LlmProvider,
+    image_bytes: &[u8],
+    mime_type: &str,
+    prompt: &str,
+    max_tokens: u32,
+    max_image_edge: u32,
+) -> Result<String> {
+    let (vision_bytes, vision_mime) = downscale_for_vision(image_bytes, mime_type, max_image_edge);
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(vision_bytes.as_ref());
+
+    let mut attempt = 0u32;
+    loop {
+        let vision_msg = VisionMessage {
+            role: "user".to_string(),
+            text: prompt.to_string(),
+            images: vec![ImageContent {
+                base64_data: base64_data.clone(),
+                media_type: vision_mime.to_string(),
+            }],
+        };
+        match llm.generate_vision(&[vision_msg], Some(max_tokens)).await {
+            Ok(response) => return Ok(response.content),
+            Err(e) if attempt < VISION_MAX_RETRIES && vision_error_is_transient(&e) => {
+                attempt += 1;
+                let backoff = Duration::from_millis(VISION_RETRY_BASE_MS << (attempt - 1));
+                warn!(
+                    attempt,
+                    model = llm.model_name(),
+                    error = %e,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "vision call transient failure — retrying"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 /// Downscale `bytes` so its longest edge is at most `max_edge` px, preserving
 /// aspect ratio and re-encoding as PNG. Returns the original bytes/mime
@@ -113,35 +185,29 @@ pub async fn describe_image_with_prompt(
     max_tokens: u32,
     max_image_edge: u32,
 ) -> Result<String> {
-    let metadata = extract_image_metadata(image_bytes, mime_type);
-
-    let (vision_bytes, vision_mime) = downscale_for_vision(image_bytes, mime_type, max_image_edge);
-    let base64_data = base64::engine::general_purpose::STANDARD.encode(vision_bytes.as_ref());
-
-    let vision_msg = VisionMessage {
-        role: "user".to_string(),
-        text: prompt.to_string(),
-        images: vec![ImageContent {
-            base64_data,
-            media_type: vision_mime.to_string(),
-        }],
-    };
-
-    // Advisory, never enforcing: attempt the vision call regardless of whether
-    // the model id is in our recommended-vision list — the admin's model may be
-    // vision-capable even if we don't recognize the name. Fall back to a
-    // metadata placeholder only when the call actually fails.
-    match llm.generate_vision(&[vision_msg], Some(max_tokens)).await {
-        Ok(response) => {
+    // Advisory, never enforcing: attempt the vision call (with transient-retry)
+    // regardless of whether the model id is in our recommended-vision list — the
+    // admin's model may be vision-capable even if we don't recognize the name.
+    // Fall back to a metadata placeholder only when the call ultimately fails.
+    match describe_image_with_prompt_strict(
+        llm,
+        image_bytes,
+        mime_type,
+        prompt,
+        max_tokens,
+        max_image_edge,
+    )
+    .await
+    {
+        Ok(content) => {
             info!(
-                format = %metadata.format,
-                size = metadata.size_bytes,
-                description_len = response.content.len(),
+                description_len = content.len(),
                 "Image described via vision LLM"
             );
-            Ok(response.content)
+            Ok(content)
         }
         Err(e) => {
+            let metadata = extract_image_metadata(image_bytes, mime_type);
             if llm.supports_vision() {
                 warn!(model = llm.model_name(), error = %e,
                     "vision call failed — using metadata placeholder");
@@ -381,5 +447,104 @@ mod tests {
         let (w, h) = extract_png_dimensions(&data);
         assert_eq!(w, Some(1920));
         assert_eq!(h, Some(1080));
+    }
+
+    // ── transient-retry behavior for vision calls ──
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use thairag_core::traits::LlmProvider;
+    use thairag_core::types::{ChatMessage, LlmResponse, VisionMessage};
+
+    /// Vision stub that fails its first `fail_n` calls with `err`, then succeeds.
+    struct FlakyVision {
+        calls: AtomicUsize,
+        fail_n: usize,
+        err: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FlakyVision {
+        fn model_name(&self) -> &str {
+            "flaky-vision"
+        }
+        fn supports_vision(&self) -> bool {
+            true
+        }
+        async fn generate(
+            &self,
+            _m: &[ChatMessage],
+            _t: Option<u32>,
+        ) -> thairag_core::error::Result<LlmResponse> {
+            unreachable!()
+        }
+        async fn generate_vision(
+            &self,
+            _m: &[VisionMessage],
+            _t: Option<u32>,
+        ) -> thairag_core::error::Result<LlmResponse> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_n {
+                Err(ThaiRagError::LlmProvider(self.err.clone()))
+            } else {
+                Ok(LlmResponse {
+                    content: "OCR-OK".into(),
+                    usage: Default::default(),
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn transient_502_is_classified_retryable() {
+        let e = ThaiRagError::LlmProvider("OpenAI returned HTTP 502 Bad Gateway: x".into());
+        assert!(vision_error_is_transient(&e));
+    }
+
+    #[test]
+    fn client_error_400_is_not_retryable() {
+        let e = ThaiRagError::LlmProvider("OpenAI returned HTTP 400 Bad Request: x".into());
+        assert!(!vision_error_is_transient(&e));
+    }
+
+    #[tokio::test]
+    async fn strict_retries_transient_502_then_succeeds() {
+        let llm = FlakyVision {
+            calls: AtomicUsize::new(0),
+            fail_n: 1, // 502 once, then succeed
+            err: "OpenAI returned HTTP 502 Bad Gateway".into(),
+        };
+        let out = describe_image_with_prompt_strict(&llm, b"img", "image/png", "ocr", 64, 0).await;
+        assert_eq!(out.unwrap(), "OCR-OK");
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 2); // 1 fail + 1 success
+    }
+
+    #[tokio::test]
+    async fn strict_does_not_retry_client_error() {
+        let llm = FlakyVision {
+            calls: AtomicUsize::new(0),
+            fail_n: 99,
+            err: "OpenAI returned HTTP 400 Bad Request".into(),
+        };
+        let out = describe_image_with_prompt_strict(&llm, b"img", "image/png", "ocr", 64, 0).await;
+        assert!(out.is_err());
+        assert_eq!(llm.calls.load(Ordering::SeqCst), 1); // no retry on 4xx
+    }
+
+    #[tokio::test]
+    async fn lenient_wrapper_returns_placeholder_after_retries_exhausted() {
+        let llm = FlakyVision {
+            calls: AtomicUsize::new(0),
+            fail_n: 99,
+            err: "OpenAI returned HTTP 503 Service Unavailable".into(),
+        };
+        let out = describe_image_with_prompt(&llm, b"img", "image/png", "ocr", 64, 0)
+            .await
+            .unwrap();
+        // Degrades to a placeholder; tried initial + VISION_MAX_RETRIES times.
+        assert!(out.contains("Image"));
+        assert_eq!(
+            llm.calls.load(Ordering::SeqCst),
+            (VISION_MAX_RETRIES + 1) as usize
+        );
     }
 }

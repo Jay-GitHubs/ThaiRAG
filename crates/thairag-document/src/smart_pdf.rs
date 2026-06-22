@@ -16,6 +16,7 @@
 //! extracted pdfium text; the whole-document zero-chunk guard lives in the
 //! pipeline.
 
+use futures_util::{StreamExt, stream};
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
 use thairag_core::types::ImageId;
@@ -84,6 +85,13 @@ pub struct SmartPdfConfig {
     pub high_quality: bool,
     /// Apply sharpen/contrast enhancement before OCR (helps Thai diacritics).
     pub enhance: bool,
+    /// Max per-page vision OCR calls in flight at once. Pages are OCR'd
+    /// concurrently up to this bound (then reassembled in page order), turning
+    /// wall-clock from sum-of-pages into ~ceil(pages/concurrency)·latency. Keep
+    /// it modest: a heavy model (e.g. 72B) on a shared/flaky gateway will 5xx
+    /// under too much parallelism (transient failures are retried, but flooding
+    /// wastes work). `1` = fully sequential.
+    pub vision_concurrency: usize,
 }
 
 impl Default for SmartPdfConfig {
@@ -98,6 +106,7 @@ impl Default for SmartPdfConfig {
             max_vision_pages: 100,
             high_quality: false,
             enhance: false,
+            vision_concurrency: 4,
         }
     }
 }
@@ -456,200 +465,49 @@ pub async fn render_to_document(
     cfg: &SmartPdfConfig,
 ) -> SmartPdfDocument {
     let total_pages = extracts.len();
+
+    // Pre-assign the vision budget by page order so concurrently-rendered pages
+    // don't race on a running counter: the first `max_vision_pages` pages that
+    // would use vision are allowed, the rest degrade to text. (The budget now
+    // bounds vision *attempts* rather than successes — a small, documented change
+    // that also caps cost when retries happen.)
+    let has_llm = llm.is_some();
+    let mut allow_vision = vec![false; total_pages];
+    let mut budget = cfg.max_vision_pages;
+    for (i, ex) in extracts.iter().enumerate() {
+        if budget == 0 {
+            break;
+        }
+        if page_wants_vision(ex, has_llm) {
+            allow_vision[i] = true;
+            budget -= 1;
+        }
+    }
+
+    // OCR pages concurrently (bounded), then reassemble in page order. Each page
+    // is independent, so wall-clock drops from sum-of-pages to roughly
+    // ceil(pages / vision_concurrency) · per-page latency.
+    let concurrency = cfg.vision_concurrency.max(1);
+    let mut results: Vec<PageRender> = stream::iter(extracts.into_iter().enumerate())
+        .map(|(i, ex)| render_page(i, ex, llm, cfg, allow_vision[i]))
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
+    results.sort_by_key(|r| r.order);
+
+    let mut rendered = Vec::with_capacity(total_pages);
+    let mut images: Vec<ExtractedImageBlob> = Vec::new();
     let mut vision_pages_used = 0usize;
     let mut pages_vision_failed = 0usize;
     let mut pages_vision_skipped = 0usize;
     let mut tables_kept_as_text = 0usize;
-    let mut rendered = Vec::with_capacity(total_pages);
-    let mut images: Vec<ExtractedImageBlob> = Vec::new();
-
-    for ex in extracts {
-        // A continuation page whose table rows were stitched into an earlier
-        // page renders empty — its content lives on the anchor page.
-        if ex.stitched_into.is_some() {
-            rendered.push(rp(&ex, String::new()));
-            continue;
-        }
-        let lang = Language::detect(&ex.text);
-        let over_budget = vision_pages_used >= cfg.max_vision_pages;
-
-        // A successful lattice reconstruction wins for ANY page strategy: the
-        // HTML table's numbers come straight from the text layer (no vision, no
-        // fabrication). This is what fixes a bordered table that the heuristic
-        // mislabelled TextOnly.
-        let mut body = if let Some(lat) = ex.table.as_ref() {
-            // Persist the in-cell images whose `[IMAGE:<id>]` markers are
-            // already embedded in the table HTML/linearized text.
-            for ci in &ex.cell_images {
-                images.push(ExtractedImageBlob {
-                    image_id: ci.image_id,
-                    bytes: ci.png.clone(),
-                    mime: PNG_MIME.to_string(),
-                    width: Some(ci.width),
-                    height: Some(ci.height),
-                    page_num: Some(ex.page_num as u32),
-                    source: "pdf_embedded",
-                });
-            }
-            lat.html.clone()
-        } else {
-            match ex.strategy {
-                PageStrategy::TextOnly => ex.text.clone(),
-
-                PageStrategy::Tabular => {
-                    // No trustworthy reconstruction (borderless with no clean
-                    // column grid, or below the confidence/coverage gate). Keep
-                    // the raw text verbatim — numbers stay exact — and flag the
-                    // page. We deliberately do NOT fall back to vision OCR: it is
-                    // probabilistic and fabricates Thai numerals.
-                    tables_kept_as_text += 1;
-                    ex.text.clone()
-                }
-
-                PageStrategy::ImageHeavy | PageStrategy::Scanned => {
-                    let Some(png) = ex.page_png.as_ref() else {
-                        rendered.push(rp(&ex, ex.text.clone()));
-                        continue;
-                    };
-                    match llm {
-                        // No vision model configured: keep the pdfium text layer
-                        // (clean for ImageHeavy, unreliable for Scanned) and flag
-                        // the page so the operator knows it needed OCR.
-                        None => {
-                            pages_vision_skipped += 1;
-                            ex.text.clone()
-                        }
-                        Some(_) if over_budget => ex.text.clone(),
-                        Some(llm) => {
-                            let prompt = if cfg.high_quality {
-                                high_quality_prompt(lang, &ex.text)
-                            } else {
-                                get_prompts(lang).full_page.to_string()
-                            };
-                            match describe(
-                                llm,
-                                png,
-                                &prompt,
-                                PAGE_VISION_TOKENS,
-                                cfg.max_image_edge,
-                            )
-                            .await
-                            {
-                                Ok(desc) => {
-                                    vision_pages_used += 1;
-                                    // ImageHeavy keeps the readable pdfium text as a
-                                    // prefix; Scanned text is unreliable, so use OCR only.
-                                    if ex.strategy == PageStrategy::ImageHeavy
-                                        && !ex.text.is_empty()
-                                    {
-                                        format!("{}\n\n{}", ex.text, desc)
-                                    } else {
-                                        desc
-                                    }
-                                }
-                                Err(e) => {
-                                    pages_vision_failed += 1;
-                                    warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
-                                    "smart-pdf: page OCR failed — keeping extracted text");
-                                    ex.text.clone()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                PageStrategy::Mixed => {
-                    let mut body = ex.text.clone();
-                    // No vision model: keep the page text, flag that its embedded
-                    // images went undescribed.
-                    let Some(llm) = llm else {
-                        if !ex.embedded.is_empty() {
-                            pages_vision_skipped += 1;
-                        }
-                        rendered.push(rp(&ex, body));
-                        continue;
-                    };
-                    if !over_budget {
-                        let prompt = get_prompts(lang).single_image;
-                        let mut described = 0usize;
-                        for png in &ex.embedded {
-                            match describe(
-                                llm,
-                                png,
-                                prompt,
-                                IMAGE_VISION_TOKENS,
-                                cfg.max_image_edge,
-                            )
-                            .await
-                            {
-                                Ok(desc) => {
-                                    // Persist the embedded image and embed its
-                                    // marker before the description.
-                                    let image_id = ImageId::new();
-                                    let meta = crate::image::extract_image_metadata(png, PNG_MIME);
-                                    images.push(ExtractedImageBlob {
-                                        image_id,
-                                        bytes: png.clone(),
-                                        mime: PNG_MIME.to_string(),
-                                        width: meta.width,
-                                        height: meta.height,
-                                        page_num: Some(ex.page_num as u32),
-                                        source: "pdf_embedded",
-                                    });
-                                    body.push_str("\n\n");
-                                    body.push_str(&crate::semantic::image_marker(
-                                        &image_id.to_string(),
-                                    ));
-                                    body.push('\n');
-                                    body.push_str(&desc);
-                                    described += 1;
-                                }
-                                Err(e) => {
-                                    pages_vision_failed += 1;
-                                    warn!(page = ex.page_num, error = %e,
-                                    vision_model = llm.model_name(),
-                                    "smart-pdf: embedded-image description failed — skipping image");
-                                }
-                            }
-                        }
-                        if described > 0 {
-                            vision_pages_used += 1;
-                        }
-                    }
-                    body
-                }
-            }
-        };
-
-        // Persist the full-page render for the vision strategies (one image per
-        // page). Mint the id here so it can be embedded both in the page
-        // markdown (`[IMAGE:<id>]`) and on the page's chunks (`image_blob_id`).
-        // Embedded-image (Mixed) blob persistence is deferred — those images are
-        // described inline.
-        if matches!(
-            ex.strategy,
-            PageStrategy::ImageHeavy | PageStrategy::Scanned
-        ) && let Some(png) = ex.page_png.as_ref()
-        {
-            let image_id = ImageId::new();
-            let meta = crate::image::extract_image_metadata(png, PNG_MIME);
-            images.push(ExtractedImageBlob {
-                image_id,
-                bytes: png.clone(),
-                mime: PNG_MIME.to_string(),
-                width: meta.width,
-                height: meta.height,
-                page_num: Some(ex.page_num as u32),
-                source: "pdf_page_render",
-            });
-            body = format!(
-                "{}\n{}",
-                crate::semantic::image_marker(&image_id.to_string()),
-                body
-            );
-        }
-
-        rendered.push(rp(&ex, body));
+    for mut r in results {
+        rendered.push(r.rendered);
+        images.append(&mut r.images);
+        vision_pages_used += r.vision_used;
+        pages_vision_failed += r.vision_failed;
+        pages_vision_skipped += r.vision_skipped;
+        tables_kept_as_text += r.tables_kept;
     }
 
     let markdown = assemble_document_markdown(title, rendered.clone());
@@ -662,6 +520,237 @@ pub async fn render_to_document(
         pages_vision_failed,
         pages_vision_skipped,
         tables_kept_as_text,
+    }
+}
+
+/// Per-page render result, aggregated after concurrent OCR completes.
+struct PageRender {
+    order: usize,
+    rendered: RenderedPage,
+    images: Vec<ExtractedImageBlob>,
+    vision_used: usize,
+    vision_failed: usize,
+    vision_skipped: usize,
+    tables_kept: usize,
+}
+
+/// Whether a page would attempt a vision call — used to pre-assign the
+/// `max_vision_pages` budget deterministically before concurrent execution.
+fn page_wants_vision(ex: &PageExtract, has_llm: bool) -> bool {
+    if !has_llm || ex.stitched_into.is_some() || ex.table.is_some() {
+        return false;
+    }
+    match ex.strategy {
+        PageStrategy::ImageHeavy | PageStrategy::Scanned => ex.page_png.is_some(),
+        PageStrategy::Mixed => !ex.embedded.is_empty(),
+        _ => false,
+    }
+}
+
+/// Render one page to markdown (independently, for concurrent execution).
+/// `allow_vision` is the pre-assigned budget decision for this page.
+async fn render_page(
+    order: usize,
+    ex: PageExtract,
+    llm: Option<&dyn LlmProvider>,
+    cfg: &SmartPdfConfig,
+    allow_vision: bool,
+) -> PageRender {
+    let mut images: Vec<ExtractedImageBlob> = Vec::new();
+    let mut vision_used = 0usize;
+    let mut vision_failed = 0usize;
+    let mut vision_skipped = 0usize;
+    let mut tables_kept = 0usize;
+
+    // A continuation page whose table rows were stitched into an earlier page
+    // renders empty — its content lives on the anchor page.
+    if ex.stitched_into.is_some() {
+        return PageRender {
+            order,
+            rendered: rp(&ex, String::new()),
+            images,
+            vision_used,
+            vision_failed,
+            vision_skipped,
+            tables_kept,
+        };
+    }
+    let lang = Language::detect(&ex.text);
+
+    // A successful lattice reconstruction wins for ANY page strategy: the HTML
+    // table's numbers come straight from the text layer (no vision, no
+    // fabrication). This is what fixes a bordered table mislabelled TextOnly.
+    let mut body = if let Some(lat) = ex.table.as_ref() {
+        for ci in &ex.cell_images {
+            images.push(ExtractedImageBlob {
+                image_id: ci.image_id,
+                bytes: ci.png.clone(),
+                mime: PNG_MIME.to_string(),
+                width: Some(ci.width),
+                height: Some(ci.height),
+                page_num: Some(ex.page_num as u32),
+                source: "pdf_embedded",
+            });
+        }
+        lat.html.clone()
+    } else {
+        match ex.strategy {
+            PageStrategy::TextOnly => ex.text.clone(),
+
+            PageStrategy::Tabular => {
+                // No trustworthy reconstruction. Keep the raw text verbatim —
+                // numbers stay exact — and flag the page. We deliberately do NOT
+                // fall back to vision OCR, which fabricates Thai numerals.
+                tables_kept += 1;
+                ex.text.clone()
+            }
+
+            PageStrategy::ImageHeavy | PageStrategy::Scanned => {
+                let Some(png) = ex.page_png.as_ref() else {
+                    return PageRender {
+                        order,
+                        rendered: rp(&ex, ex.text.clone()),
+                        images,
+                        vision_used,
+                        vision_failed,
+                        vision_skipped,
+                        tables_kept,
+                    };
+                };
+                match llm {
+                    // No vision model configured: keep the pdfium text layer and
+                    // flag the page so the operator knows it needed OCR.
+                    None => {
+                        vision_skipped += 1;
+                        ex.text.clone()
+                    }
+                    // Model exists but the per-doc vision budget is exhausted.
+                    Some(_) if !allow_vision => ex.text.clone(),
+                    Some(llm) => {
+                        let prompt = if cfg.high_quality {
+                            high_quality_prompt(lang, &ex.text)
+                        } else {
+                            get_prompts(lang).full_page.to_string()
+                        };
+                        match describe(llm, png, &prompt, PAGE_VISION_TOKENS, cfg.max_image_edge)
+                            .await
+                        {
+                            Ok(desc) => {
+                                vision_used += 1;
+                                // ImageHeavy keeps the readable pdfium text as a
+                                // prefix; Scanned text is unreliable, OCR only.
+                                if ex.strategy == PageStrategy::ImageHeavy && !ex.text.is_empty() {
+                                    format!("{}\n\n{}", ex.text, desc)
+                                } else {
+                                    desc
+                                }
+                            }
+                            Err(e) => {
+                                vision_failed += 1;
+                                warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
+                                "smart-pdf: page OCR failed — keeping extracted text");
+                                ex.text.clone()
+                            }
+                        }
+                    }
+                }
+            }
+
+            PageStrategy::Mixed => {
+                let mut body = ex.text.clone();
+                let Some(llm) = llm else {
+                    if !ex.embedded.is_empty() {
+                        vision_skipped += 1;
+                    }
+                    return PageRender {
+                        order,
+                        rendered: rp(&ex, body),
+                        images,
+                        vision_used,
+                        vision_failed,
+                        vision_skipped,
+                        tables_kept,
+                    };
+                };
+                if allow_vision {
+                    let prompt = get_prompts(lang).single_image;
+                    let mut described = 0usize;
+                    for png in &ex.embedded {
+                        match describe(llm, png, prompt, IMAGE_VISION_TOKENS, cfg.max_image_edge)
+                            .await
+                        {
+                            Ok(desc) => {
+                                let image_id = ImageId::new();
+                                let meta = crate::image::extract_image_metadata(png, PNG_MIME);
+                                images.push(ExtractedImageBlob {
+                                    image_id,
+                                    bytes: png.clone(),
+                                    mime: PNG_MIME.to_string(),
+                                    width: meta.width,
+                                    height: meta.height,
+                                    page_num: Some(ex.page_num as u32),
+                                    source: "pdf_embedded",
+                                });
+                                body.push_str("\n\n");
+                                body.push_str(&crate::semantic::image_marker(
+                                    &image_id.to_string(),
+                                ));
+                                body.push('\n');
+                                body.push_str(&desc);
+                                described += 1;
+                            }
+                            Err(e) => {
+                                vision_failed += 1;
+                                warn!(page = ex.page_num, error = %e,
+                                vision_model = llm.model_name(),
+                                "smart-pdf: embedded-image description failed — skipping image");
+                            }
+                        }
+                    }
+                    if described > 0 {
+                        vision_used += 1;
+                    }
+                }
+                body
+            }
+        }
+    };
+
+    // Persist the full-page render for the vision strategies (one image per
+    // page). Mint the id here so it can be embedded both in the page markdown
+    // (`[IMAGE:<id>]`) and on the page's chunks. Embedded-image (Mixed) blobs
+    // are persisted inline above.
+    if matches!(
+        ex.strategy,
+        PageStrategy::ImageHeavy | PageStrategy::Scanned
+    ) && let Some(png) = ex.page_png.as_ref()
+    {
+        let image_id = ImageId::new();
+        let meta = crate::image::extract_image_metadata(png, PNG_MIME);
+        images.push(ExtractedImageBlob {
+            image_id,
+            bytes: png.clone(),
+            mime: PNG_MIME.to_string(),
+            width: meta.width,
+            height: meta.height,
+            page_num: Some(ex.page_num as u32),
+            source: "pdf_page_render",
+        });
+        body = format!(
+            "{}\n{}",
+            crate::semantic::image_marker(&image_id.to_string()),
+            body
+        );
+    }
+
+    PageRender {
+        order,
+        rendered: rp(&ex, body),
+        images,
+        vision_used,
+        vision_failed,
+        vision_skipped,
+        tables_kept,
     }
 }
 
@@ -686,8 +775,17 @@ async fn describe(
     max_tokens: u32,
     max_image_edge: u32,
 ) -> Result<String> {
-    crate::image::describe_image_with_prompt(llm, png, PNG_MIME, prompt, max_tokens, max_image_edge)
-        .await
+    // Strict variant: surfaces a final (post-retry) error so the caller keeps
+    // the extracted text instead of embedding a placeholder as page content.
+    crate::image::describe_image_with_prompt_strict(
+        llm,
+        png,
+        PNG_MIME,
+        prompt,
+        max_tokens,
+        max_image_edge,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1062,5 +1160,77 @@ mod tests {
         };
         assert!(c.high_quality);
         assert_eq!(c.thresholds().page_as_image_threshold, 0.5);
+    }
+
+    /// Vision stub that echoes the first image byte as `OCR{n}` and sleeps longer
+    /// for lower bytes — so pages complete in REVERSE order, exercising the
+    /// order-preserving reassembly after concurrent OCR.
+    struct OrderEchoVision;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for OrderEchoVision {
+        fn model_name(&self) -> &str {
+            "order-echo"
+        }
+        fn supports_vision(&self) -> bool {
+            true
+        }
+        async fn generate(&self, _m: &[ChatMessage], _t: Option<u32>) -> Result<LlmResponse> {
+            unreachable!()
+        }
+        async fn generate_vision(
+            &self,
+            m: &[VisionMessage],
+            _t: Option<u32>,
+        ) -> Result<LlmResponse> {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&m[0].images[0].base64_data)
+                .unwrap();
+            let id = bytes[0] as u64;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                60u64.saturating_sub(id * 10),
+            ))
+            .await;
+            Ok(LlmResponse {
+                content: format!("OCR{id}"),
+                usage: Default::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_pages_reassemble_in_order() {
+        // 5 Scanned pages, each a 1-byte "render" carrying its index. With
+        // reverse-order completion + concurrency, the output must still be in
+        // page order and every page must carry its own OCR.
+        let pages: Vec<PageExtract> = (0..5)
+            .map(|i| PageExtract {
+                page_num: i + 1,
+                strategy: PageStrategy::Scanned,
+                text: String::new(),
+                page_png: Some(vec![i as u8]),
+                embedded: vec![],
+                table: None,
+                cell_images: vec![],
+                table_pages: vec![],
+                stitched_into: None,
+            })
+            .collect();
+        let c = SmartPdfConfig {
+            vision_concurrency: 8,
+            ..cfg()
+        };
+        let doc = render_to_document("Doc", pages, Some(&OrderEchoVision), &c).await;
+        assert_eq!(doc.vision_pages_used, 5);
+        assert_eq!(doc.pages.len(), 5);
+        for (i, p) in doc.pages.iter().enumerate() {
+            assert_eq!(p.page_num, i + 1, "pages must stay in order");
+            assert!(
+                p.markdown.contains(&format!("OCR{i}")),
+                "page {i} should carry its own OCR, got: {}",
+                p.markdown
+            );
+        }
     }
 }
