@@ -2145,6 +2145,9 @@ where
     eff.pdf_high_quality = s("document.pdf_high_quality")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.pdf_high_quality);
+    eff.pdf_vision_concurrency = s("document.pdf_vision_concurrency")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_vision_concurrency);
 
     // ── ai_preprocessing scalars ──
     eff.ai_preprocessing.enabled = s("ai_preprocessing.enabled")

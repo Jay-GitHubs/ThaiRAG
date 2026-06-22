@@ -363,6 +363,7 @@ impl ProviderBundle {
                 doc.pdf_max_images_per_page,
                 doc.pdf_high_quality,
                 doc.pdf_image_enhance,
+                doc.pdf_vision_concurrency,
             );
 
             // Always attach a vision model so the smart-PDF path can OCR pages
