@@ -1639,8 +1639,13 @@ async fn fetch_models_for_embedding_provider(
                             .map(|arr| {
                                 arr.iter()
                                     .filter(|m| {
-                                        let id = m["id"].as_str().unwrap_or("");
-                                        id.contains("embedding")
+                                        // Match common embedding-model naming
+                                        // (text-embedding-3, embed-qwen3,
+                                        // nomic-embed-text, …) — "embed" is the
+                                        // stable substring; "embedding" alone
+                                        // misses gateways like `embed-qwen3`.
+                                        let id = m["id"].as_str().unwrap_or("").to_lowercase();
+                                        id.contains("embed")
                                     })
                                     .map(|m| AvailableModel {
                                         id: m["id"].as_str().unwrap_or("").to_string(),
