@@ -1050,33 +1050,41 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
             <Divider style={{ margin: '16px 0 12px' }} />
             <Space style={{ marginBottom: 8 }}>
               <RobotOutlined />
-              <Text strong>Smart-PDF Vision OCR</Text>
+              <Text strong>Image description (DOCX / XLSX / HTML / image uploads)</Text>
               <Switch
                 size="small"
                 checked={imageDescriptionEnabled}
                 onChange={setImageDescriptionEnabled}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {imageDescriptionEnabled ? 'On — vision path enabled' : 'Off (default)'}
+                {imageDescriptionEnabled ? 'On' : 'Off (default)'}
               </Text>
             </Space>
             <Alert
-              type="warning"
+              type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="Use only for scanned / image-only PDFs"
+              message="PDFs are always processed with adaptive Smart-PDF (vision is automatic)"
               description={
                 <span>
-                  Vision OCR reads pages as images. On table- or figure-heavy pages it can
-                  <strong> invent</strong> text — fabricated numbers then get embedded and cited as if
-                  they came from the source. It needs a vision-capable model and is slow + RAM-heavy.
-                  For faithful extraction prefer the DOCX/native source; keep this for PDFs that have
-                  <em> no</em> text layer to extract.
+                  Every PDF now uses the Smart-PDF engine: clean text/table pages extract
+                  deterministically from the text layer (no vision, exact numbers), while
+                  image, scanned, or corrupted-text-layer pages are automatically routed to
+                  vision OCR. A vision-capable model must be configured below for those pages
+                  to OCR. This toggle controls only the <em>extra</em> image description for
+                  <strong> non-PDF</strong> formats (DOCX/XLSX/HTML embedded images and direct
+                  image uploads). Use “High quality” to force vision OCR on every PDF page.
                 </span>
               }
             />
-            {imageDescriptionEnabled && (
-              <Space size="large" wrap>
+            <Space style={{ marginBottom: 8 }}>
+              <RobotOutlined />
+              <Text strong>Smart-PDF OCR tuning</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                applies to the always-on PDF vision path
+              </Text>
+            </Space>
+            <Space size="large" wrap>
                 <Space direction="vertical" size={2}>
                   <Space size={4}>
                     <Text type="secondary">Fallback OCR for low-text pages</Text>
@@ -1128,10 +1136,13 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                       <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
                     </Tooltip>
                   </Space>
-                  <Switch checked={pdfHighQuality} onChange={setPdfHighQuality} />
+                  <Switch
+                    data-testid="pdf-high-quality-switch"
+                    checked={pdfHighQuality}
+                    onChange={setPdfHighQuality}
+                  />
                 </Space>
-              </Space>
-            )}
+            </Space>
           </>
         )}
       </Card>

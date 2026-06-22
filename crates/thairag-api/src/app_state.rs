@@ -365,43 +365,45 @@ impl ProviderBundle {
                 doc.pdf_image_enhance,
             );
 
-            // Enable image description if configured. Prefer the dedicated
-            // `providers.doc_vision_llm` so operators can keep a fast text-only
-            // chat model for `llm` while routing OCR / image description to
-            // a heavier vision-capable model (e.g. Ollama `llava`, Claude
-            // 3+, GPT-4o). Falls back to the primary LLM when unset, which
-            // only works if the primary model itself supports vision —
-            // pipeline.rs::process_image will fail loud with a structured
-            // EmptyExtraction reason if it doesn't.
-            let pipeline = if doc.image_description_enabled {
-                let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) =
-                    providers.doc_vision_llm
-                {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, store_ref, v)
-                    } else {
-                        cfg.clone()
-                    };
-                    if !cfg.model.is_empty() {
-                        tracing::info!(
-                            kind = ?resolved.kind,
-                            model = %resolved.model,
-                            "Using dedicated vision LLM for document pipeline"
-                        );
-                    }
-                    Arc::from(create_llm_provider(&resolved))
+            // Always attach a vision model so the smart-PDF path can OCR pages
+            // that genuinely need it — image/scanned pages, or pages whose text
+            // layer is corrupted by a broken ToUnicode CMap (the `เรืĻอง`
+            // garbling). Vision OCR is ENFORCED for PDFs: it is not gated by the
+            // opt-in `image_description_enabled` toggle (which now only gates
+            // DOCX/XLSX/HTML embedded-image + direct-image description). The
+            // routing is adaptive, so vision only actually fires per-page where
+            // needed — clean text and deterministic tables never call it.
+            //
+            // Prefer the dedicated `providers.doc_vision_llm` so operators can
+            // keep a fast text-only chat model for `llm` while routing OCR to a
+            // heavier vision-capable model (Ollama `llava`/`qwen2.5-vl`, Claude
+            // 3+, GPT-4o). Falls back to the primary LLM when unset — which only
+            // works if the primary model is itself vision-capable; pipeline.rs
+            // fails loud with a structured EmptyExtraction reason if it isn't.
+            let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = providers.doc_vision_llm {
+                let resolved = if let Some(v) = vault {
+                    resolve_profile(cfg, store_ref, v)
                 } else {
-                    tracing::info!(
-                        "No `providers.doc_vision_llm` configured — falling back to primary LLM \
-                             for image description. This only works when the primary model is \
-                             itself vision-capable."
-                    );
-                    Arc::clone(&llm)
+                    cfg.clone()
                 };
-                pipeline.with_image_description(vision_llm, true)
+                if !cfg.model.is_empty() {
+                    tracing::info!(
+                        kind = ?resolved.kind,
+                        model = %resolved.model,
+                        "Using dedicated vision LLM for document pipeline"
+                    );
+                }
+                Arc::from(create_llm_provider(&resolved))
             } else {
-                pipeline
+                tracing::info!(
+                    "No `providers.doc_vision_llm` configured — falling back to primary LLM for \
+                         PDF OCR / image description. This only works when the primary model is \
+                         itself vision-capable."
+                );
+                Arc::clone(&llm)
             };
+            let pipeline =
+                pipeline.with_image_description(vision_llm, doc.image_description_enabled);
 
             Arc::new(pipeline)
         };
