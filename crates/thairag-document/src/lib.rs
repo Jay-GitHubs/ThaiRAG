@@ -8,6 +8,7 @@ pub mod office_tables;
 pub mod pdf_rasterizer;
 pub mod pdfium_engine;
 pub mod pipeline;
+pub mod region_router;
 pub mod semantic;
 pub mod semantic_prompts;
 pub mod smart_pdf;
