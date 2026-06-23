@@ -1,6 +1,12 @@
 # Spike: Deterministic OCR (PaddleOCR Thai) vs Vision-LLM OCR
 
-Status: **Complete — GO (with caveats)** · Phase 3 spike of `DOCUMENT_COMPLEXITY_ROUTING_DESIGN.md`
+Status: **Complete — GO, confirmed by graded CER** · Phase 3 spike + Phase 1b eval of
+`DOCUMENT_COMPLEXITY_ROUTING_DESIGN.md`
+
+> **Phase 1b update (graded CER):** on 10 clean Thai gazette pages scored against the
+> trustworthy text layer, **order-independent character accuracy is PaddleOCR 94.5% vs
+> VLM 90.1%**, and PaddleOCR was more reliable (VLM had 1 timeout + 1 hallucination
+> failure). Details in the "Phase 1b" section below. This confirms the spike's GO.
 
 ## Question
 
@@ -68,7 +74,44 @@ more complete, deterministic, reliable, local, and parallelizable — it removes
 slowness, gateway 5xx, and hallucination/repetition risks for the transcription job.
 
 Before building the integration:
-1. **Phase 1b labeled eval** on a larger slice to score correctness per class (CER/WER on
-   Thai), confirming the directional result.
+1. ~~Phase 1b labeled eval~~ — **done** (below).
 2. **Decide deployment shape** (sidecar microservice vs ONNX-`ort`) and **GPU** for throughput.
 3. **Light post-processing** for the minor space/char artifacts.
+
+## Phase 1b — graded CER (no manual labeling)
+
+**Ground truth without labeling:** a *clean* (non-garbled) PDF page's pdfium text layer is
+correct, so it is the reference. `dump_page_pngs` writes each page PNG **and** its `.gt.txt`;
+`scripts/bench/ocr_eval_cer.py` OCRs the PNG with each engine and scores CER. Corpus: 10
+clean Thai pages from `tfac_gazette.pdf` (1.1k–2.4k Thai chars each, garble ratio 0.000).
+
+Two metrics, because text-layer GT and OCR differ in **reading order** (multi-column +
+headers/footnotes), which inflates an order-sensitive edit distance even when every
+character is read correctly:
+
+- **seq-CER** — standard, order-sensitive.
+- **bag-CER** — edit distance on the *sorted* character multiset → order-independent; isolates
+  "read the right characters" from "in the right order".
+
+| Engine | seq-CER | **bag-CER** | char accuracy (1−bag) | reliability (n=10) |
+|---|---|---|---|---|
+| **PaddleOCR `th_PP-OCRv5`** | 0.155 | **0.055** | **94.5%** | 10/10 steady |
+| qwen2.5-vl-7b | 0.185 | **0.099** | 90.1% | 1× HTTP 502, 1× catastrophic (0.62 bag-CER = hallucination) |
+
+### Findings
+1. **bag-CER ≈ ⅓ of seq-CER for both engines** → the high sequence error is dominated by
+   **reading-order / page-furniture** differences vs the text layer, *not* character
+   recognition. Absolute seq-CER here is an upper bound on true error, not the OCR's CER.
+2. **On true character recognition PaddleOCR wins: 94.5% vs 90.1%.** This upgrades the
+   spike from "competitive" to "competitive-to-better, with a number."
+3. **PaddleOCR is more reliable** — the VLM timed out on one page (gateway 502) and produced a
+   catastrophic hallucination on another (bag-CER 0.62); PaddleOCR was steady throughout.
+4. **Reading-order reconstruction is a separate problem** (the router's job — multi-column
+   ordering), affecting any OCR→text pipeline regardless of engine. Not an OCR-choice factor.
+
+### Caveats
+- Single fixture family (gazette prose); broaden to more layouts/fonts before final sizing.
+- text-layer GT inherits its own quirks (the spurious-space artifact is neutralized by
+  whitespace-stripping; reading order is measured separately via bag-CER).
+- Run: `cargo run -p thairag-document --example dump_page_pngs -- <out> <pdf> <pages>` then
+  `THAIRAG_API_KEY=… python3 scripts/bench/ocr_eval_cer.py <out>`.
