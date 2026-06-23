@@ -2148,6 +2148,8 @@ where
     eff.pdf_vision_concurrency = s("document.pdf_vision_concurrency")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.pdf_vision_concurrency);
+    eff.ocr_sidecar_url =
+        s("document.ocr_sidecar_url").unwrap_or_else(|| doc.ocr_sidecar_url.clone());
 
     // ── ai_preprocessing scalars ──
     eff.ai_preprocessing.enabled = s("ai_preprocessing.enabled")

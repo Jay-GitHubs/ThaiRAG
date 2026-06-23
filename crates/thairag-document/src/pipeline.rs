@@ -230,6 +230,10 @@ pub struct DocumentPipeline {
     ai_pipeline: Option<AiDocumentPipeline>,
     /// LLM provider for image description (only used when image_description_enabled).
     vision_llm: Option<Arc<dyn LlmProvider>>,
+    /// Deterministic OCR provider (tier-2). When set, OCR-needing PDF pages are
+    /// transcribed by it in preference to the vision LLM. `None` = OCR tier off
+    /// (default), in which case the smart-PDF path is byte-for-byte unchanged.
+    ocr: Option<Arc<dyn crate::ocr::OcrProvider>>,
     /// Whether to generate LLM descriptions for uploaded images.
     image_description_enabled: bool,
     /// Whether to extract tables from text content and add as separate chunks.
@@ -299,6 +303,7 @@ impl DocumentPipeline {
             chunk_overlap,
             ai_pipeline: None,
             vision_llm: None,
+            ocr: None,
             image_description_enabled: false,
             table_extraction_enabled: true,
             chunking_strategy: ChunkingStrategy::Standard,
@@ -408,6 +413,7 @@ impl DocumentPipeline {
             chunk_overlap,
             ai_pipeline,
             vision_llm: None,
+            ocr: None,
             image_description_enabled: false,
             table_extraction_enabled: true,
             chunking_strategy: ChunkingStrategy::Standard,
@@ -430,6 +436,14 @@ impl DocumentPipeline {
     pub fn with_image_description(mut self, llm: Arc<dyn LlmProvider>, enabled: bool) -> Self {
         self.vision_llm = Some(llm);
         self.image_description_enabled = enabled;
+        self
+    }
+
+    /// Attach a deterministic OCR provider (tier-2). OCR-needing PDF pages are
+    /// then transcribed by it in preference to the vision LLM. Default-off: with
+    /// no provider the smart-PDF path is byte-for-byte unchanged.
+    pub fn with_ocr_provider(mut self, ocr: Arc<dyn crate::ocr::OcrProvider>) -> Self {
+        self.ocr = Some(ocr);
         self
     }
 
@@ -1039,11 +1053,13 @@ impl DocumentPipeline {
         .await
         .map_err(|e| ThaiRagError::Validation(format!("smart-pdf extract task join: {e}")))??;
 
-        // Phase 2 (async): vision per page (if a model is configured) + assemble.
+        // Phase 2 (async): deterministic OCR / vision per page + assemble. OCR
+        // pages are preferred when an OCR provider is configured (default-off).
         let doc = crate::smart_pdf::render_to_document(
             "",
             extracts,
             effective_vision_llm.as_deref(),
+            self.ocr.as_deref(),
             &cfg,
         )
         .await;
@@ -1052,6 +1068,7 @@ impl DocumentPipeline {
             %doc_id,
             total_pages = doc.total_pages,
             vision_pages_used = doc.vision_pages_used,
+            ocr_pages_used = doc.ocr_pages_used,
             pages_vision_failed = doc.pages_vision_failed,
             pages_vision_skipped = doc.pages_vision_skipped,
             tables_kept_as_text = doc.tables_kept_as_text,

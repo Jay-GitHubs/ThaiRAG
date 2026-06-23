@@ -19,6 +19,8 @@
 use futures_util::{StreamExt, stream};
 use thairag_core::error::Result;
 use thairag_core::traits::LlmProvider;
+
+use crate::ocr::OcrProvider;
 use thairag_core::types::ImageId;
 use tracing::warn;
 
@@ -191,6 +193,9 @@ pub struct SmartPdfDocument {
     pub images: Vec<ExtractedImageBlob>,
     pub total_pages: usize,
     pub vision_pages_used: usize,
+    /// Pages transcribed by the deterministic OCR tier (PaddleOCR sidecar) rather
+    /// than the vision LLM. `0` when no OCR provider is configured.
+    pub ocr_pages_used: usize,
     pub pages_vision_failed: usize,
     /// Pages that would have gone through vision OCR (ImageHeavy/Scanned/Mixed)
     /// but were kept as their raw text layer because no vision model was
@@ -462,34 +467,35 @@ pub async fn render_to_document(
     title: &str,
     extracts: Vec<PageExtract>,
     llm: Option<&dyn LlmProvider>,
+    ocr: Option<&dyn OcrProvider>,
     cfg: &SmartPdfConfig,
 ) -> SmartPdfDocument {
     let total_pages = extracts.len();
 
-    // Pre-assign the vision budget by page order so concurrently-rendered pages
-    // don't race on a running counter: the first `max_vision_pages` pages that
-    // would use vision are allowed, the rest degrade to text. (The budget now
-    // bounds vision *attempts* rather than successes — a small, documented change
-    // that also caps cost when retries happen.)
+    // Pre-assign the per-doc model budget by page order so concurrently-rendered
+    // pages don't race on a running counter: the first `max_vision_pages` pages
+    // that would use a model pass (OCR or vision) are allowed, the rest degrade
+    // to text. (The budget bounds *attempts* rather than successes.)
     let has_llm = llm.is_some();
-    let mut allow_vision = vec![false; total_pages];
+    let has_ocr = ocr.is_some();
+    let mut allow_model = vec![false; total_pages];
     let mut budget = cfg.max_vision_pages;
     for (i, ex) in extracts.iter().enumerate() {
         if budget == 0 {
             break;
         }
-        if page_wants_vision(ex, has_llm) {
-            allow_vision[i] = true;
+        if page_wants_model(ex, has_llm, has_ocr) {
+            allow_model[i] = true;
             budget -= 1;
         }
     }
 
-    // OCR pages concurrently (bounded), then reassemble in page order. Each page
-    // is independent, so wall-clock drops from sum-of-pages to roughly
+    // Process pages concurrently (bounded), then reassemble in page order. Each
+    // page is independent, so wall-clock drops from sum-of-pages to roughly
     // ceil(pages / vision_concurrency) · per-page latency.
     let concurrency = cfg.vision_concurrency.max(1);
     let mut results: Vec<PageRender> = stream::iter(extracts.into_iter().enumerate())
-        .map(|(i, ex)| render_page(i, ex, llm, cfg, allow_vision[i]))
+        .map(|(i, ex)| render_page(i, ex, llm, ocr, cfg, allow_model[i]))
         .buffer_unordered(concurrency)
         .collect()
         .await;
@@ -498,6 +504,7 @@ pub async fn render_to_document(
     let mut rendered = Vec::with_capacity(total_pages);
     let mut images: Vec<ExtractedImageBlob> = Vec::new();
     let mut vision_pages_used = 0usize;
+    let mut ocr_pages_used = 0usize;
     let mut pages_vision_failed = 0usize;
     let mut pages_vision_skipped = 0usize;
     let mut tables_kept_as_text = 0usize;
@@ -505,6 +512,7 @@ pub async fn render_to_document(
         rendered.push(r.rendered);
         images.append(&mut r.images);
         vision_pages_used += r.vision_used;
+        ocr_pages_used += r.ocr_used;
         pages_vision_failed += r.vision_failed;
         pages_vision_skipped += r.vision_skipped;
         tables_kept_as_text += r.tables_kept;
@@ -517,47 +525,56 @@ pub async fn render_to_document(
         images,
         total_pages,
         vision_pages_used,
+        ocr_pages_used,
         pages_vision_failed,
         pages_vision_skipped,
         tables_kept_as_text,
     }
 }
 
-/// Per-page render result, aggregated after concurrent OCR completes.
+/// Per-page render result, aggregated after concurrent processing completes.
 struct PageRender {
     order: usize,
     rendered: RenderedPage,
     images: Vec<ExtractedImageBlob>,
     vision_used: usize,
+    ocr_used: usize,
     vision_failed: usize,
     vision_skipped: usize,
     tables_kept: usize,
 }
 
-/// Whether a page would attempt a vision call — used to pre-assign the
-/// `max_vision_pages` budget deterministically before concurrent execution.
-fn page_wants_vision(ex: &PageExtract, has_llm: bool) -> bool {
-    if !has_llm || ex.stitched_into.is_some() || ex.table.is_some() {
+/// Whether a page would attempt a model pass (deterministic OCR or vision) —
+/// used to pre-assign the `max_vision_pages` budget before concurrent execution.
+/// A full-page OCR page (ImageHeavy/Scanned) is served by either an OCR provider
+/// or the vision LLM; a Mixed page's figure description is the vision LLM's job
+/// only (OCR transcribes text, it doesn't describe figures).
+fn page_wants_model(ex: &PageExtract, has_llm: bool, has_ocr: bool) -> bool {
+    if ex.stitched_into.is_some() || ex.table.is_some() {
         return false;
     }
     match ex.strategy {
-        PageStrategy::ImageHeavy | PageStrategy::Scanned => ex.page_png.is_some(),
-        PageStrategy::Mixed => !ex.embedded.is_empty(),
+        PageStrategy::ImageHeavy | PageStrategy::Scanned => {
+            (has_llm || has_ocr) && ex.page_png.is_some()
+        }
+        PageStrategy::Mixed => has_llm && !ex.embedded.is_empty(),
         _ => false,
     }
 }
 
 /// Render one page to markdown (independently, for concurrent execution).
-/// `allow_vision` is the pre-assigned budget decision for this page.
+/// `allow_model` is the pre-assigned budget decision for this page.
 async fn render_page(
     order: usize,
     ex: PageExtract,
     llm: Option<&dyn LlmProvider>,
+    ocr: Option<&dyn OcrProvider>,
     cfg: &SmartPdfConfig,
-    allow_vision: bool,
+    allow_model: bool,
 ) -> PageRender {
     let mut images: Vec<ExtractedImageBlob> = Vec::new();
     let mut vision_used = 0usize;
+    let mut ocr_used = 0usize;
     let mut vision_failed = 0usize;
     let mut vision_skipped = 0usize;
     let mut tables_kept = 0usize;
@@ -570,6 +587,7 @@ async fn render_page(
             rendered: rp(&ex, String::new()),
             images,
             vision_used,
+            ocr_used,
             vision_failed,
             vision_skipped,
             tables_kept,
@@ -612,47 +630,79 @@ async fn render_page(
                         rendered: rp(&ex, ex.text.clone()),
                         images,
                         vision_used,
+                        ocr_used,
                         vision_failed,
                         vision_skipped,
                         tables_kept,
                     };
                 };
-                match llm {
-                    // No vision model configured: keep the pdfium text layer and
-                    // flag the page so the operator knows it needed OCR.
-                    None => {
-                        vision_skipped += 1;
-                        ex.text.clone()
-                    }
-                    // Model exists but the per-doc vision budget is exhausted.
-                    Some(_) if !allow_vision => ex.text.clone(),
-                    Some(llm) => {
-                        let prompt = if cfg.high_quality {
-                            high_quality_prompt(lang, &ex.text)
-                        } else {
-                            get_prompts(lang).full_page.to_string()
-                        };
-                        match describe(llm, png, &prompt, PAGE_VISION_TOKENS, cfg.max_image_edge)
-                            .await
-                        {
-                            Ok(desc) => {
-                                vision_used += 1;
-                                // ImageHeavy keeps the readable pdfium text as a
-                                // prefix; Scanned text is unreliable, OCR only.
-                                if ex.strategy == PageStrategy::ImageHeavy && !ex.text.is_empty() {
-                                    format!("{}\n\n{}", ex.text, desc)
-                                } else {
-                                    desc
-                                }
+                if ocr.is_none() && llm.is_none() {
+                    // No model of any kind: keep the pdfium text layer and flag
+                    // the page so the operator knows it needed OCR.
+                    vision_skipped += 1;
+                    ex.text.clone()
+                } else if !allow_model {
+                    // A model exists but the per-doc budget is exhausted.
+                    ex.text.clone()
+                } else {
+                    // Prefer the deterministic OCR tier (no hallucination, local,
+                    // measured better on Thai); fall back to the vision LLM, then
+                    // to the extracted text. Default-off: with `ocr == None` this
+                    // is exactly the previous vision-only behavior.
+                    let mut out: Option<String> = None;
+                    if let Some(ocr) = ocr {
+                        match ocr.ocr(png).await {
+                            Ok(t) if !t.trim().is_empty() => {
+                                ocr_used += 1;
+                                out = Some(t);
                             }
+                            Ok(_) => {} // empty transcript → try the vision fallback
                             Err(e) => {
-                                vision_failed += 1;
-                                warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
-                                "smart-pdf: page OCR failed — keeping extracted text");
-                                ex.text.clone()
+                                warn!(page = ex.page_num, error = %e, ocr = ocr.name(),
+                                "smart-pdf: deterministic OCR failed — trying vision fallback");
                             }
                         }
                     }
+                    if out.is_none() {
+                        if let Some(llm) = llm {
+                            let prompt = if cfg.high_quality {
+                                high_quality_prompt(lang, &ex.text)
+                            } else {
+                                get_prompts(lang).full_page.to_string()
+                            };
+                            match describe(
+                                llm,
+                                png,
+                                &prompt,
+                                PAGE_VISION_TOKENS,
+                                cfg.max_image_edge,
+                            )
+                            .await
+                            {
+                                Ok(desc) => {
+                                    vision_used += 1;
+                                    // ImageHeavy keeps the readable pdfium text as
+                                    // a prefix; Scanned text is unreliable, OCR only.
+                                    if ex.strategy == PageStrategy::ImageHeavy
+                                        && !ex.text.is_empty()
+                                    {
+                                        out = Some(format!("{}\n\n{}", ex.text, desc));
+                                    } else {
+                                        out = Some(desc);
+                                    }
+                                }
+                                Err(e) => {
+                                    vision_failed += 1;
+                                    warn!(page = ex.page_num, error = %e, vision_model = llm.model_name(),
+                                    "smart-pdf: page OCR failed — keeping extracted text");
+                                }
+                            }
+                        } else {
+                            // OCR was the only provider and it failed/was empty.
+                            vision_failed += 1;
+                        }
+                    }
+                    out.unwrap_or_else(|| ex.text.clone())
                 }
             }
 
@@ -667,12 +717,13 @@ async fn render_page(
                         rendered: rp(&ex, body),
                         images,
                         vision_used,
+                        ocr_used,
                         vision_failed,
                         vision_skipped,
                         tables_kept,
                     };
                 };
-                if allow_vision {
+                if allow_model {
                     let prompt = get_prompts(lang).single_image;
                     let mut described = 0usize;
                     for png in &ex.embedded {
@@ -748,6 +799,7 @@ async fn render_page(
         rendered: rp(&ex, body),
         images,
         vision_used,
+        ocr_used,
         vision_failed,
         vision_skipped,
         tables_kept,
@@ -959,7 +1011,7 @@ mod tests {
             table_pages: vec![],
             stitched_into: None,
         }];
-        let doc = render_to_document("Doc", pages, Some(&llm), &cfg()).await;
+        let doc = render_to_document("Doc", pages, Some(&llm), None, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
         assert!(doc.markdown.contains("readable body text"));
         assert!(!doc.markdown.contains("VISION"));
@@ -983,7 +1035,7 @@ mod tests {
             table_pages: vec![],
             stitched_into: None,
         }];
-        let doc = render_to_document("Doc", pages, Some(&llm), &cfg()).await;
+        let doc = render_to_document("Doc", pages, Some(&llm), None, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 1);
         assert!(doc.markdown.contains("OCR heading"));
         // The full-page render is collected as a blob and its id embedded.
@@ -1038,7 +1090,7 @@ mod tests {
                 stitched_into: None,
             },
         ];
-        let doc = render_to_document("Doc", pages, None, &cfg()).await;
+        let doc = render_to_document("Doc", pages, None, None, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0);
         assert_eq!(doc.pages_vision_failed, 0);
         // Scanned + Mixed both wanted vision and had none.
@@ -1068,7 +1120,7 @@ mod tests {
             table_pages: vec![],
             stitched_into: None,
         }];
-        let doc = render_to_document("Doc", pages, Some(&llm), &cfg()).await;
+        let doc = render_to_document("Doc", pages, Some(&llm), None, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "must not call vision");
         assert_eq!(doc.tables_kept_as_text, 1, "page should be flagged");
         assert!(doc.markdown.contains("exact numbers 123 456"));
@@ -1103,7 +1155,7 @@ mod tests {
             table_pages: vec![],
             stitched_into: None,
         }];
-        let doc = render_to_document("Doc", pages, Some(&llm), &cfg()).await;
+        let doc = render_to_document("Doc", pages, Some(&llm), None, &cfg()).await;
         assert_eq!(doc.vision_pages_used, 0, "lattice must not call vision");
         assert!(
             doc.markdown.contains("<table>"),
@@ -1145,7 +1197,7 @@ mod tests {
             table_pages: vec![],
             stitched_into: None,
         }];
-        let doc = render_to_document("Doc", pages, Some(&llm), &c).await;
+        let doc = render_to_document("Doc", pages, Some(&llm), None, &c).await;
         assert_eq!(doc.vision_pages_used, 0);
         assert!(doc.markdown.contains("fallback body text"));
     }
@@ -1221,7 +1273,7 @@ mod tests {
             vision_concurrency: 8,
             ..cfg()
         };
-        let doc = render_to_document("Doc", pages, Some(&OrderEchoVision), &c).await;
+        let doc = render_to_document("Doc", pages, Some(&OrderEchoVision), None, &c).await;
         assert_eq!(doc.vision_pages_used, 5);
         assert_eq!(doc.pages.len(), 5);
         for (i, p) in doc.pages.iter().enumerate() {
@@ -1232,5 +1284,79 @@ mod tests {
                 p.markdown
             );
         }
+    }
+
+    /// Deterministic OCR stub: returns a fixed transcript, or an error to test
+    /// the vision fallback.
+    struct StubOcr {
+        reply: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ocr::OcrProvider for StubOcr {
+        async fn ocr(&self, _png: &[u8]) -> Result<String> {
+            match &self.reply {
+                Some(t) => Ok(t.clone()),
+                None => Err(thairag_core::ThaiRagError::Internal("ocr down".into())),
+            }
+        }
+        fn name(&self) -> &str {
+            "stub-ocr"
+        }
+    }
+
+    fn scanned_page() -> Vec<PageExtract> {
+        vec![PageExtract {
+            page_num: 1,
+            strategy: PageStrategy::Scanned,
+            text: "garbled text layer".into(),
+            page_png: Some(vec![1, 2, 3]),
+            embedded: vec![],
+            table: None,
+            cell_images: vec![],
+            table_pages: vec![],
+            stitched_into: None,
+        }]
+    }
+
+    #[tokio::test]
+    async fn ocr_provider_preferred_over_vision() {
+        let llm = StubVision {
+            reply: "VISION OUTPUT".into(),
+            supports: true,
+        };
+        let ocr = StubOcr {
+            reply: Some("DETERMINISTIC OCR TEXT".into()),
+        };
+        let doc = render_to_document("Doc", scanned_page(), Some(&llm), Some(&ocr), &cfg()).await;
+        assert_eq!(doc.ocr_pages_used, 1);
+        assert_eq!(
+            doc.vision_pages_used, 0,
+            "vision must not run when OCR works"
+        );
+        assert!(doc.markdown.contains("DETERMINISTIC OCR TEXT"));
+        assert!(!doc.markdown.contains("VISION OUTPUT"));
+    }
+
+    #[tokio::test]
+    async fn ocr_failure_falls_back_to_vision() {
+        let llm = StubVision {
+            reply: "VISION FALLBACK".into(),
+            supports: true,
+        };
+        let ocr = StubOcr { reply: None }; // OCR errors
+        let doc = render_to_document("Doc", scanned_page(), Some(&llm), Some(&ocr), &cfg()).await;
+        assert_eq!(doc.ocr_pages_used, 0);
+        assert_eq!(doc.vision_pages_used, 1, "must fall back to vision");
+        assert!(doc.markdown.contains("VISION FALLBACK"));
+    }
+
+    #[tokio::test]
+    async fn ocr_with_no_vision_keeps_text_on_failure() {
+        let ocr = StubOcr { reply: None };
+        let doc = render_to_document("Doc", scanned_page(), None, Some(&ocr), &cfg()).await;
+        assert_eq!(doc.ocr_pages_used, 0);
+        assert_eq!(doc.pages_vision_failed, 1);
+        assert!(doc.markdown.contains("garbled text layer")); // kept the text
     }
 }

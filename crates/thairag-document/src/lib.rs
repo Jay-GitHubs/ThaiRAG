@@ -3,6 +3,7 @@ pub mod chunker;
 pub mod conversion_fidelity;
 pub mod converter;
 pub mod image;
+pub mod ocr;
 pub mod office_media;
 pub mod office_tables;
 pub mod pdf_rasterizer;

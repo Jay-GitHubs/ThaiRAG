@@ -406,6 +406,21 @@ impl ProviderBundle {
             let pipeline =
                 pipeline.with_image_description(vision_llm, doc.image_description_enabled);
 
+            // Deterministic OCR tier (PaddleOCR sidecar) — opt-in via
+            // `document.ocr_sidecar_url`. When set, OCR-needing PDF pages prefer
+            // it over the vision LLM. Default-off: empty URL ⇒ pipeline unchanged.
+            let pipeline =
+                match thairag_document::ocr::SidecarOcrProvider::new(&doc.ocr_sidecar_url) {
+                    Some(provider) => {
+                        tracing::info!(
+                            url = %doc.ocr_sidecar_url,
+                            "Deterministic OCR tier enabled (PaddleOCR sidecar)"
+                        );
+                        pipeline.with_ocr_provider(Arc::new(provider))
+                    }
+                    None => pipeline,
+                };
+
             Arc::new(pipeline)
         };
 

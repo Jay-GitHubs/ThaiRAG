@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 futures-util = { workspace = true }
+# Blocking HTTP client for the PaddleOCR sidecar (run via spawn_blocking).
+ureq = "2"
 
 # Build-time provisioning of the native libpdfium binary.
 [build-dependencies]

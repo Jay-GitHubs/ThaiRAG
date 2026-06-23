@@ -572,6 +572,12 @@ pub struct DocumentConfig {
     /// retried). `1` = sequential.
     #[serde(default = "default_pdf_vision_concurrency")]
     pub pdf_vision_concurrency: usize,
+    /// Base URL of the deterministic OCR sidecar (PaddleOCR Thai — see
+    /// `services/paddleocr-sidecar`), e.g. `http://paddleocr:8086`. When set,
+    /// OCR-needing PDF pages are transcribed by it in preference to the vision
+    /// LLM (faster, local, no hallucination). Empty (default) = OCR tier off.
+    #[serde(default)]
+    pub ocr_sidecar_url: String,
 }
 
 fn default_true() -> bool {
@@ -2135,6 +2141,7 @@ mod tests {
                 pdf_high_quality: false,
                 pdf_image_enhance: false,
                 pdf_vision_concurrency: default_pdf_vision_concurrency(),
+                ocr_sidecar_url: String::new(),
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
