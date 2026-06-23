@@ -45,6 +45,16 @@ services:
       redis:
         condition: service_healthy
 
+  # ── PaddleOCR sidecar (deterministic Thai OCR tier-2) ───────────────
+  # Opt-in: only starts with `docker compose --profile ocr up`. To use it,
+  # also set THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086 on the
+  # thairag service (env/.env) so OCR-needing PDF pages prefer it over the VLM.
+  paddleocr:
+    build: ./services/paddleocr-sidecar
+    profiles: ["ocr"]
+    ports:
+      - "8086:8086"
+
   # ── Admin UI ────────────────────────────────────────────────────────
   admin-ui:
     build: ./admin-ui
