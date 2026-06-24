@@ -96,7 +96,7 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
             fileList={fileList}
             beforeUpload={() => false}
             onChange={({ fileList }) => setFileList(fileList)}
-            accept=".txt,.md,.html,.pdf,.csv,.json,.docx,.xlsx"
+            accept=".txt,.md,.html,.pdf,.csv,.json,.docx,.xlsx,.odt"
           >
             <p className="ant-upload-drag-icon">
               <InboxOutlined />

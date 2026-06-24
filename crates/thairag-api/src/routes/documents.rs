@@ -2206,6 +2206,7 @@ fn mime_from_extension(ext: &str) -> Option<&'static str> {
         "csv" => Some("text/csv"),
         "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "odt" => Some("application/vnd.oasis.opendocument.text"),
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "webp" => Some("image/webp"),
