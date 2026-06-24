@@ -474,6 +474,8 @@ export interface DocumentConfigResponse {
   pdf_min_chars_per_page: number;
   pdf_max_vision_pages: number;
   pdf_high_quality: boolean;
+  pdf_page_as_image_threshold: number;
+  always_preview: boolean;
   ai_preprocessing: AiPreprocessingConfig;
 }
 
@@ -562,6 +564,8 @@ export interface UpdateDocumentConfigRequest {
   pdf_min_chars_per_page?: number;
   pdf_max_vision_pages?: number;
   pdf_high_quality?: boolean;
+  pdf_page_as_image_threshold?: number;
+  always_preview?: boolean;
   ai_preprocessing?: Partial<Omit<AiPreprocessingConfig, 'llm' | 'analyzer_llm' | 'converter_llm' | 'quality_llm' | 'chunker_llm' | 'orchestrator_llm' | 'enricher_llm' | 'retry'>> & {
     llm?: LlmConfigUpdate;
     remove_llm?: boolean;
