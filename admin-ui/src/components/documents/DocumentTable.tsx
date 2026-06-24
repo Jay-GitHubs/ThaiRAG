@@ -73,12 +73,51 @@ function agentStatusIcon(status: string) {
 }
 
 /// Detailed per-document processing breakdown shown in the Pipeline popover.
+function ExtractionDetail({ ex }: { ex: NonNullable<ProcessingProvenance['extraction']> }) {
+  const ocr = ex.ocr_pages_used ?? 0;
+  const vision = ex.vision_pages_used ?? 0;
+  const skipped = ex.pages_vision_skipped ?? 0;
+  const native = Math.max(0, (ex.total_pages ?? 0) - ocr - vision);
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <strong>Extraction</strong>
+      <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {ex.total_pages != null && <Tag>{ex.total_pages} pages</Tag>}
+        {native > 0 && <Tag color="green">Native text {native}</Tag>}
+        {ocr > 0 ? (
+          <Tag color="gold">
+            OCR {ocr}
+            {ex.ocr_provider ? ` (${ex.ocr_provider})` : ''}
+          </Tag>
+        ) : (
+          <Tag>OCR 0</Tag>
+        )}
+        {vision > 0 && (
+          <Tag color="purple">
+            Vision {vision}
+            {ex.vision_model ? ` (${ex.vision_model})` : ''}
+          </Tag>
+        )}
+        {skipped > 0 && (
+          <Tooltip title="Pages that needed OCR/vision but no model was configured — raw text kept">
+            <Tag color="warning">No-model {skipped}</Tag>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ProvenanceDetail({ prov }: { prov: ProcessingProvenance }) {
+  const ex = prov.extraction;
+  const hasExtraction =
+    ex && ((ex.total_pages ?? 0) > 0 || (ex.ocr_pages_used ?? 0) > 0 || (ex.vision_pages_used ?? 0) > 0);
   return (
     <div style={{ maxWidth: 360, fontSize: 13 }}>
       <div style={{ marginBottom: 8 }}>
         <strong>Path:</strong> {prov.path}
       </div>
+      {hasExtraction && <ExtractionDetail ex={ex!} />}
       <div style={{ marginBottom: 8 }}>
         <strong>Agents</strong>
         <div style={{ marginTop: 4 }}>

@@ -185,6 +185,52 @@ pub struct ProcessingProvenance {
     /// near-identical siblings. Empty unless facet extraction was enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facets: Vec<String>,
+    /// Which extraction engines actually ran (deterministic OCR vs vision LLM),
+    /// so an operator can see — per document, after the fact — whether e.g.
+    /// PaddleOCR transcribed any pages. Defaulted (all-zero) for non-PDF paths
+    /// and documents processed before this was recorded.
+    #[serde(default, skip_serializing_if = "ExtractionStats::is_empty")]
+    pub extraction: ExtractionStats,
+}
+
+/// Per-document record of which extraction engines ran during smart-PDF
+/// processing. A page is transcribed by exactly one of: the native text layer,
+/// the deterministic OCR tier (PaddleOCR sidecar), or the vision LLM.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExtractionStats {
+    /// Total pages in the source PDF (0 for non-PDF paths).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_pages: i64,
+    /// Pages transcribed by the deterministic OCR tier.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ocr_pages_used: i64,
+    /// Name of the OCR provider that ran (e.g. "paddleocr-sidecar"); `None` if
+    /// no page was OCR'd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocr_provider: Option<String>,
+    /// Pages transcribed/described by the vision LLM.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub vision_pages_used: i64,
+    /// Name of the vision model that ran; `None` if no page used vision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_model: Option<String>,
+    /// Pages that needed OCR/vision but had no model configured, so their raw
+    /// text layer was kept. A non-zero value flags an under-configured pipeline.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pages_vision_skipped: i64,
+}
+
+impl ExtractionStats {
+    /// True when nothing engine-specific was recorded (the all-default state),
+    /// so it can be omitted from serialized provenance.
+    pub fn is_empty(&self) -> bool {
+        self.total_pages == 0
+            && self.ocr_pages_used == 0
+            && self.ocr_provider.is_none()
+            && self.vision_pages_used == 0
+            && self.vision_model.is_none()
+            && self.pages_vision_skipped == 0
+    }
 }
 
 fn is_zero(n: &i64) -> bool {
@@ -361,6 +407,75 @@ pub enum PermissionScope {
         dept_id: DeptId,
         workspace_id: WorkspaceId,
     },
+}
+
+#[cfg(test)]
+mod extraction_stats_tests {
+    use super::{ExtractionStats, ProcessingProvenance};
+
+    // Back-compat: provenance JSON written before `extraction` existed must still
+    // deserialize, defaulting to an empty (omitted) ExtractionStats.
+    #[test]
+    fn legacy_provenance_without_extraction_deserializes() {
+        let json = r#"{"path":"smart-PDF (mechanical)","agents":[],"mechanical_fallback":false,"chunk_count":12}"#;
+        let prov: ProcessingProvenance = serde_json::from_str(json).unwrap();
+        assert_eq!(prov.path, "smart-PDF (mechanical)");
+        assert!(
+            prov.extraction.is_empty(),
+            "missing extraction → empty default"
+        );
+    }
+
+    // An empty ExtractionStats is omitted from serialized provenance (skip_if),
+    // so non-PDF paths don't carry a noisy all-zero block.
+    #[test]
+    fn empty_extraction_is_skipped_in_serialization() {
+        let prov = ProcessingProvenance {
+            path: "embedded-media (mechanical)".into(),
+            agents: vec![],
+            mechanical_fallback: false,
+            chunk_count: 3,
+            fidelity: None,
+            tables_kept_as_text: 0,
+            facets: vec![],
+            extraction: ExtractionStats::default(),
+        };
+        let json = serde_json::to_string(&prov).unwrap();
+        assert!(
+            !json.contains("extraction"),
+            "empty extraction must be omitted: {json}"
+        );
+    }
+
+    // A populated ExtractionStats round-trips and surfaces the OCR provider —
+    // the signal the UI shows ("OCR 46 (paddleocr-sidecar)").
+    #[test]
+    fn populated_extraction_round_trips_with_provider() {
+        let prov = ProcessingProvenance {
+            path: "smart-PDF + AI agents".into(),
+            agents: vec![],
+            mechanical_fallback: false,
+            chunk_count: 50,
+            fidelity: None,
+            tables_kept_as_text: 0,
+            facets: vec![],
+            extraction: ExtractionStats {
+                total_pages: 46,
+                ocr_pages_used: 46,
+                ocr_provider: Some("paddleocr-sidecar".into()),
+                ..Default::default()
+            },
+        };
+        let json = serde_json::to_string(&prov).unwrap();
+        assert!(json.contains("paddleocr-sidecar"));
+        let back: ProcessingProvenance = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extraction.ocr_pages_used, 46);
+        assert_eq!(
+            back.extraction.ocr_provider.as_deref(),
+            Some("paddleocr-sidecar")
+        );
+        assert!(!back.extraction.is_empty());
+    }
 }
 
 #[cfg(test)]
