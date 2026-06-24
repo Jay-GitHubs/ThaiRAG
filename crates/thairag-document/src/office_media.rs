@@ -1,9 +1,10 @@
-//! Extract embedded raster images from non-PDF documents (DOCX/XLSX/HTML) so
+//! Extract embedded raster images from non-PDF documents (DOCX/XLSX/HTML/ODT) so
 //! the pipeline can describe and persist them like PDF images.
 //!
-//! DOCX/XLSX are zip containers with images under a `*/media/` directory; HTML
-//! carries images inline as `data:` URLs. Remote `<img>` URLs are deliberately
-//! NOT fetched (avoids SSRF and network in the ingest path).
+//! DOCX/XLSX/ODT are zip containers with images under a `media/` (OOXML) or
+//! `Pictures/` (ODF) directory; HTML carries images inline as `data:` URLs.
+//! Remote `<img>` URLs are deliberately NOT fetched (avoids SSRF and network in
+//! the ingest path).
 
 use std::io::Read;
 
@@ -31,8 +32,9 @@ fn mime_for_name(name: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
-/// Extract images from a zip-based Office file (any `media/` directory).
-/// Used for both DOCX (`word/media/`) and XLSX (`xl/media/`).
+/// Extract images from a zip-based office file. Used for DOCX (`word/media/`),
+/// XLSX (`xl/media/`), and ODT (`Pictures/`) — image entries are recognized by
+/// their containing directory and image extension.
 pub fn extract_office_images(bytes: &[u8]) -> Vec<RawImage> {
     let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
         return Vec::new();
@@ -43,7 +45,8 @@ pub fn extract_office_images(bytes: &[u8]) -> Vec<RawImage> {
             continue;
         };
         let name = file.name().to_string();
-        if !name.contains("media/") {
+        // OOXML uses a `media/` dir; ODF (ODT) uses `Pictures/`.
+        if !(name.contains("media/") || name.contains("Pictures/")) {
             continue;
         }
         let Some(mime) = mime_for_name(&name) else {
@@ -114,6 +117,33 @@ mod tests {
     #[test]
     fn non_zip_bytes_yield_no_images() {
         assert!(extract_office_images(b"not a zip").is_empty());
+    }
+
+    #[test]
+    fn odt_pictures_dir_images_are_extracted() {
+        use std::io::Write;
+        let png = b"\x89PNG\r\n\x1a\nfake-odt-image";
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::FileOptions::default();
+            zip.start_file("content.xml", opts).unwrap();
+            zip.write_all(b"<doc/>").unwrap();
+            zip.start_file("Pictures/10000000.png", opts).unwrap();
+            zip.write_all(png).unwrap();
+            // a non-image in Pictures must be ignored
+            zip.start_file("Pictures/notes.txt", opts).unwrap();
+            zip.write_all(b"ignore me").unwrap();
+            zip.finish().unwrap();
+        }
+        let imgs = extract_office_images(&buf);
+        assert_eq!(
+            imgs.len(),
+            1,
+            "only the Pictures/ image should be extracted"
+        );
+        assert_eq!(imgs[0].mime, "image/png");
+        assert_eq!(imgs[0].bytes, png);
     }
 
     #[test]
