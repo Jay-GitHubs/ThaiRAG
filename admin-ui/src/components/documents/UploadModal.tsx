@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Modal, Upload, Input, message, Button, Spin, Radio, InputNumber, Space, Tooltip } from 'antd';
+import { Modal, Upload, Input, message, Button, Spin, Tooltip } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import { useUploadDocument, useDocument } from '../../hooks/useDocuments';
 import { ProcessingTimeline } from './ProcessingTimeline';
 import { DocumentPreviewPanel } from './DocumentPreviewPanel';
+import { HandlingControls } from './HandlingControls';
 import { previewDocument } from '../../api/documents';
 import { getDocumentConfig } from '../../api/settings';
 import type { DocumentPreview, DocumentHandling } from '../../api/types';
@@ -179,59 +180,15 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
           {preview && <DocumentPreviewPanel preview={preview} />}
 
           {/* Per-document handling override (admin's choice for this ingest). */}
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Handling</div>
-            <Radio.Group
-              value={handlingMode}
-              onChange={(e) => setHandlingMode(e.target.value)}
-              optionType="button"
-              size="small"
-            >
-              <Tooltip title="Adaptive routing (recommended)">
-                <Radio.Button value="auto">Auto</Radio.Button>
-              </Tooltip>
-              <Tooltip title="OCR every page via the vision model — max fidelity, slowest">
-                <Radio.Button value="high_quality">High quality</Radio.Button>
-              </Tooltip>
-              <Tooltip title="Deterministic OCR tier only — no vision LLM (no hallucination)">
-                <Radio.Button value="force_ocr">OCR only</Radio.Button>
-              </Tooltip>
-              <Tooltip title="No models — text layer only (fast, zero cost/risk)">
-                <Radio.Button value="text_only">Text only</Radio.Button>
-              </Tooltip>
-            </Radio.Group>
-            <Space size="large" style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12 }}>
-                <Tooltip title="Override the image-coverage threshold for this document (blank = default)">
-                  <span style={{ color: '#888', marginRight: 6 }}>Image-coverage ≥</span>
-                </Tooltip>
-                <InputNumber
-                  size="small"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={covThreshold}
-                  placeholder={preview ? String(preview.thresholds.image_coverage_threshold) : '0.5'}
-                  onChange={(v) => setCovThreshold(v ?? null)}
-                  style={{ width: 90 }}
-                />
-              </span>
-              <span style={{ fontSize: 12 }}>
-                <Tooltip title="Override the min-chars/page threshold for this document (blank = default)">
-                  <span style={{ color: '#888', marginRight: 6 }}>Min chars/page</span>
-                </Tooltip>
-                <InputNumber
-                  size="small"
-                  min={0}
-                  max={100000}
-                  value={minChars}
-                  placeholder={preview ? String(preview.thresholds.min_chars_per_page) : '50'}
-                  onChange={(v) => setMinChars(v ?? null)}
-                  style={{ width: 90 }}
-                />
-              </span>
-            </Space>
-          </div>
+          <HandlingControls
+            handlingMode={handlingMode}
+            onHandlingMode={setHandlingMode}
+            covThreshold={covThreshold}
+            onCovThreshold={setCovThreshold}
+            minChars={minChars}
+            onMinChars={setMinChars}
+            preview={preview}
+          />
         </>
       )}
     </Modal>

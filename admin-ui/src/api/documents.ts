@@ -131,9 +131,33 @@ export async function fetchDocumentImageBlob(
   return res.data as Blob;
 }
 
-export async function reprocessDocument(workspaceId: string, docId: string) {
+/** Dry-run preview for an already-stored document (the "Reprocess with options" flow). */
+export async function previewDocumentById(workspaceId: string, docId: string) {
+  const res = await client.post<DocumentPreview>(
+    `/api/km/workspaces/${workspaceId}/documents/${docId}/preview`,
+  );
+  return res.data;
+}
+
+export async function reprocessDocument(
+  workspaceId: string,
+  docId: string,
+  handling?: DocumentHandling,
+) {
+  // No handling → empty body → backend re-runs in Auto mode (legacy behaviour).
+  const body: Record<string, unknown> = {};
+  if (handling?.handling_mode && handling.handling_mode !== 'auto') {
+    body.handling_mode = handling.handling_mode;
+  }
+  if (handling?.image_coverage_threshold != null) {
+    body.image_coverage_threshold = handling.image_coverage_threshold;
+  }
+  if (handling?.min_chars_per_page != null) {
+    body.min_chars_per_page = handling.min_chars_per_page;
+  }
   const res = await client.post(
     `/api/km/workspaces/${workspaceId}/documents/${docId}/reprocess`,
+    Object.keys(body).length ? body : undefined,
   );
   return res.data;
 }

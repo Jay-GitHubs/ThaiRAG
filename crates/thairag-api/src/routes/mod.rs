@@ -358,6 +358,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(documents::get_document_image),
         )
         .route(
+            "/workspaces/{workspace_id}/documents/{doc_id}/preview",
+            post(documents::preview_document_by_id),
+        )
+        .route(
             "/workspaces/{workspace_id}/documents/{doc_id}/reprocess",
             post(documents::reprocess_document),
         )

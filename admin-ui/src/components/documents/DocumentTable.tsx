@@ -10,10 +10,10 @@ import dayjs from 'dayjs';
 import {
   useDocuments,
   useDeleteDocument,
-  useReprocessDocument,
   useReprocessAllDocuments,
 } from '../../hooks/useDocuments';
 import { UploadModal } from './UploadModal';
+import { ReprocessModal } from './ReprocessModal';
 import { IngestModal } from './IngestModal';
 import { PreviewModal } from './PreviewModal';
 import { ChunksModal } from './ChunksModal';
@@ -169,13 +169,13 @@ function FidelityCell({ doc }: { doc: Document }) {
 export function DocumentTable({ workspaceId }: Props) {
   const { data, isLoading } = useDocuments(workspaceId);
   const deleteDoc = useDeleteDocument();
-  const reprocessDoc = useReprocessDocument();
   const reprocessAll = useReprocessAllDocuments();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [ingestOpen, setIngestOpen] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<Document | null>(null);
   const [chunksDoc, setChunksDoc] = useState<Document | null>(null);
   const [detailDoc, setDetailDoc] = useState<Document | null>(null);
+  const [reprocessDocTarget, setReprocessDocTarget] = useState<Document | null>(null);
 
   // Auto-refresh when any document is processing
   const hasProcessing = data?.data?.some((d) => d.status === 'processing');
@@ -219,15 +219,6 @@ export function DocumentTable({ workspaceId }: Props) {
       URL.revokeObjectURL(url);
     } catch {
       message.error('Failed to download markdown');
-    }
-  }
-
-  async function handleReprocess(doc: Document) {
-    try {
-      await reprocessDoc.mutateAsync({ wsId: workspaceId, docId: doc.id });
-      message.success('Reprocessing started');
-    } catch {
-      message.error('Failed to reprocess document');
     }
   }
 
@@ -335,10 +326,13 @@ export function DocumentTable({ workspaceId }: Props) {
           <Tooltip title="Download markdown">
             <Button size="small" icon={<FileMarkdownOutlined />} onClick={() => handleDownloadMarkdown(record)} disabled={record.status === 'processing'} />
           </Tooltip>
-          <Tooltip title="Reprocess">
-            <Popconfirm title="Reprocess this document?" onConfirm={() => handleReprocess(record)}>
-              <Button size="small" icon={<ReloadOutlined />} disabled={record.status === 'processing'} />
-            </Popconfirm>
+          <Tooltip title="Reprocess with options…">
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={() => setReprocessDocTarget(record)}
+              disabled={record.status === 'processing'}
+            />
           </Tooltip>
           <Popconfirm title={record.status === 'processing' ? "This document is still processing. Delete anyway?" : "Delete this document?"} onConfirm={() => handleDelete(record.id)}>
             <Button danger size="small" icon={<DeleteOutlined />} />
@@ -421,6 +415,14 @@ export function DocumentTable({ workspaceId }: Props) {
           doc={detailDoc}
           open={!!detailDoc}
           onClose={() => setDetailDoc(null)}
+        />
+      )}
+      {reprocessDocTarget && (
+        <ReprocessModal
+          workspaceId={workspaceId}
+          doc={reprocessDocTarget}
+          open={!!reprocessDocTarget}
+          onClose={() => setReprocessDocTarget(null)}
         />
       )}
     </>
