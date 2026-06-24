@@ -1,5 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import { test, expect } from '@playwright/test';
 import { TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+
+// Specs run as ESM (no __dirname); resolve fixtures from cwd (the admin-ui dir).
+const FIXTURE_PDF = path.resolve(process.cwd(), '../tests/fixtures/thai-real/tfac_gazette.pdf');
 
 // After processing, a document's provenance records WHICH extraction engines ran
 // (deterministic OCR vs vision LLM) — so an operator can see, per document and
@@ -33,13 +38,10 @@ test.describe('OCR provenance visibility', () => {
   test('High-Quality reprocess records OCR/vision engine usage in provenance', async ({ request }) => {
     test.setTimeout(180_000);
     const headers = { Authorization: `Bearer ${token}` };
-    const fs = await import('fs');
-    const path = require('path');
-    const pdfPath = path.resolve(__dirname, '../../tests/fixtures/thai-real/tfac_gazette.pdf');
-    test.skip(!fs.existsSync(pdfPath), 'Thai fixture PDF not present');
+    test.skip(!fs.existsSync(FIXTURE_PDF), 'Thai fixture PDF not present');
 
     // Ingest the Thai PDF and wait for ready.
-    const buffer = fs.readFileSync(pdfPath);
+    const buffer = fs.readFileSync(FIXTURE_PDF);
     const up = await request.post(`${API_BASE}/api/km/workspaces/${wsId}/documents/upload`, {
       headers,
       multipart: {
