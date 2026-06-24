@@ -88,6 +88,7 @@ fn build_ai_provenance(
     mechanical_fallback: bool,
     chunk_count: usize,
     tables_kept_as_text: usize,
+    extraction: thairag_core::models::ExtractionStats,
 ) -> thairag_core::models::ProcessingProvenance {
     use thairag_core::models::AgentRun;
     agents.push(AgentRun {
@@ -110,6 +111,7 @@ fn build_ai_provenance(
         fidelity: None,
         tables_kept_as_text: tables_kept_as_text as i64,
         facets: Vec::new(),
+        extraction,
     }
 }
 
@@ -833,6 +835,7 @@ impl DocumentPipeline {
                 fidelity: None,
                 tables_kept_as_text: 0,
                 facets: Vec::new(),
+                extraction: Default::default(),
             };
             return Ok((chunks, prov));
         }
@@ -855,6 +858,7 @@ impl DocumentPipeline {
                 fidelity: None,
                 tables_kept_as_text: 0,
                 facets: Vec::new(),
+                extraction: Default::default(),
             };
             return Ok((chunks, prov));
         }
@@ -933,6 +937,7 @@ impl DocumentPipeline {
             fidelity: None,
             tables_kept_as_text: 0,
             facets: Vec::new(),
+            extraction: Default::default(),
         };
         Ok((chunks, prov))
     }
@@ -1145,6 +1150,26 @@ impl DocumentPipeline {
             "Smart PDF (pdfium) processing complete"
         );
 
+        // Record which extraction engines actually ran, so the per-document
+        // provenance can show (post-hoc, in the UI) whether e.g. PaddleOCR
+        // transcribed any pages — not just what the pre-ingest preview predicted.
+        let extraction = thairag_core::models::ExtractionStats {
+            total_pages: doc.total_pages as i64,
+            ocr_pages_used: doc.ocr_pages_used as i64,
+            ocr_provider: (doc.ocr_pages_used > 0)
+                .then(|| effective_ocr.as_ref().map(|o| o.name().to_string()))
+                .flatten(),
+            vision_pages_used: doc.vision_pages_used as i64,
+            vision_model: (doc.vision_pages_used > 0)
+                .then(|| {
+                    effective_vision_llm
+                        .as_ref()
+                        .map(|l| l.model_name().to_string())
+                })
+                .flatten(),
+            pages_vision_skipped: doc.pages_vision_skipped as i64,
+        };
+
         // Chunk the assembled markdown. With the AI agent pipeline enabled, run
         // the intelligence layer (analyzer → smart chunker → enricher) over the
         // whole document once — the `## Page N` markers let the chunker tag each
@@ -1229,6 +1254,7 @@ impl DocumentPipeline {
                 mechanical_fallback,
                 chunks.len(),
                 doc.tables_kept_as_text,
+                extraction.clone(),
             );
             (chunks, Some(prov))
         } else {
@@ -1292,6 +1318,7 @@ impl DocumentPipeline {
                 fidelity: None,
                 tables_kept_as_text: doc.tables_kept_as_text as i64,
                 facets: Vec::new(),
+                extraction,
             };
             (chunks, Some(prov))
         };
@@ -1385,6 +1412,7 @@ impl DocumentPipeline {
                 mechanical_fallback,
                 chunks.len(),
                 0,
+                Default::default(),
             );
             (chunks, Some(prov))
         } else {
@@ -1401,6 +1429,7 @@ impl DocumentPipeline {
                 fidelity: None,
                 tables_kept_as_text: 0,
                 facets: Vec::new(),
+                extraction: Default::default(),
             };
             (chunks, Some(prov))
         };
@@ -1578,6 +1607,12 @@ impl DocumentPipeline {
             fidelity: None,
             tables_kept_as_text: 0,
             facets: Vec::new(),
+            extraction: thairag_core::models::ExtractionStats {
+                total_pages: 1,
+                vision_pages_used: 1,
+                vision_model: Some(llm.model_name().to_string()),
+                ..Default::default()
+            },
         };
         Ok(ProcessedDocument {
             chunks: vec![chunk],
