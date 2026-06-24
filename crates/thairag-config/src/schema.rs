@@ -578,6 +578,10 @@ pub struct DocumentConfig {
     /// LLM (faster, local, no hallucination). Empty (default) = OCR tier off.
     #[serde(default)]
     pub ocr_sidecar_url: String,
+    /// Force the admin pre-ingest "Preview analysis" gate on every upload (the
+    /// upload UI requires a preview before it lets the document be ingested).
+    #[serde(default)]
+    pub always_preview: bool,
 }
 
 fn default_true() -> bool {
@@ -2142,6 +2146,7 @@ mod tests {
                 pdf_image_enhance: false,
                 pdf_vision_concurrency: default_pdf_vision_concurrency(),
                 ocr_sidecar_url: String::new(),
+                always_preview: false,
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),

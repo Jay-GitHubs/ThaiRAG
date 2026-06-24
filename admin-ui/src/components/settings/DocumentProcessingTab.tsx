@@ -683,6 +683,8 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
   const [pdfMinCharsPerPage, setPdfMinCharsPerPage] = useState(50);
   const [pdfMaxVisionPages, setPdfMaxVisionPages] = useState(100);
   const [pdfHighQuality, setPdfHighQuality] = useState(false);
+  const [pdfPageAsImage, setPdfPageAsImage] = useState(0.5);
+  const [alwaysPreview, setAlwaysPreview] = useState(false);
   const [savingPipeline, setSavingPipeline] = useState(false);
 
   // Cache of model sizes from Ollama sync (model_id → size_bytes)
@@ -728,6 +730,8 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
       setPdfMinCharsPerPage(data.pdf_min_chars_per_page);
       setPdfMaxVisionPages(data.pdf_max_vision_pages);
       setPdfHighQuality(data.pdf_high_quality);
+      setPdfPageAsImage(data.pdf_page_as_image_threshold);
+      setAlwaysPreview(data.always_preview);
 
       // Determine LLM mode from saved config
       const hasSharedLlm = !!data.ai_preprocessing.llm;
@@ -809,6 +813,8 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
             pdf_min_chars_per_page: pdfMinCharsPerPage,
             pdf_max_vision_pages: pdfMaxVisionPages,
             pdf_high_quality: pdfHighQuality,
+            pdf_page_as_image_threshold: pdfPageAsImage,
+            always_preview: alwaysPreview,
           };
       const resp = await updateDocumentConfig(req, scope);
       setConfig(resp);
@@ -1115,6 +1121,22 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                 </Space>
                 <Space direction="vertical" size={2}>
                   <Space size={4}>
+                    <Text type="secondary">Image-coverage threshold</Text>
+                    <Tooltip title="A PDF page whose image objects cover at/above this fraction of the page area (0–1) is treated as image-heavy and routed to OCR/vision. Lower = more pages go to OCR.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <InputNumber
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={pdfPageAsImage}
+                    onChange={(v) => v != null && setPdfPageAsImage(v)}
+                    style={{ width: 140 }}
+                  />
+                </Space>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
                     <Text type="secondary">Max OCR pages/doc</Text>
                     <Tooltip title="Hard cap on vision-LLM page calls per document — guards against a huge PDF translating to thousands of calls.">
                       <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
@@ -1140,6 +1162,19 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                     data-testid="pdf-high-quality-switch"
                     checked={pdfHighQuality}
                     onChange={setPdfHighQuality}
+                  />
+                </Space>
+                <Space direction="vertical" size={2}>
+                  <Space size={4}>
+                    <Text type="secondary">Always preview before ingest</Text>
+                    <Tooltip title="Require an admin to run 'Preview analysis' (the dry-run complexity check) and confirm before any document is ingested. Off = preview is optional.">
+                      <QuestionCircleOutlined style={{ fontSize: 12, color: token.colorTextQuaternary }} />
+                    </Tooltip>
+                  </Space>
+                  <Switch
+                    data-testid="always-preview-switch"
+                    checked={alwaysPreview}
+                    onChange={setAlwaysPreview}
                   />
                 </Space>
             </Space>

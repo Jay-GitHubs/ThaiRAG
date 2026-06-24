@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Modal, Upload, Input, message, Button, Spin, Radio, InputNumber, Space, Tooltip } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import { useUploadDocument, useDocument } from '../../hooks/useDocuments';
 import { ProcessingTimeline } from './ProcessingTimeline';
 import { DocumentPreviewPanel } from './DocumentPreviewPanel';
 import { previewDocument } from '../../api/documents';
+import { getDocumentConfig } from '../../api/settings';
 import type { DocumentPreview, DocumentHandling } from '../../api/types';
 import type { UploadFile } from 'antd/es/upload';
 
@@ -27,7 +28,16 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
   const [handlingMode, setHandlingMode] = useState<DocumentHandling['handling_mode']>('auto');
   const [covThreshold, setCovThreshold] = useState<number | null>(null);
   const [minChars, setMinChars] = useState<number | null>(null);
+  // When the admin policy requires it, ingest is gated behind a preview.
+  const [alwaysPreview, setAlwaysPreview] = useState(false);
   const upload = useUploadDocument();
+
+  useEffect(() => {
+    if (!open) return;
+    getDocumentConfig()
+      .then((c) => setAlwaysPreview(c.always_preview))
+      .catch(() => setAlwaysPreview(false));
+  }, [open]);
   const { data: trackedDoc } = useDocument(workspaceId, trackingDocId ?? undefined, !!trackingDocId);
 
   function reset() {
@@ -105,9 +115,23 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
         >
           Preview analysis
         </Button>,
-        <Button key="upload" type="primary" loading={upload.isPending} onClick={handleUpload}>
-          {preview ? 'Ingest anyway' : 'Upload'}
-        </Button>,
+        <Tooltip
+          key="upload"
+          title={
+            alwaysPreview && !preview
+              ? 'Admin policy: run "Preview analysis" before ingesting'
+              : ''
+          }
+        >
+          <Button
+            type="primary"
+            loading={upload.isPending}
+            disabled={alwaysPreview && !preview}
+            onClick={handleUpload}
+          >
+            {preview ? 'Ingest anyway' : 'Upload'}
+          </Button>
+        </Tooltip>,
       ];
 
   return (

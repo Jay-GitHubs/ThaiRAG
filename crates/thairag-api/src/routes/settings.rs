@@ -1864,6 +1864,11 @@ pub struct DocumentConfigResponse {
     pub pdf_max_vision_pages: usize,
     /// Vision-first OCR for every PDF page (highest fidelity, highest cost).
     pub pdf_high_quality: bool,
+    /// Image-coverage ratio (0.0–1.0) at/above which a PDF page is image-heavy
+    /// (a routing threshold surfaced for tuning).
+    pub pdf_page_as_image_threshold: f64,
+    /// Force the pre-ingest "Preview analysis" gate on every upload.
+    pub always_preview: bool,
     pub ai_preprocessing: AiPreprocessingResponse,
     /// km_store keys overridden at the *requested* scope (empty at global).
     /// Drives the admin UI origin badges + "Reset to Global" affordance: any
@@ -1928,6 +1933,8 @@ pub struct UpdateDocumentConfigRequest {
     pub pdf_min_chars_per_page: Option<usize>,
     pub pdf_max_vision_pages: Option<usize>,
     pub pdf_high_quality: Option<bool>,
+    pub pdf_page_as_image_threshold: Option<f64>,
+    pub always_preview: Option<bool>,
     pub ai_preprocessing: Option<UpdateAiPreprocessing>,
 }
 
@@ -2145,6 +2152,12 @@ where
     eff.pdf_high_quality = s("document.pdf_high_quality")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.pdf_high_quality);
+    eff.pdf_page_as_image_threshold = s("document.pdf_page_as_image_threshold")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.pdf_page_as_image_threshold);
+    eff.always_preview = s("document.always_preview")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(doc.always_preview);
     eff.pdf_vision_concurrency = s("document.pdf_vision_concurrency")
         .and_then(|v| v.parse().ok())
         .unwrap_or(doc.pdf_vision_concurrency);
@@ -2307,6 +2320,8 @@ pub async fn get_document_config(
         pdf_min_chars_per_page: eff.pdf_min_chars_per_page,
         pdf_max_vision_pages: eff.pdf_max_vision_pages,
         pdf_high_quality: eff.pdf_high_quality,
+        pdf_page_as_image_threshold: eff.pdf_page_as_image_threshold,
+        always_preview: eff.always_preview,
         ai_preprocessing: build_ai_preprocessing_response_from_config(&eff.ai_preprocessing),
         overrides: document_scope_overrides(&state, &scope),
     }))
@@ -2423,6 +2438,12 @@ pub async fn update_document_config(
     }
     if let Some(v) = req.pdf_high_quality {
         set("document.pdf_high_quality", v.to_string());
+    }
+    if let Some(v) = req.pdf_page_as_image_threshold {
+        set("document.pdf_page_as_image_threshold", v.to_string());
+    }
+    if let Some(v) = req.always_preview {
+        set("document.always_preview", v.to_string());
     }
 
     if let Some(ai_update) = &req.ai_preprocessing {
@@ -2680,6 +2701,8 @@ pub async fn update_document_config(
         pdf_min_chars_per_page: eff.pdf_min_chars_per_page,
         pdf_max_vision_pages: eff.pdf_max_vision_pages,
         pdf_high_quality: eff.pdf_high_quality,
+        pdf_page_as_image_threshold: eff.pdf_page_as_image_threshold,
+        always_preview: eff.always_preview,
         ai_preprocessing: build_ai_preprocessing_response_from_config(&eff.ai_preprocessing),
         overrides: document_scope_overrides(&state, &scope),
     }))
