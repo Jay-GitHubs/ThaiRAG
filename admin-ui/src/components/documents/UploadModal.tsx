@@ -3,6 +3,9 @@ import { Modal, Upload, Input, message, Button, Spin } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import { useUploadDocument, useDocument } from '../../hooks/useDocuments';
 import { ProcessingTimeline } from './ProcessingTimeline';
+import { DocumentPreviewPanel } from './DocumentPreviewPanel';
+import { previewDocument } from '../../api/documents';
+import type { DocumentPreview } from '../../api/types';
 import type { UploadFile } from 'antd/es/upload';
 
 interface Props {
@@ -17,6 +20,9 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
   // Once a file is uploaded we keep the modal open and switch into a live
   // tracker that polls this document and renders its per-stage progress.
   const [trackingDocId, setTrackingDocId] = useState<string | null>(null);
+  // Optional pre-ingest analysis: what the pipeline WOULD do (dry-run, no cost).
+  const [preview, setPreview] = useState<DocumentPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const upload = useUploadDocument();
   const { data: trackedDoc } = useDocument(workspaceId, trackingDocId ?? undefined, !!trackingDocId);
 
@@ -24,6 +30,23 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
     setFileList([]);
     setTitle('');
     setTrackingDocId(null);
+    setPreview(null);
+  }
+
+  async function handlePreview() {
+    const file = fileList[0]?.originFileObj;
+    if (!file) {
+      message.warning('Please select a file');
+      return;
+    }
+    setPreviewing(true);
+    try {
+      setPreview(await previewDocument(workspaceId, file));
+    } catch {
+      message.error('Preview failed');
+    } finally {
+      setPreviewing(false);
+    }
   }
 
   function handleClose() {
@@ -62,8 +85,16 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
         <Button key="cancel" onClick={handleClose}>
           Cancel
         </Button>,
+        <Button
+          key="preview"
+          loading={previewing}
+          disabled={fileList.length === 0}
+          onClick={handlePreview}
+        >
+          Preview analysis
+        </Button>,
         <Button key="upload" type="primary" loading={upload.isPending} onClick={handleUpload}>
-          Upload
+          {preview ? 'Ingest anyway' : 'Upload'}
         </Button>,
       ];
 
@@ -95,15 +126,21 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
             maxCount={1}
             fileList={fileList}
             beforeUpload={() => false}
-            onChange={({ fileList }) => setFileList(fileList)}
+            onChange={({ fileList }) => {
+              setFileList(fileList);
+              setPreview(null); // a new file invalidates any prior analysis
+            }}
             accept=".txt,.md,.html,.pdf,.csv,.json,.docx,.xlsx,.odt"
           >
             <p className="ant-upload-drag-icon">
               <InboxOutlined />
             </p>
             <p className="ant-upload-text">Click or drag file to this area</p>
-            <p className="ant-upload-hint">Max 10MB. Supported: txt, md, html, pdf, csv, json, docx, xlsx</p>
+            <p className="ant-upload-hint">
+              Max 10MB. Supported: txt, md, html, pdf, csv, json, docx, xlsx, odt
+            </p>
           </Upload.Dragger>
+          {preview && <DocumentPreviewPanel preview={preview} />}
         </>
       )}
     </Modal>

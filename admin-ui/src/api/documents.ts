@@ -4,11 +4,24 @@ import type {
   Document,
   DocumentContentResponse,
   DocumentImageInfo,
+  DocumentPreview,
   IngestRequest,
   IngestResponse,
   ListResponse,
   PaginationParams,
 } from './types';
+
+/** Dry-run: what the pipeline WOULD do for this file — no processing, no DB write. */
+export async function previewDocument(workspaceId: string, file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await client.post<DocumentPreview>(
+    `/api/km/workspaces/${workspaceId}/documents/preview`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  );
+  return res.data;
+}
 
 export async function listDocuments(workspaceId: string, params?: PaginationParams) {
   const res = await client.get<ListResponse<Document>>(
