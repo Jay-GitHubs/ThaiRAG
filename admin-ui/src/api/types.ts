@@ -61,6 +61,24 @@ export interface ProcessingProvenance {
    * deterministically; raw text kept verbatim (numbers exact, structure not).
    * Non-zero flags pages an analyst may want to review by hand. */
   tables_kept_as_text?: number;
+  /** Which extraction engines actually ran (deterministic OCR vs vision LLM).
+   * Absent/empty for non-PDF paths and docs processed before this existed. */
+  extraction?: ExtractionStats;
+}
+
+/** Per-document record of which extraction engines ran during smart-PDF
+ * processing — lets an operator see, after the fact, whether e.g. PaddleOCR
+ * transcribed any pages. */
+export interface ExtractionStats {
+  total_pages?: number;
+  ocr_pages_used?: number;
+  /** OCR provider that ran (e.g. "paddleocr-sidecar"); absent if no page OCR'd. */
+  ocr_provider?: string;
+  vision_pages_used?: number;
+  /** Vision model that ran; absent if no page used vision. */
+  vision_model?: string;
+  /** Pages that needed OCR/vision but had no model configured (raw text kept). */
+  pages_vision_skipped?: number;
 }
 
 /** Timing for one processing stage; `duration_ms` is absent while in progress. */
