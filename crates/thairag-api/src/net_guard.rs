@@ -125,11 +125,10 @@ pub fn mime_matches_magic(mime: &str, bytes: &[u8]) -> bool {
         // Spec says offset 0; real-world PDFs occasionally carry a small
         // preamble, so search the first 1 KB like pdf readers do.
         "application/pdf" => bytes.windows(5).take(1024).any(|w| w == b"%PDF-"),
-        // OOXML containers are zip archives.
+        // OOXML and ODF containers are both zip archives.
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
-            bytes.starts_with(b"PK\x03\x04")
-        }
+        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        | "application/vnd.oasis.opendocument.text" => bytes.starts_with(b"PK\x03\x04"),
         "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G']),
         "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         "image/gif" => bytes.starts_with(b"GIF8"),
@@ -200,6 +199,15 @@ mod tests {
         assert!(mime_matches_magic(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             b"PK\x03\x04rest"
+        ));
+        // ODT is also a zip container.
+        assert!(mime_matches_magic(
+            "application/vnd.oasis.opendocument.text",
+            b"PK\x03\x04rest"
+        ));
+        assert!(!mime_matches_magic(
+            "application/vnd.oasis.opendocument.text",
+            b"not a zip"
         ));
         assert!(!mime_matches_magic("image/png", b"GIF89a"));
         // Unsniffable types pass through.

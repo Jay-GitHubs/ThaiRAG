@@ -20,6 +20,7 @@ const EXT_MIME: Record<string, string> = {
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  odt: 'application/vnd.oasis.opendocument.text',
   csv: 'text/csv',
   html: 'text/html',
   htm: 'text/html',
@@ -29,7 +30,7 @@ const EXT_MIME: Record<string, string> = {
 };
 
 /** `accept` attribute value for the file picker. */
-export const ACCEPTED_EXTENSIONS = '.pdf,.docx,.xlsx,.csv,.html,.htm,.md,.markdown,.txt';
+export const ACCEPTED_EXTENSIONS = '.pdf,.docx,.xlsx,.odt,.csv,.html,.htm,.md,.markdown,.txt';
 
 /** Default 5 MB per-file ceiling — matches the backend's `max_bytes_per_attachment`. */
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;

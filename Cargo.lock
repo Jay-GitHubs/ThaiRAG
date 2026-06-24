@@ -6348,6 +6348,7 @@ dependencies = [
  "pdf-extract",
  "pdfium-render",
  "printpdf",
+ "quick-xml",
  "scraper",
  "serde",
  "serde_json",
