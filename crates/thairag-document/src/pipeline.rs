@@ -279,6 +279,30 @@ pub enum HandlingMode {
     ForceOcr,
 }
 
+/// Resolve which models actually run for a chosen handling mode — the decisive
+/// branch the per-document override hinges on. `TextOnly` and `ForceOcr` suppress
+/// the vision LLM; `TextOnly` also suppresses the deterministic OCR tier. Pulled
+/// out as a pure function so the selection→behaviour mapping can be asserted
+/// directly (a `None` provider is never invoked by `render_to_document`).
+fn effective_providers(
+    mode: HandlingMode,
+    vision_llm: &Option<Arc<dyn LlmProvider>>,
+    ocr: &Option<Arc<dyn crate::ocr::OcrProvider>>,
+) -> (
+    Option<Arc<dyn LlmProvider>>,
+    Option<Arc<dyn crate::ocr::OcrProvider>>,
+) {
+    let vision = match mode {
+        HandlingMode::TextOnly | HandlingMode::ForceOcr => None,
+        HandlingMode::Auto | HandlingMode::HighQuality => vision_llm.clone(),
+    };
+    let ocr = match mode {
+        HandlingMode::TextOnly => None,
+        _ => ocr.clone(),
+    };
+    (vision, ocr)
+}
+
 /// Per-ingest overrides, resolved from a workspace's scoped settings and/or a
 /// per-document admin choice. `None`/`Auto` fields fall back to the pipeline's
 /// built-in values, so a `default()` value is a transparent no-op.
@@ -1045,15 +1069,8 @@ impl DocumentPipeline {
         // and are flagged via `pages_vision_skipped`.
         // Per-document handling override (admin's pre-ingest choice): TextOnly
         // and ForceOcr suppress the vision LLM; TextOnly also suppresses OCR.
-        let effective_vision_llm: Option<Arc<dyn LlmProvider>> = match overrides.handling_mode {
-            HandlingMode::TextOnly | HandlingMode::ForceOcr => None,
-            HandlingMode::Auto | HandlingMode::HighQuality => self.vision_llm.clone(),
-        };
-        let effective_ocr: Option<Arc<dyn crate::ocr::OcrProvider>> = match overrides.handling_mode
-        {
-            HandlingMode::TextOnly => None,
-            _ => self.ocr.clone(),
-        };
+        let (effective_vision_llm, effective_ocr) =
+            effective_providers(overrides.handling_mode, &self.vision_llm, &self.ocr);
 
         // Advisory heads-up: the model isn't in our recommended-vision list. We
         // still attempt OCR (it may be vision-capable anyway); this only flags a
@@ -2482,5 +2499,69 @@ mod tests {
         assert!(pipeline.pdf_vision_fallback_enabled);
         assert_eq!(pipeline.pdf_min_chars_per_page, 75);
         assert_eq!(pipeline.pdf_max_vision_pages, 42);
+    }
+
+    // ── Handling-mode → effective provider selection ──────────────────
+    // The decisive branch the per-document override (and reprocess-with-options)
+    // hinges on: a chosen mode must change which models the pipeline runs. A
+    // `None` provider is never invoked, so these assertions == behaviour.
+
+    struct MockOcr;
+    #[async_trait::async_trait]
+    impl crate::ocr::OcrProvider for MockOcr {
+        async fn ocr(&self, _png: &[u8]) -> Result<String> {
+            Ok("ocr".into())
+        }
+        fn name(&self) -> &str {
+            "mock-ocr"
+        }
+    }
+
+    #[test]
+    fn handling_mode_selects_effective_providers() {
+        let (vision, _) = mock_vision_llm("v");
+        let vision: Option<Arc<dyn LlmProvider>> = Some(vision);
+        let ocr: Option<Arc<dyn crate::ocr::OcrProvider>> = Some(Arc::new(MockOcr));
+
+        // Auto: both run (adaptive routing).
+        let (v, o) = effective_providers(HandlingMode::Auto, &vision, &ocr);
+        assert!(v.is_some() && o.is_some(), "Auto keeps vision + OCR");
+
+        // High quality: both run (high_quality flag handled separately).
+        let (v, o) = effective_providers(HandlingMode::HighQuality, &vision, &ocr);
+        assert!(v.is_some() && o.is_some(), "HighQuality keeps vision + OCR");
+
+        // OCR only: deterministic OCR, NO vision LLM (no hallucination).
+        let (v, o) = effective_providers(HandlingMode::ForceOcr, &vision, &ocr);
+        assert!(
+            v.is_none() && o.is_some(),
+            "ForceOcr suppresses vision, keeps OCR"
+        );
+
+        // Text only: NO models at all — pdfium text layer only.
+        let (v, o) = effective_providers(HandlingMode::TextOnly, &vision, &ocr);
+        assert!(
+            v.is_none() && o.is_none(),
+            "TextOnly suppresses both vision and OCR"
+        );
+    }
+
+    #[test]
+    fn handling_mode_cannot_conjure_absent_providers() {
+        // With no providers configured, no mode can invent one.
+        let no_vision: Option<Arc<dyn LlmProvider>> = None;
+        let no_ocr: Option<Arc<dyn crate::ocr::OcrProvider>> = None;
+        for mode in [
+            HandlingMode::Auto,
+            HandlingMode::HighQuality,
+            HandlingMode::ForceOcr,
+            HandlingMode::TextOnly,
+        ] {
+            let (v, o) = effective_providers(mode, &no_vision, &no_ocr);
+            assert!(
+                v.is_none() && o.is_none(),
+                "{mode:?} cannot conjure a provider"
+            );
+        }
     }
 }
