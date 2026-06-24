@@ -23,6 +23,7 @@ const PDF_MIME: &str = "application/pdf";
 const DOCX_MIME: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const HTML_MIME: &str = "text/html";
+const ODT_MIME: &str = "application/vnd.oasis.opendocument.text";
 
 /// Stable reason codes for [`ThaiRagError::EmptyExtraction`].
 /// Surface these in admin UIs and treat as a stable API.
@@ -733,10 +734,11 @@ impl DocumentPipeline {
         mime_type == PDF_MIME
     }
 
-    /// Whether a DOCX/XLSX/HTML file should go through the embedded-media path
-    /// (requires a vision-capable model to describe the extracted images).
+    /// Whether a DOCX/XLSX/HTML/ODT file should go through the embedded-media
+    /// path (requires a vision-capable model to describe the extracted images).
+    /// Without vision, these fall through to the plain text-extraction path.
     fn media_eligible(&self, mime_type: &str) -> bool {
-        self.vision_capable() && matches!(mime_type, DOCX_MIME | XLSX_MIME | HTML_MIME)
+        self.vision_capable() && matches!(mime_type, DOCX_MIME | XLSX_MIME | HTML_MIME | ODT_MIME)
     }
 
     /// Whether to route an image-bearing input through the vision path.
@@ -1277,6 +1279,10 @@ impl DocumentPipeline {
                 XLSX_MIME => (
                     crate::office_media::extract_office_images(raw),
                     "xlsx_embedded",
+                ),
+                ODT_MIME => (
+                    crate::office_media::extract_office_images(raw),
+                    "odt_embedded",
                 ),
                 HTML_MIME => (
                     crate::office_media::extract_html_images(raw),
