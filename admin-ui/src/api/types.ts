@@ -291,6 +291,23 @@ export interface IngestResponse {
   size_bytes: number;
 }
 
+/** Dry-run document-complexity preview (POST .../documents/preview). */
+export interface DocumentPreview {
+  format: string;
+  total_regions: number;
+  classes: Record<string, number>;
+  native_regions: number;
+  deterministic_ocr_regions: number;
+  vision_llm_regions: number;
+  ocr_tier_available: boolean;
+  thresholds: {
+    image_coverage_threshold: number;
+    min_chars_per_page: number;
+    garble_ratio_threshold: number;
+  };
+  recommendation: string;
+}
+
 // ── Provider Config ─────────────────────────────────────────────────
 export interface LlmProviderInfo {
   kind: string;
