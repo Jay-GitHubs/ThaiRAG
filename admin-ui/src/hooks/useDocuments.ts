@@ -85,8 +85,15 @@ export function useDeleteDocument() {
 export function useReprocessDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ wsId, docId }: { wsId: string; docId: string }) =>
-      reprocessDocument(wsId, docId),
+    mutationFn: ({
+      wsId,
+      docId,
+      handling,
+    }: {
+      wsId: string;
+      docId: string;
+      handling?: DocumentHandling;
+    }) => reprocessDocument(wsId, docId, handling),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   });
 }

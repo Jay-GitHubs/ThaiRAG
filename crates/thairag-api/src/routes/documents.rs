@@ -1591,14 +1591,69 @@ pub async fn get_document_chunks(
     }))
 }
 
+/// `POST /workspaces/:ws/documents/:doc_id/preview` — dry-run complexity profile
+/// of an ALREADY-stored document (from its retained original bytes). Powers the
+/// "Reprocess with options" flow so an admin can review the handling decision
+/// before re-running. Same classifier as the upload-time preview; no DB writes,
+/// no vision/OCR cost.
+pub async fn preview_document_by_id(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<DocumentPreview>, ApiError> {
+    let workspace_id = WorkspaceId(workspace_id);
+    let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
+    require_doc(&perm, Role::can_write, "preview document")?;
+
+    let doc_id_typed = DocId(doc_id);
+    let doc = state.km_store.get_document(doc_id_typed)?;
+    let bytes = state
+        .km_store
+        .get_document_file(doc_id_typed)
+        .map_err(ApiError)?
+        .ok_or_else(|| {
+            ApiError(ThaiRagError::NotFound(
+                "Original file not stored; cannot preview".into(),
+            ))
+        })?;
+
+    let cfg =
+        crate::routes::settings::build_effective_document_config(&state.config, &*state.km_store);
+    let preview = build_document_preview(&bytes, &doc.mime_type, &cfg);
+    Ok(Json(preview))
+}
+
+/// Optional per-reprocess handling override, mirroring the upload-time
+/// `ChunkOverrides` levers. An empty/absent body falls back to `Auto` defaults —
+/// the legacy reprocess behaviour — so the plain "Reprocess" action stays
+/// backward-compatible.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct ReprocessOptions {
+    pub handling_mode: Option<String>,
+    pub image_coverage_threshold: Option<f64>,
+    pub min_chars_per_page: Option<usize>,
+}
+
 pub async fn reprocess_document(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path((workspace_id, doc_id)): Path<(Uuid, Uuid)>,
+    body: Option<Json<ReprocessOptions>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let workspace_id = WorkspaceId(workspace_id);
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_write, "reprocess document")?;
+
+    // Per-reprocess handling override (from the "Reprocess with options" UI).
+    // Absent body == Auto defaults == the prior reprocess behaviour.
+    let overrides = body.map(|Json(b)| b).unwrap_or_default();
+    let handling = thairag_document::pipeline::ChunkOverrides {
+        handling_mode: parse_handling_mode(overrides.handling_mode.as_deref()),
+        image_coverage_threshold: overrides.image_coverage_threshold,
+        min_chars_per_page: overrides.min_chars_per_page,
+        ..Default::default()
+    };
 
     let doc_id_typed = DocId(doc_id);
     let doc = state.km_store.get_document(doc_id_typed)?;
@@ -1666,7 +1721,7 @@ pub async fn reprocess_document(
             workspace_id,
             file_bytes,
             mime,
-            thairag_document::pipeline::ChunkOverrides::default(),
+            handling,
         )
         .await;
         if let Some(ref err) = error {
@@ -3128,5 +3183,46 @@ mod panic_guard_tests {
         assert!(err.is_panic(), "JoinError must report is_panic() == true");
         let msg = panic_payload_to_string(err.into_panic());
         assert_eq!(msg, "intentional test panic");
+    }
+}
+
+#[cfg(test)]
+mod reprocess_options_tests {
+    use super::*;
+    use thairag_document::pipeline::HandlingMode;
+
+    // An empty body ({} or absent) MUST map to Auto defaults so the plain
+    // "Reprocess" action keeps its legacy behaviour.
+    #[test]
+    fn empty_options_are_auto_no_overrides() {
+        let opts: ReprocessOptions = serde_json::from_str("{}").unwrap();
+        let handling = thairag_document::pipeline::ChunkOverrides {
+            handling_mode: parse_handling_mode(opts.handling_mode.as_deref()),
+            image_coverage_threshold: opts.image_coverage_threshold,
+            min_chars_per_page: opts.min_chars_per_page,
+            ..Default::default()
+        };
+        assert_eq!(handling.handling_mode, HandlingMode::Auto);
+        assert!(handling.image_coverage_threshold.is_none());
+        assert!(handling.min_chars_per_page.is_none());
+    }
+
+    // A populated body carries the admin's chosen mode + threshold overrides
+    // into the reprocess pipeline.
+    #[test]
+    fn populated_options_carry_overrides() {
+        let opts: ReprocessOptions = serde_json::from_str(
+            r#"{"handling_mode":"force_ocr","image_coverage_threshold":0.4,"min_chars_per_page":80}"#,
+        )
+        .unwrap();
+        let handling = thairag_document::pipeline::ChunkOverrides {
+            handling_mode: parse_handling_mode(opts.handling_mode.as_deref()),
+            image_coverage_threshold: opts.image_coverage_threshold,
+            min_chars_per_page: opts.min_chars_per_page,
+            ..Default::default()
+        };
+        assert_eq!(handling.handling_mode, HandlingMode::ForceOcr);
+        assert_eq!(handling.image_coverage_threshold, Some(0.4));
+        assert_eq!(handling.min_chars_per_page, Some(80));
     }
 }
