@@ -279,6 +279,13 @@ pub enum HandlingMode {
     ForceOcr,
 }
 
+/// The models actually run for an ingest: an optional vision LLM and an optional
+/// deterministic OCR provider. A `None` slot means that model is never invoked.
+type EffectiveProviders = (
+    Option<Arc<dyn LlmProvider>>,
+    Option<Arc<dyn crate::ocr::OcrProvider>>,
+);
+
 /// Resolve which models actually run for a chosen handling mode — the decisive
 /// branch the per-document override hinges on. `TextOnly` and `ForceOcr` suppress
 /// the vision LLM; `TextOnly` also suppresses the deterministic OCR tier. Pulled
@@ -288,10 +295,7 @@ fn effective_providers(
     mode: HandlingMode,
     vision_llm: &Option<Arc<dyn LlmProvider>>,
     ocr: &Option<Arc<dyn crate::ocr::OcrProvider>>,
-) -> (
-    Option<Arc<dyn LlmProvider>>,
-    Option<Arc<dyn crate::ocr::OcrProvider>>,
-) {
+) -> EffectiveProviders {
     let vision = match mode {
         HandlingMode::TextOnly | HandlingMode::ForceOcr => None,
         HandlingMode::Auto | HandlingMode::HighQuality => vision_llm.clone(),
