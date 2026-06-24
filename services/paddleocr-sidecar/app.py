@@ -31,7 +31,24 @@ def get_ocr():
         from paddleocr import PaddleOCR
 
         lang = os.environ.get("OCR_LANG", "th")
-        _ocr = PaddleOCR(lang=lang, use_textline_orientation=False)
+        # Lightweight pipeline: skip the heavy doc-orientation (PP-LCNet) and
+        # unwarping (UVDoc) stages and use the MOBILE detection model instead of
+        # the server one. The full default pipeline OOM-kills a modest container;
+        # this keeps memory low with no Thai-accuracy loss on clean renders.
+        # Pin BOTH the mobile detection and the Thai mobile recognition model:
+        # overriding the detector alone makes PaddleOCR default the recognizer to a
+        # non-Thai model (garbage output), so the Thai rec model must be explicit.
+        rec = "th_PP-OCRv5_mobile_rec" if lang == "th" else None
+        kwargs = dict(
+            lang=lang,
+            use_textline_orientation=False,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            text_detection_model_name="PP-OCRv5_mobile_det",
+        )
+        if rec:
+            kwargs["text_recognition_model_name"] = rec
+        _ocr = PaddleOCR(**kwargs)
     return _ocr
 
 
