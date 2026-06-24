@@ -3,6 +3,7 @@ import type {
   ChunksResponse,
   Document,
   DocumentContentResponse,
+  DocumentHandling,
   DocumentImageInfo,
   DocumentPreview,
   IngestRequest,
@@ -46,10 +47,24 @@ export async function ingestDocument(workspaceId: string, data: IngestRequest) {
   return res.data;
 }
 
-export async function uploadDocument(workspaceId: string, file: File, title?: string) {
+export async function uploadDocument(
+  workspaceId: string,
+  file: File,
+  title?: string,
+  handling?: DocumentHandling,
+) {
   const formData = new FormData();
   formData.append('file', file);
   if (title) formData.append('title', title);
+  if (handling?.handling_mode && handling.handling_mode !== 'auto') {
+    formData.append('handling_mode', handling.handling_mode);
+  }
+  if (handling?.image_coverage_threshold != null) {
+    formData.append('image_coverage_threshold', String(handling.image_coverage_threshold));
+  }
+  if (handling?.min_chars_per_page != null) {
+    formData.append('min_chars_per_page', String(handling.min_chars_per_page));
+  }
   const res = await client.post<IngestResponse>(
     `/api/km/workspaces/${workspaceId}/documents/upload`,
     formData,

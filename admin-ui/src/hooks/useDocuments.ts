@@ -8,7 +8,7 @@ import {
   reprocessDocument,
   uploadDocument,
 } from '../api/documents';
-import type { IngestRequest } from '../api/types';
+import type { DocumentHandling, IngestRequest } from '../api/types';
 
 export function useDocuments(workspaceId: string | undefined) {
   const query = useQuery({
@@ -58,8 +58,17 @@ export function useIngestDocument() {
 export function useUploadDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ wsId, file, title }: { wsId: string; file: File; title?: string }) =>
-      uploadDocument(wsId, file, title),
+    mutationFn: ({
+      wsId,
+      file,
+      title,
+      handling,
+    }: {
+      wsId: string;
+      file: File;
+      title?: string;
+      handling?: DocumentHandling;
+    }) => uploadDocument(wsId, file, title, handling),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   });
 }
