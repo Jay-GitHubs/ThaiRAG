@@ -13,6 +13,7 @@ docx-rs = { workspace = true }
 pdf-extract = { workspace = true }
 scraper = { workspace = true }
 calamine = { workspace = true }
+quick-xml = "0.31"
 image = { workspace = true }
 pdfium-render = { workspace = true }
 zip = { workspace = true }

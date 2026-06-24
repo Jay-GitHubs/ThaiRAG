@@ -100,6 +100,7 @@ pub const SUPPORTED_MIME_TYPES: &[&str] = &[
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.oasis.opendocument.text",
     // Image types — handled by the pipeline (LLM vision), converter returns placeholder
     "image/png",
     "image/jpeg",
@@ -122,6 +123,7 @@ impl DocumentProcessor for MarkdownConverter {
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
                 convert_xlsx(raw)
             }
+            "application/vnd.oasis.opendocument.text" => convert_odt(raw),
             // Image types: return a placeholder — actual description is done by the pipeline
             "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
                 Ok(format!("[Image: {mime_type}, {} bytes]", raw.len()))
@@ -409,6 +411,63 @@ fn convert_docx(raw: &[u8]) -> Result<String> {
     Ok(output)
 }
 
+/// Extract text from an ODT (OpenDocument Text). An ODT is a ZIP whose
+/// `content.xml` holds the ODF body; we pull the text from its `text:p` /
+/// `text:h` paragraphs (with tabs / line-breaks preserved). Encrypted or flat
+/// (`.fodt`) documents have no `content.xml` entry and return a clean error.
+fn convert_odt(raw: &[u8]) -> Result<String> {
+    use std::io::Read;
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(raw)).map_err(|e| {
+        ThaiRagError::Validation(format!("Failed to read ODT (not a valid zip): {e}"))
+    })?;
+    let mut xml = String::new();
+    {
+        let mut entry = zip.by_name("content.xml").map_err(|_| {
+            ThaiRagError::Validation(
+                "ODT has no content.xml (encrypted, or a flat .fodt, which is unsupported)".into(),
+            )
+        })?;
+        entry.read_to_string(&mut xml).map_err(|e| {
+            ThaiRagError::Validation(format!("Failed to read ODT content.xml: {e}"))
+        })?;
+    }
+    Ok(extract_odf_text(&xml))
+}
+
+/// Pull readable text out of an ODF `content.xml`, best-effort: paragraph and
+/// heading ends become newlines, `text:tab`/`text:line-break`/`text:s` map to
+/// their whitespace, and entities are decoded. Tolerates malformed tails by
+/// returning whatever parsed so far.
+fn extract_odf_text(xml: &str) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    let mut out = String::new();
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.name().as_ref() {
+                b"text:tab" => out.push('\t'),
+                b"text:line-break" => out.push('\n'),
+                b"text:s" => out.push(' '),
+                _ => {}
+            },
+            Ok(Event::End(e)) => {
+                if matches!(e.name().as_ref(), b"text:p" | b"text:h") {
+                    out.push('\n');
+                }
+            }
+            Ok(Event::Text(e)) => out.push_str(&e.unescape().unwrap_or_default()),
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out.trim().to_string()
+}
+
 fn extract_docx_cell_text(cell: &docx_rs::TableCell) -> String {
     let mut text = String::new();
     for tc_child in &cell.children {
@@ -576,6 +635,62 @@ mod tests {
             .unwrap();
         assert!(result.contains("Hello from DOCX"));
         assert!(result.contains("Second paragraph"));
+    }
+
+    #[test]
+    fn odf_text_extraction_handles_thai_and_breaks() {
+        // Pure parser test (no zip): paragraphs/headings → newlines, tab/
+        // line-break mapped, entities decoded.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <office:document-content xmlns:office="urn:office" xmlns:text="urn:text">
+            <office:body><office:text>
+            <text:h>หัวข้อเอกสาร</text:h>
+            <text:p>สวัสดี<text:tab/>ครับ &amp; ยินดีต้อนรับ</text:p>
+            <text:p>บรรทัดที่สอง</text:p>
+            </office:text></office:body></office:document-content>"#;
+        let out = extract_odf_text(xml);
+        assert!(out.contains("หัวข้อเอกสาร"));
+        assert!(out.contains("สวัสดี\tครับ & ยินดีต้อนรับ"), "got: {out:?}");
+        assert!(out.contains("บรรทัดที่สอง"));
+        // heading and first paragraph are on separate lines
+        assert!(out.contains("หัวข้อเอกสาร\n"));
+    }
+
+    #[test]
+    fn converts_odt_basic() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts = zip::write::FileOptions::default();
+            // ODF puts an uncompressed `mimetype` entry first; not required for
+            // our extractor but mirrors a real ODT.
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.oasis.opendocument.text")
+                .unwrap();
+            zip.start_file("content.xml", opts).unwrap();
+            zip.write_all(
+                r#"<office:document-content xmlns:office="o" xmlns:text="t"><office:body><office:text><text:p>เนื้อหา ODT ภาษาไทย</text:p></office:text></office:body></office:document-content>"#
+                    .as_bytes(),
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        let out = converter()
+            .convert(&buf, "application/vnd.oasis.opendocument.text")
+            .unwrap();
+        assert!(out.contains("เนื้อหา ODT ภาษาไทย"), "got: {out:?}");
+    }
+
+    #[test]
+    fn rejects_invalid_odt() {
+        let err = convert_odt(b"definitely not a zip");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn odt_in_supported_mime_types() {
+        assert!(SUPPORTED_MIME_TYPES.contains(&"application/vnd.oasis.opendocument.text"));
     }
 
     #[test]
