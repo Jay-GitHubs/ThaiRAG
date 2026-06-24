@@ -326,6 +326,12 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             )),
         )
         .route(
+            "/workspaces/{workspace_id}/documents/preview",
+            post(documents::preview_document).layer(DefaultBodyLimit::max(
+                state.config.document.max_upload_size_mb * 1024 * 1024,
+            )),
+        )
+        .route(
             "/workspaces/{workspace_id}/documents/batch",
             post(documents::batch_upload_documents).layer(DefaultBodyLimit::max(
                 state.config.document.max_upload_size_mb * 1024 * 1024,

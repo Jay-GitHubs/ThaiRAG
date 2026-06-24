@@ -38,7 +38,7 @@ pub fn strip_trivial(text: &str) -> String {
 /// alike — reads garbage like `เรืĻอง` / `โซลูชันĻ`. The only fix is to ignore
 /// the text layer and OCR the rendered page. Measured: clean Thai PDFs score
 /// 0.000; a corrupted real-world corpus scored 0.013–0.032.
-const GARBLE_RATIO_THRESHOLD: f64 = 0.01;
+pub const GARBLE_RATIO_THRESHOLD: f64 = 0.01;
 
 /// Require a few absolute hits as well, so one stray Latin-Extended letter in a
 /// short snippet (e.g. a foreign proper noun) can't trip the detector.

@@ -1036,6 +1036,257 @@ pub async fn upload_document(
     ))
 }
 
+/// Routing thresholds reported alongside a preview, so the admin sees *why* the
+/// decision was made and can tune them.
+#[derive(serde::Serialize)]
+pub struct PreviewThresholds {
+    /// Image-coverage ratio at/above which a page is image-heavy.
+    pub image_coverage_threshold: f64,
+    /// Min meaningful chars for a page's text to count as readable.
+    pub min_chars_per_page: usize,
+    /// Alien-Latin/Thai ratio at/above which a text layer is "corrupted".
+    pub garble_ratio_threshold: f64,
+}
+
+/// Dry-run document-complexity profile: what the pipeline *would* do, computed
+/// without processing, DB writes, or vision/OCR cost. Powers the pre-ingest
+/// preview so an admin can review (and later override) the handling decision.
+#[derive(serde::Serialize)]
+pub struct DocumentPreview {
+    pub format: String,
+    /// PDF pages, or 1 for a whole non-PDF document.
+    pub total_regions: usize,
+    /// Per-complexity-class region counts (NativeText, CorruptedText, …).
+    pub classes: std::collections::BTreeMap<String, usize>,
+    /// Regions served deterministically (native extraction) — no model.
+    pub native_regions: usize,
+    /// Regions routed to the deterministic OCR tier.
+    pub deterministic_ocr_regions: usize,
+    /// Regions routed to the vision LLM (figure description / last-resort OCR).
+    pub vision_llm_regions: usize,
+    /// Whether a deterministic OCR tier is configured (PaddleOCR sidecar).
+    pub ocr_tier_available: bool,
+    pub thresholds: PreviewThresholds,
+    /// A plain-language summary of the handling decision.
+    pub recommendation: String,
+}
+
+/// `POST /workspaces/:ws/documents/preview` — dry-run complexity profile of an
+/// uploaded file. Runs the same per-region classifier the pipeline uses
+/// (`extract_pages` + `region_router`) but performs NO processing, NO DB write,
+/// and NO vision/OCR calls — so it's cheap and side-effect-free.
+pub async fn preview_document(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(workspace_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<DocumentPreview>, ApiError> {
+    let perm = resolve_doc_perm(&claims, &state, WorkspaceId(workspace_id))?;
+    require_doc(&perm, Role::can_write, "preview document")?;
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
+    let mut file_content_type: Option<String> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError(ThaiRagError::Validation(format!(
+            "Invalid multipart data: {e}"
+        )))
+    })? {
+        if field.name() == Some("file") {
+            file_name = field.file_name().map(|s| s.to_string());
+            file_content_type = field.content_type().map(|s| s.to_string());
+            file_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| {
+                        ApiError(ThaiRagError::Validation(format!(
+                            "Failed to read file: {e}"
+                        )))
+                    })?
+                    .to_vec(),
+            );
+        }
+    }
+    let bytes = file_bytes
+        .ok_or_else(|| ApiError(ThaiRagError::Validation("Missing 'file' field".into())))?;
+    let max_bytes = state.config.document.max_upload_size_mb * 1024 * 1024;
+    if bytes.len() > max_bytes {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "File too large: {} bytes (max {} MB)",
+            bytes.len(),
+            state.config.document.max_upload_size_mb
+        ))));
+    }
+    let mime_type = file_content_type
+        .filter(|ct| ct != "application/octet-stream")
+        .or_else(|| {
+            file_name
+                .as_deref()
+                .and_then(|name| name.rsplit('.').next())
+                .and_then(mime_from_extension)
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "text/plain".to_string());
+    validate_mime_type(&mime_type)?;
+
+    let doc =
+        crate::routes::settings::build_effective_document_config(&state.config, &*state.km_store);
+    let preview = build_document_preview(&bytes, &mime_type, &doc);
+    Ok(Json(preview))
+}
+
+/// Pure classification → preview (no IO beyond pdfium page extraction).
+fn build_document_preview(
+    bytes: &[u8],
+    mime_type: &str,
+    doc: &thairag_config::schema::DocumentConfig,
+) -> DocumentPreview {
+    use std::collections::BTreeMap;
+    use thairag_document::region_router::{
+        FidelityTier, RegionClass, RegionSignals, SourceFormat, classify,
+    };
+
+    let format = match mime_type {
+        "application/pdf" => SourceFormat::Pdf,
+        m if m.contains("wordprocessingml") => SourceFormat::Docx,
+        m if m.contains("spreadsheetml") => SourceFormat::Xlsx,
+        "text/html" => SourceFormat::Html,
+        "application/vnd.oasis.opendocument.text" => SourceFormat::Docx, // ODF text ≈ structured
+        m if m.starts_with("image/") => SourceFormat::Image,
+        _ => SourceFormat::Text,
+    };
+
+    let mut classes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut native = 0usize;
+    let mut det_ocr = 0usize;
+    let mut vision = 0usize;
+    let mut tally = |c: RegionClass| {
+        *classes.entry(c.as_str().to_string()).or_default() += 1;
+        match c.tier() {
+            FidelityTier::Native => native += 1,
+            FidelityTier::DeterministicOcr => det_ocr += 1,
+            FidelityTier::VisionLlm => vision += 1,
+        }
+    };
+
+    if format == SourceFormat::Pdf && thairag_document::pdfium_engine::is_available() {
+        let cfg = thairag_document::smart_pdf::SmartPdfConfig {
+            image_dpi: doc.pdf_image_dpi,
+            max_image_edge: doc.max_image_edge,
+            page_as_image_threshold: doc.pdf_page_as_image_threshold,
+            min_chars_per_page: doc.pdf_min_chars_per_page,
+            min_image_size: doc.pdf_min_image_size,
+            max_images_per_page: doc.pdf_max_images_per_page,
+            max_vision_pages: doc.pdf_max_vision_pages,
+            high_quality: doc.pdf_high_quality,
+            enhance: doc.pdf_image_enhance,
+            vision_concurrency: doc.pdf_vision_concurrency,
+        };
+        if let Ok(pages) = thairag_document::smart_pdf::extract_pages(bytes, &cfg) {
+            for ex in &pages {
+                let c = RegionClass::from_page_strategy(
+                    ex.strategy,
+                    thairag_document::text_utils::text_layer_garbled(&ex.text),
+                    ex.table.is_some() || ex.stitched_into.is_some(),
+                );
+                tally(c);
+            }
+        }
+    } else {
+        tally(classify(&RegionSignals::document(format)));
+    }
+
+    let total = native + det_ocr + vision;
+    let ocr_tier_available = !doc.ocr_sidecar_url.trim().is_empty();
+    let recommendation = build_preview_recommendation(
+        total,
+        det_ocr,
+        vision,
+        ocr_tier_available,
+        doc.pdf_high_quality,
+    );
+
+    DocumentPreview {
+        format: format_label(format).to_string(),
+        total_regions: total,
+        classes,
+        native_regions: native,
+        deterministic_ocr_regions: det_ocr,
+        vision_llm_regions: vision,
+        ocr_tier_available,
+        thresholds: PreviewThresholds {
+            image_coverage_threshold: doc.pdf_page_as_image_threshold,
+            min_chars_per_page: doc.pdf_min_chars_per_page,
+            garble_ratio_threshold: thairag_document::text_utils::GARBLE_RATIO_THRESHOLD,
+        },
+        recommendation,
+    }
+}
+
+fn format_label(f: thairag_document::region_router::SourceFormat) -> &'static str {
+    use thairag_document::region_router::SourceFormat as F;
+    match f {
+        F::Pdf => "pdf",
+        F::Docx => "docx/odt",
+        F::Xlsx => "xlsx",
+        F::Html => "html",
+        F::Image => "image",
+        F::Text => "text",
+        F::Other => "other",
+    }
+}
+
+fn build_preview_recommendation(
+    total: usize,
+    det_ocr: usize,
+    vision: usize,
+    ocr_tier_available: bool,
+    high_quality: bool,
+) -> String {
+    if total == 0 {
+        return "No extractable regions detected.".into();
+    }
+    let needs_model = det_ocr + vision;
+    if needs_model == 0 {
+        return format!(
+            "Fully deterministic: all {total} region(s) extract natively (text layer / \
+             reconstructed tables) — no OCR or vision model needed."
+        );
+    }
+    let mut parts = Vec::new();
+    if det_ocr > 0 {
+        if high_quality {
+            parts.push(format!(
+                "{det_ocr} region(s) need OCR (High-Quality is ON, so every page is OCR'd)"
+            ));
+        } else {
+            parts.push(format!(
+                "{det_ocr} region(s) need OCR (scanned / corrupted text)"
+            ));
+        }
+    }
+    if vision > 0 {
+        parts.push(format!("{vision} region(s) use the vision LLM"));
+    }
+    let where_ocr = if det_ocr > 0 {
+        if ocr_tier_available {
+            " OCR is served by the deterministic tier (PaddleOCR — fast, no hallucination)."
+        } else {
+            " No OCR tier configured: OCR-needing pages fall back to the vision LLM, or keep \
+             their text if no vision model is set."
+        }
+    } else {
+        ""
+    };
+    format!(
+        "{} of {total} region(s) deterministic; {}.{}",
+        total - needs_model,
+        parts.join("; "),
+        where_ocr
+    )
+}
+
 pub async fn list_documents(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
