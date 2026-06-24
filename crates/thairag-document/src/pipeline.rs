@@ -262,13 +262,35 @@ pub struct DocumentPipeline {
     smart_pdf: crate::smart_pdf::SmartPdfConfig,
 }
 
-/// Per-ingest overrides for chunk sizing, resolved from a workspace's scoped
-/// settings. `None` fields fall back to the pipeline's built-in values, so a
-/// `default()` value is a transparent no-op (used by callers that don't scope).
+/// How an admin chose to handle one document, overriding the adaptive router for
+/// this ingest only (the pre-ingest preview/override feature).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HandlingMode {
+    /// Adaptive routing — the default pipeline behaviour.
+    #[default]
+    Auto,
+    /// OCR every PDF page via the vision model (== `high_quality`).
+    HighQuality,
+    /// No models at all — use the pdfium text layer only (fast, zero cost/risk;
+    /// OCR-needing pages keep their — possibly garbled — text, flagged).
+    TextOnly,
+    /// Deterministic OCR tier only — never call the vision LLM (no hallucination,
+    /// no gateway dependency). Falls back to text if no OCR provider is set.
+    ForceOcr,
+}
+
+/// Per-ingest overrides, resolved from a workspace's scoped settings and/or a
+/// per-document admin choice. `None`/`Auto` fields fall back to the pipeline's
+/// built-in values, so a `default()` value is a transparent no-op.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChunkOverrides {
     pub max_chunk_size: Option<usize>,
     pub chunk_overlap: Option<usize>,
+    /// Per-document handling choice (admin override of the adaptive router).
+    pub handling_mode: HandlingMode,
+    /// Per-document threshold tweaks for the smart-PDF router.
+    pub image_coverage_threshold: Option<f64>,
+    pub min_chars_per_page: Option<usize>,
 }
 
 impl DocumentPipeline {
@@ -1021,7 +1043,17 @@ impl DocumentPipeline {
         // vision model is configured at all, text/tabular pages still extract
         // cleanly via the pdfium text layer; image/scanned pages keep their text
         // and are flagged via `pages_vision_skipped`.
-        let effective_vision_llm: Option<Arc<dyn LlmProvider>> = self.vision_llm.clone();
+        // Per-document handling override (admin's pre-ingest choice): TextOnly
+        // and ForceOcr suppress the vision LLM; TextOnly also suppresses OCR.
+        let effective_vision_llm: Option<Arc<dyn LlmProvider>> = match overrides.handling_mode {
+            HandlingMode::TextOnly | HandlingMode::ForceOcr => None,
+            HandlingMode::Auto | HandlingMode::HighQuality => self.vision_llm.clone(),
+        };
+        let effective_ocr: Option<Arc<dyn crate::ocr::OcrProvider>> = match overrides.handling_mode
+        {
+            HandlingMode::TextOnly => None,
+            _ => self.ocr.clone(),
+        };
 
         // Advisory heads-up: the model isn't in our recommended-vision list. We
         // still attempt OCR (it may be vision-capable anyway); this only flags a
@@ -1039,11 +1071,21 @@ impl DocumentPipeline {
             );
         }
 
-        let cfg = SmartPdfConfig {
+        let mut cfg = SmartPdfConfig {
             min_chars_per_page: self.pdf_min_chars_per_page,
             max_vision_pages: self.pdf_max_vision_pages,
             ..self.smart_pdf.clone()
         };
+        // Apply per-document overrides on top of the scoped config.
+        if overrides.handling_mode == HandlingMode::HighQuality {
+            cfg.high_quality = true;
+        }
+        if let Some(t) = overrides.image_coverage_threshold {
+            cfg.page_as_image_threshold = t;
+        }
+        if let Some(m) = overrides.min_chars_per_page {
+            cfg.min_chars_per_page = m;
+        }
 
         // Phase 1 (sync, pdfium is !Send): extract per-page data off the async
         // runtime. The PDF bytes are moved into the blocking task.
@@ -1061,7 +1103,7 @@ impl DocumentPipeline {
             "",
             extracts,
             effective_vision_llm.as_deref(),
-            self.ocr.as_deref(),
+            effective_ocr.as_deref(),
             &cfg,
         )
         .await;

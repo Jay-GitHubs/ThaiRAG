@@ -110,6 +110,7 @@ async fn process_document(
     bytes: Vec<u8>,
     mime_type: String,
     background: bool,
+    handling: thairag_document::pipeline::ChunkOverrides,
 ) -> usize {
     if background {
         // Large file: submit to job queue
@@ -131,8 +132,15 @@ async fn process_document(
         let jq = state.job_queue.clone();
         tokio::spawn(async move {
             jq.mark_running(&job_id).await;
-            let (chunks, error) =
-                process_document_inner(state.clone(), doc_id, workspace_id, bytes, mime_type).await;
+            let (chunks, error) = process_document_inner(
+                state.clone(),
+                doc_id,
+                workspace_id,
+                bytes,
+                mime_type,
+                handling,
+            )
+            .await;
             if let Some(ref err) = error {
                 jq.mark_failed(&job_id, err.clone()).await;
                 state.webhook_dispatcher.dispatch(
@@ -168,8 +176,15 @@ async fn process_document(
         0 // chunk count unknown yet
     } else {
         // Small file: process inline
-        let (chunk_count, error) =
-            process_document_inner(state.clone(), doc_id, workspace_id, bytes, mime_type).await;
+        let (chunk_count, error) = process_document_inner(
+            state.clone(),
+            doc_id,
+            workspace_id,
+            bytes,
+            mime_type,
+            handling,
+        )
+        .await;
         if let Some(ref err) = error {
             tracing::error!(%doc_id, %err, "Small file processing failed");
         } else {
@@ -207,6 +222,7 @@ async fn process_document_inner(
     workspace_id: WorkspaceId,
     bytes: Vec<u8>,
     mime_type: String,
+    handling: thairag_document::pipeline::ChunkOverrides,
 ) -> (usize, Option<String>) {
     let state_for_panic = state.clone();
     let handle = tokio::spawn(process_document_inner_impl(
@@ -215,6 +231,7 @@ async fn process_document_inner(
         workspace_id,
         bytes,
         mime_type,
+        handling,
     ));
 
     let pair = match handle.await {
@@ -350,6 +367,7 @@ async fn process_document_inner_impl(
     workspace_id: WorkspaceId,
     bytes: Vec<u8>,
     mime_type: String,
+    handling: thairag_document::pipeline::ChunkOverrides,
 ) -> (usize, Option<String>) {
     let p = state.providers();
 
@@ -405,14 +423,7 @@ async fn process_document_inner_impl(
     // surface its structured reason/hint instead of swallowing it into a
     // generic failure message so the admin UI can act on it.
     let processed = match pipeline
-        .process_to_document(
-            &bytes,
-            &mime_type,
-            doc_id,
-            workspace_id,
-            on_step,
-            thairag_document::pipeline::ChunkOverrides::default(),
-        )
+        .process_to_document(&bytes, &mime_type, doc_id, workspace_id, on_step, handling)
         .await
     {
         Ok(d) => d,
@@ -862,6 +873,7 @@ pub async fn ingest_document(
         body.content.into_bytes(),
         mime_type.clone(),
         background,
+        thairag_document::pipeline::ChunkOverrides::default(),
     )
     .await;
 
@@ -902,6 +914,10 @@ pub async fn upload_document(
     let mut file_name: Option<String> = None;
     let mut file_content_type: Option<String> = None;
     let mut title: Option<String> = None;
+    // Optional per-document handling override (from the pre-ingest preview UI).
+    let mut handling_mode: Option<String> = None;
+    let mut ov_image_coverage: Option<f64> = None;
+    let mut ov_min_chars: Option<usize> = None;
 
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         ApiError(ThaiRagError::Validation(format!(
@@ -932,9 +948,22 @@ pub async fn upload_document(
                     )))
                 })?);
             }
+            "handling_mode" => handling_mode = field.text().await.ok(),
+            "image_coverage_threshold" => {
+                ov_image_coverage = field.text().await.ok().and_then(|s| s.parse().ok());
+            }
+            "min_chars_per_page" => {
+                ov_min_chars = field.text().await.ok().and_then(|s| s.parse().ok());
+            }
             _ => {} // ignore unknown fields
         }
     }
+    let handling = thairag_document::pipeline::ChunkOverrides {
+        handling_mode: parse_handling_mode(handling_mode.as_deref()),
+        image_coverage_threshold: ov_image_coverage,
+        min_chars_per_page: ov_min_chars,
+        ..Default::default()
+    };
 
     let bytes = file_bytes
         .ok_or_else(|| ApiError(ThaiRagError::Validation("Missing 'file' field".into())))?;
@@ -1011,6 +1040,7 @@ pub async fn upload_document(
         bytes,
         mime_type.clone(),
         background,
+        handling,
     )
     .await;
 
@@ -1630,9 +1660,15 @@ pub async fn reprocess_document(
     let jq = state.job_queue.clone();
     tokio::spawn(async move {
         jq.mark_running(&job_id).await;
-        let (chunks, error) =
-            process_document_inner(state.clone(), doc_id_typed, workspace_id, file_bytes, mime)
-                .await;
+        let (chunks, error) = process_document_inner(
+            state.clone(),
+            doc_id_typed,
+            workspace_id,
+            file_bytes,
+            mime,
+            thairag_document::pipeline::ChunkOverrides::default(),
+        )
+        .await;
         if let Some(ref err) = error {
             jq.mark_failed(&job_id, err.clone()).await;
             state.webhook_dispatcher.dispatch(
@@ -2003,8 +2039,15 @@ pub async fn reprocess_all_documents(
         let s = state.clone();
         tokio::spawn(async move {
             jq.mark_running(&job_id).await;
-            let (chunks, error) =
-                process_document_inner(s.clone(), doc_id, workspace_id, file_bytes, mime).await;
+            let (chunks, error) = process_document_inner(
+                s.clone(),
+                doc_id,
+                workspace_id,
+                file_bytes,
+                mime,
+                thairag_document::pipeline::ChunkOverrides::default(),
+            )
+            .await;
             if let Some(ref err) = error {
                 jq.mark_failed(&job_id, err.clone()).await;
                 s.webhook_dispatcher.dispatch(
@@ -2227,6 +2270,7 @@ pub async fn batch_upload_documents(
                 workspace_id,
                 entry.content,
                 entry.mime_type,
+                thairag_document::pipeline::ChunkOverrides::default(),
             )
             .await;
 
@@ -2445,6 +2489,18 @@ fn validate_mime_type(mime_type: &str) -> Result<(), ApiError> {
         ))));
     }
     Ok(())
+}
+
+/// Parse the per-document handling override from the upload form. Unknown /
+/// missing → `Auto` (the adaptive default).
+fn parse_handling_mode(s: Option<&str>) -> thairag_document::pipeline::HandlingMode {
+    use thairag_document::pipeline::HandlingMode;
+    match s.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("high_quality") => HandlingMode::HighQuality,
+        Some("text_only") => HandlingMode::TextOnly,
+        Some("force_ocr") => HandlingMode::ForceOcr,
+        _ => HandlingMode::Auto,
+    }
 }
 
 fn mime_from_extension(ext: &str) -> Option<&'static str> {
@@ -2989,8 +3045,15 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
 
     // Reprocess with the new content
     let mime = doc.mime_type.clone();
-    let (chunks, error) =
-        process_document_inner(state.clone(), doc_id, workspace_id, bytes, mime).await;
+    let (chunks, error) = process_document_inner(
+        state.clone(),
+        doc_id,
+        workspace_id,
+        bytes,
+        mime,
+        thairag_document::pipeline::ChunkOverrides::default(),
+    )
+    .await;
 
     if let Some(ref err) = error {
         jq.mark_failed(&job_id, err.clone()).await;

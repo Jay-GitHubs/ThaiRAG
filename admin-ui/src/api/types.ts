@@ -291,6 +291,13 @@ export interface IngestResponse {
   size_bytes: number;
 }
 
+/** Per-document handling override chosen by the admin before ingest. */
+export interface DocumentHandling {
+  handling_mode?: 'auto' | 'high_quality' | 'force_ocr' | 'text_only';
+  image_coverage_threshold?: number;
+  min_chars_per_page?: number;
+}
+
 /** Dry-run document-complexity preview (POST .../documents/preview). */
 export interface DocumentPreview {
   format: string;
