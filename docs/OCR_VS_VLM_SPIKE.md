@@ -1,7 +1,17 @@
 # Spike: Deterministic OCR (PaddleOCR Thai) vs Vision-LLM OCR
 
-Status: **Complete — GO, confirmed by graded CER** · Phase 3 spike + Phase 1b eval of
+Status: **Complete — GO, confirmed by graded CER, and SHIPPED** · Phase 3 spike + Phase 1b eval of
 `DOCUMENT_COMPLEXITY_ROUTING_DESIGN.md`
+
+> **Shipped (PRs #219–#235):** the GO was acted on. PaddleOCR `th_PP-OCRv5` is now the
+> deterministic tier-2 OCR engine, integrated as a **sidecar** (`services/paddleocr-sidecar/`,
+> FastAPI) behind the `OcrProvider` trait + `SidecarOcrProvider`
+> (`crates/thairag-document/src/ocr.rs`). It is wired into `smart_pdf::render_to_document`
+> as a **hybrid** tier — preferred over the vision LLM for OCR-needing pages, with the VLM
+> retained for figure *description* — and is **default-off / opt-in** via
+> `document.ocr_sidecar_url` (with the URL unset, extraction is byte-for-byte unchanged).
+> Per-ingest telemetry lands in `ExtractionStats` (`ocr_pages_used`, `ocr_provider`,
+> `vision_pages_used`, `pages_vision_skipped`).
 
 > **Phase 1b update (graded CER):** on 10 clean Thai gazette pages scored against the
 > trustworthy text layer, **order-independent character accuracy is PaddleOCR 94.5% vs

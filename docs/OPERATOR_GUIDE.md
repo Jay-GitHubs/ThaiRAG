@@ -134,6 +134,45 @@ Connector sync runs are tracked separately in `sync_runs` rows. Each run records
 
 Permissions are layered: **org → dept → workspace** with optional **per-document ACL** on top. A user inherits the lowest-level permission that applies — workspace-level grants give access to everything in the workspace; doc-level ACL can further restrict a sensitive subset. The chat pipeline filters retrieved chunks by the caller's `AccessScope` before they reach the LLM, so an unauthorized document never enters the context window.
 
+### 2.5.1 Near-clone corpora: one product per workspace/scope
+
+When a knowledge base holds **families of near-identical documents** — e.g. 14 variants of one loan program differing only in a few numbers — keep each product in its **own workspace/scope**, not mixed together in one workspace.
+
+In a *shared* scope, retrieval pulls the right chunk *plus* its near-clone siblings' conflicting values for the same field, and the answer model picks the wrong number. On a real 14-clone Thai SME-loan corpus this caps end-to-end accuracy at **~75%**, and no automatic disambiguator reliably fixes it — the user's question often doesn't identify *which* clone. Giving each product its **own scope** removes the siblings (measured **75% → 87.5%**) and lets the full-doc-context path engage when retrieval lands on a single document.
+
+Practical guidance: model each distinct product/program as its own workspace (or a UI scope-selector that sets a hard filter), and ingest its document there alone. Mixing near-clones in one workspace is the main avoidable cause of wrong-value answers. (The deterministic doc-selector + full-doc-context feature, `chat_pipeline.doc_selection_enabled`, is **default-off** and does not help in a shared near-clone scope — leave it off unless products are already separated.)
+
+### 2.5.2 Per-document handling: ingest-time control + pre-ingest preview
+
+By default the pipeline auto-detects per-page handling (native text extraction vs OCR vs vision). For PDFs you don't want left to the auto-classifier, an operator can **override the handling mode per document** — on upload *and* on reprocess — and can **dry-run a preview** of what the pipeline would do before committing.
+
+**Handling modes.** Choose a mode in the upload/reprocess options modal (admin UI) or pass it on the API request. The wire field is `handling_mode`:
+
+| UI label | Wire value | What it does |
+|---|---|---|
+| **Auto** | `auto` (or omit) | Adaptive per-page routing (the default). Native text where a clean text layer exists; OCR/vision only where needed. |
+| **High quality** | `high_quality` | Forces vision OCR for **every** PDF page. Highest fidelity, highest cost. |
+| **OCR only** | `force_ocr` | Deterministic OCR tier only (the PaddleOCR sidecar, §2.6.5.1) — never calls the vision LLM. Falls back to the extracted text layer if no OCR sidecar is configured. |
+| **Text only** | `text_only` | Text layer only — no OCR, no vision, no models at all. Fastest; only useful for PDFs you know carry a clean text layer. |
+
+Two optional per-document threshold overrides ride alongside the mode (both apply to the auto-classifier, so they're most useful with `auto`):
+
+| Field | Effect |
+|---|---|
+| `image_coverage_threshold` | Per-doc override of `pdf_page_as_image_threshold` (0.0–1.0) — the image-coverage ratio at/above which a page is treated as image-heavy. |
+| `min_chars_per_page` | Per-doc override of `pdf_min_chars_per_page` — chars below which a page counts as "no extractable text" and is routed to OCR/vision. |
+
+On the API these are **multipart form fields** on the upload (`POST /api/km/workspaces/{ws}/documents/upload`) alongside `file` and `title`, and a JSON body (`ReprocessOptions`: `handling_mode`, `image_coverage_threshold`, `min_chars_per_page`) on reprocess. An absent/empty value falls back to `auto`.
+
+**Pre-ingest preview (dry-run).** Before committing a document, preview what the pipeline *would* do — no DB write, no vision/OCR calls:
+
+- `POST /api/km/workspaces/{ws}/documents/preview` — multipart `file`, classifies a not-yet-stored file.
+- `POST /api/km/workspaces/{ws}/documents/{doc_id}/preview` — re-classifies an already-stored doc from its saved bytes.
+
+The response (`DocumentPreview`) reports `total_regions`, a per-complexity-class breakdown (`classes`), and how many regions would be served by each tier — `native_regions` (no model), `deterministic_ocr_regions`, `vision_llm_regions` — plus `ocr_tier_available` (whether the PaddleOCR sidecar is configured), the effective `thresholds`, and a plain-language `recommendation`.
+
+**Force a preview before every upload.** Set `document.always_preview = true` (config or **Admin UI → Settings**) to make the upload UI require a preview before it lets a document be ingested. This is a **UI-enforced gate** — the upload API itself does not block on it, so scripted bulk ingest is unaffected.
+
 ### 2.6.5 Vision OCR for image-only PDFs (PowerPoint exports, scans)
 
 PDFs exported from PowerPoint, scanned documents, and image-uploaded files cannot have text extracted by `pdf-extract` directly — their pages are rasterized images. The pipeline detects this and routes them to a vision-capable LLM for OCR.
@@ -173,6 +212,41 @@ PDFs exported from PowerPoint, scanned documents, and image-uploaded files canno
 > The built-in list is the offline floor. The **Model Discovery** feature (§2.6.8) can extend it from an external catalog so newly-released vision models are recognised without a code change.
 
 **What happens when vision can't run**: the pipeline only reaches the hard "Vision OCR Required" outcome when there is **no configured vision path at all** (`image_description_enabled` off, or no vision LLM and a non-vision primary). In that case an image-only PDF fails with structured `empty_extraction[no_text_vision_unavailable]: ...` and the admin UI shows the warning badge + remediation hint. When a vision LLM *is* configured but the call itself fails (a genuinely text-only model, a network error), the per-image path degrades to a metadata placeholder + WARN rather than failing the whole document. Upload never produces zero-chunk Ready documents (the historic silent failure mode is impossible — see `docs/INGEST_REVIEW_2026-05-28.md`).
+
+### 2.6.5.1 Deterministic OCR tier (PaddleOCR sidecar)
+
+The vision LLM hallucinates and is nondeterministic — the same scanned page can transcribe differently on two runs. For OCR-needing pages, ThaiRAG can instead use a **deterministic, local PaddleOCR sidecar** (Thai-capable). When configured, OCR-needing PDF pages are transcribed by the sidecar **in preference to the vision LLM** (faster, local, no hallucination); the pipeline only falls back to the vision LLM if the sidecar returns nothing. The vision LLM remains available for figure/diagram description.
+
+**It is opt-in, default-off.** Two steps:
+
+1. **Start the sidecar.** It ships as a compose profile, so it does **not** start with a plain `docker compose up`:
+
+   ```bash
+   docker compose --profile ocr up
+   ```
+
+   The `paddleocr` service (built from `services/paddleocr-sidecar`) listens on port **8086**.
+
+2. **Point the pipeline at it.** Set `document.ocr_sidecar_url` to the sidecar's URL (no trailing slash). Inside the compose network that's the service name:
+
+   ```
+   THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086
+   ```
+
+   Empty (the default) = OCR tier off; OCR-needing pages go straight to the vision LLM. The setting is also editable under **Admin UI → Settings** (hot-reload).
+
+Interaction with handling modes (§2.5.2): **OCR only** (`force_ocr`) uses *only* this tier and never calls the vision LLM — so a `force_ocr` document with no sidecar configured degrades to the plain extracted text layer. **Text only** suppresses both the sidecar and the vision LLM.
+
+### 2.6.5.2 Confirming OCR actually ran (no log-grepping)
+
+After a document is processed, the admin UI's **Pipeline popover** shows an **Extraction** line so you can confirm which tier handled the pages without reading logs. It reports, per document:
+
+- **Native text** — pages served by deterministic text extraction (no model).
+- **OCR `N` (provider)** — pages transcribed by the deterministic OCR tier, with the provider name (`paddleocr-sidecar`). If you configured the sidecar and expected it to run, this is where you verify it did.
+- **Vision `N` (model)** — pages transcribed by the vision LLM, with the model id.
+- **No-model `N`** — pages that needed OCR/vision but had no model configured (an under-configuration flag — e.g. a scanned PDF ingested with neither a sidecar nor a vision LLM).
+
+This is backed by the `ExtractionStats` provenance the pipeline records at ingest (`total_pages`, `ocr_pages_used` + `ocr_provider`, `vision_pages_used` + `vision_model`, `pages_vision_skipped`). If the Extraction line shows Vision pages where you expected OCR, the sidecar URL is unset or the sidecar is down; if it shows No-model pages, configure either the sidecar (§2.6.5.1) or a vision LLM (§2.6.5).
 
 ### 2.6.6 Tuning the pdftoppm vmem limit
 
@@ -220,7 +294,9 @@ When libpdfium can't be loaded, the engine reports unavailable and ingestion **f
 | `pdf_high_quality` | `false` | Vision-first OCR for **every** page (highest fidelity + cost). |
 | `pdf_image_enhance` | `false` | Sharpen/contrast before OCR (helps Thai diacritics). |
 
-`pdf_min_chars_per_page` and `pdf_max_vision_pages` (above) also apply to the smart engine. Embedded images from DOCX/XLSX (`*/media/`) and HTML (`data:` URLs) and direct image uploads are described and stored the same way; the originals are retrievable via `GET /workspaces/{ws}/documents/{doc}/images`.
+These are **global defaults**; `pdf_page_as_image_threshold` and `pdf_min_chars_per_page` can be overridden **per document** at ingest/reprocess time (`image_coverage_threshold` / `min_chars_per_page` — §2.5.2), and `pdf_high_quality` corresponds to the **High quality** per-document handling mode.
+
+`pdf_min_chars_per_page` and `pdf_max_vision_pages` (above) also apply to the smart engine. Embedded images from DOCX/XLSX/ODT (`*/media/`) and HTML (`data:` URLs) and direct image uploads are described and stored the same way; the originals are retrievable via `GET /workspaces/{ws}/documents/{doc}/images`. Supported upload formats are text/plain, Markdown, CSV, HTML, PDF, DOCX, XLSX, **ODT** (`.odt`, OpenDocument text), and the image types PNG/JPEG/WebP/GIF.
 
 ### 2.6.8 Model capability & discovery (advisory recommendations)
 
@@ -309,7 +385,9 @@ When you legitimately need to change the embedding model (better Thai quality, c
 2. Drop the old vector collection / wipe pgvector / point Qdrant at a fresh collection name.
 3. Update `providers.embedding.model` (and `dimension`) in config.
 4. Restart. The embedding fingerprint will mismatch — that's expected; the next step fixes it.
-5. Trigger a **reindex** of every document. The easiest way is the per-document **Reprocess** button in the admin UI, or `POST /api/km/.../documents/{doc_id}/reprocess` via the API for scripted bulk. There's also a `cargo run --bin thairag-cli -- reindex` if you maintain CLI scripts.
+5. Trigger a **reindex** of every document. The easiest way is the per-document **Reprocess** button in the admin UI, or `POST /api/km/.../documents/{doc_id}/reprocess` via the API for scripted bulk. There's also a `cargo run --bin thairag-cli -- reindex` if you maintain CLI scripts. Reprocess re-runs the full pipeline; the options modal lets you set a handling mode (§2.5.2) for the re-run, and an empty/plain reprocess defaults to **Auto**.
+
+   > **Warning — reprocessing scanned / vision-OCR'd corpora is destructive and nondeterministic.** Reprocess clears the document's prior derived chunks and re-extracts from the original bytes. When the original extraction used the **vision LLM** (a scanned/image-only corpus), the model can OCR a *different* subset of pages each run, so a reprocess can come back with *fewer/worse* chunks than before — and only a DB backup restore recovers the exact prior corpus. Back up first. The deterministic OCR tier (§2.6.5.1) plus the **OCR only** handling mode is the way to make reprocessing of such corpora reproducible.
 6. Wait for embeds to drain. Watch `mcp_sync_items_total{action="created"}` and `llm_tokens_total{type="prompt"}` to gauge progress.
 
 Budget: typical 4 KB text chunk × `text-embedding-3-large` ≈ $0.0001 per chunk at OpenAI prices. Multiply by your chunk count. Free-tier FastEmbed has zero API cost but a chunky CPU bill.
@@ -737,5 +815,7 @@ Inference logs (the per-chat-request log table) include full prompts and complet
 3. Server logs filtered by `request_id` — the request-id middleware stamps every line, so `grep <request_id>` in your log aggregator gives you the whole trace.
 4. The **Inference Logs** admin page — full prompt + completion for the offending request (subject to retention).
 5. The **Audit Log** admin page — was the action authorized; did guardrails fire.
+
+For a *document* that extracted poorly (garbled or missing text) rather than a chat incident, open the document's **Pipeline popover → Extraction** line (§2.6.5.2): it tells you which tier handled each page. Vision pages where you expected OCR ⇒ the PaddleOCR sidecar URL is unset or the sidecar is down (§2.6.5.1); No-model pages ⇒ neither a sidecar nor a vision LLM is configured. Use the pre-ingest **preview** (§2.5.2) to see the planned routing before re-uploading.
 
 Most production incidents in practice are upstream LLM/embedding provider degradation, connector credential expiry, or a runaway sync. The first two surface clearly via `/health?deep=true` + `/metrics`; the third shows up as a hot `mcp_sync_runs_total{status="failed"}` series.

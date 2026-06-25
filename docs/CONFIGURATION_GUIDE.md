@@ -204,6 +204,72 @@ PDPA/PII compliance, not for accuracy.
 
 ---
 
+## Document processing (`[document]`)
+
+These keys govern the **ingest** pipeline (chunking, PDF/image OCR), not the chat
+answer path. Unlike the chat-pipeline flags above, most are **deploy-time** settings
+read at startup — set them in `config/default.toml`, a tier config, or via env
+(`THAIRAG__DOCUMENT__<KEY>`), and restart. Defaults below are the `DocumentConfig`
+defaults in `crates/thairag-config/src/schema.rs`. A few PDF knobs
+(`pdf_image_dpi`, `ollama_num_ctx_max`) are also editable from the Admin UI and
+hot-reload.
+
+### Chunking
+
+| Key | Default | What it does |
+|---|---|---|
+| `max_chunk_size` | `512` | Target chunk size (chars). |
+| `chunk_overlap` | `64` | Overlap between adjacent chunks (chars). |
+| `max_upload_size_mb` | `50` | Reject uploads larger than this. |
+| `language_aware_chunking` | `true` | Use Thai-aware sentence/word boundaries when chunking. |
+| `table_extraction_enabled` | `true` | Heuristic table extraction from PDF/text content. |
+| `chunking_strategy` | `standard` | `standard`, `sentence_window`, or `parent_document` (small-to-big). Switching requires reprocessing existing docs. |
+| `sentence_window_size` | `3` | Sentence-window: neighbour sentences each side (≤ 10). |
+| `parent_chunk_size` | `2048` | Parent-document: parent chunk size (chars). |
+| `child_chunk_size` | `384` | Parent-document: indexed child chunk size (chars). Must be `< parent_chunk_size`. |
+
+### PDF / image OCR (vision LLM + deterministic OCR sidecar)
+
+| Key | Default | What it does |
+|---|---|---|
+| `image_description_enabled` | `false` | LLM-based description for uploaded images. Requires a vision-capable LLM. |
+| `pdf_vision_fallback_enabled` | `true` | Rasterize and OCR (vision LLM) PDF pages with too little extractable text. Requires `image_description_enabled` + a vision-capable LLM. |
+| `pdf_min_chars_per_page` | `50` | Per-page char threshold below which a page is treated as "no text" and routed to the OCR fallback. |
+| `pdf_max_vision_pages` | `100` | Hard cap on pages a single PDF may rasterize through the vision fallback (abuse guard). |
+| `pdf_image_dpi` | `150` | Render DPI for full-page images sent to the vision model. Higher = sharper OCR, more tokens/RAM. *(Admin-UI editable, hot-reload.)* |
+| `max_image_edge` | `2048` | Longest-edge pixel cap for **any** image sent to the vision model (PDF renders, embedded DOCX/XLSX/HTML images, direct uploads). Larger images are downscaled. `0` disables. |
+| `pdf_page_as_image_threshold` | `0.5` | Image-coverage ratio (0.0–1.0) at/above which a PDF page is rendered whole and OCR'd rather than treated as text+embedded-images. |
+| `pdf_min_image_size` | `100` | Skip embedded PDF images smaller than this many pixels on either axis. |
+| `pdf_max_images_per_page` | `5` | Cap on embedded images described per mixed PDF page (cost guard). |
+| `pdf_high_quality` | `false` | Vision-first OCR for **every** PDF page (highest fidelity, highest cost). |
+| `pdf_image_enhance` | `false` | Sharpen/contrast enhancement before OCR (helps Thai diacritics). |
+| `pdf_vision_concurrency` | `2` | Max per-page vision/OCR calls in flight at once. `1` = sequential. Keep modest — a heavy model on a shared/flaky gateway 5xxs under too much parallelism. |
+| `ocr_sidecar_url` | `""` (empty) | Base URL of the deterministic OCR sidecar (PaddleOCR Thai), e.g. `http://paddleocr:8086`. When set, OCR-needing PDF pages prefer it over the vision LLM (faster, local, no hallucination). Empty = OCR sidecar tier off. |
+| `always_preview` | `false` | Admin policy: force the pre-ingest "Preview analysis" gate — the upload UI requires a dry-run preview before a document can be ingested. |
+
+> **`ollama_num_ctx_max`** (default `16384`) is set on the **LLM provider**
+> (`[providers.llm]`), not `[document]`. It caps the Ollama KV-cache context window
+> so a 128K-capable vision model doesn't pre-allocate a 128K cache for one page —
+> a key RAM lever for vision ingest (see `MODEL_SETUP.md`). *(Admin-UI editable.)*
+
+### Deterministic OCR sidecar (PaddleOCR)
+
+The PaddleOCR Thai sidecar (`services/paddleocr-sidecar`) provides a deterministic,
+local OCR tier that runs **alongside** the vision LLM: when `ocr_sidecar_url` is set,
+OCR-needing PDF pages are transcribed by it in preference to the vision model. Bring it
+up via the docker-compose `ocr` profile, then point ThaiRAG at it:
+
+```bash
+docker compose --profile ocr up -d paddleocr
+# then set on the thairag service (env/.env):
+#   THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086
+```
+
+The sidecar publishes port `8086`. Use the **internal** compose hostname
+(`http://paddleocr:8086`) in `ocr_sidecar_url`, since ThaiRAG reaches it container-to-container.
+
+---
+
 ## Grounding / hallucination
 
 Across all 9 configurations, ThaiRAG produced **zero hallucinations**, and the

@@ -434,6 +434,52 @@ curl -X POST "http://localhost:8080/api/km/workspaces/$WORKSPACE_ID/documents" \
   }'
 ```
 
+Supported upload formats: plain text, Markdown, CSV, HTML, PDF, DOCX, XLSX, ODT
+(`.odt`), and images (PNG/JPEG/WebP/GIF, handled via the vision pipeline).
+
+#### Per-document handling override (optional multipart fields)
+
+The `/documents/upload` endpoint accepts optional fields that override how the
+extraction pipeline treats this document. Omit them to let the classifier decide
+(`Auto`):
+
+- `handling_mode` — one of `auto`, `high_quality`, `force_ocr`, `text_only`.
+- `image_coverage_threshold` — float; page-as-image fraction above which a page is
+  routed to OCR/vision.
+- `min_chars_per_page` — integer; pages with fewer extracted characters are treated
+  as needing OCR/vision.
+
+```bash
+curl -X POST "http://localhost:8080/api/km/workspaces/$WORKSPACE_ID/documents/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@/path/to/scanned.pdf" \
+  -F "title=Scanned Report" \
+  -F "handling_mode=force_ocr" \
+  -F "image_coverage_threshold=0.4" \
+  -F "min_chars_per_page=80"
+```
+
+#### Pre-ingest preview (dry-run)
+
+`POST /documents/preview` (multipart, `file` field) returns the classifier's
+complexity profile and recommended handling for a file **without** ingesting it, so
+an integrator can review the decision before upload. `POST /documents/{doc_id}/preview`
+does the same for an already-stored document using its original bytes.
+
+#### Reprocess with options
+
+Re-run an existing document through the pipeline. The body is optional JSON; the same
+override fields as upload apply (and `force_ocr` etc. are accepted):
+
+```bash
+curl -X POST "http://localhost:8080/api/km/workspaces/$WORKSPACE_ID/documents/$DOC_ID/reprocess" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"handling_mode":"force_ocr","image_coverage_threshold":0.4,"min_chars_per_page":80}'
+```
+
+An empty body (or no body) reprocesses with the document's stored settings.
+
 ---
 
 ## V2 API Integration

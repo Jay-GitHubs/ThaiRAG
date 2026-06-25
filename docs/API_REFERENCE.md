@@ -465,11 +465,72 @@ Upload a file. **Multipart form data.**
 |-------|------|-------------|
 | `file` | file | The document file |
 | `title` | string | Optional title (defaults to filename) |
+| `handling_mode` | string | Optional per-document override of the adaptive processing router: `auto` (default), `high_quality` (OCR every PDF page via vision), `force_ocr` (deterministic OCR tier only — never the vision LLM), `text_only` (no models — pdfium text layer only) |
+| `image_coverage_threshold` | float | Optional smart-PDF override: image-coverage ratio at/above which a page is treated as image-heavy |
+| `min_chars_per_page` | int | Optional smart-PDF override: minimum chars below which a PDF page's text is considered unreadable |
 
 **Supported formats:** `text/plain`, `text/markdown`, `text/csv`, `text/html`, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (DOCX), `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` (XLSX)
 
+### `POST /api/km/workspaces/{workspace_id}/documents/preview`
+Dry-run complexity preview of an uploaded file. **Multipart form data.** Runs the same per-region classifier the ingest pipeline uses, but performs **no processing, no DB write, and no vision/OCR calls** — so it is cheap and side-effect-free. Powers the pre-ingest "Preview analysis" gate so an admin can review (and later override) the handling decision.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | The document file to profile |
+
+**Response:**
+```json
+{
+  "format": "pdf",
+  "total_regions": 12,
+  "classes": { "NativeText": 9, "ScannedImage": 3 },
+  "native_regions": 9,
+  "deterministic_ocr_regions": 3,
+  "vision_llm_regions": 0,
+  "ocr_tier_available": true,
+  "thresholds": {
+    "image_coverage_threshold": 0.6,
+    "min_chars_per_page": 50,
+    "garble_ratio_threshold": 0.3
+  },
+  "recommendation": "9 of 12 region(s) deterministic; 3 region(s) need OCR (scanned / corrupted text). OCR is served by the deterministic tier (PaddleOCR — fast, no hallucination)."
+}
+```
+
+- `format` — one of `pdf`, `docx/odt`, `xlsx`, `html`, `image`, `text`, `other`.
+- `total_regions` — PDF page count, or `1` for a whole non-PDF document.
+- `classes` — map of per-complexity-class region name to count.
+- `native_regions` / `deterministic_ocr_regions` / `vision_llm_regions` — how regions would be routed (native extraction, deterministic OCR tier, vision LLM).
+- `ocr_tier_available` — whether a deterministic OCR tier (PaddleOCR sidecar) is configured.
+- `recommendation` — plain-language summary of the handling decision.
+
 ### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}`
 Get document metadata.
+
+The response includes a `processing_provenance` object (present once a document has been processed) describing the path, agents, and models that ran. When PDF extraction recorded engine usage, it carries an `extraction` object (omitted entirely when empty / for non-PDF paths):
+
+```json
+{
+  "processing_provenance": {
+    "path": "smart-PDF + AI agents",
+    "extraction": {
+      "total_pages": 46,
+      "ocr_pages_used": 46,
+      "ocr_provider": "paddleocr-sidecar",
+      "vision_pages_used": 0,
+      "vision_model": null,
+      "pages_vision_skipped": 0
+    }
+  }
+}
+```
+
+- `total_pages` — total pages in the source PDF.
+- `ocr_pages_used` / `ocr_provider` — pages transcribed by the deterministic OCR tier and its provider name (`ocr_provider` is omitted when no page was OCR'd).
+- `vision_pages_used` / `vision_model` — pages transcribed/described by the vision LLM and the model name (`vision_model` omitted when unused).
+- `pages_vision_skipped` — pages that needed OCR/vision but had no model configured (a non-zero value flags an under-configured pipeline).
+
+Individual `extraction` fields are omitted when zero/null.
 
 ### `DELETE /api/km/workspaces/{workspace_id}/documents/{doc_id}`
 Delete a document and all its chunks.
@@ -483,8 +544,37 @@ Download the original file.
 ### `GET /api/km/workspaces/{workspace_id}/documents/{doc_id}/chunks`
 List chunks for a document.
 
+### `POST /api/km/workspaces/{workspace_id}/documents/{doc_id}/preview`
+Dry-run complexity preview of an **already-stored** document, computed from its retained original bytes. Same `DocumentPreview` schema and side-effect-free behaviour as the upload-time `documents/preview` endpoint above. Powers the "Reprocess with options" flow. Returns `404` if the original file was not retained.
+
 ### `POST /api/km/workspaces/{workspace_id}/documents/{doc_id}/reprocess`
-Re-chunk and re-embed a document.
+Re-chunk and re-embed a document from its retained original bytes (runs as a background job).
+
+Accepts an **optional** JSON body to override the processing decision for this run. An empty or absent body falls back to `Auto` (the legacy reprocess behaviour), so the plain "Reprocess" action stays backward-compatible.
+
+```json
+{
+  "handling_mode": "force_ocr",
+  "image_coverage_threshold": 0.6,
+  "min_chars_per_page": 50
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `handling_mode` | string | `auto` (default), `high_quality`, `force_ocr`, or `text_only` — same semantics as the upload field |
+| `image_coverage_threshold` | float | Optional smart-PDF override |
+| `min_chars_per_page` | int | Optional smart-PDF override |
+
+**Response:**
+```json
+{
+  "doc_id": "uuid",
+  "job_id": "uuid",
+  "status": "processing",
+  "message": "Document reprocessing started"
+}
+```
 
 ---
 
@@ -884,8 +974,22 @@ Opportunistically warms a stale catalog in the background.
 #### `GET /api/km/settings/document`
 Get document processing configuration.
 
+The response includes chunking, upload, and PDF/vision routing fields, plus the nested `ai_preprocessing` object. Notable PDF-routing fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pdf_image_dpi` | u32 | Render DPI for PDF pages sent to the vision model |
+| `max_image_edge` | u32 | Longest-edge px cap for any image sent to vision (0 = off) |
+| `image_description_enabled` | bool | Master switch for the vision path |
+| `pdf_vision_fallback_enabled` | bool | Rasterize + OCR PDF pages whose extracted text is below the threshold |
+| `pdf_min_chars_per_page` | usize | Per-page char threshold below which a PDF page is routed to vision |
+| `pdf_max_vision_pages` | usize | Per-document cap on pages rasterized through vision |
+| `pdf_high_quality` | bool | Vision-first OCR for every PDF page |
+| `pdf_page_as_image_threshold` | float | Image-coverage ratio (0.0–1.0) at/above which a PDF page is image-heavy |
+| `always_preview` | bool | Force the pre-ingest "Preview analysis" gate on every upload |
+
 #### `PUT /api/km/settings/document`
-Update document processing configuration.
+Update document processing configuration. All fields optional — only send fields you want to change. Accepts the same field names as the GET response (including `pdf_page_as_image_threshold` and `always_preview`), plus a nested `ai_preprocessing` object.
 
 ### Chat Pipeline
 
@@ -1632,19 +1736,7 @@ Delete all scoped (non-global) settings overrides, reverting to global defaults.
 
 ### Document Configuration (extended)
 
-#### `POST /api/km/settings/document/ai-preprocessing`
-Configure AI-assisted preprocessing for documents (e.g., table extraction, image captioning, layout analysis).
-
-**Request:**
-```json
-{
-  "enabled": true,
-  "extract_tables": true,
-  "caption_images": false,
-  "layout_analysis": true,
-  "llm_override": { "kind": "ollama", "model": "llava:7b" }
-}
-```
+AI-assisted preprocessing is configured through the nested `ai_preprocessing` object on `PUT /api/km/settings/document` (see [Document Configuration](#document-configuration) above) — there is no separate `ai-preprocessing` route.
 
 ---
 
