@@ -14,6 +14,16 @@
 # To use Docker Hub instead of GHCR, set in .env:
 #   THAIRAG_IMAGE=jdevspecialist/thairag
 #   THAIRAG_ADMIN_IMAGE=jdevspecialist/thairag-admin
+#   THAIRAG_OCR_IMAGE=jdevspecialist/thairag-paddleocr
+#
+# Deterministic Thai OCR is opt-in via the `ocr` Compose profile:
+#   docker compose -f docker-compose.registry.yml --profile ocr up -d
+# and set THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086 in .env.
+#
+# The thairag service loads `.env` via env_file, so any THAIRAG__… key you set
+# in .env (provider base URLs, models, document/OCR options, …) is applied —
+# not just the few interpolated below. The interpolated ones are required
+# secrets or values constructed from other vars.
 
 services:
   # ── PostgreSQL ───────────────────────────────────────────────────────
@@ -49,6 +59,11 @@ services:
       - "8080:8080"
     volumes:
       - thairag-data:/data
+    # Load the full .env so every THAIRAG__… key you set there is applied
+    # (provider base URLs/models, document & OCR options, etc.). The explicit
+    # `environment:` block below overrides specific keys: required secrets and
+    # values constructed from other vars (DB URL, in-cluster Qdrant URL).
+    env_file: .env
     environment:
       THAIRAG__SERVER__HOST: "0.0.0.0"
       THAIRAG_TIER: ${THAIRAG_TIER:-standard}
@@ -66,6 +81,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # ── PaddleOCR sidecar (deterministic Thai OCR tier-2) ────────────────
+  # Opt-in: only starts with the `ocr` profile —
+  #   docker compose -f docker-compose.registry.yml --profile ocr up -d
+  # Then set THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086 in .env so
+  # OCR-needing PDF pages prefer it (local, deterministic) over the vision LLM.
+  paddleocr:
+    image: ${THAIRAG_OCR_IMAGE:-ghcr.io/jay-githubs/thairag-paddleocr}:${THAIRAG_TAG:-latest}
+    profiles: ["ocr"]
+    ports:
+      - "8086:8086"
 
   # ── Admin UI ─────────────────────────────────────────────────────────
   admin-ui:
