@@ -285,6 +285,9 @@ impl ChatPipeline {
         doc_title_resolver: Option<Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>>,
         image_resolver: Option<Arc<dyn Fn(ImageId) -> Option<ImageContent> + Send + Sync>>,
     ) -> Self {
+        // Apply the deployment's Thai chars/token calibration to the shared
+        // token estimator (process-global; depends on the model tokenizer).
+        crate::context_curator::set_thai_chars_per_token(config.thai_chars_per_token);
         let threshold_bits = config.quality_guard_threshold.to_bits();
         Self {
             query_analyzer,

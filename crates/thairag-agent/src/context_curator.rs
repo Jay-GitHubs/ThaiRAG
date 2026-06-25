@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::Deserialize;
 use thairag_core::PromptRegistry;
@@ -227,6 +228,30 @@ impl ContextCurator {
 /// count from the BYTE length); a 2026-06 pass swung to 2.5 chars/token, which
 /// then UNDER-counted real documents and overflowed 16K contexts. 1.5 is the
 /// corrected, overflow-safe value for Qwen on production Thai.
+/// Configured Thai chars/token calibration, stored ×1000 (1500 == 1.5).
+/// Process-global: the ratio depends only on the model's tokenizer, not the
+/// workspace/scope, so a single per-deployment value is correct. Set once from
+/// `chat_pipeline.thai_chars_per_token` when the pipeline is built; defaults to
+/// 1.5 if never set (e.g. in unit tests that don't construct a pipeline).
+static THAI_CHARS_PER_TOKEN_MILLI: AtomicU32 = AtomicU32::new(1500);
+
+/// Override the Thai chars/token calibration from config (see
+/// [`estimate_tokens`]). Non-finite or out-of-range values are clamped to
+/// `[0.5, 4.0]`; `<= 0` falls back to the 1.5 default. Idempotent and cheap —
+/// safe to call on every pipeline build.
+pub fn set_thai_chars_per_token(ratio: f32) {
+    let clamped = if ratio.is_finite() && ratio > 0.0 {
+        ratio.clamp(0.5, 4.0)
+    } else {
+        1.5
+    };
+    THAI_CHARS_PER_TOKEN_MILLI.store((clamped * 1000.0).round() as u32, Ordering::Relaxed);
+}
+
+fn thai_chars_per_token() -> f32 {
+    THAI_CHARS_PER_TOKEN_MILLI.load(Ordering::Relaxed) as f32 / 1000.0
+}
+
 fn estimate_tokens(text: &str) -> usize {
     let mut thai_chars = 0usize;
     let mut other_chars = 0usize;
@@ -237,8 +262,9 @@ fn estimate_tokens(text: &str) -> usize {
             other_chars += 1;
         }
     }
-    // Thai: 2/3 token per char ≈ 1.5 chars/token. Other: 1/4 ≈ 4 chars/token.
-    (thai_chars * 2).div_ceil(3) + other_chars / 4 + 1
+    // Thai cost is the configured chars/token (default 1.5); other ≈ 4 chars/token.
+    let thai_tokens = (thai_chars as f32 / thai_chars_per_token()).ceil() as usize;
+    thai_tokens + other_chars / 4 + 1
 }
 
 fn build_curated_context(
@@ -320,8 +346,14 @@ mod tests {
         }
     }
 
+    // Serializes the tests that mutate the process-global Thai calibration so
+    // they don't race under the parallel test runner.
+    static EST_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn token_estimate_calibrated_for_thai() {
+        let _g = EST_TEST_LOCK.lock().unwrap();
+        set_thai_chars_per_token(1.5); // pin the default for a deterministic read
         // 100 Thai chars ≈ 67 tokens (conservative 1.5 chars/token) — Qwen
         // tokenizes production Thai near byte-level, so the budget must assume
         // the worst case to avoid overflowing the context window.
@@ -338,6 +370,28 @@ mod tests {
             estimate_tokens(&thai) > estimate_tokens(&en) * 2,
             "thai should cost >2x english per char"
         );
+    }
+
+    #[test]
+    fn thai_chars_per_token_is_configurable() {
+        let _g = EST_TEST_LOCK.lock().unwrap();
+        let thai: String = "ธ".repeat(100);
+        // More aggressive (1.0 chars/token) → MORE estimated tokens.
+        set_thai_chars_per_token(1.0);
+        assert!((100..=102).contains(&estimate_tokens(&thai)), "ratio 1.0");
+        // Looser (2.0) → FEWER estimated tokens.
+        set_thai_chars_per_token(2.0);
+        assert!((50..=52).contains(&estimate_tokens(&thai)), "ratio 2.0");
+        // Garbage / out-of-range inputs clamp safely (never 0 or NaN).
+        set_thai_chars_per_token(0.0); // → falls back to 1.5
+        assert!(
+            (66..=70).contains(&estimate_tokens(&thai)),
+            "ratio 0 → default"
+        );
+        set_thai_chars_per_token(99.0); // → clamps to 4.0
+        let est = estimate_tokens(&thai);
+        assert!((24..=27).contains(&est), "ratio 99 clamps to 4.0: {est}");
+        set_thai_chars_per_token(1.5); // restore default for other tests
     }
 
     #[test]

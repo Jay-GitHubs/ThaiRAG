@@ -857,6 +857,14 @@ pub struct ChatPipelineConfig {
     /// Max estimated tokens for context window.
     #[serde(default = "default_max_context_tokens")]
     pub max_context_tokens: usize,
+    /// Thai characters per token, used to estimate prompt size for context-budget
+    /// enforcement. Default 1.5 (conservative for Qwen on production Thai — legal
+    /// text/tables/digits tokenize near byte-level). Lower it if your corpus
+    /// tokenizes even worse (measure `prompt_eval_count` ÷ Thai-char-count and use
+    /// the worst-case); raise it toward ~2.0 for clean-prose corpora to admit more
+    /// context. Clamped to [0.5, 4.0]; affects estimation only (no model change).
+    #[serde(default = "default_thai_chars_per_token")]
+    pub thai_chars_per_token: f32,
     /// Max output tokens per agent call.
     #[serde(default = "default_chat_agent_max_tokens")]
     pub agent_max_tokens: u32,
@@ -1176,6 +1184,9 @@ fn default_quality_guard_threshold() -> f32 {
 fn default_max_context_tokens() -> usize {
     4096
 }
+fn default_thai_chars_per_token() -> f32 {
+    1.5
+}
 fn default_chat_agent_max_tokens() -> u32 {
     2048
 }
@@ -1330,6 +1341,7 @@ impl Default for ChatPipelineConfig {
             quality_guard_max_retries: default_quality_guard_max_retries(),
             quality_guard_threshold: default_quality_guard_threshold(),
             max_context_tokens: default_max_context_tokens(),
+            thai_chars_per_token: default_thai_chars_per_token(),
             agent_max_tokens: default_chat_agent_max_tokens(),
             max_llm_calls_per_request: default_max_llm_calls_per_request(),
             request_timeout_secs: default_request_timeout_secs(),

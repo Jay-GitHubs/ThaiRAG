@@ -3227,6 +3227,9 @@ where
         max_context_tokens: s("chat_pipeline.max_context_tokens")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.max_context_tokens),
+        thai_chars_per_token: s("chat_pipeline.thai_chars_per_token")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.thai_chars_per_token),
         agent_max_tokens: s("chat_pipeline.agent_max_tokens")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.agent_max_tokens),
