@@ -232,6 +232,8 @@ The `docker-compose.scale.yml` override handles the Redis/Qdrant backend setting
 
 5. **Graceful shutdown.** The server has a configurable shutdown timeout (`shutdown_timeout_secs = 30`). When scaling down, Docker sends SIGTERM and waits for the grace period. In-flight SSE streams will complete or timeout during this window.
 
+6. **Document-processing throughput is per instance.** PDF/vision ingestion is bounded per instance by `document.pdf_vision_concurrency` (`THAIRAG__DOCUMENT__PDF_VISION_CONCURRENCY`, default `2`) — the max number of per-page vision OCR calls in flight at once. Keep it modest when the vision LLM runs on a shared or flaky gateway, since too much parallelism triggers upstream 5xxs (failures are retried). To reduce load on the gateway entirely, enable the deterministic OCR sidecar (PaddleOCR Thai) by setting `THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086`: OCR-needing pages are then transcribed locally instead of via the vision LLM. See the [Deployment Guide](DEPLOYMENT_GUIDE.md#paddleocr-sidecar-optional--deterministic-thai-ocr) for setup.
+
 ## Production Checklist
 
 - [ ] Use the `standard` or `premium` tier (not `free`)

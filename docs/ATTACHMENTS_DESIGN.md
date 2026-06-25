@@ -27,7 +27,7 @@ We want this third pathway as a first-class feature.
 
 In scope:
 - Single-conversation, per-session attachment: "for this chat, use these documents."
-- Format support matching the existing upload pipeline (PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text).
+- Format support matching the existing upload pipeline (PDF, DOCX, XLSX, ODT, HTML, Markdown, CSV, plain text).
 - Guardrails enforcement on attachment content (operator policy still applies).
 
 Out of scope (future PRs):

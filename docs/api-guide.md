@@ -123,9 +123,18 @@ DELETE /api/km/orgs/{org_id}/depts/{dept_id}/workspaces/{ws_id}
 ```
 GET    /api/km/workspaces/{ws_id}/documents
 POST   /api/km/workspaces/{ws_id}/documents              # JSON ingest (IngestRequest)
-POST   /api/km/workspaces/{ws_id}/documents/upload       # multipart file upload
+POST   /api/km/workspaces/{ws_id}/documents/upload       # multipart file upload (file, title, + optional handling_mode/image_coverage_threshold/min_chars_per_page)
+POST   /api/km/workspaces/{ws_id}/documents/preview      # multipart dry-run complexity preview (no DB write)
 DELETE /api/km/workspaces/{ws_id}/documents/{doc_id}
+POST   /api/km/workspaces/{ws_id}/documents/{doc_id}/preview    # dry-run preview of a stored document
+POST   /api/km/workspaces/{ws_id}/documents/{doc_id}/reprocess  # re-chunk/re-embed (optional JSON ReprocessOptions body)
 ```
+
+The `upload` multipart form accepts `file` plus optional `title`, and optional processing-router overrides `handling_mode` (`auto` | `high_quality` | `force_ocr` | `text_only`), `image_coverage_threshold` (float), and `min_chars_per_page` (int).
+
+The `preview` endpoints run the same per-region classifier as ingest but perform no processing, no DB write, and no vision/OCR cost. They return a `DocumentPreview`: `format`, `total_regions`, `classes` (class→count), `native_regions`, `deterministic_ocr_regions`, `vision_llm_regions`, `ocr_tier_available`, a `thresholds` object (`image_coverage_threshold`, `min_chars_per_page`, `garble_ratio_threshold`), and a plain-language `recommendation`.
+
+`reprocess` accepts an optional JSON body `{handling_mode, image_coverage_threshold, min_chars_per_page}`; an empty/absent body falls back to `Auto` (the legacy behaviour). It runs as a background job and returns `{doc_id, job_id, status, message}`.
 
 ### Users
 ```
@@ -198,6 +207,8 @@ GET    /api/km/settings/document           # Get document config
 PUT    /api/km/settings/document           # Update + hot-reload
 ```
 
+Includes chunking and PDF/vision routing fields plus a nested `ai_preprocessing` object. PDF-routing fields include `pdf_image_dpi`, `max_image_edge`, `image_description_enabled`, `pdf_vision_fallback_enabled`, `pdf_min_chars_per_page`, `pdf_max_vision_pages`, `pdf_high_quality`, `pdf_page_as_image_threshold`, and `always_preview` (force the pre-ingest preview gate on every upload). PUT mirrors these field names; all are optional.
+
 ### Prompt Management
 ```
 GET    /api/km/settings/prompts            # List all prompts (38 templates)
@@ -219,7 +230,7 @@ Actions logged: `login`, `login_failed`, `register`, `user_deleted`, `permission
 ```
 POST   /api/km/settings/snapshots           # Create snapshot (captures current config)
 GET    /api/km/settings/snapshots           # List all snapshots
-POST   /api/km/settings/snapshots/restore   # Restore a snapshot by ID
+POST   /api/km/settings/snapshots/{id}/restore   # Restore a snapshot by ID
 DELETE /api/km/settings/snapshots/{id}      # Delete a snapshot
 ```
 
@@ -234,8 +245,9 @@ POST   /api/km/workspaces/{ws_id}/test-query-stream  # SSE stream with real-time
 The `test-query` response includes a `pipeline_stages` array showing timing for each pipeline stage (query analysis, retrieval, reranking, context assembly, response generation).
 
 The `test-query-stream` endpoint returns Server-Sent Events:
-- `event: pipeline_progress` — Sent as each stage starts and completes, with `stage`, `status`, and `duration_ms` fields
+- `event: progress` — Sent as each stage starts and completes, with `stage`, `status`, and `duration_ms` fields
 - `event: result` — Final complete test-query response (same shape as the non-streaming endpoint)
+- `event: error` — Emitted if the pipeline fails
 
 ### Feedback
 ```

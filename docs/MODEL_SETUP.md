@@ -49,6 +49,24 @@ Both gemma4 variants report `vision` capability in Ollama, so the same model
 serves chat answers, embedded-image description, and the scanned-PDF OCR tier —
 no separate vision model needed.
 
+### Optional: deterministic OCR tier (PaddleOCR sidecar)
+
+The vision LLM above is one OCR path. ThaiRAG also ships a **deterministic** Thai
+OCR sidecar (PaddleOCR, `services/paddleocr-sidecar`) that runs **alongside** the
+vision model: when configured, OCR-needing PDF pages are transcribed by it in
+preference to the vision LLM — local, faster, and with no hallucination risk on
+text-only pages (the vision model is still used for figure/image description). Bring
+it up via the docker-compose `ocr` profile and point ThaiRAG at it:
+
+```bash
+docker compose --profile ocr up -d paddleocr   # publishes :8086
+# then on the thairag service (env/.env):
+export THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086
+```
+
+`ocr_sidecar_url` is empty by default (sidecar tier off). See
+`docs/CONFIGURATION_GUIDE.md → Document processing` for the full PDF/OCR knob list.
+
 ## Configuration
 
 ### Ollama (macOS host, Docker stack)

@@ -8,8 +8,11 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 - **Thai NLP** — Built-in Thai word segmentation via `nlpo3` for accurate tokenization
 - **OpenAI-Compatible API** — Drop-in replacement at `/v1/chat/completions` and `/v1/models`, works with Open WebUI and any OpenAI-compatible client
 - **Hierarchical Knowledge Management** — Organization → Department → Workspace → Documents with scoped permissions
-- **Multi-Format Documents** — PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text with automatic chunking
-- **Smart Document Extraction** — pdfium-based per-page PDF strategy (text / mixed / image-heavy / scanned / tabular) producing semantic markdown; image-only PDFs (PowerPoint exports, scans) routed to vision OCR; embedded images from PDF/DOCX/XLSX/HTML stored as retrievable KM content
+- **Multi-Format Documents** — PDF, DOCX, XLSX, ODT, HTML, Markdown, CSV, plain text, and images (PNG/JPEG/WebP/GIF) with automatic chunking
+- **Smart Document Extraction** — pdfium-based per-page PDF processing where a region router classifies each page (native text / reconstructed table / mixed / image-heavy / scanned / corrupted text) and serves it at the cheapest faithful fidelity tier: native extraction, deterministic OCR, or vision LLM — following the golden rule of never OCRing a deterministic table. Embedded images from PDF/DOCX/XLSX/ODT/HTML are stored as retrievable KM content
+- **Deterministic OCR Tier** — Optional PaddleOCR sidecar (`th_PP-OCRv5`, opt-in via the `ocr` Docker Compose profile + `document.ocr_sidecar_url`) used in preference to the vision LLM for OCR-needing pages — local, no hallucination, no gateway dependency
+- **Per-Document Handling Modes** — Override the adaptive router per ingest: Auto (default), HighQuality (OCR every PDF page), ForceOcr (deterministic OCR only, no vision LLM), or TextOnly (pdfium text layer only). Set via the upload form or the pre-ingest preview UI
+- **Pre-Ingest Preview** — Dry-run complexity profile (no processing, no DB writes, no vision/OCR cost) reporting per-class region counts, which fidelity tier each region would use, and a plain-language handling recommendation before you commit to ingest
 - **Multi-Agent Chat Pipeline** — Configurable LLM assignment per agent (Use Chat LLM / Shared / Per-Agent modes) with fallback chain
 - **Streaming Responses** — Server-Sent Events with real-time token usage reporting
 - **Feedback-Driven Tuning** — Document boost/penalty, golden examples, adaptive retrieval parameters based on user feedback
@@ -251,8 +254,11 @@ GET|POST    /orgs                        # Organizations
 GET|POST    /orgs/{id}/depts             # Departments
 GET|POST    /orgs/{id}/depts/{id}/workspaces  # Workspaces
 GET|POST    /workspaces/{id}/documents   # Documents
-POST        /workspaces/{id}/documents/upload       # File upload
+POST        /workspaces/{id}/documents/upload       # File upload (accepts handling_mode override)
 POST        /workspaces/{id}/documents/batch-upload # Batch upload
+POST        /workspaces/{id}/documents/preview       # Dry-run complexity profile (uploaded file)
+POST        /workspaces/{id}/documents/{doc_id}/preview   # Dry-run profile (stored doc)
+POST        /workspaces/{id}/documents/{doc_id}/reprocess # Reprocess (optional handling override)
 POST        /workspaces/{id}/test-query             # Test search + RAG
 POST        /workspaces/{id}/test-query-stream      # SSE streaming test query
 GET         /workspaces/{id}/knowledge-graph        # Knowledge graph

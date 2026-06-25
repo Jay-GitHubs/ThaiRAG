@@ -1,6 +1,14 @@
 # Document Complexity Routing — Design & Roadmap
 
-Status: **Proposed** · Owner: Document pipeline · Related: `docs/DOCUMENT_PROCESSING_FLOW.md`, `docs/ARCHITECTURE.md`
+Status: **Largely shipped** (PRs #219–#235) · Owner: Document pipeline · Related: `docs/DOCUMENT_PROCESSING_FLOW.md`, `docs/OCR_VS_VLM_SPIKE.md`, `docs/ARCHITECTURE.md`
+
+> **Implementation status (2026-06):** The core of this design is now built and
+> merged. The region router (`crates/thairag-document/src/region_router.rs`), the
+> deterministic OCR tier (`ocr.rs` + `services/paddleocr-sidecar/`), per-document
+> handling-mode overrides, the pre-ingest dry-run preview API + admin UI, and
+> extraction provenance all ship. The design below is preserved as the rationale;
+> per-item status is tracked in §4 (reuse table) and §7 (phased roadmap). One
+> naming divergence from the final code is noted in §4.
 
 ## 1. Motivation
 
@@ -108,18 +116,30 @@ Generalize the current PDF `PageStrategy` into a format-agnostic set:
 
 The machinery is ~60% present; the work is unification and a new OCR tier.
 
-| Need | Already exists | Gap |
+| Need | Already exists | Status |
 |---|---|---|
-| Per-region classifier | `semantic::select_page_strategy` (PDF pages) | Generalize to DOCX/XLSX/HTML regions; emit a unified profile |
-| Document-level analysis | `ai/analyzer.rs::DocumentAnalysis` | Fold into the profile as one signal source |
-| Corruption signal | `text_utils::text_layer_garbled` | — (done) |
-| Deterministic tables | `table_lattice`, `table_stream` | — |
-| Format extraction | `converter.rs`, office extractors, `conversion_fidelity.rs` | Expose as tier-1 handlers behind a common trait |
-| Vision description | `image::describe_image_with_prompt*`, `smart_pdf` | Reframe as tier-3 handler |
-| **Deterministic OCR** | — | **New** tier-2 `OcrProvider` (PaddleOCR/EasyOCR/Typhoon) |
-| Region orchestration | `smart_pdf::render_to_document` (concurrent, ordered) | Lift the concurrent/ordered pattern to the general router |
+| Per-region classifier | `semantic::select_page_strategy` (PDF pages) | **SHIPPED** — `region_router::classify` generalizes it; non-PDF docs route by format to `NativeStruct`/`DirectImage`/`NativeText` |
+| Document-level analysis | `ai/analyzer.rs::DocumentAnalysis` | Available as a signal source; not yet folded into the router's `RegionSignals` |
+| Corruption signal | `text_utils::text_layer_garbled` | **SHIPPED** — drives the `CorruptedText` class |
+| Deterministic tables | `table_lattice`, `table_stream` | **SHIPPED** — a reconstructed table forces `NativeTable` (golden rule) |
+| Format extraction | `converter.rs`, office extractors, `conversion_fidelity.rs` | Tier-1 native path, in place (not refactored behind a new trait — see note) |
+| Vision description | `image::describe_image_with_prompt*`, `smart_pdf` | **SHIPPED** as the `VisionLlm` tier; `Mixed` regions flag `needs_figure_description` |
+| **Deterministic OCR** | — | **SHIPPED** — tier-2 `OcrProvider` trait + `SidecarOcrProvider` (PaddleOCR sidecar). EasyOCR/Typhoon were evaluated but PaddleOCR was chosen |
+| Region orchestration | `smart_pdf::render_to_document` (concurrent, ordered) | **SHIPPED** — the OCR/vision tiers are wired into the existing concurrent/ordered `render_to_document` per page |
 
-Proposed core abstraction:
+**Naming divergence from the design (code wins):** the shipped code does *not* use a
+`RegionHandler` trait with `NativeExtract`/`DeterministicTable`/`DeterministicOcr`/
+`VisionDescribe` implementations. Instead the decision and execution layers are split:
+
+- **Decision** — `region_router.rs` is pure and IO-free: `RegionClass` + `FidelityTier`
+  (`Native` / `DeterministicOcr` / `VisionLlm`) + `classify()`/`plan()` over
+  `RegionSignals`, with `RegionClass::tier()` encoding the golden rule and
+  `RegionClass::from_page_strategy` bridging the PDF taxonomy.
+- **Execution** — `smart_pdf::render_to_document` runs the selected tiers per page
+  (native extraction / `OcrProvider::ocr` / vision LLM), rather than dispatching to
+  per-region handler objects.
+
+The original proposed abstraction, for the record:
 
 ```rust
 trait RegionHandler {
@@ -127,8 +147,6 @@ trait RegionHandler {
 }
 // implementations: NativeExtract, DeterministicTable, DeterministicOcr, VisionDescribe
 ```
-
-with the router selecting a handler per region from the profile + thresholds.
 
 ## 5. Thresholds: calibrate, never guess
 
@@ -158,9 +176,10 @@ before integration. Candidates:
 - **EasyOCR** — lighter (PyTorch), Thai supported.
 - **Typhoon OCR** — Thai-focused; potentially best Thai accuracy.
 
-Integration shape (decided after the bench wins): a **sidecar microservice** or an
-**ONNX-exported model via the Rust `ort` crate** — ThaiRAG is Rust, these engines
-are Python, so this is a real new component, not a config flag.
+Integration shape (decided after the bench): a **PaddleOCR sidecar microservice**
+(`services/paddleocr-sidecar/`, FastAPI, `th_PP-OCRv5`). ONNX-via-`ort` was the
+alternative but was not pursued — ThaiRAG is Rust, PaddleOCR is Python, so this is a
+real new component rather than a config flag (run as an opt-in Docker Compose profile).
 
 Why this matters: a dedicated OCR engine is *deterministic* (transcribes, doesn't
 generate), **fast and local**, and **not bottlenecked on the gateway** — which
@@ -172,21 +191,34 @@ stays for what only it can do: semantic description of figures/diagrams.
 
 Each phase ships independently and is gated on measured improvement.
 
-- **Phase 1 — Profiler + eval harness.** Compute the `DocumentProfile`/signals for
-  all formats; assemble the labeled corpus; build triage + extraction scoring.
-  Output: the corpus's real complexity distribution + a baseline of where
-  extraction fails today. *Low risk, immediately useful, prerequisite for all
-  threshold work.*
-- **Phase 2 — Unified region router + fidelity ladder.** Promote
-  `select_page_strategy` into the format-agnostic router behind `RegionHandler`;
-  wire tier-1 (native) and tier-3 (VLM) handlers; enforce the golden rule.
-- **Phase 3 — Deterministic OCR provider.** Bench candidates on the corpus; if a
-  winner beats VLM OCR on Thai accuracy + speed, integrate it as the tier-2
-  handler (sidecar/ONNX).
-- **Phase 4 — Threshold calibration.** Tune every routing threshold per class
-  against the harness; persist as config with sane defaults.
-- **Phase 5 — Format coverage.** Full DOCX/XLSX/HTML region profiling so the
-  golden rule (e.g. never OCR a DOCX table) holds end-to-end.
+- **Phase 1 — Profiler + eval harness.** ✅ **SHIPPED.** `region_router.rs` is the
+  pure profiler/classifier (`classify`/`plan` over `RegionSignals`). The OCR
+  evaluation harness (`scripts/bench/ocr_vs_vlm.py`, `ocr_eval_cer.py`) produced the
+  graded Thai CER numbers in `docs/OCR_VS_VLM_SPIKE.md`. *Note:* a fully labeled,
+  multi-class triage-accuracy corpus across every class is not yet assembled — the
+  shipped eval focused on the OCR-vs-VLM transcription decision (Phase 3 gate).
+- **Phase 2 — Unified region router + fidelity ladder.** ✅ **SHIPPED.**
+  `select_page_strategy` is promoted into the format-agnostic `region_router`
+  (`RegionClass` + `FidelityTier`), tier-1 (native) and tier-3 (vision) paths run in
+  `smart_pdf::render_to_document`, and the golden rule is enforced in
+  `RegionClass::tier()` (table tests prove a reconstructed table is never OCR'd).
+  Shipped as a decision/execution split rather than the `RegionHandler` trait — see §4.
+- **Phase 3 — Deterministic OCR provider.** ✅ **SHIPPED.** PaddleOCR `th_PP-OCRv5`
+  beat the VLM on Thai CER (94.5% vs 90.1%) and reliability, so it was integrated as
+  the tier-2 `OcrProvider` via an HTTP **sidecar** (`services/paddleocr-sidecar/`),
+  preferred over the vision LLM when configured. **Default-off / opt-in** via
+  `document.ocr_sidecar_url`; ONNX-via-`ort` was not pursued.
+- **Phase 4 — Threshold calibration.** ⏳ **Partial / future.** The router runs on
+  `StrategyThresholds::default()` (the inherited smart-PDF defaults), with
+  per-document overrides exposed (`ChunkOverrides.image_coverage_threshold`,
+  `min_chars_per_page`) and the `HandlingMode` escape hatches. A systematic
+  data-driven re-tune of every routing threshold per class against a labeled corpus
+  is **not yet done**.
+- **Phase 5 — Format coverage.** ⏳ **Partial / future.** Non-PDF formats
+  (DOCX/XLSX/HTML) are routed at *document* granularity to `NativeStruct` (native
+  extraction). True per-*region* profiling *inside* an office doc — so the golden
+  rule fires on, e.g., an embedded scanned table within a DOCX — is **not yet shipped**;
+  PDF pages remain the only sub-document regions the router classifies individually.
 
 ## 8. Risks & open questions
 
@@ -206,6 +238,12 @@ Each phase ships independently and is gated on measured improvement.
 
 ## 9. Recommendation
 
-Start with **Phase 1**. It is low-risk, makes the corpus's complexity *visible*,
-establishes the baseline, and turns every later threshold/algorithm choice into a
-measured decision instead of a guess.
+*(Original recommendation, now superseded by the shipped work above.)* Start with
+**Phase 1**. It is low-risk, makes the corpus's complexity *visible*, establishes the
+baseline, and turns every later threshold/algorithm choice into a measured decision
+instead of a guess.
+
+**Update:** Phases 1–3 shipped (PRs #219–#235) along the path this recommendation set —
+the deterministic OCR decision was made on measured Thai CER, not a guess. The
+remaining open work is the data-driven threshold calibration (Phase 4) and
+sub-document region profiling for office formats (Phase 5).
