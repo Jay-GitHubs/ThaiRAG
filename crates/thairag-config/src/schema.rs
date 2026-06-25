@@ -865,6 +865,14 @@ pub struct ChatPipelineConfig {
     /// context. Clamped to [0.5, 4.0]; affects estimation only (no model change).
     #[serde(default = "default_thai_chars_per_token")]
     pub thai_chars_per_token: f32,
+    /// Estimated tokens charged against the context budget per image hydrated
+    /// into a multimodal answer (default 1500 — a conservative high-res page on
+    /// Qwen-VL). Only applied when the answer LLM is vision-capable; text-only
+    /// answer paths never send images, so they reserve nothing. Prevents an
+    /// image-heavy prompt from silently overflowing the model context window.
+    /// Tune to your `pdf_image_dpi`/`max_image_edge` (lower DPI → fewer tokens).
+    #[serde(default = "default_tokens_per_image")]
+    pub tokens_per_image: usize,
     /// Max output tokens per agent call.
     #[serde(default = "default_chat_agent_max_tokens")]
     pub agent_max_tokens: u32,
@@ -1187,6 +1195,9 @@ fn default_max_context_tokens() -> usize {
 fn default_thai_chars_per_token() -> f32 {
     1.5
 }
+fn default_tokens_per_image() -> usize {
+    1500
+}
 fn default_chat_agent_max_tokens() -> u32 {
     2048
 }
@@ -1342,6 +1353,7 @@ impl Default for ChatPipelineConfig {
             quality_guard_threshold: default_quality_guard_threshold(),
             max_context_tokens: default_max_context_tokens(),
             thai_chars_per_token: default_thai_chars_per_token(),
+            tokens_per_image: default_tokens_per_image(),
             agent_max_tokens: default_chat_agent_max_tokens(),
             max_llm_calls_per_request: default_max_llm_calls_per_request(),
             request_timeout_secs: default_request_timeout_secs(),

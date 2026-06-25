@@ -131,7 +131,12 @@ impl ContextCurator {
         }
     }
 
-    pub async fn curate(&self, query: &str, results: &[SearchResult]) -> Result<CuratedContext> {
+    pub async fn curate(
+        &self,
+        query: &str,
+        results: &[SearchResult],
+        image_budget: ImageBudget,
+    ) -> Result<CuratedContext> {
         if results.is_empty() {
             return Ok(CuratedContext {
                 chunks: vec![],
@@ -207,7 +212,12 @@ impl ContextCurator {
             selected_indices
         };
 
-        build_curated_context(results, &selected_indices, self.max_context_tokens)
+        build_curated_context(
+            results,
+            &selected_indices,
+            self.max_context_tokens,
+            image_budget,
+        )
     }
 }
 
@@ -267,13 +277,38 @@ fn estimate_tokens(text: &str) -> usize {
     thai_tokens + other_chars / 4 + 1
 }
 
+/// Per-request image-token reservation for context-budget accounting.
+///
+/// When the answer LLM is vision-capable, each image-bearing chunk that will be
+/// hydrated into the prompt costs `tokens_per_image` against the budget (capped
+/// at `max_images`, matching the hydration cap), so an image-heavy multimodal
+/// prompt can't silently overflow the model context window. `none()` (both 0)
+/// for text-only answer paths — images are never sent, so they reserve nothing.
+#[derive(Clone, Copy)]
+pub struct ImageBudget {
+    pub tokens_per_image: usize,
+    pub max_images: usize,
+}
+
+impl ImageBudget {
+    /// No image accounting — text-only answer path.
+    pub fn none() -> Self {
+        Self {
+            tokens_per_image: 0,
+            max_images: 0,
+        }
+    }
+}
+
 fn build_curated_context(
     results: &[SearchResult],
     selected: &[usize],
     max_tokens: usize,
+    image_budget: ImageBudget,
 ) -> Result<CuratedContext> {
     let mut chunks = Vec::new();
     let mut total_tokens = 0;
+    let mut images_reserved = 0usize;
 
     for (rank, &idx) in selected.iter().enumerate() {
         let i = idx.saturating_sub(1); // Convert 1-based to 0-based
@@ -282,12 +317,27 @@ fn build_curated_context(
         }
 
         let r = &results[i];
-        let tokens = estimate_tokens(&r.chunk.content);
+        let image_blob_id = r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id);
+        // Charge the per-image cost only for chunks whose image will actually be
+        // hydrated: vision answer path (tokens_per_image > 0), this chunk has an
+        // image, and we're under the hydration cap. Matches hydrate_images.
+        let image_cost = if image_budget.tokens_per_image > 0
+            && image_blob_id.is_some()
+            && images_reserved < image_budget.max_images
+        {
+            image_budget.tokens_per_image
+        } else {
+            0
+        };
+        let tokens = estimate_tokens(&r.chunk.content) + image_cost;
 
         if total_tokens + tokens > max_tokens && !chunks.is_empty() {
-            break; // Hit budget
+            break; // Hit budget (text + reserved image tokens)
         }
 
+        if image_cost > 0 {
+            images_reserved += 1;
+        }
         chunks.push(CuratedChunk {
             index: rank + 1,
             content: r.chunk.content.clone(),
@@ -295,7 +345,7 @@ fn build_curated_context(
             source_doc_id: r.chunk.doc_id,
             source_chunk_id: r.chunk.chunk_id,
             source_doc_title: None,
-            image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
+            image_blob_id,
             images: Vec::new(),
         });
         total_tokens += tokens;
@@ -308,9 +358,13 @@ fn build_curated_context(
 }
 
 /// Fallback: take top-K chunks directly without LLM curation.
-pub fn fallback_curate(results: &[SearchResult], max_tokens: usize) -> CuratedContext {
+pub fn fallback_curate(
+    results: &[SearchResult],
+    max_tokens: usize,
+    image_budget: ImageBudget,
+) -> CuratedContext {
     let indices: Vec<usize> = (1..=results.len()).collect();
-    build_curated_context(results, &indices, max_tokens).unwrap_or(CuratedContext {
+    build_curated_context(results, &indices, max_tokens, image_budget).unwrap_or(CuratedContext {
         chunks: vec![],
         total_tokens_est: 0,
     })
@@ -401,12 +455,49 @@ mod tests {
             result_with_image("text chunk", None),
             result_with_image("image chunk", Some(img)),
         ];
-        let ctx = fallback_curate(&results, 10_000);
+        let ctx = fallback_curate(&results, 10_000, ImageBudget::none());
         assert_eq!(ctx.chunks.len(), 2);
         assert_eq!(ctx.chunks[0].image_blob_id, None);
         assert_eq!(ctx.chunks[1].image_blob_id, Some(img));
         // Nothing is hydrated until hydrate_images runs.
         assert!(ctx.chunks.iter().all(|c| c.images.is_empty()));
+    }
+
+    #[test]
+    fn image_budget_reserves_tokens_for_hydrated_images() {
+        let results = [
+            result_with_image("a", None),
+            result_with_image("b", Some(ImageId::new())),
+            result_with_image("c", Some(ImageId::new())),
+        ];
+        // Text-only path: tiny budget still admits all three (chars ≈ 1 token each).
+        let text_only = fallback_curate(&results, 100, ImageBudget::none());
+        assert_eq!(text_only.chunks.len(), 3);
+
+        // Vision path: each image-bearing chunk now costs +1500 tokens, so a
+        // 2000-token budget fits the text chunk + exactly ONE image chunk
+        // (1 + 1500 + ... the 2nd image would blow 2000).
+        let img = ImageBudget {
+            tokens_per_image: 1500,
+            max_images: 4,
+        };
+        let vision = fallback_curate(&results, 2000, img);
+        assert_eq!(vision.chunks.len(), 2, "text + 1 image fits 2000");
+        // The reported estimate includes the reserved image tokens.
+        assert!(
+            vision.total_tokens_est >= 1500,
+            "image tokens counted: {}",
+            vision.total_tokens_est
+        );
+
+        // The hydration cap bounds the reservation: with max_images=1 only the
+        // first image is charged, so a later image chunk is admitted text-only.
+        let capped = ImageBudget {
+            tokens_per_image: 1500,
+            max_images: 1,
+        };
+        let ctx = fallback_curate(&results, 4000, capped);
+        assert_eq!(ctx.chunks.len(), 3, "cap charges only the first image");
     }
 
     #[test]
@@ -416,7 +507,7 @@ mod tests {
             result_with_image("text chunk", None),
             result_with_image("image chunk", Some(img)),
         ];
-        let mut ctx = fallback_curate(&results, 10_000);
+        let mut ctx = fallback_curate(&results, 10_000, ImageBudget::none());
         ctx.hydrate_images(&|_id| Some(dummy_image()), 10);
         assert!(ctx.chunks[0].images.is_empty(), "text chunk stays empty");
         assert_eq!(ctx.chunks[1].images.len(), 1, "image chunk hydrated");
@@ -427,7 +518,7 @@ mod tests {
         let results: Vec<SearchResult> = (0..5)
             .map(|i| result_with_image(&format!("img {i}"), Some(ImageId::new())))
             .collect();
-        let mut ctx = fallback_curate(&results, 100_000);
+        let mut ctx = fallback_curate(&results, 100_000, ImageBudget::none());
         ctx.hydrate_images(&|_id| Some(dummy_image()), 2);
         let hydrated = ctx.chunks.iter().filter(|c| !c.images.is_empty()).count();
         assert_eq!(hydrated, 2, "cap limits total hydrated images");
@@ -436,7 +527,7 @@ mod tests {
     #[test]
     fn hydrate_images_skips_when_resolver_returns_none() {
         let results = [result_with_image("image chunk", Some(ImageId::new()))];
-        let mut ctx = fallback_curate(&results, 10_000);
+        let mut ctx = fallback_curate(&results, 10_000, ImageBudget::none());
         ctx.hydrate_images(&|_id| None, 10);
         assert!(ctx.chunks[0].images.is_empty());
     }
@@ -485,7 +576,7 @@ mod tests {
             result_with_image("Northeast | 1100 | 1200", None),
         ];
         let ctx = curator
-            .curate("Northeast Q1 sales", &results)
+            .curate("Northeast Q1 sales", &results, ImageBudget::none())
             .await
             .unwrap();
         assert_eq!(ctx.chunks.len(), 2, "empty selection must keep all chunks");
