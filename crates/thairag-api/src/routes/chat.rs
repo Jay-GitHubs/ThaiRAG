@@ -1989,6 +1989,329 @@ async fn handle_stream(
     Ok(response)
 }
 
+// ── First-party chat-UI streaming endpoint ───────────────────────────────
+
+/// Request body for `POST /api/chat/conversations/{id}/messages`.
+#[derive(serde::Deserialize)]
+pub struct SendMessageRequest {
+    pub content: String,
+}
+
+/// POST /api/chat/conversations/{id}/messages — first-party streaming chat.
+///
+/// Owner-checks the conversation, loads its stored history, runs the RAG
+/// pipeline, streams a clean first-party SSE protocol, and persists the
+/// completed turn back to the conversation. Independent of
+/// `/v1/chat/completions` (which serves OWUI / OpenAI-compatible clients with
+/// their bespoke chunk shapes) — this endpoint owns its own event protocol:
+///
+/// - `{"type":"progress","stage","status"}` — pipeline stage updates
+/// - `{"type":"token","text"}`              — streamed answer tokens
+/// - `{"type":"citation","citations":[…]}`  — resolved sources (once, post-answer)
+/// - `{"type":"done","message_id","usage"}` — terminal success
+/// - `{"type":"error","message"}`           — terminal failure
+///
+/// followed by a `[DONE]` sentinel. Inline source images are added in a
+/// follow-up PR (a future `{"type":"image",…}` event).
+pub async fn stream_conversation_message(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(conversation_id): Path<String>,
+    AppJson(req): AppJson<SendMessageRequest>,
+) -> Result<Response, ApiError> {
+    // ── Validation ──────────────────────────────────────────────────
+    let content = req.content.trim().to_string();
+    if content.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "message content must not be empty".into(),
+        )));
+    }
+    let max_msg_len = state.config.server.max_message_length;
+    if content.len() > max_msg_len {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "message content too long: {} chars (max {max_msg_len})",
+            content.len()
+        ))));
+    }
+
+    // ── Require a real signed-in user (conversations are user-owned) ──
+    let uid = claims.sub.parse::<Uuid>().map(UserId).map_err(|_| {
+        ApiError(ThaiRagError::Auth(
+            "A signed-in user is required for chat conversations".into(),
+        ))
+    })?;
+    let user_id_str = claims.sub.clone();
+
+    // ── Per-user concurrency + token-bucket rate limiting ──
+    let _request_guard = state
+        .user_request_limiter
+        .try_acquire(&claims.sub)
+        .map_err(|()| {
+            ApiError(ThaiRagError::Validation(
+                "Too many concurrent requests. Please wait for your previous request to complete."
+                    .into(),
+            ))
+        })?;
+    state
+        .user_rate_limiter
+        .try_acquire(&claims.sub)
+        .map_err(|retry_after| {
+            ApiError(ThaiRagError::Validation(format!(
+                "User rate limit exceeded. Retry after {:.0} seconds.",
+                retry_after.ceil()
+            )))
+        })?;
+
+    // ── Owner-checked history load (404/403 without leaking existence) ──
+    let history = crate::chat_history::load_history(
+        &state.km_store,
+        &conversation_id,
+        &user_id_str,
+        crate::chat_history::DEFAULT_HISTORY_LIMIT,
+    )
+    .map_err(|e| match e {
+        crate::chat_history::ConversationAccess::NotFound => {
+            ApiError(ThaiRagError::NotFound("Conversation not found".into()))
+        }
+        crate::chat_history::ConversationAccess::Forbidden => ApiError(
+            ThaiRagError::Authorization("You do not have access to this conversation".into()),
+        ),
+    })?;
+
+    let mut full_messages = history;
+    full_messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: content.clone(),
+        images: vec![],
+    });
+
+    // ── Scope + settings resolution (the user's workspace permissions) ──
+    let ws_ids = state.km_store.get_user_workspace_ids(uid);
+    let scope = if ws_ids.is_empty() {
+        AccessScope::none()
+    } else {
+        AccessScope::new(ws_ids)
+    };
+    let settings_scope = scope
+        .workspace_ids
+        .first()
+        .map(|ws_id| state.resolve_scope_for_workspace(*ws_id))
+        .unwrap_or(crate::store::SettingsScope::Global);
+
+    // ── Memories / personal memory / searchable scopes (reuse /v1 setup) ──
+    let memories = load_memories(&state, Some(uid));
+    let personal_memories = retrieve_personal_memories(&state, Some(uid), &full_messages).await;
+    let available_scopes = build_searchable_scopes(&state, &scope);
+    let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
+
+    // ── Spawn the pipeline so progress can stream in real-time ──
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<thairag_core::types::PipelineProgress>();
+    let p = state.providers();
+    let metadata_cell: MetadataCell = Arc::new(Mutex::new(PipelineMetadata::default()));
+    let metadata_cell_clone = metadata_cell.clone();
+    let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
+
+    let pipeline_handle = tokio::spawn(async move {
+        if let Some(ref pipeline) = scoped_pipeline {
+            pipeline
+                .process_stream(
+                    &full_messages,
+                    &scope,
+                    &memories,
+                    &available_scopes,
+                    Some(progress_tx),
+                    Some(metadata_cell_clone),
+                    // First-party messages never carry client-injected context.
+                    false,
+                )
+                .await
+        } else {
+            drop(progress_tx);
+            p.orchestrator.process_stream(&full_messages, &scope).await
+        }
+    });
+
+    // Config read out here so the (move) stream closure doesn't hold `&state`
+    // across the config struct.
+    let cite_enabled = state.config.chat_pipeline.citation_annotations_enabled;
+    let source_max = state.config.chat_pipeline.source_footer_max.max(1);
+    let cite_base = state
+        .config
+        .chat_pipeline
+        .citation_base_url
+        .trim_end_matches('/')
+        .to_string();
+    let conv_id = conversation_id.clone();
+
+    let sse_stream = async_stream::stream! {
+        // 1) Drain progress events until the pipeline task resolves.
+        let mut pipeline_handle = pipeline_handle;
+        let pipeline_result;
+        loop {
+            tokio::select! {
+                evt = progress_rx.recv() => {
+                    if let Some(progress) = evt {
+                        let data = serde_json::json!({
+                            "type": "progress",
+                            "stage": progress.stage,
+                            "status": format!("{:?}", progress.status),
+                        });
+                        yield Ok::<_, std::convert::Infallible>(
+                            Event::default().data(data.to_string())
+                        );
+                    }
+                }
+                result = &mut pipeline_handle => {
+                    while let Ok(evt) = progress_rx.try_recv() {
+                        let data = serde_json::json!({
+                            "type": "progress",
+                            "stage": evt.stage,
+                            "status": format!("{:?}", evt.status),
+                        });
+                        yield Ok::<_, std::convert::Infallible>(
+                            Event::default().data(data.to_string())
+                        );
+                    }
+                    pipeline_result = match result {
+                        Ok(r) => r,
+                        Err(e) => Err(ThaiRagError::LlmProvider(
+                            format!("Pipeline task panicked: {e}")
+                        )),
+                    };
+                    break;
+                }
+            }
+        }
+
+        let LlmStreamResponse { stream: token_stream, usage: usage_cell } = match pipeline_result {
+            Ok(resp) => resp,
+            Err(e) => {
+                let data = serde_json::json!({"type":"error","message": e.to_string()});
+                yield Ok(Event::default().data(data.to_string()));
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
+
+        // 2) Token events.
+        let mut accumulated = String::new();
+        let mut token_stream = std::pin::pin!(token_stream);
+        let mut stream_failed = false;
+        while let Some(result) = token_stream.next().await {
+            match result {
+                Ok(token) => {
+                    accumulated.push_str(&token);
+                    let data = serde_json::json!({"type":"token","text": token});
+                    yield Ok(Event::default().data(data.to_string()));
+                }
+                Err(e) => {
+                    let data = serde_json::json!({"type":"error","message": e.to_string()});
+                    yield Ok(Event::default().data(data.to_string()));
+                    stream_failed = true;
+                    break;
+                }
+            }
+        }
+        if stream_failed {
+            // A mid-stream failure leaves the turn unsaved (the user keeps their
+            // text client-side); surface terminal sentinel and stop.
+            yield Ok(Event::default().data("[DONE]"));
+            return;
+        }
+
+        // 3) Citations — resolved once, in the clean first-party shape.
+        let footer_meta = metadata_cell.lock().unwrap().clone();
+        let mut persisted_citations: Vec<crate::chat_history::PersistedCitation> = Vec::new();
+        if cite_enabled {
+            let sources = build_citation_sources(
+                &footer_meta,
+                source_max,
+                |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
+            );
+            persisted_citations = sources
+                .iter()
+                .map(|s| crate::chat_history::PersistedCitation {
+                    doc_id: s.doc_id.clone(),
+                    title: s.title.clone(),
+                    page: s.page,
+                    section: s.section.clone(),
+                    url: if cite_base.is_empty() {
+                        None
+                    } else {
+                        Some(citation_url(&state, &cite_base, &s.doc_id, s.page, s.section.as_deref()))
+                    },
+                })
+                .collect();
+            if !persisted_citations.is_empty() {
+                let data = serde_json::json!({
+                    "type": "citation",
+                    "citations": persisted_citations,
+                });
+                yield Ok(Event::default().data(data.to_string()));
+            }
+        }
+
+        // 4) Token accounting (metrics + observability), mirroring /v1.
+        let llm_usage = usage_cell.lock().unwrap().take().unwrap_or_default();
+        state.metrics.record_tokens(llm_usage.prompt_tokens, llm_usage.completion_tokens);
+        persist_usage(&state, llm_usage.prompt_tokens, llm_usage.completion_tokens);
+
+        // 5) Persist the completed turn (user + assistant) to the conversation.
+        let token_stats = crate::chat_history::PersistedTokenStats {
+            prompt_tokens: llm_usage.prompt_tokens,
+            completion_tokens: llm_usage.completion_tokens,
+        };
+        let message_id = match crate::chat_history::persist_turn(
+            &state.km_store,
+            &conv_id,
+            &content,
+            &accumulated,
+            &persisted_citations,
+            &token_stats,
+        ) {
+            Ok(row) => row.id,
+            Err(e) => {
+                let data = serde_json::json!({
+                    "type": "error",
+                    "message": format!("failed to save message: {e}"),
+                });
+                yield Ok(Event::default().data(data.to_string()));
+                String::new()
+            }
+        };
+
+        // 6) Terminal success.
+        let done = serde_json::json!({
+            "type": "done",
+            "message_id": message_id,
+            "usage": {
+                "prompt_tokens": llm_usage.prompt_tokens,
+                "completion_tokens": llm_usage.completion_tokens,
+            },
+        });
+        yield Ok(Event::default().data(done.to_string()));
+        yield Ok(Event::default().data("[DONE]"));
+    };
+
+    let mut response = Sse::new(sse_stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(std::time::Duration::from_secs(5))
+                .text("ping"),
+        )
+        .into_response();
+    response.headers_mut().insert(
+        "X-Accel-Buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    Ok(response)
+}
+
 /// Extract the LLM kind/model from the provider config.
 fn resolve_llm_info(p: &crate::app_state::ProviderBundle) -> (String, String) {
     if let Some(ref rg) = p.chat_pipeline_config.response_generator_llm {
