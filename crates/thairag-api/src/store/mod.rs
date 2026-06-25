@@ -370,6 +370,10 @@ pub struct InferenceLogEntry {
     // Tokens
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
+    /// ThaiRAG's estimated context-token count for this request (the budget
+    /// estimator's prediction). Surfaced next to the actual `prompt_tokens` so
+    /// operators can see estimate-vs-actual drift. 0 when not recorded.
+    pub estimated_context_tokens: u32,
     // Timing
     pub total_ms: u64,
     pub search_ms: Option<u64>,

@@ -1363,6 +1363,11 @@ impl ChatPipeline {
             tokens = context.total_tokens_est,
             "Pipeline: curated"
         );
+        // Transparency: record the estimator's predicted context size so the
+        // inference log can show it next to the model's actual prompt_tokens.
+        Self::update_metadata(metadata, |m| {
+            m.estimated_context_tokens = Some(context.total_tokens_est as u32);
+        });
 
         // ── Retrieval Refinement (skip if budget low — needs 2+ calls per retry) ──
         let context = if self.config.retrieval_refinement_enabled && budget.remaining() >= 4 {
