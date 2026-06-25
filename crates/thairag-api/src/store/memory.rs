@@ -68,6 +68,8 @@ pub struct MemoryKmStore {
     training_pairs: RwLock<Vec<super::TrainingPair>>,
     finetune_jobs: RwLock<HashMap<String, crate::store::FinetuneJob>>,
     image_blobs: RwLock<HashMap<thairag_core::types::ImageId, super::ImageBlobRecord>>,
+    conversations: RwLock<Vec<super::ConversationRow>>,
+    messages: RwLock<Vec<super::MessageRow>>,
 }
 
 impl Default for MemoryKmStore {
@@ -121,6 +123,8 @@ impl MemoryKmStore {
             training_pairs: RwLock::new(Vec::new()),
             finetune_jobs: RwLock::new(HashMap::new()),
             image_blobs: RwLock::new(HashMap::new()),
+            conversations: RwLock::new(Vec::new()),
+            messages: RwLock::new(Vec::new()),
         }
     }
 }
@@ -1863,6 +1867,120 @@ impl KmStoreTrait for MemoryKmStore {
         }
     }
 
+    // ── Chat Conversations (first-party chat UI) ─────────────────────
+
+    fn create_conversation(
+        &self,
+        user_id: &str,
+        title: &str,
+        workspace_scope: Option<&str>,
+    ) -> Result<super::ConversationRow> {
+        let now = Utc::now().to_rfc3339();
+        let row = super::ConversationRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            user_id: user_id.to_string(),
+            title: title.to_string(),
+            workspace_scope: workspace_scope.map(|s| s.to_string()),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.conversations.write().unwrap().push(row.clone());
+        Ok(row)
+    }
+
+    fn list_conversations(&self, user_id: &str) -> Vec<super::ConversationRow> {
+        let mut rows: Vec<super::ConversationRow> = self
+            .conversations
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|c| c.user_id == user_id)
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        rows
+    }
+
+    fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
+        self.conversations
+            .read()
+            .unwrap()
+            .iter()
+            .find(|c| c.id == conversation_id)
+            .cloned()
+    }
+
+    fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {
+        let mut convs = self.conversations.write().unwrap();
+        if let Some(c) = convs.iter_mut().find(|c| c.id == conversation_id) {
+            c.title = title.to_string();
+            c.updated_at = Utc::now().to_rfc3339();
+            Ok(())
+        } else {
+            Err(ThaiRagError::NotFound(format!(
+                "Conversation {conversation_id} not found"
+            )))
+        }
+    }
+
+    fn delete_conversation(&self, conversation_id: &str) -> Result<()> {
+        self.conversations
+            .write()
+            .unwrap()
+            .retain(|c| c.id != conversation_id);
+        self.messages
+            .write()
+            .unwrap()
+            .retain(|m| m.conversation_id != conversation_id);
+        Ok(())
+    }
+
+    fn append_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        citations: &str,
+        images: &str,
+        token_stats: &str,
+    ) -> Result<super::MessageRow> {
+        let now = Utc::now().to_rfc3339();
+        let row = super::MessageRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            conversation_id: conversation_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            citations: citations.to_string(),
+            images: images.to_string(),
+            token_stats: token_stats.to_string(),
+            created_at: now.clone(),
+        };
+        self.messages.write().unwrap().push(row.clone());
+        if let Some(c) = self
+            .conversations
+            .write()
+            .unwrap()
+            .iter_mut()
+            .find(|c| c.id == conversation_id)
+        {
+            c.updated_at = now;
+        }
+        Ok(row)
+    }
+
+    fn list_messages(&self, conversation_id: &str) -> Vec<super::MessageRow> {
+        let mut rows: Vec<super::MessageRow> = self
+            .messages
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|m| m.conversation_id == conversation_id)
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        rows
+    }
+
     // ── Knowledge Graph ──────────────────────────────────────────────
 
     fn upsert_entity(
@@ -3124,6 +3242,43 @@ mod tests {
             .unwrap();
         let result = store.insert_user("BOB@test.com".into(), "Bob2".into(), "h2".into());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn conversation_and_message_roundtrip() {
+        let store = MemoryKmStore::new();
+        let alice = "11111111-1111-1111-1111-111111111111";
+        let bob = "22222222-2222-2222-2222-222222222222";
+
+        let c1 = store
+            .create_conversation(alice, "Onboarding", Some("ws-1"))
+            .unwrap();
+        let c2 = store.create_conversation(alice, "Billing", None).unwrap();
+        store.create_conversation(bob, "Bob's chat", None).unwrap();
+
+        assert_eq!(c1.workspace_scope.as_deref(), Some("ws-1"));
+        assert_eq!(store.list_conversations(alice).len(), 2);
+        assert_eq!(store.list_conversations(bob).len(), 1);
+        assert_eq!(store.get_conversation(&c1.id).unwrap().user_id, alice);
+
+        store
+            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}")
+            .unwrap();
+        store
+            .append_message(&c1.id, "assistant", "hello", "[]", "[]", "{}")
+            .unwrap();
+        let msgs = store.list_messages(&c1.id);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(store.list_messages(&c2.id).len(), 0);
+
+        store.rename_conversation(&c1.id, "Renamed").unwrap();
+        assert_eq!(store.get_conversation(&c1.id).unwrap().title, "Renamed");
+
+        store.delete_conversation(&c1.id).unwrap();
+        assert!(store.get_conversation(&c1.id).is_none());
+        assert_eq!(store.list_messages(&c1.id).len(), 0);
+        assert_eq!(store.list_conversations(alice).len(), 1);
     }
 
     #[test]

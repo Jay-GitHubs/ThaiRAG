@@ -6,6 +6,7 @@ pub mod backup;
 pub mod chat;
 pub mod collaboration;
 pub mod connectors;
+pub mod conversations;
 pub mod documents;
 pub mod eval;
 pub mod feedback;
@@ -756,6 +757,21 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/api/chat/sessions/{session_id}/summarize",
             post(chat::summarize_session),
+        )
+        // First-party chat-UI conversation history (durable, per-user).
+        .route(
+            "/api/chat/conversations",
+            get(conversations::list_conversations).post(conversations::create_conversation),
+        )
+        .route(
+            "/api/chat/conversations/{id}",
+            get(conversations::get_conversation)
+                .patch(conversations::rename_conversation)
+                .delete(conversations::delete_conversation),
+        )
+        .route(
+            "/api/chat/conversations/{id}/messages",
+            get(conversations::list_messages),
         )
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))

@@ -346,6 +346,37 @@ pub struct ApiKeyRow {
     pub is_active: bool,
 }
 
+// ── Chat Conversations (first-party chat UI) ─────────────────────────
+
+/// A durable, per-user chat conversation for the native ThaiRAG chat
+/// frontend. `user_id` matches the JWT `sub` claim (users.id as a string).
+/// Distinct from the ephemeral in-memory SessionStore used by /v1 clients.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConversationRow {
+    pub id: String,
+    pub user_id: String,
+    pub title: String,
+    /// Optional hard scope (workspace id) this conversation is pinned to.
+    pub workspace_scope: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A single message within a conversation. `citations`, `images` and
+/// `token_stats` are JSON strings (arrays / object) produced by the chat
+/// pipeline; they are persisted verbatim and parsed client-side.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MessageRow {
+    pub id: String,
+    pub conversation_id: String,
+    pub role: String,
+    pub content: String,
+    pub citations: String,
+    pub images: String,
+    pub token_stats: String,
+    pub created_at: String,
+}
+
 // ── Inference Log Types ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1085,6 +1116,36 @@ pub trait KmStoreTrait: Send + Sync {
     fn list_api_keys(&self, user_id: UserId) -> Vec<ApiKeyRow>;
     fn revoke_api_key(&self, key_id: ApiKeyId) -> Result<()>;
     fn touch_api_key(&self, key_id: ApiKeyId);
+
+    // ── Chat Conversations (first-party chat UI) ─────────────────────
+    /// Create a new conversation owned by `user_id`. Returns the new row.
+    fn create_conversation(
+        &self,
+        user_id: &str,
+        title: &str,
+        workspace_scope: Option<&str>,
+    ) -> Result<ConversationRow>;
+    /// List a user's conversations, most-recently-updated first.
+    fn list_conversations(&self, user_id: &str) -> Vec<ConversationRow>;
+    /// Fetch a single conversation by id (no ownership check — callers must
+    /// compare `user_id` against the requester for access control).
+    fn get_conversation(&self, conversation_id: &str) -> Option<ConversationRow>;
+    /// Rename a conversation and bump its `updated_at`.
+    fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()>;
+    /// Delete a conversation and all its messages (cascade).
+    fn delete_conversation(&self, conversation_id: &str) -> Result<()>;
+    /// Append a message and bump the parent conversation's `updated_at`.
+    fn append_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        citations: &str,
+        images: &str,
+        token_stats: &str,
+    ) -> Result<MessageRow>;
+    /// List a conversation's messages in chronological order.
+    fn list_messages(&self, conversation_id: &str) -> Vec<MessageRow>;
 
     // ── Knowledge Graph ──────────────────────────────────────────────
     /// Upsert an entity by name+type+workspace (returns existing if found).
