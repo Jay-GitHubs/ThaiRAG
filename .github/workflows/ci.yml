@@ -351,6 +351,18 @@ jobs:
           SHA_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Cross-registry imagetools pushes (esp. the Docker Hub mirror)
+          # intermittently fail with an HTTP/2 "PROTOCOL_ERROR" mid-copy.
+          # Retry with backoff so a transient blip doesn't fail the publish.
+          retry() {
+            for attempt in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              echo "attempt ${attempt} failed: $* — retrying in $((attempt*10))s" >&2
+              sleep $((attempt*10))
+            done
+            echo "giving up after 4 attempts: $*" >&2
+            return 1
+          }
           SHORT_SHA="${SHA_TAG:0:7}"
           API_DIGEST_AMD=$(cat /tmp/digests/api/amd64)
           API_DIGEST_ARM=$(cat /tmp/digests/api/arm64)
@@ -359,12 +371,12 @@ jobs:
 
           for TAG in latest "${SHORT_SHA}"; do
             # Build the multi-arch manifest in GHCR from the per-platform digests.
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${GHCR}:${TAG}" \
               "${GHCR}@${API_DIGEST_AMD}" \
               "${GHCR}@${API_DIGEST_ARM}"
             # Mirror the just-published GHCR manifest to Docker Hub.
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${HUB}:${TAG}" \
               "${GHCR}:${TAG}"
           done
@@ -374,6 +386,15 @@ jobs:
           SHA_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          retry() {
+            for attempt in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              echo "attempt ${attempt} failed: $* — retrying in $((attempt*10))s" >&2
+              sleep $((attempt*10))
+            done
+            echo "giving up after 4 attempts: $*" >&2
+            return 1
+          }
           SHORT_SHA="${SHA_TAG:0:7}"
           ADMIN_DIGEST_AMD=$(cat /tmp/digests/admin/amd64)
           ADMIN_DIGEST_ARM=$(cat /tmp/digests/admin/arm64)
@@ -381,11 +402,11 @@ jobs:
           HUB="jdevspecialist/thairag-admin"
 
           for TAG in latest "${SHORT_SHA}"; do
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${GHCR}:${TAG}" \
               "${GHCR}@${ADMIN_DIGEST_AMD}" \
               "${GHCR}@${ADMIN_DIGEST_ARM}"
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${HUB}:${TAG}" \
               "${GHCR}:${TAG}"
           done
@@ -395,6 +416,15 @@ jobs:
           SHA_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+          retry() {
+            for attempt in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              echo "attempt ${attempt} failed: $* — retrying in $((attempt*10))s" >&2
+              sleep $((attempt*10))
+            done
+            echo "giving up after 4 attempts: $*" >&2
+            return 1
+          }
           SHORT_SHA="${SHA_TAG:0:7}"
           OCR_DIGEST_AMD=$(cat /tmp/digests/paddleocr/amd64)
           OCR_DIGEST_ARM=$(cat /tmp/digests/paddleocr/arm64)
@@ -402,11 +432,11 @@ jobs:
           HUB="jdevspecialist/thairag-paddleocr"
 
           for TAG in latest "${SHORT_SHA}"; do
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${GHCR}:${TAG}" \
               "${GHCR}@${OCR_DIGEST_AMD}" \
               "${GHCR}@${OCR_DIGEST_ARM}"
-            docker buildx imagetools create \
+            retry docker buildx imagetools create \
               --tag "${HUB}:${TAG}" \
               "${GHCR}:${TAG}"
           done
