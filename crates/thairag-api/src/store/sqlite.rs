@@ -3261,6 +3261,164 @@ impl KmStoreTrait for SqliteKmStore {
         );
     }
 
+    // ── Chat Conversations (first-party chat UI) ─────────────────────
+
+    fn create_conversation(
+        &self,
+        user_id: &str,
+        title: &str,
+        workspace_scope: Option<&str>,
+    ) -> Result<super::ConversationRow> {
+        let conn = self.conn.lock().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let now = ts(&chrono::Utc::now());
+        conn.execute(
+            "INSERT INTO conversations (id, user_id, title, workspace_scope, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![id, user_id, title, workspace_scope, now],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to create conversation: {e}")))?;
+        Ok(super::ConversationRow {
+            id,
+            user_id: user_id.to_string(),
+            title: title.to_string(),
+            workspace_scope: workspace_scope.map(|s| s.to_string()),
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    fn list_conversations(&self, user_id: &str) -> Vec<super::ConversationRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                 FROM conversations WHERE user_id = ?1 ORDER BY updated_at DESC",
+            )
+            .unwrap();
+        stmt.query_map(params![user_id], |row| {
+            Ok(super::ConversationRow {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                title: row.get(2)?,
+                workspace_scope: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+             FROM conversations WHERE id = ?1",
+            params![conversation_id],
+            |row| {
+                Ok(super::ConversationRow {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    title: row.get(2)?,
+                    workspace_scope: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            },
+        )
+        .ok()
+    }
+
+    fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = ts(&chrono::Utc::now());
+        conn.execute(
+            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![title, now, conversation_id],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to rename conversation: {e}")))?;
+        Ok(())
+    }
+
+    fn delete_conversation(&self, conversation_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Explicit message delete in addition to the FK cascade, so deletion is
+        // correct even if foreign-key enforcement is ever disabled.
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ?1",
+            params![conversation_id],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to delete messages: {e}")))?;
+        conn.execute(
+            "DELETE FROM conversations WHERE id = ?1",
+            params![conversation_id],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to delete conversation: {e}")))?;
+        Ok(())
+    }
+
+    fn append_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        citations: &str,
+        images: &str,
+        token_stats: &str,
+    ) -> Result<super::MessageRow> {
+        let conn = self.conn.lock().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let now = ts(&chrono::Utc::now());
+        conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, conversation_id, role, content, citations, images, token_stats, now],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to append message: {e}")))?;
+        conn.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            params![now, conversation_id],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to bump conversation: {e}")))?;
+        Ok(super::MessageRow {
+            id,
+            conversation_id: conversation_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            citations: citations.to_string(),
+            images: images.to_string(),
+            token_stats: token_stats.to_string(),
+            created_at: now,
+        })
+    }
+
+    fn list_messages(&self, conversation_id: &str) -> Vec<super::MessageRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at
+                 FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
+            )
+            .unwrap();
+        stmt.query_map(params![conversation_id], |row| {
+            Ok(super::MessageRow {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                citations: row.get(4)?,
+                images: row.get(5)?,
+                token_stats: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
     // ── Knowledge Graph ──────────────────────────────────────────────
 
     fn upsert_entity(
@@ -5307,6 +5465,68 @@ mod tests {
         assert_eq!(store.list_workspaces_in_dept(dept.id).len(), 1);
         store.delete_workspace(ws.id).unwrap();
         assert!(store.get_workspace(ws.id).is_err());
+    }
+
+    #[test]
+    fn conversation_and_message_roundtrip() {
+        let store = mem_store();
+        let alice = "11111111-1111-1111-1111-111111111111";
+        let bob = "22222222-2222-2222-2222-222222222222";
+
+        let c1 = store
+            .create_conversation(alice, "Onboarding", Some("ws-1"))
+            .unwrap();
+        let c2 = store.create_conversation(alice, "Billing", None).unwrap();
+        let _cb = store.create_conversation(bob, "Bob's chat", None).unwrap();
+
+        assert_eq!(c1.title, "Onboarding");
+        assert_eq!(c1.workspace_scope.as_deref(), Some("ws-1"));
+        assert_eq!(c2.workspace_scope, None);
+
+        // Listing is per-user (ownership isolation at the data layer).
+        assert_eq!(store.list_conversations(alice).len(), 2);
+        assert_eq!(store.list_conversations(bob).len(), 1);
+
+        // get_conversation surfaces the owner so the route layer can ACL-check.
+        assert_eq!(store.get_conversation(&c1.id).unwrap().user_id, alice);
+
+        // Append messages; list is chronological.
+        store
+            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}")
+            .unwrap();
+        store
+            .append_message(
+                &c1.id,
+                "assistant",
+                "hello",
+                "[{\"doc_id\":\"d1\"}]",
+                "[]",
+                "{\"prompt_tokens\":5}",
+            )
+            .unwrap();
+        let msgs = store.list_messages(&c1.id);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].role, "assistant");
+        assert_eq!(msgs[1].citations, "[{\"doc_id\":\"d1\"}]");
+
+        // Messages of one conversation don't leak into another.
+        assert_eq!(store.list_messages(&c2.id).len(), 0);
+
+        // Rename updates the title.
+        store
+            .rename_conversation(&c1.id, "Onboarding (Q3)")
+            .unwrap();
+        assert_eq!(
+            store.get_conversation(&c1.id).unwrap().title,
+            "Onboarding (Q3)"
+        );
+
+        // Delete cascades to messages.
+        store.delete_conversation(&c1.id).unwrap();
+        assert!(store.get_conversation(&c1.id).is_none());
+        assert_eq!(store.list_messages(&c1.id).len(), 0);
+        assert_eq!(store.list_conversations(alice).len(), 1);
     }
 
     #[test]

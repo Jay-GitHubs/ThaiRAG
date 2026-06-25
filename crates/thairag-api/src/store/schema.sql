@@ -528,3 +528,28 @@ CREATE TABLE IF NOT EXISTS finetune_jobs (
     updated_at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_finetune_jobs_dataset ON finetune_jobs(dataset_id);
+
+-- ── First-party Chat UI: conversations + messages ──────────────────────
+-- Durable, per-user chat history for the native ThaiRAG chat frontend.
+-- Mirrors postgres_schema.sql; timestamps are RFC3339 TEXT here.
+CREATE TABLE IF NOT EXISTS conversations (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    workspace_scope TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    citations       TEXT NOT NULL DEFAULT '[]',
+    images          TEXT NOT NULL DEFAULT '[]',
+    token_stats     TEXT NOT NULL DEFAULT '{}',
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);

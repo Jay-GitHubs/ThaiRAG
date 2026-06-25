@@ -3293,6 +3293,191 @@ impl KmStoreTrait for PostgresKmStore {
         });
     }
 
+    // ── Chat Conversations (first-party chat UI) ─────────────────────
+
+    fn create_conversation(
+        &self,
+        user_id: &str,
+        title: &str,
+        workspace_scope: Option<&str>,
+    ) -> Result<super::ConversationRow> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO conversations (id, user_id, title, workspace_scope, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $5)",
+            )
+            .bind(&id)
+            .bind(user_id)
+            .bind(title)
+            .bind(workspace_scope)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to create conversation: {e}")))?;
+        Ok(super::ConversationRow {
+            id,
+            user_id: user_id.to_string(),
+            title: title.to_string(),
+            workspace_scope: workspace_scope.map(|s| s.to_string()),
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+        })
+    }
+
+    fn list_conversations(&self, user_id: &str) -> Vec<super::ConversationRow> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                 FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC",
+            )
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let created_at: DateTime<Utc> = row.get("created_at");
+            let updated_at: DateTime<Utc> = row.get("updated_at");
+            super::ConversationRow {
+                id: row.get("id"),
+                user_id: row.get("user_id"),
+                title: row.get("title"),
+                workspace_scope: row.get("workspace_scope"),
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+        .collect()
+    }
+
+    fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                 FROM conversations WHERE id = $1",
+            )
+            .bind(conversation_id)
+            .fetch_optional(&self.pool)
+            .await
+        })
+        .ok()
+        .flatten()
+        .map(|row| {
+            let created_at: DateTime<Utc> = row.get("created_at");
+            let updated_at: DateTime<Utc> = row.get("updated_at");
+            super::ConversationRow {
+                id: row.get("id"),
+                user_id: row.get("user_id"),
+                title: row.get("title"),
+                workspace_scope: row.get("workspace_scope"),
+                created_at: created_at.to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
+            }
+        })
+    }
+
+    fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {
+        let now = chrono::Utc::now();
+        block_on(async {
+            sqlx::query("UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3")
+                .bind(title)
+                .bind(now)
+                .bind(conversation_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to rename conversation: {e}")))?;
+        Ok(())
+    }
+
+    fn delete_conversation(&self, conversation_id: &str) -> Result<()> {
+        block_on(async {
+            sqlx::query("DELETE FROM conversations WHERE id = $1")
+                .bind(conversation_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to delete conversation: {e}")))?;
+        Ok(())
+    }
+
+    fn append_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        citations: &str,
+        images: &str,
+        token_stats: &str,
+    ) -> Result<super::MessageRow> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&id)
+            .bind(conversation_id)
+            .bind(role)
+            .bind(content)
+            .bind(citations)
+            .bind(images)
+            .bind(token_stats)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+            sqlx::query("UPDATE conversations SET updated_at = $1 WHERE id = $2")
+                .bind(now)
+                .bind(conversation_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to append message: {e}")))?;
+        Ok(super::MessageRow {
+            id,
+            conversation_id: conversation_id.to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            citations: citations.to_string(),
+            images: images.to_string(),
+            token_stats: token_stats.to_string(),
+            created_at: now.to_rfc3339(),
+        })
+    }
+
+    fn list_messages(&self, conversation_id: &str) -> Vec<super::MessageRow> {
+        block_on(async {
+            sqlx::query(
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at
+                 FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(&self.pool)
+            .await
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let created_at: DateTime<Utc> = row.get("created_at");
+            super::MessageRow {
+                id: row.get("id"),
+                conversation_id: row.get("conversation_id"),
+                role: row.get("role"),
+                content: row.get("content"),
+                citations: row.get("citations"),
+                images: row.get("images"),
+                token_stats: row.get("token_stats"),
+                created_at: created_at.to_rfc3339(),
+            }
+        })
+        .collect()
+    }
+
     // ── Knowledge Graph ──────────────────────────────────────────────
 
     fn upsert_entity(
