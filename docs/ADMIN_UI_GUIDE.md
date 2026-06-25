@@ -43,9 +43,9 @@ Pages are role-gated:
 | Role | Accessible Pages |
 |------|-----------------|
 | `viewer` | Dashboard, Health |
-| `editor` | + KM Hierarchy, Documents, Test Chat, Connectors |
+| `editor` | + KM Hierarchy, Documents, Test Chat, Connectors, Knowledge Graph |
 | `admin` | + Users, Permissions, Usage & Costs, Feedback & Tuning, Analytics, Inference Logs |
-| `super_admin` | + Settings, Guardrails, Plugins, Evaluation, A/B Tests, Knowledge Graph, Backup & Restore, Vector Migration, Rate Limits |
+| `super_admin` | + Settings, Guardrails, Plugins, Evaluation, A/B Tests, Backup & Restore, Vector Migration, Rate Limits |
 
 The sidebar menu automatically shows only pages the logged-in user can access.
 
@@ -639,15 +639,48 @@ Create and run A/B tests comparing different pipeline configurations.
 
 ## Knowledge Graph
 
-**Path:** `/knowledge-graph` | **Min role:** `super_admin`
+**Path:** `/knowledge-graph` | **Min role:** `editor`
 
-Visualize and manage the knowledge graph built from ingested documents.
+Browse and curate the per-workspace knowledge graph (entities + relations)
+extracted from ingested documents. This page is a **knowledge-exploration tool**
+— it is **not** wired into chat retrieval (see the note below).
 
-- **Graph visualization** — Interactive node/edge graph of entities and their relationships
-- **Entity extraction** — Trigger entity extraction on selected documents or an entire workspace
-- **Entity browser** — Search, view, and edit individual entities and their attributes
-- **Relationship management** — Add, edit, or delete relationships between entities
-- **Export** — Download the graph as JSON or RDF for use in external tools
+- **Workspace selector** — the graph is always scoped to a single workspace.
+- **Two views** (toggle):
+  - **Table** — entities with name, type, linked-document count, and created date.
+  - **Graph** — a force-directed visualization with summary stat cards (entities,
+    relations, entity types, relation types).
+- **Filter & search** — filter by entity type (Person, Organization, Location,
+  Concept, Event, Technology, Product) and free-text entity search.
+- **Entity drawer** (click an entity) — its type, linked documents, copyable id,
+  and a **Relations** list (direction, relation type, confidence). Each linked
+  document has a **Re-extract** button to re-run extraction on that document.
+- **Delete** — remove an entity and all its relations.
+
+> The UI is browse + curate only: there is **no** entity/attribute editing, no
+> manual relationship creation, and no JSON/RDF export.
+
+### Populating the graph (it is empty by default)
+
+Entity extraction is **off by default** because it is LLM-expensive (~2 calls per
+chunk). To get data on this page:
+
+1. Enable it in config (deploy-time): `knowledge_graph.enabled = true`
+   (env: `THAIRAG__KNOWLEDGE_GRAPH__ENABLED=true`). Without it, extraction is
+   refused.
+2. To auto-extract on future uploads, also set
+   `knowledge_graph.extract_on_ingest = true`. `knowledge_graph.max_chunks_per_doc`
+   (default 20) bounds the per-document cost.
+3. **Already-ingested documents** have no bulk backfill — trigger extraction
+   per document via the drawer's **Re-extract** button (or
+   `POST /api/km/workspaces/{ws}/documents/{doc}/extract`).
+
+Extraction uses the currently configured main LLM.
+
+> **Not the same as chat "Graph RAG".** This persisted graph is independent of
+> the `chat_pipeline.graph_rag_enabled` retrieval enhancer, which builds its own
+> ephemeral graph at query time and does not read these entities. Enabling one
+> does not affect the other.
 
 ---
 
