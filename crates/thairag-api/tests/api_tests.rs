@@ -2974,3 +2974,127 @@ async fn create_user_defaults_role_to_viewer() {
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["role"], "viewer");
 }
+
+// ── First-party chat-UI streaming endpoint (Phase 2) ─────────────────
+
+async fn create_conversation_id(app: &Router, token: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/chat/conversations",
+            serde_json::json!({"title": "Test"}),
+            token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp.into_body()).await;
+    json["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn chat_stream_persists_turn_and_streams_protocol() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "chatter@test.com", "Chatter", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // Send a message — streams the clean first-party protocol.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "hello"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        resp.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body.contains(r#""type":"token""#),
+        "expected token events, got: {body}"
+    );
+    assert!(
+        body.contains(r#""type":"done""#),
+        "expected done event, got: {body}"
+    );
+    assert!(body.contains("data: [DONE]"), "expected [DONE] sentinel");
+
+    // The completed turn is now persisted: user + assistant.
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let msgs = body_json(resp.into_body()).await;
+    let arr = msgs.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "expected user + assistant persisted: {msgs}");
+    assert_eq!(arr[0]["role"], "user");
+    assert_eq!(arr[0]["content"], "hello");
+    assert_eq!(arr[1]["role"], "assistant");
+}
+
+#[tokio::test]
+async fn chat_stream_rejects_empty_content() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "empty@test.com", "E", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+    let resp = app
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "   "}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn chat_stream_unknown_conversation_is_404() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "u404@test.com", "U", "Pass1234").await;
+    let resp = app
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/chat/conversations/00000000-0000-0000-0000-000000000000/messages",
+            serde_json::json!({"content": "hi"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn chat_stream_cross_user_is_forbidden() {
+    let app = build_app(true);
+    let token_a = register_and_get_token(&app, "owner-c@test.com", "A", "Pass1234").await;
+    let token_b = register_and_get_token(&app, "intruder-c@test.com", "B", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token_a).await;
+    let resp = app
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "hi"}),
+            &token_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}

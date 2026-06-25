@@ -49,6 +49,15 @@ This blocks a real product.
 
 ## Phase 2 — First-party streaming chat endpoint + protocol
 
+Status: PR 2a (this) shipped the `POST /api/chat/conversations/{id}/messages`
+SSE endpoint — owner-checked, loads history via `chat_history::load_history`,
+runs the pipeline, streams a clean first-party protocol (`progress` / `token` /
+`citation` / `done` / `error` + `[DONE]`), and persists the turn via
+`chat_history::persist_turn`. New handler reuses the `/v1` setup helpers but has
+its own SSE loop — `/v1` is untouched (OWUI/OpenAI clients unaffected).
+PR 2b (next): tokenized media route + `image` events + relevance gating.
+
+
 - `POST /api/chat/conversations/{id}/messages` (SSE): persists user turn → streams
   → persists assistant turn (content + citations + images).
 - Clean event protocol: `token`, `citation` {doc_id,title,snippet,page,section,url},
