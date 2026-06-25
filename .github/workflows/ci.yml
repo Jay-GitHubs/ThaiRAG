@@ -284,12 +284,23 @@ jobs:
           cache-from: type=gha,scope=admin-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=admin-${{ matrix.arch_tag }}
 
+      - name: Build & push PaddleOCR sidecar by digest (GHCR)
+        id: build-paddleocr
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/paddleocr-sidecar
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/jay-githubs/thairag-paddleocr,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=paddleocr-${{ matrix.arch_tag }}
+          cache-to: type=gha,mode=max,scope=paddleocr-${{ matrix.arch_tag }}
+
       # Persist the per-platform digests so the merge job can pick them up.
       - name: Export digests
         run: |
-          mkdir -p /tmp/digests/api /tmp/digests/admin
+          mkdir -p /tmp/digests/api /tmp/digests/admin /tmp/digests/paddleocr
           echo "${{ steps.build-api.outputs.digest }}" > /tmp/digests/api/${{ matrix.arch_tag }}
           echo "${{ steps.build-admin.outputs.digest }}" > /tmp/digests/admin/${{ matrix.arch_tag }}
+          echo "${{ steps.build-paddleocr.outputs.digest }}" > /tmp/digests/paddleocr/${{ matrix.arch_tag }}
 
       - name: Upload digests
         uses: actions/upload-artifact@v4
@@ -374,6 +385,27 @@ jobs:
               --tag "${GHCR}:${TAG}" \
               "${GHCR}@${ADMIN_DIGEST_AMD}" \
               "${GHCR}@${ADMIN_DIGEST_ARM}"
+            docker buildx imagetools create \
+              --tag "${HUB}:${TAG}" \
+              "${GHCR}:${TAG}"
+          done
+
+      - name: Create PaddleOCR manifest (GHCR) and mirror to Docker Hub
+        env:
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${SHA_TAG:0:7}"
+          OCR_DIGEST_AMD=$(cat /tmp/digests/paddleocr/amd64)
+          OCR_DIGEST_ARM=$(cat /tmp/digests/paddleocr/arm64)
+          GHCR="ghcr.io/jay-githubs/thairag-paddleocr"
+          HUB="jdevspecialist/thairag-paddleocr"
+
+          for TAG in latest "${SHORT_SHA}"; do
+            docker buildx imagetools create \
+              --tag "${GHCR}:${TAG}" \
+              "${GHCR}@${OCR_DIGEST_AMD}" \
+              "${GHCR}@${OCR_DIGEST_ARM}"
             docker buildx imagetools create \
               --tag "${HUB}:${TAG}" \
               "${GHCR}:${TAG}"
