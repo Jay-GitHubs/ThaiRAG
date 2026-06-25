@@ -2577,6 +2577,20 @@ impl ChatPipeline {
         }
     }
 
+    /// Per-image token reservation for context-budget accounting. Non-zero only
+    /// when the answer LLM is vision-capable (text-only answers never send
+    /// images), so image-bearing chunks don't shrink the budget needlessly.
+    fn image_budget(&self) -> context_curator::ImageBudget {
+        if self.response_generator.supports_vision() {
+            context_curator::ImageBudget {
+                tokens_per_image: self.config.tokens_per_image,
+                max_images: MAX_VISION_IMAGES_PER_ANSWER,
+            }
+        } else {
+            context_curator::ImageBudget::none()
+        }
+    }
+
     /// Budget-aware curator: use heuristic fallback if budget exhausted.
     async fn run_curator_budgeted(
         &self,
@@ -2600,6 +2614,7 @@ impl ChatPipeline {
             return Ok(context_curator::fallback_curate(
                 results,
                 self.config.max_context_tokens.max(FULL_DOC_CONTEXT_TOKENS),
+                self.image_budget(),
             ));
         }
         if self.context_curator.is_some() && budget.try_spend() {
@@ -2608,6 +2623,7 @@ impl ChatPipeline {
             Ok(context_curator::fallback_curate(
                 results,
                 self.config.max_context_tokens,
+                self.image_budget(),
             ))
         }
     }
@@ -2875,9 +2891,13 @@ impl ChatPipeline {
         results: &[thairag_core::types::SearchResult],
     ) -> Result<CuratedContext> {
         let mut ctx = if let Some(ref curator) = self.context_curator {
-            curator.curate(query, results).await?
+            curator.curate(query, results, self.image_budget()).await?
         } else {
-            context_curator::fallback_curate(results, self.config.max_context_tokens)
+            context_curator::fallback_curate(
+                results,
+                self.config.max_context_tokens,
+                self.image_budget(),
+            )
         };
 
         // Enrich chunks with document titles so the LLM knows which

@@ -3230,6 +3230,9 @@ where
         thai_chars_per_token: s("chat_pipeline.thai_chars_per_token")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.thai_chars_per_token),
+        tokens_per_image: s("chat_pipeline.tokens_per_image")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.tokens_per_image),
         agent_max_tokens: s("chat_pipeline.agent_max_tokens")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.agent_max_tokens),
