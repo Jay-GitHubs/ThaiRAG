@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS inference_logs (
     settings_scope    TEXT NOT NULL DEFAULT 'global',
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_context_tokens INTEGER NOT NULL DEFAULT 0,
     total_ms          INTEGER NOT NULL DEFAULT 0,
     search_ms         INTEGER,
     generation_ms     INTEGER,

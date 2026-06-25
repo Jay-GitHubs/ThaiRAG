@@ -133,6 +133,7 @@ impl PostgresKmStore {
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS input_guardrails_pass BOOLEAN",
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS output_guardrails_pass BOOLEAN",
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS guardrail_violation_codes TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS estimated_context_tokens INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = sqlx::query(stmt).execute(&pool).await;
         }
@@ -2591,7 +2592,7 @@ impl KmStoreTrait for PostgresKmStore {
                     id, timestamp, user_id, workspace_id, org_id, dept_id, session_id, response_id,
                     query_text, detected_language, intent, complexity,
                     llm_kind, llm_model, settings_scope,
-                    prompt_tokens, completion_tokens,
+                    prompt_tokens, completion_tokens, estimated_context_tokens,
                     total_ms, search_ms, generation_ms,
                     chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
@@ -2603,14 +2604,14 @@ impl KmStoreTrait for PostgresKmStore {
                     $1, $2, $3, $4, $5, $6, $7, $8,
                     $9, $10, $11, $12,
                     $13, $14, $15,
-                    $16, $17,
-                    $18, $19, $20,
-                    $21, $22, $23, $24,
-                    $25, $26, $27, $28,
-                    $29, $30,
-                    $31, $32, $33,
-                    $34,
-                    $35, $36, $37
+                    $16, $17, $18,
+                    $19, $20, $21,
+                    $22, $23, $24, $25,
+                    $26, $27, $28, $29,
+                    $30, $31,
+                    $32, $33, $34,
+                    $35,
+                    $36, $37, $38
                 )",
             )
             .bind(&entry.id)
@@ -2630,6 +2631,7 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(&entry.settings_scope)
             .bind(entry.prompt_tokens as i32)
             .bind(entry.completion_tokens as i32)
+            .bind(entry.estimated_context_tokens as i32)
             .bind(entry.total_ms as i32)
             .bind(entry.search_ms.map(|v| v as i32))
             .bind(entry.generation_ms.map(|v| v as i32))
@@ -2681,7 +2683,7 @@ impl KmStoreTrait for PostgresKmStore {
             "SELECT id, timestamp, user_id, workspace_id, org_id, dept_id, session_id, response_id,
                     query_text, detected_language, intent, complexity,
                     llm_kind, llm_model, settings_scope,
-                    prompt_tokens, completion_tokens,
+                    prompt_tokens, completion_tokens, estimated_context_tokens,
                     total_ms, search_ms, generation_ms,
                     chunks_retrieved, avg_chunk_score, self_rag_decision, self_rag_confidence,
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
@@ -2810,6 +2812,7 @@ impl KmStoreTrait for PostgresKmStore {
                 settings_scope: row.get("settings_scope"),
                 prompt_tokens: row.get::<i32, _>("prompt_tokens") as u32,
                 completion_tokens: row.get::<i32, _>("completion_tokens") as u32,
+                estimated_context_tokens: row.get::<i32, _>("estimated_context_tokens") as u32,
                 total_ms: row.get::<i32, _>("total_ms") as u64,
                 search_ms: row.get::<Option<i32>, _>("search_ms").map(|v| v as u64),
                 generation_ms: row.get::<Option<i32>, _>("generation_ms").map(|v| v as u64),

@@ -257,6 +257,7 @@ mod tests {
             settings_scope: "global".into(),
             prompt_tokens: 0,
             completion_tokens: 0,
+            estimated_context_tokens: 0,
             total_ms: 0,
             search_ms: None,
             generation_ms: None,

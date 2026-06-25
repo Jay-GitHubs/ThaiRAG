@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import {
   Typography,
   Tabs,
@@ -65,6 +66,26 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+/**
+ * Render ThaiRAG's estimated context tokens next to the model's actual prompt
+ * tokens for token-budget drift transparency. When estimated is 0 (not
+ * recorded, e.g. lean-path queries) just show the actual prompt tokens.
+ */
+function renderPromptTokens(estimated: number, actual: number): ReactNode {
+  if (estimated <= 0) return actual.toLocaleString();
+  const drift = actual > 0 ? actual / estimated : 0;
+  return (
+    <span>
+      est {estimated.toLocaleString()} → actual {actual.toLocaleString()}
+      {drift > 0 && (
+        <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
+          ({drift.toFixed(1)}×)
+        </Typography.Text>
+      )}
+    </span>
+  );
 }
 
 function rateColor(rate: number): string {
@@ -336,8 +357,21 @@ function LogBrowserTab() {
     },
     {
       title: 'Tokens',
-      width: 100,
-      render: (_: unknown, r: InferenceLogEntry) => formatTokenCount(r.prompt_tokens + r.completion_tokens),
+      width: 140,
+      render: (_: unknown, r: InferenceLogEntry) => {
+        const total = formatTokenCount(r.prompt_tokens + r.completion_tokens);
+        if (r.estimated_context_tokens <= 0) return total;
+        const drift = r.prompt_tokens > 0 ? r.prompt_tokens / r.estimated_context_tokens : 0;
+        return (
+          <span>
+            {total}
+            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 11 }}>
+              est {formatTokenCount(r.estimated_context_tokens)} → {formatTokenCount(r.prompt_tokens)}
+              {drift > 0 ? ` (${drift.toFixed(1)}×)` : ''}
+            </Typography.Text>
+          </span>
+        );
+      },
     },
     {
       title: 'Latency',
@@ -515,7 +549,7 @@ function LogEntryDetail({ entry }: { entry: InferenceLogEntry }) {
             <Descriptions.Item label="Total Time">{entry.total_ms}ms</Descriptions.Item>
             <Descriptions.Item label="Search Time">{entry.search_ms != null ? `${entry.search_ms}ms` : '-'}</Descriptions.Item>
             <Descriptions.Item label="Generation Time">{entry.generation_ms != null ? `${entry.generation_ms}ms` : '-'}</Descriptions.Item>
-            <Descriptions.Item label="Prompt Tokens">{entry.prompt_tokens}</Descriptions.Item>
+            <Descriptions.Item label="Prompt Tokens">{renderPromptTokens(entry.estimated_context_tokens, entry.prompt_tokens)}</Descriptions.Item>
             <Descriptions.Item label="Completion Tokens">{entry.completion_tokens}</Descriptions.Item>
           </Descriptions>
 
