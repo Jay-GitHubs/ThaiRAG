@@ -174,7 +174,7 @@ Uncomment the `open-webui` service in `docker-compose.yml`. Configure it to poin
 
 ```yaml
 open-webui:
-  image: ghcr.io/open-webui/open-webui:v0.8.10
+  image: ghcr.io/open-webui/open-webui:v0.9.6
   ports:
     - "3000:8080"
   environment:
