@@ -96,7 +96,7 @@ const DEFAULT_TEMPLATE: &str = "You are a context curator. Given a user query an
                 Rules:\n\
                 - List chunk numbers (1-based) in order of relevance\n\
                 - Exclude chunks that are irrelevant to the query\n\
-                - Stay within the token budget (estimate ~4 chars per token for English, ~2 for Thai)\n\
+                - Stay within the token budget (estimate ~4 chars per token for English, ~1.5 for Thai)\n\
                 Output ONLY valid JSON.";
 
 pub struct ContextCurator {
@@ -210,16 +210,23 @@ impl ContextCurator {
     }
 }
 
-/// Estimate token count (rough: 4 chars/token English, 2 chars/token Thai).
-/// Estimate LLM token count for budget enforcement.
+/// Estimate LLM token count for context-budget enforcement.
+/// (rough: 4 chars/token English, 1.5 chars/token Thai).
 ///
-/// Calibrated against real tokenizers via Ollama `prompt_eval_count`
-/// (2026-06-11): Thai ≈ 3.2 chars/token on gemma4, ≈ 2.0 on qwen3 — we use
-/// 2.5 as the model-agnostic middle. The previous code assumed 2 chars/token
-/// AND subtracted the Thai CHAR count from the BYTE length (Thai is 3
-/// bytes/char), counting 2 phantom "other" chars per Thai char — together
-/// overestimating Thai token counts ~2×, which silently dropped relevant
-/// chunks at the context-budget boundary.
+/// Thai calibration — `~1.5 chars/token` for Qwen. Production Thai documents
+/// (legal text, gazettes, tables, digits) tokenize FAR worse than clean prose:
+/// rare characters, numerals and mixed scripts fall to near byte-level in the
+/// Qwen BPE tokenizer, so real `prompt_eval_count` runs ~1.3–1.6 chars/token —
+/// not the ~2.0 measured on clean prose. We deliberately use the conservative
+/// 1.5 because the failure modes are asymmetric: **under-counting overflows the
+/// model context window (silent truncation / OOM)** on Thai-heavy prompts —
+/// observed as ~16.7K real tokens against a budget that thought it was ~6K —
+/// which is worse than over-counting (dropping one chunk at the boundary).
+///
+/// History: an early version OVER-counted Thai ~2× (subtracting the Thai CHAR
+/// count from the BYTE length); a 2026-06 pass swung to 2.5 chars/token, which
+/// then UNDER-counted real documents and overflowed 16K contexts. 1.5 is the
+/// corrected, overflow-safe value for Qwen on production Thai.
 fn estimate_tokens(text: &str) -> usize {
     let mut thai_chars = 0usize;
     let mut other_chars = 0usize;
@@ -230,7 +237,8 @@ fn estimate_tokens(text: &str) -> usize {
             other_chars += 1;
         }
     }
-    (thai_chars * 2).div_ceil(5) + other_chars / 4 + 1
+    // Thai: 2/3 token per char ≈ 1.5 chars/token. Other: 1/4 ≈ 4 chars/token.
+    (thai_chars * 2).div_ceil(3) + other_chars / 4 + 1
 }
 
 fn build_curated_context(
@@ -314,15 +322,22 @@ mod tests {
 
     #[test]
     fn token_estimate_calibrated_for_thai() {
-        // 100 Thai chars ≈ 40 tokens (2.5 chars/token), NOT 100+ as the old
-        // bytes-based formula produced.
+        // 100 Thai chars ≈ 67 tokens (conservative 1.5 chars/token) — Qwen
+        // tokenizes production Thai near byte-level, so the budget must assume
+        // the worst case to avoid overflowing the context window.
         let thai: String = "ธ".repeat(100);
         let est = estimate_tokens(&thai);
-        assert!((38..=45).contains(&est), "thai estimate {est}");
-        // 100 ASCII chars ≈ 25 tokens.
+        assert!((66..=70).contains(&est), "thai estimate {est}");
+        // 100 ASCII chars ≈ 25 tokens (4 chars/token, unchanged).
         let en = "a".repeat(100);
         let est = estimate_tokens(&en);
         assert!((24..=27).contains(&est), "english estimate {est}");
+        // Thai must estimate clearly MORE tokens than the same char count of
+        // English — the asymmetry the old 2.5 ratio under-counted.
+        assert!(
+            estimate_tokens(&thai) > estimate_tokens(&en) * 2,
+            "thai should cost >2x english per char"
+        );
     }
 
     #[test]
