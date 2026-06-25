@@ -189,20 +189,25 @@ A separate **Fidelity** tag (Verified / Review / Unverifiable) reports how faith
 converted text matches the original, with a popover showing the score, numbers matched/
 fabricated, and character coverage.
 
-### Document Versioning
-- Documents support version history — uploading a new file for an existing document creates a new version rather than overwriting
-- **Version History** — View all versions of a document with timestamps and file sizes
-- **Diff** — Compare the extracted text between any two versions side-by-side
-- **Restore** — Roll back to any previous version (re-processes the older file)
+### Document versioning, refresh scheduling & per-document ACLs (API-only)
 
-### Refresh Scheduling
-- Set a recurring refresh schedule (cron expression) on any document that was ingested via a URL or connector source
-- The system re-fetches and re-processes the source on schedule, creating a new version automatically
+These three capabilities exist in the backend API but are **not yet surfaced in
+the admin UI** — drive them through the REST API (see `docs/API_REFERENCE.md`):
 
-### ACL Management
-- Per-document access control lists (ACLs) allow fine-grained permissions on top of workspace-level permissions
-- Grant or revoke read access for specific users on individual documents
-- Useful for sensitive documents within shared workspaces
+- **Document versioning** — a version is snapshotted automatically before each
+  reprocess. List/inspect/diff versions via
+  `GET .../documents/{doc_id}/versions`,
+  `GET .../documents/{doc_id}/versions/{version}`, and
+  `GET .../documents/{doc_id}/diff` (versions selected via query params). There
+  is no version history / diff / restore screen in the UI.
+- **Refresh scheduling** — a document's `refresh_schedule` can be set via the API
+  to re-fetch its source on an interval. The format is an interval string
+  (`1h`, `6h`, `1d`, `7d`, `30d`), **not** a cron expression. No UI control exists.
+- **Per-document ACLs** — grant/revoke a specific user's access to an individual
+  document on top of workspace-level permissions via
+  `POST .../documents/{doc_id}/acl` and
+  `DELETE .../documents/{doc_id}/acl/{user_id}`. There is no per-document ACL
+  screen in the UI; the **Permissions** page manages workspace-level access.
 
 ---
 

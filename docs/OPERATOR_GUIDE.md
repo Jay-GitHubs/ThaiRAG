@@ -102,7 +102,7 @@ The pipeline always runs hybrid search first. Then `chat_pipeline.rs::maybe_live
 3. **KB coverage is insufficient.** Either zero retrieved chunks, or average relevance score < `0.15`.
 4. There are active connectors visible to the requesting user's `AccessScope`.
 
-Then it fans out to up to `live_retrieval.max_connectors` connectors in parallel, with a per-connector content budget of `max_content_chars / num_connectors`. If more connectors are configured than the cap allows, an LLM call picks the most relevant ones.
+Then it fans out to up to `live_retrieval_max_connectors` connectors in parallel, with a per-connector content budget of `live_retrieval_max_content_chars / num_connectors`. If more connectors are configured than the cap allows, an LLM call picks the most relevant ones.
 
 **Result**: the original (poor) context is replaced with the live-fetched content. The model sees fresh content; the KB is unchanged.
 
@@ -473,24 +473,27 @@ Hybrid search over KB
 
 In `config/local.toml`:
 
+The live-retrieval knobs are **flat keys** on `[chat_pipeline]` (all prefixed
+`live_retrieval_`), not a nested sub-table:
+
 ```toml
 [chat_pipeline]
 live_retrieval_enabled = true
-
-[chat_pipeline.live_retrieval]
 # How many connectors to fan out to in parallel before falling back to an LLM
-# call to pick the best ones.
-max_connectors = 3
+# call to pick the best ones. (default: 3)
+live_retrieval_max_connectors = 3
 # Total content budget across all selected connectors. Divided evenly per
-# connector. Bigger = more context for the LLM, more latency.
-max_content_chars = 16000
-# Overall timeout for the whole fan-out. Tune up for slow MCP servers.
-timeout_secs = 30
-# Per-connector connect / read timeouts.
-connect_timeout_secs = 5
-read_timeout_secs = 15
-# Tokens to spend on the optional "pick relevant connectors" LLM call.
-max_tokens = 256
+# connector. Bigger = more context for the LLM, more latency. (default: 30000)
+live_retrieval_max_content_chars = 30000
+# Overall timeout for the whole fan-out, in seconds. Tune up for slow MCP
+# servers. (default: 15)
+live_retrieval_timeout_secs = 15
+
+# Optional dedicated LLM for the "pick relevant connectors" selection call.
+# Omit to reuse the main chat LLM.
+# [chat_pipeline.live_retrieval_llm]
+# kind = "open_ai_compatible"
+# model = "..."
 ```
 
 Connectors are wired separately at `/connectors` in the admin UI. Live retrieval reuses whatever you've already configured for sync; you don't double-register them.
