@@ -114,18 +114,80 @@ Manage documents within workspaces.
 - Click a document to view its content and chunk details
 
 ### Upload
-- Click "Upload Document" to open the upload modal
-- **Supported formats:** PDF, DOCX, XLSX, HTML, Markdown, CSV, plain text
-- **Batch upload:** Select multiple files at once; each is processed independently in the background
+- Click **Upload File** to open the upload modal (a separate **Ingest Text** button opens a paste-raw-text modal)
+- **Supported formats:** PDF, DOCX, XLSX, ODT, HTML, Markdown, CSV, JSON, plain text. The dragger accepts a single file (max 10MB by default)
+- Optionally enter a **Title** (defaults to the filename)
 - Documents are automatically converted, chunked, embedded, and indexed
 - Upload size limit is configurable (default varies by tier)
 
+#### Preview analysis (dry-run complexity check)
+Before ingesting, click **Preview analysis** to run a no-cost dry-run that shows what
+the pipeline *would* do. The result renders a handling preview panel with:
+- **Fidelity routing split bar** — proportion of regions routed to **Native**
+  (deterministic, no model), **Det. OCR** (deterministic OCR tier), and **Vision LLM**.
+  A "⚠ OCR tier not configured" note appears if deterministic OCR is needed but unavailable.
+- **Region classes** — per-class tags with counts and percentages (e.g. NativeText,
+  Scanned, ImageHeavy, CorruptedText).
+- **Thresholds** — the image-coverage, min-chars/page, and garble-ratio values behind
+  the decision.
+- **Recommendation** — a one-line summary of the handling decision.
+
+After a preview, the primary button becomes **Ingest anyway**; without a preview it reads
+**Upload**. If the admin policy **Always preview before ingest** is on (Settings →
+Document Processing), the ingest button is disabled until a preview has been run.
+
+#### Handling controls (per-document override)
+Below the dropzone, a **Handling** section lets you override the pipeline's choice for
+this one ingest:
+- **Handling mode** (radio): **Auto** (adaptive routing, recommended), **High quality**
+  (OCR every page via the vision model — max fidelity, slowest), **OCR only**
+  (deterministic OCR tier only, no vision LLM), **Text only** (no models — text layer only).
+- **Image-coverage ≥** and **Min chars/page** — optional threshold overrides for this
+  document (blank = use the default / preview value).
+
+After upload, the modal stays open and switches to a live **Processing Document** timeline
+showing each pipeline stage; click **Done** when finished.
+
 ### Document Actions
-- **View Content** — See the extracted text content
-- **View Chunks** — Browse individual chunks with their metadata (page numbers, section titles, chunk index)
-- **Download** — Download the original file
-- **Reprocess** — Re-chunk and re-embed the document (useful after changing chunk settings)
-- **Delete** — Remove document and all its chunks from vector DB and search index
+Each row has a set of icon buttons:
+- **Processing details** — Open the per-stage processing detail modal (live while processing, the persisted record afterwards). The Status tag and Pipeline tag are also clickable shortcuts to this.
+- **Preview content** — See the extracted text content
+- **View chunks** — Browse individual chunks with their metadata (page numbers, section titles, chunk index)
+- **Download original** — Download the original file
+- **Download markdown** — Download the converted text as a `.md` file
+- **Reprocess with options…** — Open the reprocess modal (see below)
+- **Delete** — Remove document and all its chunks from vector DB and search index (popconfirm)
+
+A toolbar **Re-embed All** button (with confirmation) reprocesses every document in the
+workspace with the current embedding model — use it after switching embedding models.
+
+### Reprocess (with options)
+Clicking a document's **Reprocess with options…** action opens a modal that:
+- **Auto-runs the dry-run preview** for the stored document on open, rendering the same
+  handling preview panel as the upload flow. If the original file isn't stored, a
+  "Preview unavailable" notice is shown and you can still reprocess.
+- Shows a **re-OCR warning** alert: reprocessing rebuilds the document's chunks from the
+  original file, and scanned / vision-OCR'd documents are re-OCR'd and may differ from the
+  current corpus.
+- Lets you pick a **handling mode** and threshold overrides (the same Handling controls as
+  upload) before clicking the **Reprocess** button.
+
+This replaces the old one-click "Reprocess?" confirm.
+
+### Pipeline provenance popover
+Each document row shows a **Pipeline** tag indicating the processing path. Hovering it
+opens a "Processing details" popover with:
+- **Path** — the processing path taken
+- **Extraction** — page count plus a breakdown of **Native text**, **OCR** pages (with the
+  OCR provider, e.g. `paddleocr-sidecar`), and **Vision** pages (with the vision model). A
+  **No-model N** warning tag appears when pages needed OCR/vision but no model was
+  configured (raw text was kept).
+- **Agents** — each AI agent that ran, with status, model, and any note
+- **Fallback** — whether a mechanical fallback was used, and the resulting chunk count
+
+A separate **Fidelity** tag (Verified / Review / Unverifiable) reports how faithfully the
+converted text matches the original, with a popover showing the score, numbers matched/
+fabricated, and character coverage.
 
 ### Document Versioning
 - Documents support version history — uploading a new file for an existing document creates a new version rather than overwriting
@@ -373,9 +435,24 @@ All discovery fetches are GETs of a public catalog or an admin-configured tool �
 KM data leaves the deployment.
 
 ### Document Processing Tab
-Configure document ingestion parameters:
-- Chunk size and overlap
-- Maximum upload size
+Configure document ingestion parameters. Under **Pipeline Settings**:
+- Max chunk size and chunk overlap (the only two knobs editable in a non-global scope)
+- Max upload size (takes effect after server restart), PDF render DPI, max image edge
+
+A **Smart-PDF OCR tuning** block (global scope only) governs the always-on PDF vision path:
+- **Fallback OCR for low-text pages** (switch)
+- **Min chars/page (below → OCR)**
+- **Image-coverage threshold** — a PDF page whose image objects cover at/above this fraction
+  (0–1) of the page area is treated as image-heavy and routed to OCR/vision (lower = more
+  pages go to OCR)
+- **Max OCR pages/doc**
+- **High quality (OCR every page)** (switch)
+- **Always preview before ingest** (switch) — when on, admins must run **Preview analysis**
+  (the dry-run complexity check) and confirm before any document is ingested; off = preview
+  is optional
+
+Below Pipeline Settings sit the **Document Vision LLM** (model for Smart-PDF OCR and image
+description) and **AI Document Preprocessing** sections.
 
 ### Chat Pipeline Tab
 Configure the RAG pipeline behavior:

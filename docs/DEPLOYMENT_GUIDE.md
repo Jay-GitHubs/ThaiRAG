@@ -64,6 +64,7 @@ The `docker-compose.yml` defines these services:
 | `grafana` | grafana/grafana | 3001 | Dashboards & visualization |
 | `ollama` | ollama/ollama (commented) | 11435 | Local LLM (free tier) |
 | `open-webui` | open-webui (commented) | 3000 | Chat interface (optional) |
+| `paddleocr` | Built from services/paddleocr-sidecar | 8086 | Deterministic Thai OCR tier (opt-in, `--profile ocr`) |
 
 ### Setup
 
@@ -188,6 +189,35 @@ open-webui:
 ```
 
 See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup including per-user permission enforcement.
+
+### PaddleOCR Sidecar (Optional — Deterministic Thai OCR)
+
+The `paddleocr` service is an optional, deterministic OCR tier for the document
+pipeline. It wraps PaddleOCR's Thai `th_PP-OCRv5_mobile_rec` model behind a small
+FastAPI HTTP service (port 8086) and transcribes OCR-needing PDF pages (scanned or
+corrupted-CMap text) locally — faster, with no hallucination, and more accurate on
+Thai than the vision LLM. When it is not enabled, OCR-needing pages fall back to the
+vision LLM. The vision LLM is still used for figure *description* either way.
+
+The service is gated behind the `ocr` compose profile, so it does **not** start by
+default. To enable it:
+
+1. Start the sidecar:
+
+```bash
+docker compose --profile ocr up -d --build paddleocr
+```
+
+2. Point ThaiRAG at it (env or `.env` on the `thairag` service), then restart:
+
+```bash
+THAIRAG__DOCUMENT__OCR_SIDECAR_URL=http://paddleocr:8086
+```
+
+With the URL empty or unset, the OCR tier is off and PDF extraction is unchanged.
+The same value is also tunable at runtime via the `document.ocr_sidecar_url` setting
+in the Admin UI (km-store). See `services/paddleocr-sidecar/README.md` for build and
+endpoint details.
 
 ### Persistent Volumes
 
@@ -381,6 +411,8 @@ cd admin-ui && npx playwright test
 |-----|-------------|---------|-------------|
 | `document.max_chunk_size` | `THAIRAG__DOCUMENT__MAX_CHUNK_SIZE` | `512` | Chunk size in tokens |
 | `document.chunk_overlap` | `THAIRAG__DOCUMENT__CHUNK_OVERLAP` | `64` | Overlap between chunks |
+| `document.pdf_vision_concurrency` | `THAIRAG__DOCUMENT__PDF_VISION_CONCURRENCY` | `2` | Max per-page vision OCR calls in flight at once (`1` = sequential) |
+| `document.ocr_sidecar_url` | `THAIRAG__DOCUMENT__OCR_SIDECAR_URL` | (empty = off) | Base URL of the deterministic OCR sidecar (e.g. `http://paddleocr:8086`); when set, OCR-needing PDF pages prefer it over the vision LLM |
 
 ### Session
 

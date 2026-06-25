@@ -108,6 +108,63 @@ Document ingestion pipeline:
 5. **Persistence** — Chunks are saved to the `document_chunks` DB table (for Tantivy rebuild on restart)
 6. **Indexing** — Stored in both VectorDB (semantic search) and Tantivy BM25 (disk-based via MmapDirectory)
 
+#### Region router & fidelity ladder (`region_router.rs`)
+
+A pure (no-IO) decision layer classifies each *region* (a PDF page, or a whole
+non-PDF document) into a `RegionClass` and the `FidelityTier` it should be served
+at. The three tiers form a fidelity ladder, lowest (most exact) preferred:
+
+- `Native` — structured extraction (PDF text layer, DOCX/XLSX/HTML native struct,
+  deterministically reconstructed lattice/stream tables). Exact, no model.
+- `DeterministicOcr` — deterministic OCR of a rendered page (PaddleOCR sidecar) for
+  regions with no trustworthy text layer. No hallucination, local.
+- `VisionLlm` — vision LLM for figure/diagram description, or last-resort OCR.
+
+`RegionClass` (e.g. `NativeText`, `NativeTable`, `TabularAsText`, `Mixed`,
+`ImageHeavy`, `Scanned`, `CorruptedText`, `NativeStruct`, `DirectImage`) generalizes
+the PDF-only `PageStrategy`. `classify()` reproduces `semantic::select_page_strategy`
+for PDF pages, then applies the pdfium engine's two refinements via
+`RegionClass::from_page_strategy`: a successfully reconstructed deterministic table
+wins (`NativeTable`), and a non-vision page whose text layer is garbled (broken
+ToUnicode CMap, the `เรืĻอง` class of bug) is routed to OCR (`CorruptedText`) rather
+than trusting the corrupt text. The **golden rule** is encoded in `RegionClass::tier`:
+no region whose content comes from native structured extraction is ever sent to
+OCR/vision — notably a deterministic table is never OCR'd.
+
+#### Deterministic OCR tier (`ocr.rs`)
+
+`OcrProvider` trait (page PNG → transcribed text). The only implementation,
+`SidecarOcrProvider`, is an HTTP client for the PaddleOCR FastAPI sidecar
+(`services/paddleocr-sidecar/`, `th_PP-OCRv5` Thai model). It is wired into the
+smart-PDF engine **default-off**: with no sidecar URL configured
+(`document.ocr_sidecar_url`), extraction is byte-for-byte unchanged. When set, the
+deterministic OCR tier is preferred over the vision LLM for OCR-needing pages; the
+vision LLM stays for figure description. Decision rationale in
+`docs/OCR_VS_VLM_SPIKE.md`.
+
+#### Per-document handling modes & pre-ingest preview
+
+A per-document `HandlingMode` (`ChunkOverrides.handling_mode`) lets an admin override
+the adaptive router for a single ingest:
+
+- `Auto` — adaptive routing (default).
+- `HighQuality` — OCR every PDF page via the vision model.
+- `TextOnly` — pdfium text layer only; no vision LLM and no deterministic OCR.
+- `ForceOcr` — deterministic OCR tier only; never call the vision LLM (falls back to
+  text if no OCR provider is configured).
+
+A pre-ingest dry-run preview API (`POST /api/km/workspaces/{ws}/documents/preview`,
+and `…/documents/{doc_id}/preview` for re-runs) returns the classifier's per-page
+complexity profile + a handling recommendation before ingest, surfaced in the admin
+UI so an operator can review and override the decision.
+
+#### Extraction provenance
+
+The smart-PDF engine records `ExtractionStats` inside `ProcessingProvenance`
+(`thairag-core::models`): `total_pages`, `ocr_pages_used`, `ocr_provider`,
+`vision_pages_used`, `vision_model`, and `pages_vision_skipped` — showing exactly how
+many pages each tier handled.
+
 ### thairag-search
 Hybrid search engine:
 1. **Vector search** — Embedding query → top-K from VectorDB
