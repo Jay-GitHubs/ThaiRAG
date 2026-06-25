@@ -4,6 +4,7 @@ pub mod audit;
 pub mod backup;
 pub mod builtin_plugins;
 pub mod cached_embedding;
+pub mod chat_history;
 pub mod csrf;
 pub mod embedding_cache;
 pub mod error;

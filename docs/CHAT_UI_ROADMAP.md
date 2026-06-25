@@ -20,7 +20,15 @@ gate passes, then is decommissioned.
   pipeline.
 - **Run OWUI in parallel** until parity, then remove in one cleanup PR.
 
-## Phase 1 — Conversation persistence (backend, the blocker) — IN PROGRESS
+## Phase 1 — Conversation persistence (backend, the blocker)
+
+Status: PR-1 merged (#245 — tables, store CRUD across 3 backends, `/api/chat/
+conversations` routes with per-user ACL). PR-2 (this) adds the `chat_history`
+service glue: owner-checked load of stored history into pipeline `ChatMessage`s
++ `persist_turn` (user + assistant with citations/token-stats JSON). It is
+consumed by the Phase 2 `/api/chat` streaming endpoint and deliberately does
+**not** touch the `/v1` SessionStore path.
+
 
 Chat history today is ephemeral (in-memory DashMap / 1h Redis TTL); zero
 conversation tables in Postgres; no session-listing API; no per-user isolation.
