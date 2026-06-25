@@ -218,6 +218,12 @@ pub struct PipelineMetadata {
     pub completeness_score: Option<f32>,
     pub search_ms: Option<u64>,
     pub generation_ms: Option<u64>,
+    /// ThaiRAG's own estimate of the curated-context token count (the budget
+    /// estimator's prediction). Recorded alongside the model's actual
+    /// `prompt_tokens` so operators can see estimate-vs-actual drift (Thai
+    /// tokenization, images) instead of trusting the estimate blind.
+    #[serde(default)]
+    pub estimated_context_tokens: Option<u32>,
     /// Per-chunk data for lineage tracking (populated when search results are available).
     #[serde(default)]
     pub retrieved_chunks: Vec<RetrievedChunkMeta>,

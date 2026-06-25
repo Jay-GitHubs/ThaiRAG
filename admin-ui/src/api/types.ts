@@ -1306,6 +1306,7 @@ export interface InferenceLogEntry {
   llm_kind: string;
   llm_model: string;
   settings_scope: string;
+  estimated_context_tokens: number;
   prompt_tokens: number;
   completion_tokens: number;
   total_ms: number;

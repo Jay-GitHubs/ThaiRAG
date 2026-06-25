@@ -459,6 +459,7 @@ async fn handle_v2_non_stream(
             settings_scope: format!("{:?}", settings_scope),
             prompt_tokens: llm_resp.usage.prompt_tokens,
             completion_tokens: llm_resp.usage.completion_tokens,
+            estimated_context_tokens: meta.estimated_context_tokens.unwrap_or(0),
             total_ms: processing_time_ms,
             search_ms: meta.search_ms,
             generation_ms: meta.generation_ms,
