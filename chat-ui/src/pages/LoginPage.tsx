@@ -44,14 +44,14 @@ export function LoginPage() {
             name="email"
             rules={[{ required: true, message: 'Email is required' }]}
           >
-            <Input type="email" autoComplete="username" />
+            <Input type="email" autoComplete="username" placeholder="Email" />
           </Form.Item>
           <Form.Item
             label="Password"
             name="password"
             rules={[{ required: true, message: 'Password is required' }]}
           >
-            <Input.Password autoComplete="current-password" />
+            <Input.Password autoComplete="current-password" placeholder="Password" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loading}>
             Sign in

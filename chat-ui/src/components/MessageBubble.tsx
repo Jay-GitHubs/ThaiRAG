@@ -19,6 +19,7 @@ export function MessageBubble({ message }: { message: UiMessage }) {
 
   return (
     <div
+      data-testid={isUser ? 'msg-user' : 'msg-assistant'}
       style={{
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
