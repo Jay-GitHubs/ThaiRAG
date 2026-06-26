@@ -132,6 +132,14 @@ the usual DB backup), then `cd chat-ui && npm run test:e2e` (first run:
 
 ## Phase 6 — Hardening & parity gate
 
+Progress: stop / regenerate shipped (parity gap G2). Stop aborts the stream
+(AbortController) keeping the partial answer; regenerate drops + deletes the
+trailing assistant turn and re-answers the same last user message (backend
+`regenerate` flag + `delete_message` store primitive + `persist_assistant`), so
+the user turn is never duplicated. Remaining: G3 mobile, G4 error recovery,
+G1 SSO (pending the auth decision).
+
+
 - Mobile/responsive, error/timeout/interrupt recovery (edge-action analysis).
 - Dockerfile + nginx (clone admin-ui, port 8082) + compose service.
 - Parity checklist = OWUI removal trigger: streaming chat, durable per-user
