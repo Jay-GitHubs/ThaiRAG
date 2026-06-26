@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Layout, Spin, Tag, message as antdMessage } from 'antd';
-import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Button, Drawer, Grid, Layout, Spin, Tag, message as antdMessage } from 'antd';
+import { DatabaseOutlined, MenuOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   listConversations,
   listWorkspaces,
@@ -28,6 +28,9 @@ export function ChatPage() {
   const [newScope, setNewScope] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Initial conversation list + the user's workspaces (for the scope picker).
   useEffect(() => {
@@ -51,15 +54,20 @@ export function ChatPage() {
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
-  // Load messages when the active conversation changes.
+  // Load messages when the active conversation changes. Switching aborts any
+  // in-flight stream (so its tokens can't bleed into the new conversation) and
+  // ignores a stale load that resolves after another switch.
   useEffect(() => {
+    abortRef.current?.abort();
     if (!activeId) {
       setMessages([]);
       return;
     }
+    let cancelled = false;
     setLoadingMsgs(true);
     listMessages(activeId)
       .then((rows) => {
+        if (cancelled) return;
         setMessages(
           rows.map((r) => ({
             id: r.id,
@@ -70,9 +78,19 @@ export function ChatPage() {
           })),
         );
       })
-      .catch(() => antdMessage.error('Failed to load messages'))
-      .finally(() => setLoadingMsgs(false));
+      .catch(() => {
+        if (!cancelled) antdMessage.error('Failed to load messages');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMsgs(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [activeId]);
+
+  // Abort a running stream if the page unmounts.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -243,22 +261,40 @@ export function ChatPage() {
     ? wsName(activeConversation.workspace_scope)
     : wsName(newScope);
 
+  const sidebar = (
+    <ConversationSidebar
+      conversations={conversations}
+      activeId={activeId}
+      onSelect={(id) => {
+        setActiveId(id);
+        setDrawerOpen(false);
+      }}
+      onNew={() => {
+        void handleNew();
+        setDrawerOpen(false);
+      }}
+      onDelete={handleDelete}
+    />
+  );
+
   return (
     <Layout style={{ height: '100%' }}>
-      <Layout.Sider
-        width={272}
-        style={{ background: 'var(--ink)' }}
-        breakpoint="md"
-        collapsedWidth={0}
-      >
-        <ConversationSidebar
-          conversations={conversations}
-          activeId={activeId}
-          onSelect={setActiveId}
-          onNew={handleNew}
-          onDelete={handleDelete}
-        />
-      </Layout.Sider>
+      {isMobile ? (
+        <Drawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          placement="left"
+          width={272}
+          closable={false}
+          styles={{ body: { padding: 0, background: 'var(--ink)' } }}
+        >
+          {sidebar}
+        </Drawer>
+      ) : (
+        <Layout.Sider width={272} style={{ background: 'var(--ink)' }}>
+          {sidebar}
+        </Layout.Sider>
+      )}
       <Layout.Content
         style={{
           display: 'flex',
@@ -267,6 +303,25 @@ export function ChatPage() {
           background: 'var(--canvas)',
         }}
       >
+        {isMobile && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--line)',
+            }}
+          >
+            <Button
+              type="text"
+              aria-label="Menu"
+              icon={<MenuOutlined />}
+              onClick={() => setDrawerOpen(true)}
+            />
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>ThaiRAG</span>
+          </div>
+        )}
         {messages.length > 0 && (
           <div
             style={{
