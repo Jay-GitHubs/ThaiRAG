@@ -2142,6 +2142,8 @@ pub async fn stream_conversation_message(
         .citation_base_url
         .trim_end_matches('/')
         .to_string();
+    let inline_images_enabled = state.config.chat_pipeline.inline_images_enabled;
+    let inline_images_max = state.config.chat_pipeline.inline_images_max;
     let conv_id = conversation_id.clone();
 
     let sse_stream = async_stream::stream! {
@@ -2252,6 +2254,34 @@ pub async fn stream_conversation_message(
             }
         }
 
+        // 3b) Inline source images — the retrieved chunks' source images,
+        // surfaced so the UI can show screenshots/figures next to the answer.
+        // Gated (default off); needs a browser-reachable base + signing key.
+        let mut persisted_images: Vec<crate::chat_history::PersistedImage> = Vec::new();
+        if inline_images_enabled
+            && !cite_base.is_empty()
+            && let Some(jwt) = state.jwt.as_deref()
+        {
+            for (img_id, page) in
+                select_inline_images(&footer_meta.retrieved_chunks, inline_images_max)
+            {
+                // Sign a single-image, time-limited token (reusing the citation
+                // token model with the image id as subject) so a browser <img>
+                // can load it from the public media route without auth headers.
+                if let Ok(token) = jwt.encode_citation(&img_id.0.to_string(), 24) {
+                    persisted_images.push(crate::chat_history::PersistedImage {
+                        image_id: img_id.0.to_string(),
+                        url: format!("{cite_base}/api/chat/media/{}?token={token}", img_id.0),
+                        page,
+                    });
+                }
+            }
+            if !persisted_images.is_empty() {
+                let data = serde_json::json!({"type": "image", "images": persisted_images});
+                yield Ok(Event::default().data(data.to_string()));
+            }
+        }
+
         // 4) Token accounting (metrics + observability), mirroring /v1.
         let llm_usage = usage_cell.lock().unwrap().take().unwrap_or_default();
         state.metrics.record_tokens(llm_usage.prompt_tokens, llm_usage.completion_tokens);
@@ -2268,6 +2298,7 @@ pub async fn stream_conversation_message(
             &content,
             &accumulated,
             &persisted_citations,
+            &persisted_images,
             &token_stats,
         ) {
             Ok(row) => row.id,
@@ -2308,6 +2339,81 @@ pub async fn stream_conversation_message(
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-cache"),
+    );
+    Ok(response)
+}
+
+/// Select the source images to surface inline for an answer: retrieved chunks
+/// that carry an `image_blob_id`, deduped by image, capped at `max`, preserving
+/// retrieval order. Returns `(image_id, first_page)` pairs.
+fn select_inline_images(
+    chunks: &[thairag_core::types::RetrievedChunkMeta],
+    max: usize,
+) -> Vec<(thairag_core::types::ImageId, Option<usize>)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for c in chunks {
+        if let Some(img) = c.image_blob_id
+            && seen.insert(img)
+        {
+            let page = c.page_numbers.as_ref().and_then(|p| p.first().copied());
+            out.push((img, page));
+            if out.len() >= max {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Query params for the token-gated media route.
+#[derive(serde::Deserialize)]
+pub struct MediaQuery {
+    pub token: String,
+}
+
+/// GET /api/chat/media/{image_id}?token=… — serve a source image by id.
+///
+/// Public (no auth header): the signed, time-limited `token` authorizes a
+/// single image so a browser `<img>` in a chat answer can load it directly.
+/// Mirrors the citation viewer's token model (`JwtService::encode_citation`),
+/// using the image id as the token subject.
+pub async fn serve_media(
+    State(state): State<AppState>,
+    Path(image_id): Path<String>,
+    Query(params): Query<MediaQuery>,
+) -> Result<Response, ApiError> {
+    let jwt = state
+        .jwt
+        .as_deref()
+        .ok_or_else(|| ApiError(ThaiRagError::Auth("media tokens are not configured".into())))?;
+    let authorized = jwt
+        .decode_citation(&params.token)
+        .map_err(|_| ApiError(ThaiRagError::Auth("invalid or expired media token".into())))?;
+    if authorized != image_id {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "token does not authorize this image".into(),
+        )));
+    }
+    let img_uuid = image_id
+        .parse::<Uuid>()
+        .map_err(|_| ApiError(ThaiRagError::Validation("invalid image id".into())))?;
+    let record = state
+        .km_store
+        .get_image_blob(thairag_core::types::ImageId(img_uuid))
+        .ok()
+        .flatten()
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("image not found".into())))?;
+
+    let mut response = Response::new(axum::body::Body::from(record.bytes));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_str(&record.mime)
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, max-age=3600"),
     );
     Ok(response)
 }
@@ -2502,6 +2608,34 @@ mod citation_tests {
             section_title: section.map(str::to_string),
             ..chunk(id, preview, 0.9, rank)
         }
+    }
+
+    #[test]
+    fn select_inline_images_dedupes_caps_and_skips_imageless() {
+        use thairag_core::types::ImageId;
+        let img_a = ImageId::new();
+        let img_b = ImageId::new();
+        let mk = |img: Option<ImageId>, page: Option<usize>| RetrievedChunkMeta {
+            image_blob_id: img,
+            page_numbers: page.map(|p| vec![p]),
+            ..Default::default()
+        };
+        let chunks = vec![
+            mk(Some(img_a), Some(2)),
+            mk(None, None),           // no image → skipped
+            mk(Some(img_a), Some(9)), // duplicate of img_a → skipped
+            mk(Some(img_b), None),
+        ];
+
+        // Dedup by image, preserve order, carry first page.
+        assert_eq!(
+            select_inline_images(&chunks, 10),
+            vec![(img_a, Some(2)), (img_b, None)]
+        );
+        // Cap respected.
+        assert_eq!(select_inline_images(&chunks, 1), vec![(img_a, Some(2))]);
+        // Empty input → empty.
+        assert!(select_inline_images(&[], 10).is_empty());
     }
 
     fn cite(marker: u32, chunk_id: &str, title: &str, score: f32) -> Citation {

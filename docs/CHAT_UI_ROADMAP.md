@@ -55,7 +55,12 @@ runs the pipeline, streams a clean first-party protocol (`progress` / `token` /
 `citation` / `done` / `error` + `[DONE]`), and persists the turn via
 `chat_history::persist_turn`. New handler reuses the `/v1` setup helpers but has
 its own SSE loop — `/v1` is untouched (OWUI/OpenAI clients unaffected).
-PR 2b (next): tokenized media route + `image` events + relevance gating.
+PR 2b (this) shipped inline source images: `image_blob_id` threaded into
+`RetrievedChunkMeta`; token-gated `GET /api/chat/media/{image_id}?token=…`
+(reuses the citation-token model); the stream emits `{"type":"image",…}` events
+(deduped, capped) and persists them to `messages.images`; gated by
+`chat_pipeline.inline_images_enabled` (default off) + `inline_images_max`
+(default 4), requires `citation_base_url`. Phase 2 complete.
 
 
 - `POST /api/chat/conversations/{id}/messages` (SSE): persists user turn → streams
