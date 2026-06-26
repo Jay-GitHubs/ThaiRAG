@@ -65,6 +65,13 @@ export interface WorkspaceOption {
   name: string;
 }
 
+/** A file attached to a chat turn (base64). Matches the backend `Attachment`. */
+export interface Attachment {
+  name: string;
+  mime_type: string;
+  data: string;
+}
+
 // ── First-party streaming chat protocol (SSE `data:` JSON objects) ─────
 export type StreamEvent =
   | { type: 'progress'; stage: string; status: string }
