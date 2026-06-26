@@ -16,7 +16,6 @@ pub mod metrics;
 pub mod model_catalog;
 pub mod net_guard;
 pub mod oidc;
-pub mod owui_feedback_sync;
 pub mod plugin_hooks;
 pub mod plugin_registry;
 pub mod rate_limit;
