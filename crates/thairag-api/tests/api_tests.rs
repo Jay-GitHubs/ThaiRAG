@@ -3154,3 +3154,97 @@ async fn media_route_valid_token_missing_image_is_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ── Chat scope selector (workspace pinning) ──────────────────────────
+
+#[tokio::test]
+async fn chat_workspaces_endpoint_and_scoped_conversation() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "scoper@test.com", "Scoper", "Pass1234").await;
+
+    // Build org → dept → workspace; creating the org grants the creator a
+    // permission on it, so it shows up as a searchable workspace.
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/orgs",
+            serde_json::json!({"name": "ScopeCo"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let org_id = body_json(r.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts"),
+            serde_json::json!({"name": "D"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let dept_id = body_json(r.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+            serde_json::json!({"name": "Loans"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let ws_id = body_json(r.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The scope picker endpoint lists that workspace.
+    let r = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/workspaces", &token))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let wss = body_json(r.into_body()).await;
+    assert!(
+        wss.as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["id"] == ws_id && w["name"] == "Loans"),
+        "workspaces endpoint should list the created workspace: {wss}"
+    );
+
+    // A conversation can be pinned to that workspace, and the pin persists.
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/chat/conversations",
+            serde_json::json!({"title": "pinned", "workspace_scope": ws_id}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let conv = body_json(r.into_body()).await;
+    assert_eq!(conv["workspace_scope"], ws_id);
+    let cid = conv["id"].as_str().unwrap().to_string();
+
+    let r = app
+        .oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{cid}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(r.into_body()).await["workspace_scope"], ws_id);
+}

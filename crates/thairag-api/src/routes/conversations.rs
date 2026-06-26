@@ -12,10 +12,11 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
+use thairag_core::types::UserId;
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
@@ -35,6 +36,13 @@ pub struct CreateConversationRequest {
 #[derive(Deserialize)]
 pub struct RenameConversationRequest {
     pub title: String,
+}
+
+/// A workspace the signed-in user can search, for the chat scope picker.
+#[derive(Serialize)]
+pub struct WorkspaceOption {
+    pub id: String,
+    pub name: String,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -149,4 +157,34 @@ pub async fn list_messages(
 ) -> Result<Json<Vec<MessageRow>>, ApiError> {
     require_owned(&state, &claims, &id)?;
     Ok(Json(state.km_store.list_messages(&id)))
+}
+
+/// GET /api/chat/workspaces — the workspaces the user can search, for the chat
+/// scope picker. Mirrors the retrieval scope (their permissioned workspaces).
+pub async fn list_workspaces(
+    State(state): State<AppState>,
+    claims: axum::Extension<AuthClaims>,
+) -> Result<Json<Vec<WorkspaceOption>>, ApiError> {
+    let user_id = current_user_id(&claims)?;
+    let uid = UserId(
+        user_id
+            .parse()
+            .map_err(|_| ApiError(ThaiRagError::Auth("Invalid user id in token".into())))?,
+    );
+    let opts: Vec<WorkspaceOption> = state
+        .km_store
+        .get_user_workspace_ids(uid)
+        .into_iter()
+        .filter_map(|wid| {
+            state
+                .km_store
+                .get_workspace(wid)
+                .ok()
+                .map(|w| WorkspaceOption {
+                    id: w.id.0.to_string(),
+                    name: w.name,
+                })
+        })
+        .collect();
+    Ok(Json(opts))
 }
