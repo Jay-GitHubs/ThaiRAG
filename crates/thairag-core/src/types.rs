@@ -199,6 +199,11 @@ pub struct RetrievedChunkMeta {
     /// Section/heading the chunk belongs to, when known (set by the AI chunker).
     #[serde(default)]
     pub section_title: Option<String>,
+    /// Reference into `document_image_blobs` for the source image this chunk's
+    /// text was derived from (page render / embedded image / image upload).
+    /// Surfaced so the chat UI can render the source image inline.
+    #[serde(default)]
+    pub image_blob_id: Option<ImageId>,
 }
 
 /// Metadata collected during pipeline execution for inference logging.

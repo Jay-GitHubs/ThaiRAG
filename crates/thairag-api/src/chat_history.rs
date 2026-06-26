@@ -59,6 +59,18 @@ pub struct PersistedTokenStats {
     pub completion_tokens: u32,
 }
 
+/// A source image persisted alongside an assistant message, in the shape the
+/// chat UI renders inline. Stored as a JSON array in `messages.images`. `url`
+/// points at the token-gated media route so a browser `<img>` can load it
+/// without an auth header.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedImage {
+    pub image_id: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+}
+
 /// Convert stored message rows into pipeline messages.
 ///
 /// Only `role` + `content` are replayed. Images are intentionally *not*
@@ -111,9 +123,11 @@ pub fn persist_turn(
     user_content: &str,
     assistant_content: &str,
     citations: &[PersistedCitation],
+    images: &[PersistedImage],
     token_stats: &PersistedTokenStats,
 ) -> Result<MessageRow> {
     let citations_json = serde_json::to_string(citations).unwrap_or_else(|_| "[]".to_string());
+    let images_json = serde_json::to_string(images).unwrap_or_else(|_| "[]".to_string());
     let token_json = serde_json::to_string(token_stats).unwrap_or_else(|_| "{}".to_string());
 
     store.append_message(conversation_id, "user", user_content, "[]", "[]", "{}")?;
@@ -122,8 +136,7 @@ pub fn persist_turn(
         "assistant",
         assistant_content,
         &citations_json,
-        // Inline source images are populated in Phase 2 (image events).
-        "[]",
+        &images_json,
         &token_json,
     )
 }
@@ -209,8 +222,16 @@ mod tests {
             prompt_tokens: 12,
             completion_tokens: 7,
         };
+        let images = vec![PersistedImage {
+            image_id: "img-1".into(),
+            url: "https://h/api/chat/media/img-1?token=t".into(),
+            page: Some(4),
+        }];
 
-        let assistant = persist_turn(&store, &conv.id, "how?", "do X", &citations, &stats).unwrap();
+        let assistant = persist_turn(
+            &store, &conv.id, "how?", "do X", &citations, &images, &stats,
+        )
+        .unwrap();
         assert_eq!(assistant.role, "assistant");
         assert_eq!(assistant.content, "do X");
 
@@ -224,8 +245,8 @@ mod tests {
         assert_eq!(parsed, citations);
         let parsed_stats: PersistedTokenStats = serde_json::from_str(&rows[1].token_stats).unwrap();
         assert_eq!(parsed_stats, stats);
-        // Images column is reserved for Phase 2.
-        assert_eq!(rows[1].images, "[]");
+        let parsed_images: Vec<PersistedImage> = serde_json::from_str(&rows[1].images).unwrap();
+        assert_eq!(parsed_images, images);
     }
 
     #[test]

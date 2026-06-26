@@ -1040,6 +1040,7 @@ impl ChatPipeline {
                                 .metadata
                                 .as_ref()
                                 .and_then(|m| m.section_title.clone()),
+                            image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
                         })
                         .collect();
                 });
@@ -1253,6 +1254,7 @@ impl ChatPipeline {
                         .metadata
                         .as_ref()
                         .and_then(|m| m.section_title.clone()),
+                    image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
                 })
                 .collect();
         });
@@ -2091,6 +2093,7 @@ impl ChatPipeline {
                                 .metadata
                                 .as_ref()
                                 .and_then(|m| m.section_title.clone()),
+                            image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
                         })
                         .collect();
                 });
@@ -2216,6 +2219,7 @@ impl ChatPipeline {
                                 .metadata
                                 .as_ref()
                                 .and_then(|m| m.section_title.clone()),
+                            image_blob_id: r.chunk.metadata.as_ref().and_then(|m| m.image_blob_id),
                         })
                         .collect();
                 });

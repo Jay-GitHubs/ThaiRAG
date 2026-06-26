@@ -3504,6 +3504,12 @@ where
             .unwrap_or(cp.citation_annotations_enabled),
         citation_base_url: s("chat_pipeline.citation_base_url")
             .unwrap_or_else(|| cp.citation_base_url.clone()),
+        inline_images_enabled: s("chat_pipeline.inline_images_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.inline_images_enabled),
+        inline_images_max: s("chat_pipeline.inline_images_max")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.inline_images_max),
         // Guardrails (PR1)
         input_guardrails_enabled: s("chat_pipeline.input_guardrails_enabled")
             .and_then(|v| v.parse().ok())

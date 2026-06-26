@@ -3098,3 +3098,59 @@ async fn chat_stream_cross_user_is_forbidden() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// ── Token-gated media route (Phase 2 PR-2b) ──────────────────────────
+
+/// JwtService with the same secret as `build_test_state(true)`.
+fn media_jwt() -> JwtService {
+    JwtService::new("test-secret-key-1234567890", 24)
+}
+
+fn get_request_no_auth(uri: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
+}
+
+const IMG_A: &str = "11111111-1111-1111-1111-111111111111";
+const IMG_B: &str = "22222222-2222-2222-2222-222222222222";
+
+#[tokio::test]
+async fn media_route_rejects_bad_token() {
+    let app = build_app(true);
+    let resp = app
+        .oneshot(get_request_no_auth(&format!(
+            "/api/chat/media/{IMG_A}?token=not-a-jwt"
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn media_route_rejects_token_for_other_image() {
+    let app = build_app(true);
+    let token = media_jwt().encode_citation(IMG_A, 24).unwrap();
+    let resp = app
+        .oneshot(get_request_no_auth(&format!(
+            "/api/chat/media/{IMG_B}?token={token}"
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn media_route_valid_token_missing_image_is_404() {
+    let app = build_app(true);
+    let token = media_jwt().encode_citation(IMG_A, 24).unwrap();
+    let resp = app
+        .oneshot(get_request_no_auth(&format!(
+            "/api/chat/media/{IMG_A}?token={token}"
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
