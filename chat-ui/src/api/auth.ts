@@ -1,5 +1,16 @@
 import client from './client';
-import type { LoginRequest, LoginResponse, RegisterRequest, User } from './types';
+import type {
+  LoginRequest,
+  LoginResponse,
+  ProviderInfo,
+  RegisterRequest,
+  User,
+} from './types';
+
+export async function listProviders(): Promise<ProviderInfo[]> {
+  const res = await client.get<ProviderInfo[]>('/api/auth/providers');
+  return res.data;
+}
 
 export async function login(data: LoginRequest): Promise<LoginResponse> {
   const res = await client.post<LoginResponse>('/api/auth/login', data);
