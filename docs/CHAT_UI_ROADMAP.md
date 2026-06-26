@@ -136,8 +136,13 @@ Progress: stop / regenerate shipped (parity gap G2). Stop aborts the stream
 (AbortController) keeping the partial answer; regenerate drops + deletes the
 trailing assistant turn and re-answers the same last user message (backend
 `regenerate` flag + `delete_message` store primitive + `persist_assistant`), so
-the user turn is never duplicated. Remaining: G3 mobile, G4 error recovery,
-G1 SSO (pending the auth decision).
+the user turn is never duplicated.
+
+Also shipped: G3 mobile (Drawer sidebar + hamburger top bar below the `md`
+breakpoint) and G4 error recovery (abort the in-flight stream on conversation
+switch + on unmount; ignore stale message loads — prevents cross-conversation
+token bleed). Remaining for cutover: G1 SSO (pending the auth decision);
+G5/G6/G7 optional.
 
 
 - Mobile/responsive, error/timeout/interrupt recovery (edge-action analysis).
