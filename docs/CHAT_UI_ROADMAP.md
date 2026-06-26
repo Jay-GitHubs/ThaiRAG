@@ -102,6 +102,16 @@ images. Live e2e against the Docker stack is the remaining verification (Phase 6
 
 - Per-conversation file upload → existing ingest pipeline. Progress UI.
 
+### Live e2e (Playwright)
+
+`chat-ui/e2e/` holds the live-stack Playwright suite (mirrors admin-ui's setup):
+`auth.setup.ts` (idempotent test-user registration), `login.spec.ts` (redirect +
+login), `chat-smoke.spec.ts` (new chat → send → streamed answer → persists across
+reload). Assumes the Docker stack is up — chat-ui on `:8082`, backend on `:8080`.
+Run: bring up the chat-ui container (`./scripts/docker-rebuild.sh chat-ui`, after
+the usual DB backup), then `cd chat-ui && npm run test:e2e` (first run:
+`npx playwright install chromium`).
+
 ## Phase 6 — Hardening & parity gate
 
 - Mobile/responsive, error/timeout/interrupt recovery (edge-action analysis).
