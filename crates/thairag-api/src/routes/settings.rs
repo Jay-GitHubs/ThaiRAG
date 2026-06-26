@@ -2946,6 +2946,9 @@ pub struct ChatPipelineConfigResponse {
     pub source_footer_max: usize,
     // Native citations (OpenAI-standard annotations)
     pub citation_annotations_enabled: bool,
+    // Inline source images
+    pub inline_images_enabled: bool,
+    pub inline_images_max: usize,
     // Structured Extraction (Thai answer-quality experiment)
     pub structured_extraction_enabled: bool,
     // Guardrails (PR1)
@@ -3101,6 +3104,9 @@ pub struct UpdateChatPipelineRequest {
     pub source_footer_max: Option<usize>,
     // Native citations (OpenAI-standard annotations)
     pub citation_annotations_enabled: Option<bool>,
+    // Inline source images
+    pub inline_images_enabled: Option<bool>,
+    pub inline_images_max: Option<usize>,
     // Structured Extraction (Thai answer-quality experiment)
     pub structured_extraction_enabled: Option<bool>,
     // Guardrails (PR1)
@@ -3630,6 +3636,8 @@ fn build_chat_pipeline_response_from_config(
         source_footer_enabled: eff.source_footer_enabled,
         source_footer_max: eff.source_footer_max,
         citation_annotations_enabled: eff.citation_annotations_enabled,
+        inline_images_enabled: eff.inline_images_enabled,
+        inline_images_max: eff.inline_images_max,
         structured_extraction_enabled: eff.structured_extraction_enabled,
         input_guardrails_enabled: eff.input_guardrails_enabled,
         output_guardrails_enabled: eff.output_guardrails_enabled,
@@ -3911,6 +3919,9 @@ pub async fn update_chat_pipeline_config(
         citation_annotations_enabled,
         "chat_pipeline.citation_annotations_enabled"
     );
+    // Inline source images
+    persist_bool!(inline_images_enabled, "chat_pipeline.inline_images_enabled");
+    persist_num!(inline_images_max, "chat_pipeline.inline_images_max");
     // Structured Extraction (Thai answer-quality experiment)
     persist_bool!(
         structured_extraction_enabled,

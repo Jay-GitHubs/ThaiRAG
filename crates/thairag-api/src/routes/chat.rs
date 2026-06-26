@@ -2042,18 +2042,19 @@ pub async fn stream_conversation_message(
         }
     });
 
-    // Config read out here so the (move) stream closure doesn't hold `&state`
-    // across the config struct.
-    let cite_enabled = state.config.chat_pipeline.citation_annotations_enabled;
-    let source_max = state.config.chat_pipeline.source_footer_max.max(1);
-    let cite_base = state
-        .config
-        .chat_pipeline
-        .citation_base_url
-        .trim_end_matches('/')
-        .to_string();
-    let inline_images_enabled = state.config.chat_pipeline.inline_images_enabled;
-    let inline_images_max = state.config.chat_pipeline.inline_images_max;
+    // Read the EFFECTIVE (scope-merged) chat-pipeline config so citation/inline-
+    // image settings are admin-toggleable at runtime per scope, not just at boot.
+    // Read out here so the (move) stream closure doesn't hold `&state`.
+    let eff_cp = crate::routes::settings::get_effective_chat_pipeline_scoped(
+        &state.config,
+        &*state.km_store,
+        &settings_scope,
+    );
+    let cite_enabled = eff_cp.citation_annotations_enabled;
+    let source_max = eff_cp.source_footer_max.max(1);
+    let cite_base = eff_cp.citation_base_url.trim_end_matches('/').to_string();
+    let inline_images_enabled = eff_cp.inline_images_enabled;
+    let inline_images_max = eff_cp.inline_images_max;
     let is_regenerate = req.regenerate;
     let conv_id = conversation_id.clone();
 

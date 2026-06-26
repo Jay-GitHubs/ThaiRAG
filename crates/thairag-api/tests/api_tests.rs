@@ -3359,3 +3359,27 @@ async fn chat_regenerate_replaces_assistant_without_duplicating_user() {
         "assistant should be a fresh row"
     );
 }
+
+#[tokio::test]
+async fn inline_images_setting_is_admin_toggleable() {
+    use thairag_api::routes::settings::get_effective_chat_pipeline;
+
+    let state = build_test_state(false);
+    // Default off (deploy-time default).
+    assert!(!get_effective_chat_pipeline(&state).inline_images_enabled);
+
+    // An admin flips it on (and bumps the cap) via scoped settings — no restart.
+    state
+        .km_store
+        .set_scoped_setting("chat_pipeline.inline_images_enabled", "global", "", "true");
+    state
+        .km_store
+        .set_scoped_setting("chat_pipeline.inline_images_max", "global", "", "9");
+
+    let eff = get_effective_chat_pipeline(&state);
+    assert!(
+        eff.inline_images_enabled,
+        "toggle should take effect at runtime"
+    );
+    assert_eq!(eff.inline_images_max, 9);
+}
