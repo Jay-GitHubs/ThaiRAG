@@ -45,9 +45,12 @@ steps. Built after shipping #245–#254.
 - **G5 — Feedback thumbs (optional).** `/v1/chat/feedback` exists; OWUI feedback
   was judged low-value at current scale and left off. Skip for cutover; add later
   if wanted.
-- **G6 — Inline images live (config).** Works but `inline_images_enabled` is
-  default-off and read from *static boot config*. Move it (and `citation_base_url`)
-  to the admin-toggleable effective config so it's not deploy-time-only. *Small.*
+- **G6 — Inline images live (config). DONE.** The `/api/chat` stream handler now
+  reads the *effective* (scope-merged) chat-pipeline config via
+  `get_effective_chat_pipeline_scoped`, so `inline_images_enabled` /
+  `inline_images_max` / `citation_*` apply at runtime per scope instead of only
+  at boot. `inline_images_enabled` + `inline_images_max` are exposed in the
+  settings GET/PATCH surface so admins can toggle them.
 - **G7 — Rename UI (minor).** Rename endpoint exists; add a sidebar action.
 
 ## Go / no-go gate
