@@ -1138,6 +1138,17 @@ pub struct ChatPipelineConfig {
     /// back to the opaque `thairag:///doc/{id}` identifier (not openable).
     #[serde(default)]
     pub citation_base_url: String,
+    /// Inline source images: when on, the first-party `/api/chat` streaming
+    /// endpoint emits `image` events for retrieved chunks that carry a source
+    /// image, and the chat UI renders them inline. Requires `citation_base_url`
+    /// (the token-gated media route shares that host). Default OFF — valuable
+    /// for screenshot / manual corpora, noise for prose corpora.
+    #[serde(default)]
+    pub inline_images_enabled: bool,
+    /// Max number of inline source images emitted per answer (deduped by image).
+    /// Caps noise when many retrieved chunks share the same page render.
+    #[serde(default = "default_inline_images_max")]
+    pub inline_images_max: usize,
 
     // ── Feature: Structured Extraction (Thai answer-quality experiment) ──
     /// Extract-then-answer: before generating, prompt the model to copy the
@@ -1319,6 +1330,9 @@ fn default_personal_memory_min_relevance() -> f32 {
 fn default_live_retrieval_timeout_secs() -> u64 {
     15
 }
+fn default_inline_images_max() -> usize {
+    4
+}
 fn default_live_retrieval_max_connectors() -> u32 {
     3
 }
@@ -1451,6 +1465,8 @@ impl Default for ChatPipelineConfig {
             structured_citations_enabled: true,
             citation_annotations_enabled: true,
             citation_base_url: String::new(),
+            inline_images_enabled: false,
+            inline_images_max: default_inline_images_max(),
             // Structured Extraction (opt-in experiment)
             structured_extraction_enabled: false,
             structured_extraction_llm: None,
