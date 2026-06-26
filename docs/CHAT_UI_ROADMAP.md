@@ -109,6 +109,15 @@ a "Searching &lt;workspace&gt;" chip on active conversations.
 
 ## Phase 5 — Attachments & ingestion-from-chat (v1 scope)
 
+Status: per-conversation attachments shipped. Files attach to a turn (base64),
+are decoded/converted/guardrail-checked via the existing attachment pipeline,
+used as context for the answer, and kept session-scoped (keyed by conversation
+id) so follow-up turns reuse them — mirroring the /v1 behavior. Not added to the
+permanent KB (ingest-to-corpus deferred). FE: paperclip + file chips in the
+composer, attachment tags on the user turn. Backend: `SendMessageRequest.
+attachments` → `process_request_attachments` → `process_stream_with_attachments`.
+
+
 - Per-conversation file upload → existing ingest pipeline. Progress UI.
 
 ### Live e2e (Playwright)

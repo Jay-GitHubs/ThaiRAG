@@ -3248,3 +3248,39 @@ async fn chat_workspaces_endpoint_and_scoped_conversation() {
         .unwrap();
     assert_eq!(body_json(r.into_body()).await["workspace_scope"], ws_id);
 }
+
+#[tokio::test]
+async fn chat_stream_accepts_attachment() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "attach@test.com", "Attach", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+    // "hello attachment" base64-encoded as a small text/plain attachment.
+    let resp = app
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({
+                "content": "summarize the attached file",
+                "attachments": [
+                    {"name": "note.txt", "mime_type": "text/plain", "data": "aGVsbG8gYXR0YWNobWVudA=="}
+                ]
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        resp.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        body.contains("data: [DONE]"),
+        "stream should complete: {body}"
+    );
+}

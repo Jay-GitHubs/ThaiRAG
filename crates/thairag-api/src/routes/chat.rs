@@ -1995,6 +1995,11 @@ async fn handle_stream(
 #[derive(serde::Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
+    /// Files attached to this turn (base64). Decoded, converted, and guardrail-
+    /// checked, then used as context for the answer and kept (session-scoped) for
+    /// follow-up turns in the same conversation. Not added to the permanent KB.
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
 }
 
 /// POST /api/chat/conversations/{id}/messages — first-party streaming chat.
@@ -2109,6 +2114,24 @@ pub async fn stream_conversation_message(
         .map(|ws_id| state.resolve_scope_for_workspace(*ws_id))
         .unwrap_or(crate::store::SettingsScope::Global);
 
+    // ── Per-conversation attachments ────────────────────────────────
+    // New attachments are decoded/converted/guardrail-checked and stashed in the
+    // (ephemeral) session keyed by the conversation id, so follow-up turns reuse
+    // them — mirroring the /v1 attachment behavior. They are context for the
+    // answer, not added to the permanent KB.
+    let attach_sid = SessionId(conversation_id.parse::<Uuid>().unwrap_or_default());
+    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+        Some(raw) if !raw.is_empty() => {
+            let processed = process_request_attachments(&state, raw)?;
+            state
+                .session_store
+                .attach(&attach_sid, processed.clone())
+                .await;
+            processed
+        }
+        _ => state.session_store.get_attachments(&attach_sid).await,
+    };
+
     // ── Memories / personal memory / searchable scopes (reuse /v1 setup) ──
     let memories = load_memories(&state, Some(uid));
     let personal_memories = retrieve_personal_memories(&state, Some(uid), &full_messages).await;
@@ -2125,18 +2148,31 @@ pub async fn stream_conversation_message(
 
     let pipeline_handle = tokio::spawn(async move {
         if let Some(ref pipeline) = scoped_pipeline {
-            pipeline
-                .process_stream(
-                    &full_messages,
-                    &scope,
-                    &memories,
-                    &available_scopes,
-                    Some(progress_tx),
-                    Some(metadata_cell_clone),
-                    // First-party messages never carry client-injected context.
-                    false,
-                )
-                .await
+            if attachments.is_empty() {
+                pipeline
+                    .process_stream(
+                        &full_messages,
+                        &scope,
+                        &memories,
+                        &available_scopes,
+                        Some(progress_tx),
+                        Some(metadata_cell_clone),
+                        // No client-injected <context>; real attachments go below.
+                        false,
+                    )
+                    .await
+            } else {
+                pipeline
+                    .process_stream_with_attachments(
+                        &full_messages,
+                        &attachments,
+                        &memories,
+                        &scope,
+                        Some(progress_tx),
+                        Some(metadata_cell_clone),
+                    )
+                    .await
+            }
         } else {
             drop(progress_tx);
             p.orchestrator.process_stream(&full_messages, &scope).await

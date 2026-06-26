@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Image, Tooltip } from 'antd';
+import { Image, Tag, Tooltip } from 'antd';
+import { FileTextOutlined } from '@ant-design/icons';
 import type { Citation, ImageRef } from '../api/types';
 
 export interface UiMessage {
@@ -9,6 +10,8 @@ export interface UiMessage {
   content: string;
   citations: Citation[];
   images: ImageRef[];
+  /** Names of files attached to a user turn (display only). */
+  attachments?: string[];
   streaming?: boolean;
 }
 
@@ -24,9 +27,16 @@ function AssistantMark() {
   );
 }
 
-function UserMessage({ content }: { content: string }) {
+function UserMessage({ message }: { message: UiMessage }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 22 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        marginBottom: 22,
+      }}
+    >
       <div
         data-testid="msg-user"
         style={{
@@ -40,8 +50,17 @@ function UserMessage({ content }: { content: string }) {
           whiteSpace: 'pre-wrap',
         }}
       >
-        {content}
+        {message.content}
       </div>
+      {message.attachments && message.attachments.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'flex-end' }}>
+          {message.attachments.map((name, i) => (
+            <Tag key={`${name}-${i}`} icon={<FileTextOutlined />} style={{ margin: 0 }}>
+              {name}
+            </Tag>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -182,7 +201,7 @@ function AssistantMessage({ message }: { message: UiMessage }) {
 
 export function MessageBubble({ message }: { message: UiMessage }) {
   return message.role === 'user' ? (
-    <UserMessage content={message.content} />
+    <UserMessage message={message} />
   ) : (
     <AssistantMessage message={message} />
   );

@@ -1,5 +1,11 @@
 import client, { getToken } from './client';
-import type { Conversation, MessageRow, StreamEvent, WorkspaceOption } from './types';
+import type {
+  Attachment,
+  Conversation,
+  MessageRow,
+  StreamEvent,
+  WorkspaceOption,
+} from './types';
 
 export async function listConversations(): Promise<Conversation[]> {
   const res = await client.get<Conversation[]>('/api/chat/conversations');
@@ -47,6 +53,7 @@ export function streamMessage(
   content: string,
   onEvent: (evt: StreamEvent) => void,
   signal?: AbortSignal,
+  attachments?: Attachment[],
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const token = getToken();
@@ -56,7 +63,10 @@ export function streamMessage(
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      }),
       signal,
     })
       .then(async (res) => {
