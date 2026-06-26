@@ -1994,12 +1994,18 @@ async fn handle_stream(
 /// Request body for `POST /api/chat/conversations/{id}/messages`.
 #[derive(serde::Deserialize)]
 pub struct SendMessageRequest {
+    /// Defaults to empty — a regenerate request carries no content.
+    #[serde(default)]
     pub content: String,
     /// Files attached to this turn (base64). Decoded, converted, and guardrail-
     /// checked, then used as context for the answer and kept (session-scoped) for
     /// follow-up turns in the same conversation. Not added to the permanent KB.
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
+    /// Regenerate the last answer: drop the trailing assistant turn and produce a
+    /// fresh one for the same last user message. `content` is ignored.
+    #[serde(default)]
+    pub regenerate: bool,
 }
 
 /// POST /api/chat/conversations/{id}/messages — first-party streaming chat.
@@ -2026,7 +2032,7 @@ pub async fn stream_conversation_message(
 ) -> Result<Response, ApiError> {
     // ── Validation ──────────────────────────────────────────────────
     let content = req.content.trim().to_string();
-    if content.is_empty() {
+    if !req.regenerate && content.is_empty() {
         return Err(ApiError(ThaiRagError::Validation(
             "message content must not be empty".into(),
         )));
@@ -2083,12 +2089,32 @@ pub async fn stream_conversation_message(
         ),
     })?;
 
-    let mut full_messages = history;
-    full_messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: content.clone(),
-        images: vec![],
-    });
+    let full_messages = if req.regenerate {
+        // Replace the last answer: drop (and delete) the trailing assistant turn,
+        // then re-run generation for the last user message already in history.
+        let mut rows = state.km_store.list_messages(&conversation_id);
+        if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
+            let last = rows.pop().expect("checked non-empty");
+            state.km_store.delete_message(&last.id)?;
+        }
+        if rows.last().map(|m| m.role.as_str()) != Some("user") {
+            return Err(ApiError(ThaiRagError::Validation(
+                "nothing to regenerate".into(),
+            )));
+        }
+        if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
+            rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
+        }
+        crate::chat_history::rows_to_chat_messages(&rows)
+    } else {
+        let mut h = history;
+        h.push(ChatMessage {
+            role: "user".to_string(),
+            content: content.clone(),
+            images: vec![],
+        });
+        h
+    };
 
     // ── Scope + settings resolution (the user's workspace permissions) ──
     // A conversation can be pinned to a single workspace (scope selector); when
@@ -2191,6 +2217,7 @@ pub async fn stream_conversation_message(
         .to_string();
     let inline_images_enabled = state.config.chat_pipeline.inline_images_enabled;
     let inline_images_max = state.config.chat_pipeline.inline_images_max;
+    let is_regenerate = req.regenerate;
     let conv_id = conversation_id.clone();
 
     let sse_stream = async_stream::stream! {
@@ -2334,20 +2361,34 @@ pub async fn stream_conversation_message(
         state.metrics.record_tokens(llm_usage.prompt_tokens, llm_usage.completion_tokens);
         persist_usage(&state, llm_usage.prompt_tokens, llm_usage.completion_tokens);
 
-        // 5) Persist the completed turn (user + assistant) to the conversation.
+        // 5) Persist the turn. Regenerate replaces only the assistant turn (the
+        // user message already exists + the old answer was deleted above); a
+        // normal turn persists both the user prompt and the assistant reply.
         let token_stats = crate::chat_history::PersistedTokenStats {
             prompt_tokens: llm_usage.prompt_tokens,
             completion_tokens: llm_usage.completion_tokens,
         };
-        let message_id = match crate::chat_history::persist_turn(
-            &state.km_store,
-            &conv_id,
-            &content,
-            &accumulated,
-            &persisted_citations,
-            &persisted_images,
-            &token_stats,
-        ) {
+        let persist_result = if is_regenerate {
+            crate::chat_history::persist_assistant(
+                &state.km_store,
+                &conv_id,
+                &accumulated,
+                &persisted_citations,
+                &persisted_images,
+                &token_stats,
+            )
+        } else {
+            crate::chat_history::persist_turn(
+                &state.km_store,
+                &conv_id,
+                &content,
+                &accumulated,
+                &persisted_citations,
+                &persisted_images,
+                &token_stats,
+            )
+        };
+        let message_id = match persist_result {
             Ok(row) => row.id,
             Err(e) => {
                 let data = serde_json::json!({

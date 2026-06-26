@@ -126,11 +126,30 @@ pub fn persist_turn(
     images: &[PersistedImage],
     token_stats: &PersistedTokenStats,
 ) -> Result<MessageRow> {
+    store.append_message(conversation_id, "user", user_content, "[]", "[]", "{}")?;
+    persist_assistant(
+        store,
+        conversation_id,
+        assistant_content,
+        citations,
+        images,
+        token_stats,
+    )
+}
+
+/// Persist only an assistant message (no user turn). Used by regenerate, where
+/// the user turn already exists and only the answer is being replaced.
+pub fn persist_assistant(
+    store: &Arc<dyn KmStoreTrait>,
+    conversation_id: &str,
+    assistant_content: &str,
+    citations: &[PersistedCitation],
+    images: &[PersistedImage],
+    token_stats: &PersistedTokenStats,
+) -> Result<MessageRow> {
     let citations_json = serde_json::to_string(citations).unwrap_or_else(|_| "[]".to_string());
     let images_json = serde_json::to_string(images).unwrap_or_else(|_| "[]".to_string());
     let token_json = serde_json::to_string(token_stats).unwrap_or_else(|_| "{}".to_string());
-
-    store.append_message(conversation_id, "user", user_content, "[]", "[]", "{}")?;
     store.append_message(
         conversation_id,
         "assistant",

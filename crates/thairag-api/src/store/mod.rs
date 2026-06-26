@@ -1146,6 +1146,9 @@ pub trait KmStoreTrait: Send + Sync {
     ) -> Result<MessageRow>;
     /// List a conversation's messages in chronological order.
     fn list_messages(&self, conversation_id: &str) -> Vec<MessageRow>;
+    /// Delete a single message by id (used by regenerate to drop the prior
+    /// assistant turn before producing a fresh one).
+    fn delete_message(&self, message_id: &str) -> Result<()>;
 
     // ── Knowledge Graph ──────────────────────────────────────────────
     /// Upsert an entity by name+type+workspace (returns existing if found).

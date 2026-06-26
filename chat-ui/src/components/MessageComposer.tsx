@@ -1,6 +1,11 @@
 import { useRef, useState } from 'react';
 import { Button, Input, Tag, Tooltip, message as antdMessage } from 'antd';
-import { ArrowUpOutlined, PaperClipOutlined, FileTextOutlined } from '@ant-design/icons';
+import {
+  ArrowUpOutlined,
+  PaperClipOutlined,
+  FileTextOutlined,
+  BorderOutlined,
+} from '@ant-design/icons';
 import type { Attachment } from '../api/types';
 
 const MAX_FILES = 5;
@@ -25,9 +30,11 @@ function readAsAttachment(file: File): Promise<Attachment> {
 export function MessageComposer({
   disabled,
   onSend,
+  onStop,
 }: {
   disabled: boolean;
   onSend: (text: string, attachments: Attachment[]) => void;
+  onStop?: () => void;
 }) {
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<Attachment[]>([]);
@@ -122,15 +129,27 @@ export function MessageComposer({
           disabled={disabled}
           style={{ padding: '5px 0', fontSize: 15.5, resize: 'none' }}
         />
-        <Button
-          type="primary"
-          shape="circle"
-          aria-label="Send"
-          icon={<ArrowUpOutlined />}
-          onClick={submit}
-          loading={disabled}
-          disabled={!value.trim() && files.length === 0}
-        />
+        {disabled && onStop ? (
+          <Tooltip title="Stop">
+            <Button
+              type="primary"
+              shape="circle"
+              aria-label="Stop"
+              icon={<BorderOutlined />}
+              onClick={onStop}
+            />
+          </Tooltip>
+        ) : (
+          <Button
+            type="primary"
+            shape="circle"
+            aria-label="Send"
+            icon={<ArrowUpOutlined />}
+            onClick={submit}
+            loading={disabled}
+            disabled={!value.trim() && files.length === 0}
+          />
+        )}
       </div>
       <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
         Enter to send · Shift + Enter for a new line

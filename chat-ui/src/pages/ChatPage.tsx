@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Spin, Tag, message as antdMessage } from 'antd';
-import { DatabaseOutlined } from '@ant-design/icons';
+import { Button, Layout, Spin, Tag, message as antdMessage } from 'antd';
+import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   listConversations,
   listWorkspaces,
@@ -11,7 +11,7 @@ import {
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
-import type { Attachment, Conversation, WorkspaceOption } from '../api/types';
+import type { Attachment, Conversation, StreamEvent, WorkspaceOption } from '../api/types';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
@@ -27,6 +27,7 @@ export function ChatPage() {
   // Scope chosen for the *next* new conversation (null = all workspaces).
   const [newScope, setNewScope] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Initial conversation list + the user's workspaces (for the scope picker).
   useEffect(() => {
@@ -88,6 +89,35 @@ export function ChatPage() {
     });
   }, []);
 
+  // Shared SSE event handler for both send and regenerate.
+  const handleStreamEvent = useCallback(
+    (evt: StreamEvent) => {
+      switch (evt.type) {
+        case 'token':
+          updateLastAssistant((m) => ({ ...m, content: m.content + evt.text }));
+          break;
+        case 'citation':
+          updateLastAssistant((m) => ({ ...m, citations: evt.citations }));
+          break;
+        case 'image':
+          updateLastAssistant((m) => ({ ...m, images: evt.images }));
+          break;
+        case 'done':
+          updateLastAssistant((m) => ({ ...m, id: evt.message_id, streaming: false }));
+          break;
+        case 'error':
+          antdMessage.error(evt.message);
+          updateLastAssistant((m) => ({ ...m, streaming: false }));
+          break;
+      }
+    },
+    [updateLastAssistant],
+  );
+
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
   const handleNew = useCallback(async () => {
     try {
       const conv = await createConversation(undefined, newScope);
@@ -142,38 +172,19 @@ export function ChatPage() {
         { role: 'assistant', content: '', citations: [], images: [], streaming: true },
       ]);
       setSending(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       try {
-        await streamMessage(
-          convId,
-          text,
-          (evt) => {
-          switch (evt.type) {
-            case 'token':
-              updateLastAssistant((m) => ({ ...m, content: m.content + evt.text }));
-              break;
-            case 'citation':
-              updateLastAssistant((m) => ({ ...m, citations: evt.citations }));
-              break;
-            case 'image':
-              updateLastAssistant((m) => ({ ...m, images: evt.images }));
-              break;
-            case 'done':
-              updateLastAssistant((m) => ({ ...m, id: evt.message_id, streaming: false }));
-              break;
-            case 'error':
-              antdMessage.error(evt.message);
-              updateLastAssistant((m) => ({ ...m, streaming: false }));
-              break;
-          }
-          },
-          undefined,
-          attachments,
-        );
+        await streamMessage(convId, text, handleStreamEvent, controller.signal, attachments);
       } catch (e) {
-        antdMessage.error(e instanceof Error ? e.message : 'Streaming failed');
+        // A user-pressed Stop aborts the fetch — keep the partial answer, no toast.
+        if (!controller.signal.aborted) {
+          antdMessage.error(e instanceof Error ? e.message : 'Streaming failed');
+        }
         updateLastAssistant((m) => ({ ...m, streaming: false }));
       } finally {
+        abortRef.current = null;
         setSending(false);
       }
 
@@ -192,8 +203,34 @@ export function ChatPage() {
           });
       }
     },
-    [activeId, messages.length, newScope, updateLastAssistant],
+    [activeId, messages.length, newScope, handleStreamEvent, updateLastAssistant],
   );
+
+  const handleRegenerate = useCallback(async () => {
+    if (!activeId || sending) return;
+    // Drop the last answer from view and stream a fresh one (the backend deletes
+    // the old assistant row and re-answers the same last user message).
+    setMessages((prev) => {
+      const next = prev.slice();
+      if (next.length > 0 && next[next.length - 1].role === 'assistant') next.pop();
+      next.push({ role: 'assistant', content: '', citations: [], images: [], streaming: true });
+      return next;
+    });
+    setSending(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await streamMessage(activeId, '', handleStreamEvent, controller.signal, undefined, true);
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        antdMessage.error(e instanceof Error ? e.message : 'Regeneration failed');
+      }
+      updateLastAssistant((m) => ({ ...m, streaming: false }));
+    } finally {
+      abortRef.current = null;
+      setSending(false);
+    }
+  }, [activeId, sending, handleStreamEvent, updateLastAssistant]);
 
   const suggestions = [
     'สรุปขั้นตอนการขอสินเชื่อ',
@@ -316,13 +353,20 @@ export function ChatPage() {
               {messages.map((m, i) => (
                 <MessageBubble key={m.id ?? i} message={m} />
               ))}
+              {!sending && messages[messages.length - 1]?.role === 'assistant' && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+                  <Button size="small" icon={<ReloadOutlined />} onClick={handleRegenerate}>
+                    Regenerate
+                  </Button>
+                </div>
+              )}
               <div ref={bottomRef} />
             </div>
           )}
         </div>
         <div style={{ borderTop: '1px solid var(--line)', background: 'var(--canvas)' }}>
           <div style={{ maxWidth: 820, margin: '0 auto', width: '100%' }}>
-            <MessageComposer disabled={sending} onSend={handleSend} />
+            <MessageComposer disabled={sending} onSend={handleSend} onStop={handleStop} />
           </div>
         </div>
       </Layout.Content>
