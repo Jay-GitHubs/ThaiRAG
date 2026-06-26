@@ -1,5 +1,5 @@
-import { Button, Popconfirm, Tooltip } from 'antd';
-import { PlusOutlined, DeleteOutlined, LogoutOutlined } from '@ant-design/icons';
+import { Button, Input, Popconfirm, Tooltip } from 'antd';
+import { PlusOutlined, DeleteOutlined, EditOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import type { Conversation } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
@@ -11,15 +11,29 @@ export function ConversationSidebar({
   onSelect,
   onNew,
   onDelete,
+  onRename,
 }: {
   conversations: Conversation[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, title: string) => void;
 }) {
   const { user, logout } = useAuth();
   const [hovered, setHovered] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  const startEdit = (id: string, title: string) => {
+    setEditingId(id);
+    setEditValue(title);
+  };
+  const commitEdit = (id: string) => {
+    const t = editValue.trim();
+    if (t) onRename(id, t);
+    setEditingId(null);
+  };
 
   return (
     <div
@@ -74,32 +88,59 @@ export function ConversationSidebar({
                   transition: 'background 0.12s',
                 }}
               >
-                <span
-                  style={{
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    fontSize: 14,
-                  }}
-                >
-                  {c.title || 'Untitled'}
-                </span>
-                {(hovered === c.id || active) && (
-                  <Popconfirm
-                    title="Delete this conversation?"
-                    okText="Delete"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={(e) => {
-                      e?.stopPropagation();
-                      onDelete(c.id);
+                {editingId === c.id ? (
+                  <Input
+                    size="small"
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onPressEnter={() => commitEdit(c.id)}
+                    onBlur={() => commitEdit(c.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setEditingId(null);
                     }}
-                    onCancel={(e) => e?.stopPropagation()}
+                    style={{ flex: 1 }}
+                  />
+                ) : (
+                  <span
+                    style={{
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      fontSize: 14,
+                    }}
                   >
-                    <DeleteOutlined
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}
-                    />
-                  </Popconfirm>
+                    {c.title || 'Untitled'}
+                  </span>
+                )}
+                {(hovered === c.id || active) && editingId !== c.id && (
+                  <span style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                    <Tooltip title="Rename">
+                      <EditOutlined
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(c.id, c.title || '');
+                        }}
+                        style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}
+                      />
+                    </Tooltip>
+                    <Popconfirm
+                      title="Delete this conversation?"
+                      okText="Delete"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={(e) => {
+                        e?.stopPropagation();
+                        onDelete(c.id);
+                      }}
+                      onCancel={(e) => e?.stopPropagation()}
+                    >
+                      <DeleteOutlined
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}
+                      />
+                    </Popconfirm>
+                  </span>
                 )}
               </div>
             );

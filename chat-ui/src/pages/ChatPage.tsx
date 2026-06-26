@@ -160,6 +160,15 @@ export function ChatPage() {
     [activeId],
   );
 
+  const handleRename = useCallback(async (id: string, title: string) => {
+    try {
+      const updated = await renameConversation(id, title);
+      setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+    } catch {
+      antdMessage.error('Failed to rename conversation');
+    }
+  }, []);
+
   const handleSend = useCallback(
     async (text: string, attachments: Attachment[] = []) => {
       // Ensure a conversation exists (lazily create one on first message).
@@ -274,6 +283,7 @@ export function ChatPage() {
         setDrawerOpen(false);
       }}
       onDelete={handleDelete}
+      onRename={handleRename}
     />
   );
 
