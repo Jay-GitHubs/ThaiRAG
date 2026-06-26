@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Layout, Empty, Spin, message as antdMessage } from 'antd';
+import { Layout, Spin, message as antdMessage } from 'antd';
 import {
   listConversations,
   createConversation,
@@ -165,9 +165,19 @@ export function ChatPage() {
     [activeId, messages.length, updateLastAssistant],
   );
 
+  const suggestions = [
+    'สรุปขั้นตอนการขอสินเชื่อ',
+    'What documents do I need to apply?',
+  ];
+
   return (
     <Layout style={{ height: '100%' }}>
-      <Layout.Sider width={260} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
+      <Layout.Sider
+        width={272}
+        style={{ background: 'var(--ink)' }}
+        breakpoint="md"
+        collapsedWidth={0}
+      >
         <ConversationSidebar
           conversations={conversations}
           activeId={activeId}
@@ -176,18 +186,67 @@ export function ChatPage() {
           onDelete={handleDelete}
         />
       </Layout.Sider>
-      <Layout.Content style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 16px' }}>
+      <Layout.Content
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          background: 'var(--canvas)',
+        }}
+      >
+        <div className="thin-scroll" style={{ flex: 1, overflowY: 'auto', padding: '28px 20px' }}>
           {loadingMsgs ? (
-            <div style={{ textAlign: 'center', marginTop: 80 }}>
+            <div style={{ textAlign: 'center', marginTop: 100 }}>
               <Spin />
             </div>
           ) : messages.length === 0 ? (
-            <div style={{ marginTop: 80 }}>
-              <Empty description="Ask a question to get started" />
+            <div style={{ maxWidth: 640, margin: '14vh auto 0', textAlign: 'center' }}>
+              <h1
+                style={{
+                  fontFamily: 'var(--font-display)',
+                  fontWeight: 600,
+                  fontSize: 30,
+                  margin: 0,
+                  color: 'var(--text)',
+                }}
+              >
+                What do you want to find?
+              </h1>
+              <p style={{ color: 'var(--text-muted)', fontSize: 16, marginTop: 12 }}>
+                ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง
+              </p>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 10,
+                  justifyContent: 'center',
+                  flexWrap: 'wrap',
+                  marginTop: 26,
+                }}
+              >
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => handleSend(s)}
+                    disabled={sending}
+                    style={{
+                      fontFamily: 'var(--font-body)',
+                      fontSize: 14,
+                      color: 'var(--text)',
+                      background: 'var(--surface)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 10,
+                      padding: '10px 14px',
+                      cursor: sending ? 'default' : 'pointer',
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
-            <div style={{ maxWidth: 860, margin: '0 auto' }}>
+            <div style={{ maxWidth: 820, margin: '0 auto' }}>
               {messages.map((m, i) => (
                 <MessageBubble key={m.id ?? i} message={m} />
               ))}
@@ -195,8 +254,10 @@ export function ChatPage() {
             </div>
           )}
         </div>
-        <div style={{ maxWidth: 860, margin: '0 auto', width: '100%' }}>
-          <MessageComposer disabled={sending} onSend={handleSend} />
+        <div style={{ borderTop: '1px solid var(--line)', background: 'var(--canvas)' }}>
+          <div style={{ maxWidth: 820, margin: '0 auto', width: '100%' }}>
+            <MessageComposer disabled={sending} onSend={handleSend} />
+          </div>
         </div>
       </Layout.Content>
     </Layout>
