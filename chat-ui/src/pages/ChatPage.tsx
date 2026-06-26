@@ -11,7 +11,7 @@ import {
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
-import type { Conversation, WorkspaceOption } from '../api/types';
+import type { Attachment, Conversation, WorkspaceOption } from '../api/types';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
@@ -113,7 +113,7 @@ export function ChatPage() {
   );
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: Attachment[] = []) => {
       // Ensure a conversation exists (lazily create one on first message).
       let convId = activeId;
       let isFirstMessage = messages.length === 0;
@@ -132,13 +132,22 @@ export function ChatPage() {
 
       setMessages((prev) => [
         ...prev,
-        { role: 'user', content: text, citations: [], images: [] },
+        {
+          role: 'user',
+          content: text,
+          citations: [],
+          images: [],
+          attachments: attachments.map((a) => a.name),
+        },
         { role: 'assistant', content: '', citations: [], images: [], streaming: true },
       ]);
       setSending(true);
 
       try {
-        await streamMessage(convId, text, (evt) => {
+        await streamMessage(
+          convId,
+          text,
+          (evt) => {
           switch (evt.type) {
             case 'token':
               updateLastAssistant((m) => ({ ...m, content: m.content + evt.text }));
@@ -157,7 +166,10 @@ export function ChatPage() {
               updateLastAssistant((m) => ({ ...m, streaming: false }));
               break;
           }
-        });
+          },
+          undefined,
+          attachments,
+        );
       } catch (e) {
         antdMessage.error(e instanceof Error ? e.message : 'Streaming failed');
         updateLastAssistant((m) => ({ ...m, streaming: false }));
