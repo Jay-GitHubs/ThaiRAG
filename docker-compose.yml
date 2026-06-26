@@ -63,6 +63,14 @@ services:
     depends_on:
       - thairag
 
+  # ── Chat UI (first-party end-user chat frontend) ───────────────────
+  chat-ui:
+    build: ./chat-ui
+    ports:
+      - "8082:80"
+    depends_on:
+      - thairag
+
   # ── Qdrant (vector database, free & open-source) ───────────────────
   qdrant:
     image: qdrant/qdrant:latest

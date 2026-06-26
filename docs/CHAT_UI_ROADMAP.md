@@ -75,6 +75,15 @@ PR 2b (this) shipped inline source images: `image_blob_id` threaded into
 
 ## Phase 3 — Chat UI MVP
 
+Status: PR-3a (this) scaffolds the standalone `chat-ui/` app (React 18 + Vite 6 +
+TS + antd + TanStack Query, port 8082, Dockerfile + nginx + compose service).
+Native JWT login (reuses the backend `/api/auth/login`), conversation sidebar
+(list/create/select/delete + auto-title from first message), and the streaming
+chat loop consuming the first-party SSE protocol (`token`/`citation`/`image`/
+`done`) with markdown + Thai rendering, inline citation chips, and inline source
+images. Live e2e against the Docker stack is the remaining verification (Phase 6).
+
+
 - Scaffold `chat-ui/` from admin-ui tooling. Auth reuse. SSE chat loop (template:
   `admin-ui/src/api/testQuery.ts`). Markdown + code + Thai rendering (add a real
   markdown renderer — admin-ui has none). History sidebar (Phase 1 endpoints).

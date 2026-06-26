@@ -1,0 +1,85 @@
+// ── Auth ─────────────────────────────────────────────────────────────
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: User;
+}
+
+export interface RegisterRequest {
+  email: string;
+  name: string;
+  password: string;
+}
+
+// ── Conversations & messages (mirror the backend store rows) ──────────
+export interface Conversation {
+  id: string;
+  user_id: string;
+  title: string;
+  workspace_scope?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A stored message. `citations`/`images`/`token_stats` are JSON strings the
+ *  backend persists verbatim; parse with the helpers below. */
+export interface MessageRow {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant' | string;
+  content: string;
+  citations: string;
+  images: string;
+  token_stats: string;
+  created_at: string;
+}
+
+export interface Citation {
+  doc_id: string;
+  title: string;
+  page?: number;
+  section?: string;
+  url?: string;
+}
+
+export interface ImageRef {
+  image_id: string;
+  url: string;
+  page?: number;
+}
+
+// ── First-party streaming chat protocol (SSE `data:` JSON objects) ─────
+export type StreamEvent =
+  | { type: 'progress'; stage: string; status: string }
+  | { type: 'token'; text: string }
+  | { type: 'citation'; citations: Citation[] }
+  | { type: 'image'; images: ImageRef[] }
+  | { type: 'done'; message_id: string; usage: { prompt_tokens: number; completion_tokens: number } }
+  | { type: 'error'; message: string };
+
+export function parseCitations(json: string): Citation[] {
+  try {
+    return JSON.parse(json) as Citation[];
+  } catch {
+    return [];
+  }
+}
+
+export function parseImages(json: string): ImageRef[] {
+  try {
+    return JSON.parse(json) as ImageRef[];
+  } catch {
+    return [];
+  }
+}
