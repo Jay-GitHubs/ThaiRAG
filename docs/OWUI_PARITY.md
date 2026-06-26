@@ -51,7 +51,9 @@ steps. Built after shipping #245–#254.
   `inline_images_max` / `citation_*` apply at runtime per scope instead of only
   at boot. `inline_images_enabled` + `inline_images_max` are exposed in the
   settings GET/PATCH surface so admins can toggle them.
-- **G7 — Rename UI (minor).** Rename endpoint exists; add a sidebar action.
+- **G7 — Rename UI (minor). DONE.** Sidebar rename: a pencil action on each
+  conversation opens an inline input (Enter/blur to save, Esc to cancel) wired to
+  the existing rename endpoint.
 
 ## Go / no-go gate
 
