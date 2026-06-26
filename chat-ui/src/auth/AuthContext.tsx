@@ -9,6 +9,7 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginWithToken: (token: string, user: User) => void;
   logout: () => void;
 }
 
@@ -16,6 +17,7 @@ const AuthContext = createContext<AuthState>({
   user: null,
   isAuthenticated: false,
   login: async () => {},
+  loginWithToken: () => {},
   logout: () => {},
 });
 
@@ -39,6 +41,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(res.user);
   }, []);
 
+  // Used by the OIDC/SSO callback, which delivers a ready JWT + user via the URL.
+  const loginWithToken = useCallback((token: string, u: User) => {
+    setToken(token);
+    sessionStorage.setItem(USER_KEY, JSON.stringify(u));
+    setUser(u);
+  }, []);
+
   const logout = useCallback(() => {
     setToken(null);
     sessionStorage.removeItem(USER_KEY);
@@ -47,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, loginWithToken, logout }}>
       {children}
     </AuthContext.Provider>
   );

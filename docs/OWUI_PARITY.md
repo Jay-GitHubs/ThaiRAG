@@ -26,13 +26,14 @@ steps. Built after shipping #245–#254.
 
 ## Gaps to close before cutover
 
-- **G1 — OIDC/SSO login (BLOCKER, *if* your OWUI users authenticate via Keycloak).**
-  OWUI end users sign in with Keycloak SSO; chat-ui only has native email/password.
-  Cutting OWUI without SSO would lock those users out. The backend already has
-  OIDC (`crates/thairag-api/src/oidc.rs`, `/api/auth/oauth/{provider}/authorize`
-  + `/callback`); chat-ui needs a "Sign in with SSO" button + callback handling.
-  Locked decision was "auth configurable (native+OIDC)" — this is that. *Medium.*
-  → If real users do NOT use SSO (native only), G1 drops to not-needed.
+- **G1 — OIDC/SSO login. DONE.** chat-ui now lists enabled providers
+  (`GET /api/auth/providers`) and renders "Continue with X" buttons that start
+  `GET /api/auth/oauth/{id}/authorize`; the login page consumes the backend's
+  `#token=…&user=…` callback fragment (mirrors admin-ui). No backend changes —
+  the callback's relative `/login` redirect stays on whichever frontend origin
+  proxied it. Deployment note: the IdP's `redirect_uri` must allow chat-ui's
+  origin (e.g. `http://localhost:8082/api/auth/oauth/callback`). Fulfils the
+  locked "auth configurable (native+OIDC)" decision.
 - **G2 — Stop / regenerate / edit.** Table-stakes chat controls. Stop needs the
   stream's AbortController wired to a button; regenerate re-sends the last user
   turn; edit-and-resend rewrites it. *Small–medium.*
@@ -51,9 +52,9 @@ steps. Built after shipping #245–#254.
 
 ## Go / no-go gate
 
-Cutover when **G1 (if applicable), G2, G3, G4 are done** and a final live
-headed-e2e parity pass is green (login → stream → citations → images → upload →
-scope → stop/regenerate, on desktop + mobile viewport).
+**G1–G4 are all done.** Remaining before cutover: a final live headed-e2e parity
+pass that's green (login + SSO → stream → citations → images → upload → scope →
+stop/regenerate, on desktop + mobile viewport). Then Phase 7.
 
 ## Phase 7 — decommission steps (after the gate)
 

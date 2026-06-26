@@ -22,6 +22,13 @@ export interface RegisterRequest {
   password: string;
 }
 
+/** A public identity provider for an SSO "Sign in with X" button. */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  provider_type: string;
+}
+
 // ── Conversations & messages (mirror the backend store rows) ──────────
 export interface Conversation {
   id: string;
