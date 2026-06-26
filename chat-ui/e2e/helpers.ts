@@ -7,8 +7,10 @@ export const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8080';
 /** Log in through the UI and land on the chat page. */
 export async function login(page: Page) {
   await page.goto('/login');
-  await page.getByPlaceholder('Email').fill(TEST_EMAIL);
-  await page.getByPlaceholder('Password').fill(TEST_PASSWORD);
+  // Target the form labels, not placeholders — placeholders are decorative copy
+  // and change with design; the "Email"/"Password" labels are stable.
+  await page.getByLabel('Email').fill(TEST_EMAIL);
+  await page.getByLabel('Password').fill(TEST_PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // The chat page is the only one with a "New chat" button — its presence is the
   // reliable post-login signal (more robust than matching the root URL).
