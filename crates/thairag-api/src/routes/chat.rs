@@ -2086,11 +2086,22 @@ pub async fn stream_conversation_message(
     });
 
     // ── Scope + settings resolution (the user's workspace permissions) ──
+    // A conversation can be pinned to a single workspace (scope selector); when
+    // it is — and the user actually has access to that workspace — retrieval is
+    // hard-filtered to it. This is the "one product per scope" lever that avoids
+    // near-clone cross-contamination. An unknown/forbidden pin is ignored (falls
+    // back to all the user's workspaces), so the pin can never widen access.
     let ws_ids = state.km_store.get_user_workspace_ids(uid);
-    let scope = if ws_ids.is_empty() {
-        AccessScope::none()
-    } else {
-        AccessScope::new(ws_ids)
+    let pinned_ws = state
+        .km_store
+        .get_conversation(&conversation_id)
+        .and_then(|c| c.workspace_scope)
+        .and_then(|s| s.parse::<Uuid>().ok())
+        .map(thairag_core::types::WorkspaceId);
+    let scope = match pinned_ws {
+        Some(w) if ws_ids.contains(&w) => AccessScope::new(vec![w]),
+        _ if ws_ids.is_empty() => AccessScope::none(),
+        _ => AccessScope::new(ws_ids),
     };
     let settings_scope = scope
         .workspace_ids

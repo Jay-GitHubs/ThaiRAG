@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Layout, Spin, message as antdMessage } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Layout, Spin, Tag, message as antdMessage } from 'antd';
+import { DatabaseOutlined } from '@ant-design/icons';
 import {
   listConversations,
+  listWorkspaces,
   createConversation,
   deleteConversation,
   listMessages,
@@ -9,10 +11,11 @@ import {
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
-import type { Conversation } from '../api/types';
+import type { Conversation, WorkspaceOption } from '../api/types';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
+import { ScopeSelector } from '../components/ScopeSelector';
 
 export function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -20,9 +23,12 @@ export function ChatPage() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  // Scope chosen for the *next* new conversation (null = all workspaces).
+  const [newScope, setNewScope] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Initial conversation list.
+  // Initial conversation list + the user's workspaces (for the scope picker).
   useEffect(() => {
     listConversations()
       .then((list) => {
@@ -30,7 +36,19 @@ export function ChatPage() {
         if (list.length > 0) setActiveId(list[0].id);
       })
       .catch(() => antdMessage.error('Failed to load conversations'));
+    listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => {
+        /* no picker if this fails; chat still works across all workspaces */
+      });
   }, []);
+
+  const wsName = useMemo(() => {
+    const m = new Map(workspaces.map((w) => [w.id, w.name]));
+    return (id?: string | null) => (id ? (m.get(id) ?? 'Workspace') : null);
+  }, [workspaces]);
+
+  const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
   // Load messages when the active conversation changes.
   useEffect(() => {
@@ -72,14 +90,14 @@ export function ChatPage() {
 
   const handleNew = useCallback(async () => {
     try {
-      const conv = await createConversation();
+      const conv = await createConversation(undefined, newScope);
       setConversations((prev) => [conv, ...prev]);
       setActiveId(conv.id);
       setMessages([]);
     } catch {
       antdMessage.error('Failed to create conversation');
     }
-  }, []);
+  }, [newScope]);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -101,7 +119,7 @@ export function ChatPage() {
       let isFirstMessage = messages.length === 0;
       if (!convId) {
         try {
-          const conv = await createConversation();
+          const conv = await createConversation(undefined, newScope);
           setConversations((prev) => [conv, ...prev]);
           setActiveId(conv.id);
           convId = conv.id;
@@ -162,13 +180,19 @@ export function ChatPage() {
           });
       }
     },
-    [activeId, messages.length, updateLastAssistant],
+    [activeId, messages.length, newScope, updateLastAssistant],
   );
 
   const suggestions = [
     'สรุปขั้นตอนการขอสินเชื่อ',
     'What documents do I need to apply?',
   ];
+
+  // Scope shown for the active conversation: its pin once created, else the
+  // picker selection for the next new chat.
+  const activeScopeName = activeConversation
+    ? wsName(activeConversation.workspace_scope)
+    : wsName(newScope);
 
   return (
     <Layout style={{ height: '100%' }}>
@@ -194,6 +218,28 @@ export function ChatPage() {
           background: 'var(--canvas)',
         }}
       >
+        {messages.length > 0 && (
+          <div
+            style={{
+              borderBottom: '1px solid var(--line)',
+              padding: '9px 20px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 13,
+              color: 'var(--text-muted)',
+            }}
+          >
+            <DatabaseOutlined />
+            <span>Searching</span>
+            <Tag
+              color={activeConversation?.workspace_scope ? 'green' : 'default'}
+              style={{ margin: 0 }}
+            >
+              {activeScopeName ?? 'All my workspaces'}
+            </Tag>
+          </div>
+        )}
         <div className="thin-scroll" style={{ flex: 1, overflowY: 'auto', padding: '28px 20px' }}>
           {loadingMsgs ? (
             <div style={{ textAlign: 'center', marginTop: 100 }}>
@@ -215,6 +261,14 @@ export function ChatPage() {
               <p style={{ color: 'var(--text-muted)', fontSize: 16, marginTop: 12 }}>
                 ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง
               </p>
+              {workspaces.length > 0 && (
+                <div style={{ marginTop: 22 }}>
+                  <div className="eyebrow" style={{ marginBottom: 8 }}>
+                    Search in
+                  </div>
+                  <ScopeSelector workspaces={workspaces} value={newScope} onChange={setNewScope} />
+                </div>
+              )}
               <div
                 style={{
                   display: 'flex',

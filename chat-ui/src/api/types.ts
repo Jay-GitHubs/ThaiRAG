@@ -59,6 +59,12 @@ export interface ImageRef {
   page?: number;
 }
 
+/** A workspace the user can scope a conversation to (chat scope picker). */
+export interface WorkspaceOption {
+  id: string;
+  name: string;
+}
+
 // ── First-party streaming chat protocol (SSE `data:` JSON objects) ─────
 export type StreamEvent =
   | { type: 'progress'; stage: string; status: string }

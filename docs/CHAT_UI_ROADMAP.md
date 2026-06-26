@@ -92,6 +92,15 @@ images. Live e2e against the Docker stack is the remaining verification (Phase 6
 
 ## Phase 4 — Differentiators
 
+Status: scope selector shipped. A conversation can be pinned to one workspace
+(`conversations.workspace_scope`), which hard-filters retrieval to it — the "one
+product per scope" lever against near-clone cross-contamination. New
+`GET /api/chat/workspaces` feeds the picker; the stream handler narrows
+`AccessScope` to the pin when the user has access (an unknown/forbidden pin is
+ignored, never widening access). FE: ScopeSelector in the empty state +
+a "Searching &lt;workspace&gt;" chip on active conversations.
+
+
 - Native inline citations (render `citation` events, ThaiRAG-styled).
 - Inline source images (render `image` events inline — the OWUI blocker).
 - Scope/workspace selector baked into chat (hard filter; supports the near-clone

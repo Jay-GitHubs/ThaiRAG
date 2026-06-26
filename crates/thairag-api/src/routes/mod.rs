@@ -760,6 +760,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             post(chat::summarize_session),
         )
         // First-party chat-UI conversation history (durable, per-user).
+        .route("/api/chat/workspaces", get(conversations::list_workspaces))
         .route(
             "/api/chat/conversations",
             get(conversations::list_conversations).post(conversations::create_conversation),

@@ -1,14 +1,23 @@
 import client, { getToken } from './client';
-import type { Conversation, MessageRow, StreamEvent } from './types';
+import type { Conversation, MessageRow, StreamEvent, WorkspaceOption } from './types';
 
 export async function listConversations(): Promise<Conversation[]> {
   const res = await client.get<Conversation[]>('/api/chat/conversations');
   return res.data;
 }
 
-export async function createConversation(title?: string): Promise<Conversation> {
+export async function listWorkspaces(): Promise<WorkspaceOption[]> {
+  const res = await client.get<WorkspaceOption[]>('/api/chat/workspaces');
+  return res.data;
+}
+
+export async function createConversation(
+  title?: string,
+  workspaceScope?: string | null,
+): Promise<Conversation> {
   const res = await client.post<Conversation>('/api/chat/conversations', {
     title: title ?? '',
+    ...(workspaceScope ? { workspace_scope: workspaceScope } : {}),
   });
   return res.data;
 }
