@@ -3284,3 +3284,80 @@ async fn chat_stream_accepts_attachment() {
         "stream should complete: {body}"
     );
 }
+
+#[tokio::test]
+async fn chat_regenerate_replaces_assistant_without_duplicating_user() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "regen@test.com", "Regen", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // First turn → persists user + assistant.
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "hello"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let _ = r.into_body().collect().await.unwrap();
+
+    let msgs1 = body_json(
+        app.clone()
+            .oneshot(get_request_auth(
+                &format!("/api/chat/conversations/{conv_id}/messages"),
+                &token,
+            ))
+            .await
+            .unwrap()
+            .into_body(),
+    )
+    .await;
+    assert_eq!(msgs1.as_array().unwrap().len(), 2);
+    let first_assistant_id = msgs1.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Regenerate.
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"regenerate": true}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let _ = r.into_body().collect().await.unwrap();
+
+    // Still exactly user + assistant (no duplicate user), assistant is a fresh row.
+    let msgs2 = body_json(
+        app.oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            &token,
+        ))
+        .await
+        .unwrap()
+        .into_body(),
+    )
+    .await;
+    let arr = msgs2.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        2,
+        "regenerate must not duplicate the user turn: {msgs2}"
+    );
+    assert_eq!(arr[0]["role"], "user");
+    assert_eq!(arr[1]["role"], "assistant");
+    assert_ne!(
+        arr[1]["id"].as_str().unwrap(),
+        first_assistant_id,
+        "assistant should be a fresh row"
+    );
+}

@@ -1935,6 +1935,14 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
+    fn delete_message(&self, message_id: &str) -> Result<()> {
+        self.messages
+            .write()
+            .unwrap()
+            .retain(|m| m.id != message_id);
+        Ok(())
+    }
+
     fn append_message(
         &self,
         conversation_id: &str,

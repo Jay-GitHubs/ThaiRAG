@@ -3405,6 +3405,17 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(())
     }
 
+    fn delete_message(&self, message_id: &str) -> Result<()> {
+        block_on(async {
+            sqlx::query("DELETE FROM messages WHERE id = $1")
+                .bind(message_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to delete message: {e}")))?;
+        Ok(())
+    }
+
     fn append_message(
         &self,
         conversation_id: &str,

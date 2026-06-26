@@ -3359,6 +3359,13 @@ impl KmStoreTrait for SqliteKmStore {
         Ok(())
     }
 
+    fn delete_message(&self, message_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM messages WHERE id = ?1", params![message_id])
+            .map_err(|e| ThaiRagError::Database(format!("Failed to delete message: {e}")))?;
+        Ok(())
+    }
+
     fn append_message(
         &self,
         conversation_id: &str,
