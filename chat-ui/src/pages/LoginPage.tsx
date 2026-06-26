@@ -1,13 +1,44 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { Button, Form, Input, message } from 'antd';
+import { Button, Divider, Form, Input, message } from 'antd';
 import { useAuth } from '../auth/AuthContext';
+import { listProviders } from '../api/auth';
+import type { ProviderInfo } from '../api/types';
 import { BrandMark } from '../components/BrandMark';
 
 export function LoginPage() {
-  const { login, isAuthenticated } = useAuth();
+  const { login, loginWithToken, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+
+  // OIDC/SSO callback: the backend redirects back with #token=…&user=… in the
+  // URL fragment. Pick it up, store the session, and land in the app.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.includes('token=')) return;
+    const params = new URLSearchParams(hash.substring(1));
+    const token = params.get('token');
+    const userJson = params.get('user');
+    if (token && userJson) {
+      try {
+        loginWithToken(token, JSON.parse(userJson));
+        window.history.replaceState(null, '', '/login');
+        navigate('/', { replace: true });
+      } catch {
+        message.error('Failed to complete SSO sign-in.');
+      }
+    }
+  }, [loginWithToken, navigate]);
+
+  // Enabled SSO providers → "Sign in with X" buttons (native login still works).
+  useEffect(() => {
+    listProviders()
+      .then(setProviders)
+      .catch(() => {
+        /* no SSO buttons if this fails */
+      });
+  }, []);
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
@@ -22,6 +53,14 @@ export function LoginPage() {
       message.error('Those credentials did not match. Try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const startSso = (p: ProviderInfo) => {
+    if (p.provider_type === 'oidc' || p.provider_type === 'oauth2') {
+      window.location.href = `/api/auth/oauth/${p.id}/authorize`;
+    } else {
+      message.info(`${p.provider_type.toUpperCase()} login isn't available here yet.`);
     }
   };
 
@@ -114,6 +153,25 @@ export function LoginPage() {
             Sign in
           </Button>
         </Form>
+
+        {providers.length > 0 && (
+          <>
+            <Divider plain style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+              or
+            </Divider>
+            {providers.map((p) => (
+              <Button
+                key={p.id}
+                block
+                size="large"
+                style={{ marginBottom: 8 }}
+                onClick={() => startSso(p)}
+              >
+                Continue with {p.name}
+              </Button>
+            ))}
+          </>
+        )}
       </main>
     </div>
   );
