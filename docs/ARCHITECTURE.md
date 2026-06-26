@@ -413,7 +413,6 @@ All backends implement `KmStoreTrait` with identical behavior. Key tables:
 - Workspace-scoped permissions — users only access documents in their assigned workspaces
 - **Fine-grained ACLs** — Workspace-level ACL entries (`workspace_acls`) and document-level ACL entries (`document_acls`) allow granting or denying access at individual resource granularity, overriding role defaults
 - Super admins bypass all permission checks
-- **Open WebUI identity passthrough** — When Open WebUI sets `ENABLE_FORWARD_USER_INFO_HEADERS=true`, ThaiRAG resolves real user identity from `X-OpenWebUI-User-Email` header and applies per-user workspace permissions even through the shared API key
 - **Permission revocation** — On workspace access revocation, server-side sessions and personal memories for the affected user are cleared to prevent stale context leaks
 
 ### OWASP Hardening

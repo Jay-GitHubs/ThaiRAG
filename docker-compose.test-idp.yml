@@ -41,58 +41,9 @@ services:
       THAIRAG__AUTH__API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
       # Browser-reachable base URL for clickable citation links (host-mapped 8080).
       THAIRAG__CHAT_PIPELINE__CITATION_BASE_URL: "http://localhost:8080"
-      # OWUI → ThaiRAG feedback sync (polls OWUI's admin export endpoint).
-      THAIRAG__OWUI_FEEDBACK_SYNC__ENABLED: "false"
-      THAIRAG__OWUI_FEEDBACK_SYNC__BASE_URL: "http://open-webui:8080"
-      THAIRAG__OWUI_FEEDBACK_SYNC__ADMIN_API_KEY: "${OWUI_ADMIN_API_KEY:-}"
-      THAIRAG__OWUI_FEEDBACK_SYNC__INTERVAL_SECS: "15"
     depends_on:
       keycloak:
         condition: service_healthy
 
-  # ── Open WebUI with OIDC pointing to Keycloak ─────────────────────
-  # Open WebUI runs its own backend inside the container.
-  # OPENID_PROVIDER_URL must use host.docker.internal so that the discovery
-  # doc returns browser-reachable URLs (same rule as ThaiRAG's issuer URL).
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.9.6
-    ports:
-      - "3000:8080"
-    volumes:
-      - open-webui-data:/app/backend/data
-    environment:
-      OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-      OPENAI_API_KEYS: "${THAIRAG_OPENWEBUI_API_KEY:-sk-thairag-openwebui}"
-      # Enable API-key auth so ThaiRAG's feedback sync can call the admin export endpoint.
-      ENABLE_API_KEYS: "true"
-      # Increase timeout for pipeline responses (multiple sequential LLM calls)
-      AIOHTTP_CLIENT_TIMEOUT: "600"
-      # Full-context mode: inject the whole uploaded file into the prompt instead
-      # of embedding + retrieving chunks. Avoids OWUI's local embedder picking
-      # weak chunks (esp. Thai); ThaiRAG answers from the injected system message
-      # (its empty-KB stream guard is suppressed when client context is present).
-      # Best for small/medium docs — a large file can exceed the answer model's
-      # context window (ollama_num_ctx_max). NOTE: these are OWUI PersistentConfig
-      # values — env only seeds a FRESH volume; a running instance is changed via
-      # POST /api/v1/retrieval/config/update (stored in webui.db).
-      RAG_FULL_CONTEXT: "true"
-      BYPASS_EMBEDDING_AND_RETRIEVAL: "true"
-      # Forward user identity headers to ThaiRAG for per-user permission enforcement
-      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-      # OIDC SSO via Keycloak
-      # Open WebUI's backend reaches Keycloak via host.docker.internal:9090.
-      # This ensures the browser also gets reachable URLs from the discovery doc.
-      # The browser redirect uses localhost:3000 (configured in Keycloak client).
-      ENABLE_OAUTH_SIGNUP: "true"
-      OAUTH_PROVIDER_NAME: "Keycloak"
-      OAUTH_CLIENT_ID: "open-webui"
-      OAUTH_CLIENT_SECRET: "rtAWAxhX7pzBISKA8DRzSJ2FDImTyJZm"
-      OPENID_PROVIDER_URL: "http://host.docker.internal:9090/realms/thairag/.well-known/openid-configuration"
-      OAUTH_SCOPES: "openid profile email"
-    depends_on:
-      - thairag
-      - keycloak
-
 volumes:
   keycloak-data:
-  open-webui-data:

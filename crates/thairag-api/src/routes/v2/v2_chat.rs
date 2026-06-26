@@ -248,35 +248,11 @@ pub async fn v2_chat_completions(
 
 /// Resolve user ID from claims/headers (same logic as V1).
 fn resolve_user_id(
-    state: &AppState,
+    _state: &AppState,
     claims: &AuthClaims,
-    headers: &axum::http::HeaderMap,
+    _headers: &axum::http::HeaderMap,
 ) -> Option<UserId> {
-    if claims.sub == "api-key" {
-        headers
-            .get("x-openwebui-user-email")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|email| match state.km_store.get_user_by_email(email) {
-                Ok(u) => Some(u.user.id),
-                Err(_) => {
-                    let name = headers
-                        .get("x-openwebui-user-name")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or(email);
-                    state
-                        .km_store
-                        .upsert_user_by_email(
-                            email.to_string(),
-                            name.to_string(),
-                            String::new(),
-                            false,
-                            "viewer".to_string(),
-                        )
-                        .ok()
-                        .map(|u| u.id)
-                }
-            })
-    } else if claims.sub == "anonymous" {
+    if claims.sub == "anonymous" || claims.sub == "api-key" {
         None
     } else {
         claims.sub.parse::<Uuid>().ok().map(UserId)

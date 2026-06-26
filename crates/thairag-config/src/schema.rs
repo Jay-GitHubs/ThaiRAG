@@ -16,8 +16,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
-    pub owui_feedback_sync: OwuiFeedbackSyncConfig,
-    #[serde(default)]
     pub session: SessionConfig,
     #[serde(default)]
     pub attachments: AttachmentsConfig,
@@ -1659,54 +1657,6 @@ fn default_sync_retry_max_delay_secs() -> u64 {
     60
 }
 
-// ── OWUI Feedback Sync Config ────────────────────────────────────────
-
-/// Polls Open WebUI's admin feedback export and folds native thumbs up/down
-/// ratings into ThaiRAG's feedback backend. Default off. See the OWUI feedback
-/// loop: OWUI discards the upstream response id, so ThaiRAG stamps it into the
-/// `usage` object (which OWUI persists in its feedback snapshot) and the sync
-/// reads it back to correlate a rating to the original request.
-#[derive(Debug, Clone, Deserialize)]
-pub struct OwuiFeedbackSyncConfig {
-    /// Master switch. When false the sync task is never spawned (strict no-op).
-    #[serde(default)]
-    pub enabled: bool,
-    /// Browser-unreachable internal base URL of the OWUI backend
-    /// (e.g. `http://open-webui:8080`). The sync calls
-    /// `{base_url}/api/v1/evaluations/feedbacks/all/export`.
-    #[serde(default)]
-    pub base_url: String,
-    /// API key of an OWUI **admin** user, sent as `Authorization: Bearer …`.
-    /// The export endpoint is admin-gated.
-    #[serde(default)]
-    pub admin_api_key: String,
-    /// Poll interval in seconds.
-    #[serde(default = "default_owui_sync_interval")]
-    pub interval_secs: u64,
-    /// HTTP request timeout in seconds.
-    #[serde(default = "default_owui_sync_timeout")]
-    pub request_timeout_secs: u64,
-}
-
-impl Default for OwuiFeedbackSyncConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            base_url: String::new(),
-            admin_api_key: String::new(),
-            interval_secs: default_owui_sync_interval(),
-            request_timeout_secs: default_owui_sync_timeout(),
-        }
-    }
-}
-
-fn default_owui_sync_interval() -> u64 {
-    300
-}
-fn default_owui_sync_timeout() -> u64 {
-    30
-}
-
 // ── Session Config ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2190,7 +2140,6 @@ mod tests {
             },
             chat_pipeline: ChatPipelineConfig::default(),
             mcp: McpConfig::default(),
-            owui_feedback_sync: OwuiFeedbackSyncConfig::default(),
             session: SessionConfig::default(),
             attachments: AttachmentsConfig::default(),
             embedding_cache: EmbeddingCacheConfig::default(),

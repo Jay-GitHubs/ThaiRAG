@@ -34,7 +34,6 @@ use crate::store::{InferenceLogEntry, LineageRecord, SearchAnalyticsEvent};
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    headers: axum::http::HeaderMap,
     AppJson(req): AppJson<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
     // ── Request validation ──────────────────────────────────────────
@@ -141,40 +140,9 @@ pub async fn chat_completions(
     };
 
     // ── Scope resolution ────────────────────────────────────────────
-    // For API key auth: check X-OpenWebUI-User-Email header to resolve real user.
-    // This allows Open WebUI (with ENABLE_FORWARD_USER_INFO_HEADERS=true) to
-    // enforce per-user workspace permissions even through a shared API key.
-    let user_id = if claims.sub == "api-key" {
-        // Resolve real user from forwarded headers (e.g., Open WebUI with
-        // ENABLE_FORWARD_USER_INFO_HEADERS=true). If the user doesn't exist
-        // in ThaiRAG yet, auto-create them as a viewer.
-        headers
-            .get("x-openwebui-user-email")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|email| {
-                match state.km_store.get_user_by_email(email) {
-                    Ok(u) => Some(u.user.id),
-                    Err(_) => {
-                        // Auto-provision: create user from forwarded identity
-                        let name = headers
-                            .get("x-openwebui-user-name")
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or(email);
-                        state
-                            .km_store
-                            .upsert_user_by_email(
-                                email.to_string(),
-                                name.to_string(),
-                                String::new(),
-                                false,
-                                "viewer".to_string(),
-                            )
-                            .ok()
-                            .map(|u| u.id)
-                    }
-                }
-            })
-    } else if claims.sub == "anonymous" {
+    // anonymous (auth disabled) and api-key (machine-to-machine) have no
+    // concrete user; a JWT carries the user id in `sub`.
+    let user_id = if claims.sub == "anonymous" || claims.sub == "api-key" {
         None
     } else {
         claims.sub.parse::<Uuid>().ok().map(UserId)
@@ -220,10 +188,6 @@ pub async fn chat_completions(
     // ── Build available scopes for tool router (Feature 3) ─────────
     let available_scopes = build_searchable_scopes(&state, &scope);
 
-    // Open WebUI forwards a per-user email header; its presence lets us skip the
-    // redundant plain-text footer there, since OWUI renders native annotations.
-    let is_openwebui = headers.contains_key("x-openwebui-user-email");
-
     if req.stream {
         handle_stream(
             state,
@@ -237,7 +201,6 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
-            is_openwebui,
         )
         .await
     } else {
@@ -253,7 +216,6 @@ pub async fn chat_completions(
             personal_memories,
             settings_scope,
             attachments,
-            is_openwebui,
         )
         .await
     }
@@ -567,89 +529,6 @@ fn build_citation_sources(
             })
             .collect()
     }
-}
-
-/// Build Open WebUI `{"event":{"type":"source",...}}` SSE payloads that carry
-/// real snippet content. OWUI dispatches these to its event emitter and renders
-/// each as a clickable, INLINE citation (the modal shows the source text). This
-/// is richer than `url_citation`, which OWUI converts into a title-only source
-/// with a URL — rendering as a link that opens a new tab. One payload per cited
-/// document; the `document`/`metadata` arrays are kept parallel as OWUI's
-/// `Citations.svelte` expects, and `metadata.source` is the (non-URL) doc id so
-/// OWUI does not treat it as a bare link citation.
-fn build_owui_source_events(
-    jwt: Option<&thairag_auth::JwtService>,
-    meta: &PipelineMetadata,
-    sources: &[CitationSource],
-    cite_base: &str,
-) -> Vec<String> {
-    let mut out = Vec::with_capacity(sources.len());
-    for s in sources {
-        if s.doc_id.is_empty() {
-            continue;
-        }
-        // Keep the chunk alongside its snippet so each citation entry can carry
-        // its own page/section provenance (OWUI renders these parallel arrays).
-        let chunks: Vec<&thairag_core::types::RetrievedChunkMeta> = meta
-            .retrieved_chunks
-            .iter()
-            .filter(|c| c.doc_id == s.doc_id && !c.content_preview.trim().is_empty())
-            .take(3)
-            .collect();
-        let mut documents: Vec<String> = chunks
-            .iter()
-            .map(|c| {
-                // OWUI has no native "section" slot, so prefix it into the
-                // snippet markdown the modal renders. Page rides metadata.page.
-                match c.section_title.as_deref() {
-                    Some(sec) if !sec.trim().is_empty() => {
-                        format!("**Section:** {sec}\n\n{}", c.content_preview)
-                    }
-                    _ => c.content_preview.clone(),
-                }
-            })
-            .collect();
-        let mut metadata: Vec<serde_json::Value> = chunks
-            .iter()
-            .map(|c| {
-                let mut m = serde_json::json!({ "source": s.doc_id, "name": s.title });
-                // OWUI's CitationModal renders metadata.page 0-indexed (shows
-                // page+1), so convert our 1-indexed page down by one.
-                if let Some(p) = primary_page(c) {
-                    m["page"] = serde_json::json!(p.saturating_sub(1));
-                }
-                m
-            })
-            .collect();
-        if documents.is_empty() {
-            documents.push(s.title.clone());
-            metadata.push(serde_json::json!({ "source": s.doc_id, "name": s.title }));
-        }
-        let mut source_obj = serde_json::json!({ "name": s.title, "id": s.doc_id });
-        if !cite_base.is_empty()
-            && let Some(jwt) = jwt
-            && let Ok(token) = jwt.encode_citation(&s.doc_id, 24)
-        {
-            source_obj["url"] = serde_json::Value::String(format!(
-                "{cite_base}/v1/citation/{}?token={}{}",
-                s.doc_id,
-                token,
-                provenance_query(s.page, s.section.as_deref()),
-            ));
-        }
-        let event = serde_json::json!({
-            "event": {
-                "type": "source",
-                "data": {
-                    "source": source_obj,
-                    "document": documents,
-                    "metadata": metadata,
-                }
-            }
-        });
-        out.push(event.to_string());
-    }
-    out
 }
 
 /// Build the `url` for a citation annotation. When a public base URL is
@@ -1121,7 +1000,6 @@ async fn handle_non_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
-    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     // Inject personal memory context
     let full_messages = inject_personal_memory_context(full_messages, &personal_memories);
@@ -1165,7 +1043,7 @@ async fn handle_non_stream(
     // stream-vs-non-stream divergence where stream refused but non-stream
     // answered from general knowledge.
     let has_external_context =
-        is_openwebui || thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages);
+        thairag_agent::chat_pipeline::has_client_supplied_context(&req.messages);
     let mut llm_resp = if let Some(ref pipeline) = scoped_pipeline {
         if attachments.is_empty() {
             pipeline
@@ -1455,7 +1333,6 @@ async fn handle_stream(
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
-    is_openwebui: bool,
 ) -> Result<Response, ApiError> {
     let id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = Utc::now().timestamp();
@@ -1677,21 +1554,11 @@ async fn handle_stream(
         let footer_meta = metadata_cell.lock().unwrap().clone();
 
         // ── Native, clickable citations ──────────────────────────────────
-        // Two client-specific shapes, same resolved source list:
-        //  • Open WebUI → `{"event":{"type":"source",...}}` chunks carrying real
-        //    snippet content. OWUI's middleware dispatches these to its event
-        //    emitter and renders them as INLINE citations (click → modal with the
-        //    text). Its OpenAI connector is a transparent line passthrough
-        //    (`stream_chunks_handler`), so the chunk reaches the middleware
-        //    verbatim. `url_citation` alone only yields a title-only link that
-        //    opens a new tab, which is worse UX.
-        //  • Every other client → OpenAI-standard
-        //    `delta.annotations[].url_citation` (a valid chat.completion.chunk),
-        //    rendered as clickable references or safely ignored.
-        // The plain-text footer below is the universal fallback, skipped for OWUI
-        // when source events were emitted (avoids a redundant duplicate).
+        // Portable OpenAI-standard `delta.annotations[].url_citation` (a valid
+        // chat.completion.chunk), rendered as clickable references by capable
+        // clients or safely ignored. The plain-text footer below is the
+        // universal fallback.
         let cite_cfg = &state.config.chat_pipeline;
-        let mut citations_emitted = false;
         if cite_cfg.citation_annotations_enabled {
             let sources = build_citation_sources(
                 &footer_meta,
@@ -1700,70 +1567,45 @@ async fn handle_stream(
             );
             if !sources.is_empty() {
                 let cite_base = cite_cfg.citation_base_url.trim_end_matches('/');
-                if is_openwebui {
-                    // OWUI: emit content-bearing `event: source` chunks so each
-                    // citation renders as a clickable INLINE source (modal shows
-                    // the snippet text) — one click, no new tab.
-                    for payload in
-                        build_owui_source_events(
-                            state.jwt.as_deref(),
-                            &footer_meta,
-                            &sources,
-                            cite_base,
-                        )
-                    {
-                        yield Ok(Event::default().data(payload));
-                        citations_emitted = true;
-                    }
-                } else {
-                    // Other clients: portable OpenAI-standard
-                    // `delta.annotations[].url_citation`.
-                    let annotations: Vec<ChatAnnotation> = sources
-                        .iter()
-                        .map(|s| ChatAnnotation {
-                            annotation_type: "url_citation".to_string(),
-                            url_citation: UrlCitation {
-                                url: citation_url(
-                                    &state,
-                                    cite_base,
-                                    &s.doc_id,
-                                    s.page,
-                                    s.section.as_deref(),
-                                ),
-                                title: s.title.clone(),
-                            },
-                        })
-                        .collect();
-                    let ann_chunk = ChatCompletionChunk {
-                        id: id_clone.clone(),
-                        object: "chat.completion.chunk".to_string(),
-                        created,
-                        model: model_clone.clone(),
-                        choices: vec![ChatChunkChoice {
-                            index: 0,
-                            delta: ChatChunkDelta {
-                                role: None,
-                                content: None,
-                                annotations: Some(annotations),
-                            },
-                            finish_reason: None,
-                        }],
-                        usage: None,
-                    };
-                    yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
-                    citations_emitted = true;
-                }
+                let annotations: Vec<ChatAnnotation> = sources
+                    .iter()
+                    .map(|s| ChatAnnotation {
+                        annotation_type: "url_citation".to_string(),
+                        url_citation: UrlCitation {
+                            url: citation_url(
+                                &state,
+                                cite_base,
+                                &s.doc_id,
+                                s.page,
+                                s.section.as_deref(),
+                            ),
+                            title: s.title.clone(),
+                        },
+                    })
+                    .collect();
+                let ann_chunk = ChatCompletionChunk {
+                    id: id_clone.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created,
+                    model: model_clone.clone(),
+                    choices: vec![ChatChunkChoice {
+                        index: 0,
+                        delta: ChatChunkDelta {
+                            role: None,
+                            content: None,
+                            annotations: Some(annotations),
+                        },
+                        finish_reason: None,
+                    }],
+                    usage: None,
+                };
+                yield Ok(Event::default().data(serde_json::to_string(&ann_chunk).unwrap()));
             }
         }
 
-        // Append the plain-text source footer for transparency / fallback.
-        // Emitted as a final content chunk so clients without native citation
-        // support still render it inline. Skipped for Open WebUI when we already
-        // emitted native `delta.annotations` (OWUI v0.9.6 renders those as
-        // clickable references, so the footer would be a redundant duplicate);
-        // every other client still gets the footer.
-        if !(is_openwebui && citations_emitted)
-            && let Some(footer) = build_source_footer(
+        // Append the plain-text source footer for transparency / fallback, so
+        // clients without native citation support still render it inline.
+        if let Some(footer) = build_source_footer(
             &footer_meta,
             state.config.chat_pipeline.source_footer_enabled,
             state.config.chat_pipeline.source_footer_max,
@@ -1845,12 +1687,7 @@ async fn handle_stream(
                 prompt_tokens: llm_usage.prompt_tokens,
                 completion_tokens: llm_usage.completion_tokens,
                 total_tokens: llm_usage.prompt_tokens + llm_usage.completion_tokens,
-                // OWUI persists the usage object verbatim into its feedback
-                // snapshot; stamp the response id here so the feedback bridge
-                // can correlate a thumbs rating back to this request. OWUI
-                // discards the chunk-level `id`, so usage is the only carrier
-                // that survives invisibly (never rendered/copied/spoken).
-                thairag_response_id: is_openwebui.then(|| id_clone.clone()),
+                thairag_response_id: None,
             }),
         };
         yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap()));
@@ -2828,90 +2665,6 @@ mod citation_tests {
         assert_eq!(sources[1].doc_id, "doc-c");
     }
 
-    fn src(doc_id: &str, title: &str) -> CitationSource {
-        CitationSource {
-            title: title.to_string(),
-            doc_id: doc_id.to_string(),
-            page: None,
-            section: None,
-        }
-    }
-
-    #[test]
-    fn owui_source_event_carries_snippet_content_not_title() {
-        let meta = PipelineMetadata {
-            retrieved_chunks: vec![
-                chunk("a", "the real snippet text", 0.9, 0),
-                chunk("a", "second snippet", 0.8, 1),
-            ],
-            ..Default::default()
-        };
-        let sources = vec![src("doc-a", "Title A")];
-
-        let events = build_owui_source_events(None, &meta, &sources, "");
-        assert_eq!(events.len(), 1);
-        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
-        let data = &v["event"]["data"];
-        assert_eq!(v["event"]["type"], "source");
-        // document carries the chunk snippets, not the title.
-        let docs = data["document"].as_array().unwrap();
-        assert_eq!(docs.len(), 2);
-        assert_eq!(docs[0], "the real snippet text");
-        assert_eq!(docs[1], "second snippet");
-        // metadata runs parallel to document, each pointing at the (non-URL) doc id.
-        let md = data["metadata"].as_array().unwrap();
-        assert_eq!(md.len(), 2);
-        assert_eq!(md[0]["source"], "doc-a");
-        assert_eq!(md[0]["name"], "Title A");
-        // no url without a citation base / jwt.
-        assert!(data["source"].get("url").is_none());
-        assert_eq!(data["source"]["id"], "doc-a");
-        assert_eq!(data["source"]["name"], "Title A");
-    }
-
-    #[test]
-    fn owui_source_event_falls_back_to_title_without_snippet() {
-        let meta = PipelineMetadata {
-            retrieved_chunks: vec![chunk("a", "", 0.9, 0)],
-            ..Default::default()
-        };
-        let sources = vec![src("doc-b", "Title B")];
-
-        let events = build_owui_source_events(None, &meta, &sources, "");
-        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
-        let docs = v["event"]["data"]["document"].as_array().unwrap();
-        // no matching snippet → fall back to the title so the modal is non-empty.
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0], "Title B");
-    }
-
-    #[test]
-    fn owui_source_event_caps_snippets_at_three() {
-        let meta = PipelineMetadata {
-            retrieved_chunks: vec![
-                chunk("a", "s1", 0.9, 0),
-                chunk("a", "s2", 0.8, 1),
-                chunk("a", "s3", 0.7, 2),
-                chunk("a", "s4", 0.6, 3),
-            ],
-            ..Default::default()
-        };
-        let sources = vec![src("doc-a", "Title A")];
-
-        let events = build_owui_source_events(None, &meta, &sources, "");
-        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
-        let docs = v["event"]["data"]["document"].as_array().unwrap();
-        assert_eq!(docs.len(), 3);
-    }
-
-    #[test]
-    fn owui_source_event_skips_empty_doc_id() {
-        let meta = PipelineMetadata::default();
-        let sources = vec![src("", "No Id")];
-        let events = build_owui_source_events(None, &meta, &sources, "http://x");
-        assert!(events.is_empty());
-    }
-
     #[test]
     fn citation_source_carries_page_and_section_from_marker_chunk() {
         let meta = PipelineMetadata {
@@ -2935,45 +2688,6 @@ mod citation_tests {
         let sources = build_citation_sources(&meta, 10, echo_title);
         assert_eq!(sources[0].page, Some(3));
         assert_eq!(sources[0].section.as_deref(), Some("Intro"));
-    }
-
-    #[test]
-    fn owui_source_event_injects_section_and_zero_indexed_page() {
-        let meta = PipelineMetadata {
-            retrieved_chunks: vec![chunk_loc(
-                "a",
-                "the snippet",
-                0,
-                Some(7),
-                Some("Prohibited"),
-            )],
-            ..Default::default()
-        };
-        let sources = vec![src("doc-a", "Title A")];
-        let events = build_owui_source_events(None, &meta, &sources, "");
-        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
-        let data = &v["event"]["data"];
-        // Section prefixed into the snippet markdown the modal renders.
-        assert_eq!(
-            data["document"][0].as_str().unwrap(),
-            "**Section:** Prohibited\n\nthe snippet"
-        );
-        // metadata.page is 0-indexed (OWUI displays page+1), so 7 → 6.
-        assert_eq!(data["metadata"][0]["page"], 6);
-    }
-
-    #[test]
-    fn owui_source_event_omits_page_when_absent() {
-        let meta = PipelineMetadata {
-            retrieved_chunks: vec![chunk("a", "snippet", 0.9, 0)],
-            ..Default::default()
-        };
-        let sources = vec![src("doc-a", "Title A")];
-        let events = build_owui_source_events(None, &meta, &sources, "");
-        let v: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
-        // No page metadata; snippet has no section prefix.
-        assert!(v["event"]["data"]["metadata"][0].get("page").is_none());
-        assert_eq!(v["event"]["data"]["document"][0], "snippet");
     }
 
     #[test]

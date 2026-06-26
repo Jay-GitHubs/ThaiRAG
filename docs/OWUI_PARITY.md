@@ -58,6 +58,13 @@ stop/regenerate, on desktop + mobile viewport). Then Phase 7.
 
 ## Phase 7 — decommission steps (after the gate)
 
+**Status: DONE.** OWUI removed — compose service + `webui.db` volume dropped;
+`owui_feedback_sync` module + config + spawn deleted; the `x-openwebui-*` user
+resolution, `is_openwebui` branching, and `build_owui_source_events` removed from
+`chat.rs`/`v2_chat.rs`/`ws_chat.rs`. Kept: `/v1`, the citation viewer + media
+route, and `oidc.rs` (now powering chat-ui SSO). Keycloak stays as the chat-ui
+SSO IdP. The steps below are the record of what was done.
+
 1. **Compose:** remove the OWUI service from `docker-compose.test-idp.yml` and the
    commented block in `docker-compose.yml`; drop the `open-webui-data`
    (`webui.db`) volume.
