@@ -46,6 +46,9 @@
 
   --mark-bg: #fff3bf;
   --mark-text: #1a2330;
+  /* Translucent variant for highlights drawn *over* content (the PDF overlay),
+     so the text underneath always shows through. */
+  --mark-overlay: rgba(47, 142, 126, 0.3);
   --chip-border: #cfe3dd;
 
   --scrollbar: rgba(120, 120, 120, 0.28);
@@ -83,8 +86,9 @@
   --code-text: #dfe7f2;
   --code-btn-bg: rgba(255, 255, 255, 0.1);
 
-  --mark-bg: rgba(127, 211, 193, 0.24);
+  --mark-bg: rgba(127, 211, 193, 0.32);
   --mark-text: #eef3fa;
+  --mark-overlay: rgba(70, 179, 160, 0.32);
   --chip-border: #2c4a44;
 
   --scrollbar: rgba(255, 255, 255, 0.18);
@@ -120,6 +124,7 @@
 
   --mark-bg: #ffe9a8;
   --mark-text: #20242e;
+  --mark-overlay: rgba(58, 79, 156, 0.28);
   --chip-border: #c9d0ec;
 
   --scrollbar: rgba(100, 100, 120, 0.3);
@@ -155,6 +160,7 @@
 
   --mark-bg: #ffd9b3;
   --mark-text: #2a2020;
+  --mark-overlay: rgba(192, 57, 43, 0.26);
   --chip-border: #ecc9c1;
 
   --scrollbar: rgba(120, 90, 90, 0.3);
@@ -190,6 +196,7 @@
 
   --mark-bg: #ffe1b0;
   --mark-text: #3a2b33;
+  --mark-overlay: rgba(213, 106, 147, 0.3);
   --chip-border: #f2cfde;
 
   --scrollbar: rgba(150, 110, 130, 0.3);
@@ -225,6 +232,7 @@
 
   --mark-bg: #fde68a;
   --mark-text: #1e293b;
+  --mark-overlay: rgba(37, 99, 235, 0.26);
   --chip-border: #cdd9ec;
 
   --scrollbar: rgba(100, 116, 139, 0.35);
@@ -258,8 +266,9 @@
   --code-text: #d9d4f5;
   --code-btn-bg: rgba(255, 255, 255, 0.1);
 
-  --mark-bg: rgba(34, 211, 238, 0.24);
+  --mark-bg: rgba(34, 211, 238, 0.3);
   --mark-text: #f0edff;
+  --mark-overlay: rgba(34, 211, 238, 0.32);
   --chip-border: #34406a;
 
   --scrollbar: rgba(255, 255, 255, 0.16);
@@ -293,8 +302,9 @@
   --code-text: #ffd9f4;
   --code-btn-bg: rgba(255, 255, 255, 0.1);
 
-  --mark-bg: rgba(56, 224, 214, 0.26);
+  --mark-bg: rgba(56, 224, 214, 0.32);
   --mark-text: #ffeaff;
+  --mark-overlay: rgba(56, 224, 214, 0.34);
   --chip-border: #4a2a5e;
 
   --scrollbar: rgba(255, 255, 255, 0.16);
@@ -328,8 +338,9 @@
   --code-text: #ffcf87;
   --code-btn-bg: rgba(255, 176, 0, 0.14);
 
-  --mark-bg: rgba(255, 176, 0, 0.24);
+  --mark-bg: rgba(255, 176, 0, 0.32);
   --mark-text: #ffe6b8;
+  --mark-overlay: rgba(255, 176, 0, 0.38);
   --chip-border: #4a3a16;
 
   --scrollbar: rgba(255, 176, 0, 0.25);
@@ -365,8 +376,9 @@
   --code-text: #d3eee6;
   --code-btn-bg: rgba(255, 255, 255, 0.1);
 
-  --mark-bg: rgba(52, 211, 153, 0.24);
+  --mark-bg: rgba(52, 211, 153, 0.3);
   --mark-text: #e8fbf6;
+  --mark-overlay: rgba(52, 211, 153, 0.32);
   --chip-border: #235049;
 
   --scrollbar: rgba(255, 255, 255, 0.16);
