@@ -2,6 +2,7 @@ import client, { getToken } from './client';
 import type {
   Attachment,
   Conversation,
+  DocumentSource,
   MessageRow,
   StreamEvent,
   WorkspaceOption,
@@ -39,6 +40,12 @@ export async function deleteConversation(id: string): Promise<void> {
 
 export async function listMessages(id: string): Promise<MessageRow[]> {
   const res = await client.get<MessageRow[]>(`/api/chat/conversations/${id}/messages`);
+  return res.data;
+}
+
+/** Fetch a cited document's text for the in-app source viewer. */
+export async function getDocumentSource(docId: string): Promise<DocumentSource> {
+  const res = await client.get<DocumentSource>(`/api/chat/documents/${docId}/source`);
   return res.data;
 }
 

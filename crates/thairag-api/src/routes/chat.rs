@@ -426,6 +426,9 @@ struct CitationSource {
     page: Option<usize>,
     /// Section/heading the cited passage belongs to, when known.
     section: Option<String>,
+    /// A snippet of the cited chunk's text, used by the in-app source viewer to
+    /// locate and highlight the passage within the full document.
+    snippet: Option<String>,
 }
 
 /// Resolve a human-readable document title for native citations: prefer a title
@@ -487,6 +490,7 @@ fn build_citation_sources(
                     doc_id: c.doc_id.clone(),
                     page: loc.and_then(primary_page),
                     section: loc.and_then(|r| r.section_title.clone()),
+                    snippet: loc.map(|r| r.content_preview.clone()),
                 });
             } else if let Some(rc) = meta.retrieved_chunks.iter().find(|r| r.rank == n - 1) {
                 // Marker gap: fill positionally from the ranked retrieval so the
@@ -496,6 +500,7 @@ fn build_citation_sources(
                     doc_id: rc.doc_id.clone(),
                     page: primary_page(rc),
                     section: rc.section_title.clone(),
+                    snippet: Some(rc.content_preview.clone()),
                 });
             } else {
                 out.push(CitationSource {
@@ -503,6 +508,7 @@ fn build_citation_sources(
                     doc_id: String::new(),
                     page: None,
                     section: None,
+                    snippet: None,
                 });
             }
         }
@@ -526,6 +532,7 @@ fn build_citation_sources(
                 doc_id: c.doc_id.clone(),
                 page: primary_page(c),
                 section: c.section_title.clone(),
+                snippet: Some(c.content_preview.clone()),
             })
             .collect()
     }
@@ -2155,6 +2162,7 @@ pub async fn stream_conversation_message(
                     } else {
                         Some(citation_url(&state, &cite_base, &s.doc_id, s.page, s.section.as_deref()))
                     },
+                    snippet: s.snippet.clone(),
                 })
                 .collect();
             if !persisted_citations.is_empty() {
