@@ -89,15 +89,15 @@ function renderPromptTokens(estimated: number, actual: number): ReactNode {
 }
 
 function rateColor(rate: number): string {
-  if (rate >= 0.95) return '#52c41a';
-  if (rate >= 0.8) return '#faad14';
-  return '#cf1322';
+  if (rate >= 0.95) return 'var(--success)';
+  if (rate >= 0.8) return 'var(--warning)';
+  return 'var(--danger)';
 }
 
 function scoreColor(score: number): string {
-  if (score >= 0.8) return '#52c41a';
-  if (score >= 0.5) return '#faad14';
-  return '#cf1322';
+  if (score >= 0.8) return 'var(--success)';
+  if (score >= 0.5) return 'var(--warning)';
+  return 'var(--danger)';
 }
 
 function inferenceLogsToCsv(entries: InferenceLogEntry[]): string {
@@ -140,9 +140,12 @@ export default function InferenceLogsPage() {
   return (
     <>
       <Space align="baseline" style={{ marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Inference Logs
-        </Typography.Title>
+        <div>
+          <div className="eyebrow">Analytics &amp; Quality</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Inference Logs
+          </Typography.Title>
+        </div>
         <Tooltip title="Per-request inference logs for compliance, audit, performance analysis, and support investigation. Captures model, tokens, timing, quality scores, and pipeline details for every query.">
           <QuestionCircleOutlined style={{ fontSize: 16 }} />
         </Tooltip>
@@ -925,8 +928,8 @@ function ManagementTab() {
 
       {/* Purge */}
       <Card
-        title={<span style={{ color: '#cf1322' }}><DeleteOutlined /> Purge Logs</span>}
-        style={{ borderColor: '#ff4d4f' }}
+        title={<span style={{ color: 'var(--danger)' }}><DeleteOutlined /> Purge Logs</span>}
+        style={{ borderColor: 'var(--danger)' }}
       >
         <Alert
           type="warning"
