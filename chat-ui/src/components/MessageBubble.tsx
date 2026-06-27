@@ -77,14 +77,22 @@ function CodeBlock({ children, ...props }: { children?: React.ReactNode }) {
   );
 }
 
-/** Small celadon document mark that stands in for the assistant. */
+/** Friendly robot mark that stands in for the assistant. The head paints
+ *  --on-accent (always legible on the accent square); the eyes/mouth are
+ *  cut-outs in the accent color, so the avatar reads correctly in every theme. */
 function AssistantMark() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style={{ flexShrink: 0 }}>
       <rect width="28" height="28" rx="8" fill="var(--celadon)" />
-      <rect x="8" y="9" width="12" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.85" />
-      <rect x="8" y="13" width="12" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.5" />
-      <rect x="8" y="17" width="8" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.85" />
+      {/* antenna */}
+      <rect x="13.2" y="4" width="1.6" height="3.2" rx="0.8" fill="var(--on-accent)" />
+      <circle cx="14" cy="3.6" r="1.5" fill="var(--on-accent)" />
+      {/* head */}
+      <rect x="6.5" y="7.5" width="15" height="13" rx="4" fill="var(--on-accent)" />
+      {/* eyes + mouth (cut-outs showing the accent square through) */}
+      <circle cx="11" cy="13" r="1.7" fill="var(--celadon)" />
+      <circle cx="17" cy="13" r="1.7" fill="var(--celadon)" />
+      <rect x="10.5" y="16.4" width="7" height="1.7" rx="0.85" fill="var(--celadon)" />
     </svg>
   );
 }

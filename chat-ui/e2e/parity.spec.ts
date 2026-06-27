@@ -320,6 +320,26 @@ test('theme picker switches + persists, keyboard shortcuts (UX batch D)', async 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'celadon');
 });
 
+test('celadon theme variables actually apply (regression: dropped selector)', async ({ page }) => {
+  await login(page);
+  // Select the default theme explicitly — its vars must apply (a combined
+  // `:root, :root[data-theme=celadon]` selector previously failed to, leaving the
+  // whole theme's colors empty → transparent bubbles, black avatar).
+  await page.getByTestId('theme-picker').click();
+  await page.getByTestId('theme-option-celadon').click();
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill('hello');
+  await page.getByRole('button', { name: 'Send' }).click();
+  // The user bubble paints var(--celadon); if the theme vars didn't apply it would
+  // be transparent. (Optimistic bubble renders immediately — no need to await.)
+  const bg = await page
+    .getByTestId('msg-user')
+    .first()
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(bg).not.toBe('rgba(0, 0, 0, 0)');
+  expect(bg).not.toBe('transparent');
+});
+
 test('citations stay legible under a dark theme (theme compatibility)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);
