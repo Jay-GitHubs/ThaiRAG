@@ -166,6 +166,7 @@ export function MessageComposer({
           />
         </Tooltip>
         <Input.TextArea
+          data-testid="composer-input"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onPaste={onPaste}
