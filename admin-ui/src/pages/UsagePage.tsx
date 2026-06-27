@@ -60,7 +60,12 @@ export function UsagePage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>Usage & Costs</Typography.Title>
+        <div>
+          <div className="eyebrow">Analytics &amp; Quality</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Usage &amp; Costs
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="usage" />
       </div>
 
@@ -89,7 +94,7 @@ export function UsagePage() {
                   }
                   prefix={<DollarOutlined />}
                   valueStyle={{
-                    color: isLocal ? '#52c41a' : data.estimated_cost_usd && data.estimated_cost_usd > 1 ? '#cf1322' : undefined,
+                    color: isLocal ? 'var(--success)' : data.estimated_cost_usd && data.estimated_cost_usd > 1 ? 'var(--danger)' : undefined,
                   }}
                 />
               </Card>
@@ -189,7 +194,7 @@ export function UsagePage() {
               </Typography.Paragraph>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid #333' }}>
+                  <tr style={{ borderBottom: '1px solid var(--line)' }}>
                     <th style={{ textAlign: 'left', padding: '4px 8px' }}>Model</th>
                     <th style={{ textAlign: 'right', padding: '4px 8px' }}>Input</th>
                     <th style={{ textAlign: 'right', padding: '4px 8px' }}>Output</th>
@@ -202,7 +207,7 @@ export function UsagePage() {
                       <tr
                         key={row.model}
                         style={{
-                          borderBottom: '1px solid #222',
+                          borderBottom: '1px solid var(--line)',
                           fontWeight: isActive ? 'bold' : undefined,
                           background: isActive ? 'rgba(24, 144, 255, 0.1)' : undefined,
                         }}

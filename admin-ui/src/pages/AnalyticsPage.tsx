@@ -151,7 +151,7 @@ function BarChart({
   data,
   labelKey,
   valueKey,
-  color = '#1677ff',
+  color = 'var(--celadon)',
   height = 200,
   suffix = '',
 }: {
@@ -376,9 +376,12 @@ export default function AnalyticsPage() {
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Analytics
-          </Typography.Title>
+          <div>
+            <div className="eyebrow">Analytics &amp; Quality</div>
+            <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              Analytics
+            </Typography.Title>
+          </div>
           <Tooltip title="Query volume, latency trends, popular topics, and token usage derived from inference logs.">
             <QuestionCircleOutlined style={{ fontSize: 16 }} />
           </Tooltip>
@@ -459,7 +462,7 @@ export default function AnalyticsPage() {
             data={timeBuckets}
             labelKey="label"
             valueKey="count"
-            color="#1677ff"
+            color="var(--celadon)"
             height={220}
             suffix=" queries"
           />
@@ -483,10 +486,10 @@ export default function AnalyticsPage() {
               <div>
                 <Row gutter={[16, 12]}>
                   {[
-                    { label: 'p50 (Median)', value: latencyPercentiles.p50, color: '#52c41a' },
-                    { label: 'p90', value: latencyPercentiles.p90, color: '#1677ff' },
-                    { label: 'p95', value: latencyPercentiles.p95, color: '#faad14' },
-                    { label: 'p99', value: latencyPercentiles.p99, color: '#cf1322' },
+                    { label: 'p50 (Median)', value: latencyPercentiles.p50, color: 'var(--success)' },
+                    { label: 'p90', value: latencyPercentiles.p90, color: 'var(--celadon)' },
+                    { label: 'p95', value: latencyPercentiles.p95, color: 'var(--warning)' },
+                    { label: 'p99', value: latencyPercentiles.p99, color: 'var(--danger)' },
                   ].map((p) => (
                     <Col xs={12} sm={6} key={p.label}>
                       <Statistic
@@ -499,10 +502,10 @@ export default function AnalyticsPage() {
                 </Row>
                 <div style={{ marginTop: 20 }}>
                   {[
-                    { label: 'p50', value: latencyPercentiles.p50, color: '#52c41a' },
-                    { label: 'p90', value: latencyPercentiles.p90, color: '#1677ff' },
-                    { label: 'p95', value: latencyPercentiles.p95, color: '#faad14' },
-                    { label: 'p99', value: latencyPercentiles.p99, color: '#cf1322' },
+                    { label: 'p50', value: latencyPercentiles.p50, color: 'var(--success)' },
+                    { label: 'p90', value: latencyPercentiles.p90, color: 'var(--celadon)' },
+                    { label: 'p95', value: latencyPercentiles.p95, color: 'var(--warning)' },
+                    { label: 'p99', value: latencyPercentiles.p99, color: 'var(--danger)' },
                   ].map((p) => (
                     <div key={p.label} style={{ marginBottom: 8 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -564,9 +567,9 @@ export default function AnalyticsPage() {
             <RobotOutlined />
             <span>Token Usage Over Time</span>
             <Space size={4} style={{ marginLeft: 8 }}>
-              <div style={{ width: 12, height: 12, backgroundColor: '#1677ff', borderRadius: 2, display: 'inline-block' }} />
+              <div style={{ width: 12, height: 12, backgroundColor: 'var(--celadon)', borderRadius: 2, display: 'inline-block' }} />
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Prompt</Typography.Text>
-              <div style={{ width: 12, height: 12, backgroundColor: '#52c41a', borderRadius: 2, display: 'inline-block', marginLeft: 8 }} />
+              <div style={{ width: 12, height: 12, backgroundColor: 'var(--success)', borderRadius: 2, display: 'inline-block', marginLeft: 8 }} />
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Completion</Typography.Text>
             </Space>
           </Space>
@@ -578,7 +581,7 @@ export default function AnalyticsPage() {
             data={timeBuckets}
             labelKey="label"
             keys={['promptTokens', 'completionTokens']}
-            colors={['#1677ff', '#52c41a']}
+            colors={['var(--celadon)', 'var(--success)']}
             height={200}
           />
         ) : (
@@ -648,7 +651,7 @@ export default function AnalyticsPage() {
               { title: 'Model', dataIndex: 'model', render: (v: string) => <Tag color="blue">{v}</Tag> },
               { title: 'Requests', dataIndex: 'count', sorter: (a, b) => a.count - b.count, defaultSortOrder: 'descend' as const },
               { title: 'Avg Latency', dataIndex: 'avg_ms', render: (v: number) => formatMs(v), sorter: (a, b) => a.avg_ms - b.avg_ms },
-              { title: 'Avg Quality', dataIndex: 'avg_quality', render: (v: number) => <span style={{ color: v >= 0.8 ? '#52c41a' : v >= 0.5 ? '#faad14' : '#cf1322' }}>{v.toFixed(3)}</span> },
+              { title: 'Avg Quality', dataIndex: 'avg_quality', render: (v: number) => <span style={{ color: v >= 0.8 ? 'var(--success)' : v >= 0.5 ? 'var(--warning)' : 'var(--danger)' }}>{v.toFixed(3)}</span> },
               { title: 'Total Tokens', dataIndex: 'total_tokens', render: (v: number) => formatTokenCount(v) },
             ]}
           />
