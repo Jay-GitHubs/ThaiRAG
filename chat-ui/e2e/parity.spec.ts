@@ -69,7 +69,8 @@ test('source drawer renders the original PDF (Phase 2)', async ({ page }) => {
     .locator('.ant-select-item-option')
     .filter({ hasText: /^KMs$/ })
     .click();
-  await page.getByPlaceholder(COMPOSER).fill('เอกสารฉบับนี้เกี่ยวกับอะไร');
+  // A born-digital PDF query, so the cited (first) source is a PDF.
+  await page.getByPlaceholder(COMPOSER).fill('What were the Q1 and Q2 sales for the North and South regions?');
   await page.getByRole('button', { name: 'Send' }).click();
   await waitForAnswer(page);
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });

@@ -2174,19 +2174,34 @@ pub async fn stream_conversation_message(
             }
         }
 
-        // 3b) Inline source images — the retrieved chunks' source images,
-        // surfaced so the UI can show screenshots/figures next to the answer.
-        // Gated (default off); needs a browser-reachable base + signing key.
+        // 3b) Inline source images — the source images of the chunks the answer
+        // actually cited (falls back to all retrieved chunks only when there are
+        // no structured citations), so images track the citations, not raw
+        // retrieval. Gated (default off); needs a browser-reachable base + key.
+        let image_chunks: Vec<thairag_core::types::RetrievedChunkMeta> =
+            if footer_meta.citations.is_empty() {
+                footer_meta.retrieved_chunks.clone()
+            } else {
+                let cited: std::collections::HashSet<&str> = footer_meta
+                    .citations
+                    .iter()
+                    .map(|c| c.chunk_id.as_str())
+                    .collect();
+                footer_meta
+                    .retrieved_chunks
+                    .iter()
+                    .filter(|r| cited.contains(r.chunk_id.as_str()))
+                    .cloned()
+                    .collect()
+            };
         let mut persisted_images: Vec<crate::chat_history::PersistedImage> = Vec::new();
         if inline_images_enabled
             && !cite_base.is_empty()
             && let Some(jwt) = state.jwt.as_deref()
         {
-            for (img_id, page) in resolve_inline_images(
-                &*state.km_store,
-                &footer_meta.retrieved_chunks,
-                inline_images_max,
-            ) {
+            for (img_id, page) in
+                resolve_inline_images(&*state.km_store, &image_chunks, inline_images_max)
+            {
                 // Sign a single-image, time-limited token (reusing the citation
                 // token model with the image id as subject) so a browser <img>
                 // can load it from the public media route without auth headers.

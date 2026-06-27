@@ -2152,6 +2152,8 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
+                let stream =
+                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2278,6 +2280,8 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
+                let stream =
+                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2389,6 +2393,41 @@ impl ChatPipeline {
     }
 
     /// Layer 3: Post-stream quality check.
+    /// Record structured citations for the streaming path. The non-stream
+    /// `process()` parses the answer's `[N]` markers after generation, but a
+    /// stream returns before the answer exists — so we wrap the token stream to
+    /// accumulate it and, once complete, parse markers against the *curated*
+    /// context (the same mapping `process()` uses) into pipeline metadata. This
+    /// is what makes the source footer reflect what the answer actually cited
+    /// rather than the raw retrieval set. No-op when the feature is disabled.
+    fn wrap_stream_recording_citations(
+        &self,
+        inner: LlmStreamResponse,
+        context: CuratedContext,
+        metadata: Option<MetadataCell>,
+    ) -> LlmStreamResponse {
+        if !self.config.structured_citations_enabled {
+            return inner;
+        }
+        let usage = inner.usage.clone();
+        let stream = async_stream::stream! {
+            let mut inner_stream = inner.stream;
+            let mut collected = String::new();
+            while let Some(chunk) = inner_stream.next().await {
+                if let Ok(text) = &chunk { collected.push_str(text) }
+                yield chunk;
+            }
+            let citations = crate::citation_parser::parse_citations(&collected, &context);
+            if !citations.is_empty() {
+                Self::update_metadata(&metadata, |m| { m.citations = citations; });
+            }
+        };
+        LlmStreamResponse {
+            stream: Box::pin(stream),
+            usage,
+        }
+    }
+
     fn wrap_stream_with_quality_guard(
         &self,
         inner: LlmStreamResponse,
