@@ -82,6 +82,7 @@ export function streamMessage(
   signal?: AbortSignal,
   attachments?: Attachment[],
   regenerate?: boolean,
+  edit?: boolean,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const token = getToken();
@@ -95,6 +96,7 @@ export function streamMessage(
         content,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(regenerate ? { regenerate: true } : {}),
+        ...(edit ? { edit: true } : {}),
       }),
       signal,
     })

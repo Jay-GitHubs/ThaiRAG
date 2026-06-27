@@ -3,12 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
-import { Image, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
+import { Button as AntButton, Image, Input, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
   CheckOutlined,
   CopyOutlined,
   DislikeFilled,
   DislikeOutlined,
+  EditOutlined,
   FileTextOutlined,
   LikeFilled,
   LikeOutlined,
@@ -86,9 +87,71 @@ function AssistantMark() {
   );
 }
 
-function UserMessage({ message }: { message: UiMessage }) {
+function UserMessage({
+  message,
+  editable,
+  onEdit,
+}: {
+  message: UiMessage;
+  editable?: boolean;
+  onEdit?: (text: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.content);
+  const [hovered, setHovered] = useState(false);
+
+  const begin = () => {
+    setDraft(message.content);
+    setEditing(true);
+  };
+  const save = () => {
+    const t = draft.trim();
+    setEditing(false);
+    if (t && t !== message.content) onEdit?.(t);
+  };
+
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: 22 }}>
+        <div style={{ width: '100%', maxWidth: 620 }}>
+          <Input.TextArea
+            data-testid="edit-input"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            autoSize={{ minRows: 1, maxRows: 8 }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                save();
+              }
+              if (e.key === 'Escape') setEditing(false);
+            }}
+            style={{ fontSize: 15.5 }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+            <AntButton size="small" onClick={() => setEditing(false)}>
+              Cancel
+            </AntButton>
+            <AntButton
+              size="small"
+              type="primary"
+              data-testid="edit-save"
+              onClick={save}
+              disabled={!draft.trim()}
+            >
+              Send
+            </AntButton>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -96,20 +159,37 @@ function UserMessage({ message }: { message: UiMessage }) {
         marginBottom: 22,
       }}
     >
-      <div
-        data-testid="msg-user"
-        style={{
-          maxWidth: 620,
-          background: 'var(--celadon)',
-          color: '#fff',
-          padding: '11px 15px',
-          borderRadius: '14px 14px 4px 14px',
-          fontSize: 15.5,
-          lineHeight: 1.6,
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        {message.content}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {editable && (
+          <Tooltip title="Edit & resend">
+            <EditOutlined
+              data-testid="edit-message"
+              onClick={begin}
+              style={{
+                fontSize: 13,
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                opacity: hovered ? 1 : 0,
+                transition: 'opacity 0.12s',
+              }}
+            />
+          </Tooltip>
+        )}
+        <div
+          data-testid="msg-user"
+          style={{
+            maxWidth: 620,
+            background: 'var(--celadon)',
+            color: '#fff',
+            padding: '11px 15px',
+            borderRadius: '14px 14px 4px 14px',
+            fontSize: 15.5,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {message.content}
+        </div>
       </div>
       {message.attachments && message.attachments.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'flex-end' }}>
@@ -421,13 +501,17 @@ export function MessageBubble({
   message,
   onFeedback,
   onSourceClick,
+  editable,
+  onEdit,
 }: {
   message: UiMessage;
   onFeedback?: (messageId: string, value: number) => void;
   onSourceClick?: (c: Citation) => void;
+  editable?: boolean;
+  onEdit?: (text: string) => void;
 }) {
   return message.role === 'user' ? (
-    <UserMessage message={message} />
+    <UserMessage message={message} editable={editable} onEdit={onEdit} />
   ) : (
     <AssistantMessage message={message} onFeedback={onFeedback} onSourceClick={onSourceClick} />
   );

@@ -249,6 +249,40 @@ test('finished answer offers a copy button (answer ergonomics)', async ({ page }
   await expect(page.getByTestId('copy-answer').last()).toBeVisible({ timeout: 10_000 });
 });
 
+test('edit & resend a user message replaces the turn (UX batch C)', async ({ page }) => {
+  test.setTimeout(200_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+
+  await page.getByPlaceholder(COMPOSER).fill('edittest-alpha สวัสดี ตอบสั้น ๆ');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-alpha' })).toBeVisible();
+
+  // Composer advertises drop/paste upload (batch C input power).
+  await expect(page.getByText(/drop or paste files/)).toBeVisible();
+
+  // Edit the last user message and resend the corrected prompt.
+  await page.getByTestId('msg-user').last().hover();
+  await page.getByTestId('edit-message').click();
+  await page.getByTestId('edit-input').fill('edittest-beta สวัสดี ตอบสั้น ๆ');
+  await page.getByTestId('edit-save').click();
+  await waitForAnswer(page);
+
+  // The edited prompt replaces the original — no duplicate user turn.
+  await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-beta' })).toBeVisible();
+  await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-alpha' })).toHaveCount(0);
+
+  // Reload to prove the backend replaced (not orphaned) the rows: the edited
+  // conversation is most-recent, so it's the top row.
+  await page.reload();
+  await page.getByTestId('conversation-row').first().click();
+  await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-beta' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-alpha' })).toHaveCount(0);
+});
+
 test('sidebar search + date grouping (UX batch B)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);
