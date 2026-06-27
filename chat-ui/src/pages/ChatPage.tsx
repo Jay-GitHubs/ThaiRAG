@@ -18,6 +18,26 @@ import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
 import { ScopeSelector } from '../components/ScopeSelector';
 
+// Friendly labels for the backend's pipeline stage names (the `progress` SSE
+// event), so the "preparing answer" state reads in plain language. Unknown
+// stages fall back to a humanized version of the raw name.
+const STAGE_LABELS: Record<string, string> = {
+  query_analyzer: 'Understanding your question',
+  self_rag_gate: 'Deciding what to look up',
+  pipeline_orchestrator: 'Planning the answer',
+  retrieval: 'Searching your documents',
+  search: 'Searching your documents',
+  context_curator: 'Reading the most relevant parts',
+  output_guardrails: 'Reviewing the answer',
+};
+
+function stageLabel(stage: string): string {
+  return (
+    STAGE_LABELS[stage] ??
+    `${stage.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())}…`
+  );
+}
+
 export function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -122,8 +142,13 @@ export function ChatPage() {
   const handleStreamEvent = useCallback(
     (evt: StreamEvent) => {
       switch (evt.type) {
+        case 'progress':
+          // Show what the pipeline is doing while the answer is being prepared,
+          // so slow retrieval (e.g. an all-workspaces search) doesn't look frozen.
+          updateLastAssistant((m) => ({ ...m, progress: stageLabel(evt.stage) }));
+          break;
         case 'token':
-          updateLastAssistant((m) => ({ ...m, content: m.content + evt.text }));
+          updateLastAssistant((m) => ({ ...m, content: m.content + evt.text, progress: undefined }));
           break;
         case 'citation':
           updateLastAssistant((m) => ({ ...m, citations: evt.citations }));
@@ -132,11 +157,11 @@ export function ChatPage() {
           updateLastAssistant((m) => ({ ...m, images: evt.images }));
           break;
         case 'done':
-          updateLastAssistant((m) => ({ ...m, id: evt.message_id, streaming: false }));
+          updateLastAssistant((m) => ({ ...m, id: evt.message_id, streaming: false, progress: undefined }));
           break;
         case 'error':
           antdMessage.error(evt.message);
-          updateLastAssistant((m) => ({ ...m, streaming: false }));
+          updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined }));
           break;
       }
     },
