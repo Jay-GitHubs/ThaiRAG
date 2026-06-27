@@ -104,7 +104,7 @@ export function PermissionMatrix({ orgId }: Props) {
         return (
           <Space>
             <Tag color={color}>{level}</Tag>
-            {name && <span style={{ fontSize: 12, color: '#666' }}>{name}</span>}
+            {name && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{name}</span>}
           </Space>
         );
       },

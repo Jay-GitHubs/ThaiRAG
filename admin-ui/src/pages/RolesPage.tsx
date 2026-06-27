@@ -92,7 +92,7 @@ function PermissionMatrixEditor({
       </thead>
       <tbody>
         {RESOURCES.map((r, i) => (
-          <tr key={r} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(0,0,0,0.03)' }}>
+          <tr key={r} style={{ background: i % 2 === 0 ? 'transparent' : 'var(--celadon-tint)' }}>
             <td style={{ padding: '4px 8px', textTransform: 'capitalize', fontWeight: 500 }}>{r}</td>
             {ACTIONS.map((a) => (
               <td key={a} style={{ textAlign: 'center', padding: '4px 8px' }}>
@@ -260,7 +260,12 @@ export function RolesPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('roles.title')}</Typography.Title>
+        <div>
+          <div className="eyebrow">Access Control</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            {t('roles.title')}
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="roles" />
       </div>
 

@@ -15,7 +15,12 @@ export function PermissionsPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>Permissions</Typography.Title>
+        <div>
+          <div className="eyebrow">Access Control</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Permissions
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="permissions" />
       </div>
       <Space style={{ marginBottom: 16 }} data-tour="perm-scope">
