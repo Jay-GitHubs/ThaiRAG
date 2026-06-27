@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, TEST_EMAIL, TEST_PASSWORD } from './helpers';
+import { API_BASE, login, TEST_EMAIL, TEST_PASSWORD } from './helpers';
 
 // Final OWUI-parity gate: exercises the full first-party feature set against the
 // live stack. Streaming tests depend on a working chat model on the deployment.
@@ -51,6 +51,37 @@ test('regenerate replaces the answer without duplicating the turn (G2)', async (
   // Exactly one user + one assistant — regenerate replaced, didn't append.
   await expect(page.getByTestId('msg-user')).toHaveCount(1);
   await expect(page.getByTestId('msg-assistant')).toHaveCount(1);
+});
+
+test('first message with no conversation selected streams (regression: lazy-create abort)', async ({
+  page,
+  request,
+}) => {
+  // A brand-new account has zero conversations, so activeId is null and the
+  // first send must lazily create the conversation. Regression for the bug where
+  // creating it flipped activeId, firing the "abort on conversation switch"
+  // effect, which aborted the just-started stream (HTTP 499) → blank forever.
+  // (Clicking "New chat" first sidesteps it, which is why other tests passed.)
+  const email = `lazy-${Date.now()}@test.com`;
+  const password = 'Test1234!';
+  const reg = await request.post(`${API_BASE}/api/auth/register`, {
+    data: { email, name: 'Lazy Create', password },
+  });
+  expect(reg.ok() || reg.status() === 400 || reg.status() === 409).toBeTruthy();
+
+  await page.goto('/login');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('button', { name: 'New chat' })).toBeVisible({ timeout: 15_000 });
+
+  // Send WITHOUT clicking "New chat" — exercises the lazy-create path.
+  await page.getByPlaceholder(COMPOSER).fill('Hello, can you respond to this?');
+  await page.getByRole('button', { name: 'Send' }).click();
+
+  await waitForAnswer(page);
+  const text = (await page.getByTestId('msg-assistant').last().innerText()).trim();
+  expect(text.length, 'assistant answer must render on the first lazy-created conversation').toBeGreaterThan(0);
 });
 
 test('thumbs feedback persists across reload (G5)', async ({ page }) => {
