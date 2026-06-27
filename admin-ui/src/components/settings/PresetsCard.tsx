@@ -168,7 +168,7 @@ export function PresetsCard() {
             {!isCloud && (
               <Badge
                 count={`${available}/${total} models`}
-                style={{ backgroundColor: allReady ? '#52c41a' : '#faad14' }}
+                style={{ backgroundColor: allReady ? 'var(--success)' : 'var(--warning)' }}
               />
             )}
           </Space>
@@ -226,10 +226,10 @@ export function PresetsCard() {
               title: 'Status',
               width: 60,
               render: (_: unknown, r: PresetModelInfo) => isModelAvailable(r.model)
-                ? <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />
+                ? <CheckCircleOutlined style={{ color: 'var(--success)', fontSize: 16 }} />
                 : pulling.has(r.model)
                   ? <Spin size="small" />
-                  : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />,
+                  : <CloseCircleOutlined style={{ color: 'var(--danger)', fontSize: 16 }} />,
             }]),
             {
               title: 'Model',

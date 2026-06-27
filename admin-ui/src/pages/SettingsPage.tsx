@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Tabs, Tour, Typography } from 'antd';
+import { Card, Tabs, Tour } from 'antd';
 import type { SettingsScopeParam } from '../api/types';
 import { DocumentProcessingTab } from '../components/settings/DocumentProcessingTab';
 import { IdpTab } from '../components/settings/IdpTab';
@@ -11,6 +11,7 @@ import { ScopeSelector } from '../components/settings/ScopeSelector';
 import { SharedCommonTab } from '../components/settings/SharedCommonTab';
 import { SnapshotsCard } from '../components/settings/SnapshotsCard';
 import { VectorDbTab } from '../components/settings/VectorDbTab';
+import { PageHeader } from '../components/PageHeader';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
 import { getSettingsSteps } from '../tours/steps/settings';
@@ -22,10 +23,9 @@ export function SettingsPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4}>Settings</Typography.Title>
+      <PageHeader eyebrow="System" title="Settings">
         <TourGuideButton tourId="settings" />
-      </div>
+      </PageHeader>
       <Card size="small" style={{ marginBottom: 16 }} data-tour="settings-scope">
         <ScopeSelector value={scope} onChange={setScope} />
       </Card>

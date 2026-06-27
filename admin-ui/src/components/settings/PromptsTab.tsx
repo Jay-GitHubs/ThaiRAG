@@ -86,7 +86,7 @@ export function PromptsTab() {
       title={<><RobotOutlined /> Agent System Prompts</>}
       extra={
         <Space>
-          <Badge count={overrideCount} style={{ backgroundColor: '#faad14' }} offset={[8, 0]}>
+          <Badge count={overrideCount} style={{ backgroundColor: 'var(--warning)' }} offset={[8, 0]}>
             <Tag color={overrideCount > 0 ? 'orange' : 'default'}>
               {overrideCount} override{overrideCount !== 1 ? 's' : ''}
             </Tag>
