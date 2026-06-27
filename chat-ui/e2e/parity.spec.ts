@@ -84,6 +84,26 @@ test('first message with no conversation selected streams (regression: lazy-crea
   expect(text.length, 'assistant answer must render on the first lazy-created conversation').toBeGreaterThan(0);
 });
 
+test('streaming shows pipeline progress before the answer (progress events)', async ({ page }) => {
+  // The streamed answer can take >60s on a cold model; allow the full
+  // waitForAnswer budget rather than hitting the default per-test timeout.
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill('สวัสดี ทำอะไรได้บ้าง');
+  await page.getByRole('button', { name: 'Send' }).click();
+
+  // While the pipeline runs (before any tokens), a progress indicator shows the
+  // current stage instead of a blank bubble.
+  await expect(page.getByTestId('msg-progress')).toBeVisible({ timeout: 15_000 });
+
+  // It resolves into a real answer, and the progress indicator goes away.
+  await waitForAnswer(page);
+  await expect(page.getByTestId('msg-progress')).toHaveCount(0);
+  const text = (await page.getByTestId('msg-assistant').last().innerText()).trim();
+  expect(text.length).toBeGreaterThan(0);
+});
+
 test('thumbs feedback persists across reload (G5)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
