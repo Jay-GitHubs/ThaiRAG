@@ -68,7 +68,7 @@ export function SourceDrawer({
               data-testid="source-provenance"
               style={{
                 background: 'var(--celadon-tint)',
-                border: '1px solid #cfe3dd',
+                border: '1px solid var(--chip-border)',
                 borderRadius: 8,
                 padding: '8px 12px',
                 marginBottom: 14,

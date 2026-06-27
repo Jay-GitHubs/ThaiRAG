@@ -145,7 +145,7 @@ export function MessageComposer({
           padding: '8px 8px 8px 8px',
           boxShadow: dragging
             ? '0 0 0 3px var(--celadon-tint)'
-            : '0 1px 2px rgba(20,34,59,0.04)',
+            : '0 1px 2px var(--shadow-sm)',
           transition: 'border-color 0.12s, box-shadow 0.12s',
         }}
       >

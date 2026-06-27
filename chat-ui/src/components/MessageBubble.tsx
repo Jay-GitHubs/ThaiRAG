@@ -2,7 +2,9 @@ import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/github.css';
+// The code surface (--code-bg) is a dark slate in every theme, so the dark
+// syntax palette reads well across all of them.
+import 'highlight.js/styles/github-dark.css';
 import { Button as AntButton, Image, Input, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
   CheckOutlined,
@@ -58,12 +60,12 @@ function CodeBlock({ children, ...props }: { children?: React.ReactNode }) {
           top: 6,
           right: 6,
           border: 'none',
-          background: 'rgba(0,0,0,0.06)',
+          background: 'var(--code-btn-bg)',
           borderRadius: 6,
           padding: '2px 8px',
           fontSize: 11.5,
           cursor: 'pointer',
-          color: 'var(--text-muted)',
+          color: 'var(--code-text)',
         }}
       >
         {copied ? 'Copied' : 'Copy'}
@@ -80,9 +82,9 @@ function AssistantMark() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" style={{ flexShrink: 0 }}>
       <rect width="28" height="28" rx="8" fill="var(--celadon)" />
-      <rect x="8" y="9" width="12" height="1.8" rx="0.9" fill="rgba(255,255,255,0.85)" />
-      <rect x="8" y="13" width="12" height="1.8" rx="0.9" fill="rgba(255,255,255,0.55)" />
-      <rect x="8" y="17" width="8" height="1.8" rx="0.9" fill="rgba(255,255,255,0.85)" />
+      <rect x="8" y="9" width="12" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.85" />
+      <rect x="8" y="13" width="12" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.5" />
+      <rect x="8" y="17" width="8" height="1.8" rx="0.9" fill="var(--on-accent)" fillOpacity="0.85" />
     </svg>
   );
 }
@@ -180,7 +182,7 @@ function UserMessage({
           style={{
             maxWidth: 620,
             background: 'var(--celadon)',
-            color: '#fff',
+            color: 'var(--on-accent)',
             padding: '11px 15px',
             borderRadius: '14px 14px 4px 14px',
             fontSize: 15.5,
@@ -274,7 +276,7 @@ function Sources({
                   alignItems: 'center',
                   gap: 8,
                   background: 'var(--celadon-tint)',
-                  border: '1px solid #cfe3dd',
+                  border: '1px solid var(--chip-border)',
                   borderRadius: 8,
                   padding: '5px 10px 5px 6px',
                   maxWidth: 320,
@@ -285,7 +287,7 @@ function Sources({
                     fontFamily: 'var(--font-mono)',
                     fontSize: 11,
                     fontWeight: 500,
-                    color: '#fff',
+                    color: 'var(--on-accent)',
                     background: 'var(--celadon)',
                     borderRadius: 5,
                     padding: '1px 6px',

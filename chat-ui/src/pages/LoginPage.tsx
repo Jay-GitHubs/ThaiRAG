@@ -88,7 +88,7 @@ export function LoginPage() {
         </div>
         <BrandMark tone="light" />
         <div style={{ position: 'relative', maxWidth: 460 }}>
-          <div className="eyebrow" style={{ color: 'rgba(255,255,255,0.55)', marginBottom: 18 }}>
+          <div className="eyebrow" style={{ color: 'var(--ink-dim)', marginBottom: 18 }}>
             Document intelligence · เอกสารอัจฉริยะ
           </div>
           <h1
@@ -108,7 +108,7 @@ export function LoginPage() {
             ถามเป็นภาษาไทยหรืออังกฤษ แล้วได้คำตอบพร้อมหน้าเอกสารต้นทาง — ไม่ต้องเปิดหาเอง.
           </p>
         </div>
-        <div className="eyebrow" style={{ color: 'rgba(255,255,255,0.4)' }}>
+        <div className="eyebrow" style={{ color: 'var(--ink-dim)' }}>
           Grounded in your knowledge base
         </div>
       </aside>

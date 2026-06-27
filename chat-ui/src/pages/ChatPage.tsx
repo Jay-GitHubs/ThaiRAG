@@ -664,7 +664,7 @@ export function ChatPage() {
               bottom: 88,
               left: '50%',
               transform: 'translateX(-50%)',
-              boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
+              boxShadow: '0 2px 10px var(--shadow-md)',
               zIndex: 5,
             }}
           />
