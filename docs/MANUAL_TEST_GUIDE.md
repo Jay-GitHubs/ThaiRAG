@@ -106,8 +106,15 @@ instead of reading the whole document. Two highlight surfaces:
 
 | View | Highlight |
 |---|---|
-| **Text** (converted text) | Cited passage highlighted yellow + scrolled to. Works for **every** doc type. |
+| **Text** (converted doc) | Renders the converted document as **rich markup** — tables (xlsx / docx / csv), headings and lists — and highlights the matching **block** (table row / paragraph / list item), scrolled to. Works for **every** doc type. |
 | **Document** (original PDF) | Cited passage highlighted **on the PDF page** — but only for **born-digital** PDFs (those with a real text layer). Scanned PDFs have no text layer, so the PDF view only **jumps to the page**; use the Text tab for the highlight there. |
+
+### 3A.0 Highlight in a table (docx / xlsx / csv)
+- **Setup:** `complex_table.docx` (a Thai/English table) has been uploaded to **KMs**.
+- **Action:** New chat → scope **KMs** → ask `กลุ่ม A มีรายการอะไรบ้างและมูลค่าเท่าไร`
+  → click the source chip.
+- **Expected:** The drawer shows the document as a **rendered table** (not raw
+  text), with the cited **row highlighted**. The answer's values match it.
 
 ### 3A.1 Highlight on the original PDF (born-digital)
 - **Setup:** A born-digital PDF must be in the workspace. `borderless_table.pdf`

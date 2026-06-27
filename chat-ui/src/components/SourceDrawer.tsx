@@ -1,31 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Drawer, Grid, Segmented, Spin } from 'antd';
 import { getDocumentSource } from '../api/conversations';
 import type { Citation, DocumentSource } from '../api/types';
 import { PdfViewer } from './PdfViewer';
-
-/**
- * Locate the cited passage inside the full document text so we can highlight it.
- * We have no stored character offsets, so this is a best-effort text match on the
- * snippet (falls back to shorter prefixes). Returns null if it can't be found.
- */
-function buildHighlight(content: string, snippet?: string) {
-  const cand = snippet?.trim();
-  if (!cand) return null;
-  let needle = cand;
-  let idx = content.indexOf(needle);
-  if (idx < 0 && cand.length > 60) {
-    needle = cand.slice(0, 60);
-    idx = content.indexOf(needle);
-  }
-  if (idx < 0 && cand.length > 30) {
-    needle = cand.slice(0, 30);
-    idx = content.indexOf(needle);
-  }
-  if (idx < 0) return null;
-  const end = Math.min(content.length, idx + Math.max(needle.length, cand.length));
-  return { before: content.slice(0, idx), match: content.slice(idx, end), after: content.slice(end) };
-}
+import { RichTextView } from './RichTextView';
 
 export function SourceDrawer({
   citation,
@@ -39,7 +17,6 @@ export function SourceDrawer({
   const [error, setError] = useState<string | null>(null);
   // Original-PDF view vs converted-text view. Defaults to the PDF for PDFs.
   const [view, setView] = useState<'pdf' | 'text'>('text');
-  const markRef = useRef<HTMLElement>(null);
   const screens = Grid.useBreakpoint();
 
   useEffect(() => {
@@ -63,14 +40,6 @@ export function SourceDrawer({
 
   const isPdf = doc?.mime_type === 'application/pdf';
 
-  // Scroll the highlighted passage into view once the document renders.
-  useEffect(() => {
-    if (doc && markRef.current) {
-      markRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-  }, [doc]);
-
-  const hl = doc ? buildHighlight(doc.content, citation?.snippet) : null;
   const prov = [
     citation?.section ? `Section ${citation.section}` : null,
     citation?.page ? `p.${citation.page}` : null,
@@ -125,42 +94,7 @@ export function SourceDrawer({
           {view === 'pdf' && isPdf ? (
             <PdfViewer docId={doc.doc_id} page={citation?.page} snippet={citation?.snippet} />
           ) : (
-            <>
-              {!hl && citation?.snippet && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 14 }}
-                  message="Couldn't pinpoint the exact passage — showing the full document."
-                />
-              )}
-              <div
-                data-testid="source-content"
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  wordWrap: 'break-word',
-                  fontSize: 14,
-                  lineHeight: 1.7,
-                  color: 'var(--ink)',
-                }}
-              >
-                {hl ? (
-                  <>
-                    {hl.before}
-                    <mark
-                      ref={markRef}
-                      data-testid="source-highlight"
-                      style={{ background: '#fff3bf', padding: '1px 2px', borderRadius: 3 }}
-                    >
-                      {hl.match}
-                    </mark>
-                    {hl.after}
-                  </>
-                ) : (
-                  doc.content
-                )}
-              </div>
-            </>
+            <RichTextView content={doc.content} snippet={citation?.snippet} />
           )}
           {citation?.url && (
             <div style={{ marginTop: 18, fontSize: 12.5 }}>
