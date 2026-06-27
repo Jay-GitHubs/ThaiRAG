@@ -29,6 +29,11 @@ export function ChatPage() {
   const [newScope, setNewScope] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Conversation id we're currently streaming into. Lets the activeId effect
+  // tell a real conversation *switch* (abort + reload) from the activeId change
+  // that happens when we lazily create the conversation we're sending to (which
+  // must NOT abort the just-started stream or reload over the optimistic turn).
+  const streamingConvRef = useRef<string | null>(null);
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -59,6 +64,10 @@ export function ChatPage() {
   // in-flight stream (so its tokens can't bleed into the new conversation) and
   // ignores a stale load that resolves after another switch.
   useEffect(() => {
+    // When activeId became the conversation we're actively streaming into (a
+    // first-message lazy-create), the optimistic turn + live stream are
+    // authoritative — don't abort the stream or reload empty over it.
+    if (streamingConvRef.current === activeId) return;
     abortRef.current?.abort();
     if (!activeId) {
       setMessages([]);
@@ -225,6 +234,7 @@ export function ChatPage() {
       setSending(true);
       const controller = new AbortController();
       abortRef.current = controller;
+      streamingConvRef.current = convId;
 
       try {
         await streamMessage(convId, text, handleStreamEvent, controller.signal, attachments);
@@ -236,6 +246,7 @@ export function ChatPage() {
         updateLastAssistant((m) => ({ ...m, streaming: false }));
       } finally {
         abortRef.current = null;
+        streamingConvRef.current = null;
         setSending(false);
       }
 
@@ -270,6 +281,7 @@ export function ChatPage() {
     setSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    streamingConvRef.current = activeId;
     try {
       await streamMessage(activeId, '', handleStreamEvent, controller.signal, undefined, true);
     } catch (e) {
@@ -279,6 +291,7 @@ export function ChatPage() {
       updateLastAssistant((m) => ({ ...m, streaming: false }));
     } finally {
       abortRef.current = null;
+      streamingConvRef.current = null;
       setSending(false);
     }
   }, [activeId, sending, handleStreamEvent, updateLastAssistant]);
