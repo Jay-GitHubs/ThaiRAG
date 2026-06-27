@@ -4,11 +4,14 @@ import {
   DeleteOutlined,
   EditOutlined,
   LogoutOutlined,
+  MoonOutlined,
   SearchOutlined,
+  SunOutlined,
 } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
 import type { Conversation } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { useTheme } from '../theme/ThemeProvider';
 import { BrandMark } from './BrandMark';
 
 // Bucket a conversation by how recently it was updated, for sidebar grouping.
@@ -41,6 +44,7 @@ export function ConversationSidebar({
   onRename: (id: string, title: string) => void;
 }) {
   const { user, logout } = useAuth();
+  const { mode, toggle } = useTheme();
   const [hovered, setHovered] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -173,9 +177,11 @@ export function ConversationSidebar({
       </div>
 
       <div style={{ padding: '4px 12px 12px' }}>
-        <Button type="primary" icon={<PlusOutlined />} block onClick={onNew}>
-          New chat
-        </Button>
+        <Tooltip title="New chat — press ? for all shortcuts">
+          <Button type="primary" icon={<PlusOutlined />} block onClick={onNew}>
+            New chat
+          </Button>
+        </Tooltip>
       </div>
 
       <div style={{ padding: '0 12px 10px' }}>
@@ -240,13 +246,31 @@ export function ConversationSidebar({
             <div style={{ fontSize: 11, color: 'var(--ink-dim)' }}>{user.email}</div>
           )}
         </div>
-        <Tooltip title="Sign out">
-          <Button
-            type="text"
-            icon={<LogoutOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />}
-            onClick={logout}
-          />
-        </Tooltip>
+        <div style={{ display: 'flex', flexShrink: 0 }}>
+          <Tooltip title={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+            <Button
+              type="text"
+              aria-label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              data-testid="theme-toggle"
+              icon={
+                mode === 'dark' ? (
+                  <SunOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />
+                ) : (
+                  <MoonOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />
+                )
+              }
+              onClick={toggle}
+            />
+          </Tooltip>
+          <Tooltip title="Sign out">
+            <Button
+              type="text"
+              aria-label="Sign out"
+              icon={<LogoutOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />}
+              onClick={logout}
+            />
+          </Tooltip>
+        </div>
       </div>
     </div>
   );

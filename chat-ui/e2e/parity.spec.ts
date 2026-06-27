@@ -283,6 +283,31 @@ test('edit & resend a user message replaces the turn (UX batch C)', async ({ pag
   await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-alpha' })).toHaveCount(0);
 });
 
+test('dark mode persists + keyboard shortcuts (UX batch D)', async ({ page }) => {
+  await login(page);
+
+  // Toggle to dark; the theme is reflected on <html> and survives a reload.
+  await page.getByTestId('theme-toggle').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  // "?" opens the shortcuts help.
+  await page.locator('body').click();
+  await page.keyboard.press('?');
+  await expect(page.getByText('Keyboard shortcuts')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // "/" focuses the message box.
+  await page.locator('body').click();
+  await page.keyboard.press('/');
+  await expect(page.getByTestId('composer-input')).toBeFocused();
+
+  // Restore light theme for a clean slate.
+  await page.getByTestId('theme-toggle').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
 test('sidebar search + date grouping (UX batch B)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);

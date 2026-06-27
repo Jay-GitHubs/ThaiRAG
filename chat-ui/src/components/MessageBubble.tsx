@@ -286,7 +286,7 @@ function Sources({
                     fontSize: 11,
                     fontWeight: 500,
                     color: '#fff',
-                    background: 'var(--celadon-deep)',
+                    background: 'var(--celadon)',
                     borderRadius: 5,
                     padding: '1px 6px',
                   }}
