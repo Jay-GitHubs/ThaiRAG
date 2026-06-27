@@ -229,7 +229,12 @@ export function TenantsPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('tenants.title')}</Typography.Title>
+        <div>
+          <div className="eyebrow">Access Control</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            {t('tenants.title')}
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="tenants" />
       </div>
 

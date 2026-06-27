@@ -227,7 +227,12 @@ export function UsersPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('users.title')}</Typography.Title>
+        <div>
+          <div className="eyebrow">Access Control</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            {t('users.title')}
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="users" />
       </div>
       <Space style={{ marginBottom: 16 }} wrap data-tour="users-search">
