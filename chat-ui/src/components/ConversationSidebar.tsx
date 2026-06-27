@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
   MoonOutlined,
   SearchOutlined,
   SunOutlined,
@@ -35,6 +36,7 @@ export function ConversationSidebar({
   onNew,
   onDelete,
   onRename,
+  onCollapse,
 }: {
   conversations: Conversation[];
   activeId: string | null;
@@ -42,6 +44,8 @@ export function ConversationSidebar({
   onNew: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  /** Desktop only: collapse the rail. Omitted on mobile (the Drawer closes instead). */
+  onCollapse?: () => void;
 }) {
   const { user, logout } = useAuth();
   const { mode, toggle } = useTheme();
@@ -172,8 +176,26 @@ export function ConversationSidebar({
         color: 'var(--ink-bright)',
       }}
     >
-      <div style={{ padding: '18px 16px 12px' }}>
+      <div
+        style={{
+          padding: '18px 16px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
         <BrandMark tone="light" size={24} />
+        {onCollapse && (
+          <Tooltip title="Collapse sidebar">
+            <Button
+              type="text"
+              aria-label="Collapse sidebar"
+              data-testid="sidebar-collapse"
+              icon={<MenuFoldOutlined style={{ color: 'rgba(255,255,255,0.55)' }} />}
+              onClick={onCollapse}
+            />
+          </Tooltip>
+        )}
       </div>
 
       <div style={{ padding: '4px 12px 12px' }}>

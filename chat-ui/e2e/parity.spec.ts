@@ -308,6 +308,29 @@ test('dark mode persists + keyboard shortcuts (UX batch D)', async ({ page }) =>
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
+test('sidebar collapses (desktop) and the edit button shows without hover', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+
+  // Collapse hides the rail and surfaces an expand control; persists across reload.
+  await page.getByTestId('sidebar-collapse').click();
+  await expect(page.getByTestId('sidebar-expand')).toBeVisible();
+  await expect(page.getByTestId('conversation-search')).toBeHidden();
+  await page.reload();
+  await expect(page.getByTestId('sidebar-expand')).toBeVisible();
+  await page.getByTestId('sidebar-expand').click();
+  await expect(page.getByTestId('conversation-search')).toBeVisible();
+
+  // The edit affordance is shown by default (not opacity:0) — touch users have no hover.
+  await page.getByPlaceholder(COMPOSER).fill('สวัสดี ตอบสั้น ๆ');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  const opacity = await page
+    .getByTestId('edit-message')
+    .evaluate((el) => getComputedStyle(el).opacity);
+  expect(Number(opacity)).toBeGreaterThan(0.3);
+});
+
 test('sidebar search + date grouping (UX batch B)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);

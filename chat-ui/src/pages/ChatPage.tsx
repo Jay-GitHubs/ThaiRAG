@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Drawer, Grid, Layout, Modal, Skeleton, Tag, message as antdMessage } from 'antd';
-import { DatabaseOutlined, DownOutlined, MenuOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  DatabaseOutlined,
+  DownOutlined,
+  MenuOutlined,
+  MenuUnfoldOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import {
   listConversations,
   listWorkspaces,
@@ -65,6 +71,19 @@ export function ChatPage() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Desktop-only: collapse the sidebar to widen the reading column (persisted).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem('thairag-sidebar-collapsed') === '1',
+  );
+  const toggleSidebar = useCallback(
+    () =>
+      setSidebarCollapsed((c) => {
+        const next = !c;
+        localStorage.setItem('thairag-sidebar-collapsed', next ? '1' : '0');
+        return next;
+      }),
+    [],
+  );
   // Citation whose source is open in the in-app source viewer (null = closed).
   const [sourceCitation, setSourceCitation] = useState<Citation | null>(null);
 
@@ -451,6 +470,7 @@ export function ChatPage() {
       }}
       onDelete={handleDelete}
       onRename={handleRename}
+      onCollapse={isMobile ? undefined : toggleSidebar}
     />
   );
 
@@ -468,7 +488,14 @@ export function ChatPage() {
           {sidebar}
         </Drawer>
       ) : (
-        <Layout.Sider width={272} style={{ background: 'var(--ink)' }}>
+        <Layout.Sider
+          width={272}
+          collapsible
+          collapsed={sidebarCollapsed}
+          collapsedWidth={0}
+          trigger={null}
+          style={{ background: 'var(--ink)' }}
+        >
           {sidebar}
         </Layout.Sider>
       )}
@@ -481,7 +508,7 @@ export function ChatPage() {
           position: 'relative',
         }}
       >
-        {isMobile && (
+        {(isMobile || sidebarCollapsed) && (
           <div
             style={{
               display: 'flex',
@@ -493,9 +520,10 @@ export function ChatPage() {
           >
             <Button
               type="text"
-              aria-label="Menu"
-              icon={<MenuOutlined />}
-              onClick={() => setDrawerOpen(true)}
+              aria-label={isMobile ? 'Open menu' : 'Show sidebar'}
+              data-testid={isMobile ? 'mobile-menu' : 'sidebar-expand'}
+              icon={isMobile ? <MenuOutlined /> : <MenuUnfoldOutlined />}
+              onClick={() => (isMobile ? setDrawerOpen(true) : toggleSidebar())}
             />
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>ThaiRAG</span>
           </div>
