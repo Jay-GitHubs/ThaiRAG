@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Drawer, Grid, Layout, Spin, Tag, message as antdMessage } from 'antd';
+import { Button, Drawer, Grid, Layout, Modal, Skeleton, Tag, message as antdMessage } from 'antd';
 import { DatabaseOutlined, DownOutlined, MenuOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   listConversations,
@@ -39,6 +39,9 @@ function stageLabel(stage: string): string {
   );
 }
 
+// Label the platform modifier key for the shortcuts help.
+const MOD = /mac|iphone|ipad/i.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+
 export function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -52,6 +55,7 @@ export function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamStartRef = useRef(0);
   const [atBottom, setAtBottom] = useState(true);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   // Conversation id we're currently streaming into. Lets the activeId effect
   // tell a real conversation *switch* (abort + reload) from the activeId change
@@ -396,6 +400,32 @@ export function ChatPage() {
     return -1;
   }, [messages]);
 
+  // Keyboard shortcuts. Mod = ⌘ (mac) / Ctrl. We stay out of the way while the
+  // user is typing in a field, except for the global new-chat and stop bindings.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const el = e.target as HTMLElement | null;
+      const typing =
+        el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable === true;
+
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        void handleNew();
+      } else if (e.key === 'Escape' && sending) {
+        handleStop();
+      } else if (!typing && !mod && e.key === '/') {
+        e.preventDefault();
+        document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')?.focus();
+      } else if (!typing && e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleNew, handleStop, sending]);
+
   const suggestions = [
     'สรุปขั้นตอนการขอสินเชื่อ',
     'What documents do I need to apply?',
@@ -499,8 +529,23 @@ export function ChatPage() {
           style={{ flex: 1, overflowY: 'auto', padding: '28px 20px' }}
         >
           {loadingMsgs ? (
-            <div style={{ textAlign: 'center', marginTop: 100 }}>
-              <Spin />
+            <div style={{ maxWidth: 820, margin: '0 auto', paddingTop: 8 }} data-testid="msg-skeleton">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: 'flex',
+                    justifyContent: i % 2 === 0 ? 'flex-end' : 'flex-start',
+                    marginBottom: 26,
+                  }}
+                >
+                  <Skeleton.Button
+                    active
+                    block={i % 2 === 1}
+                    style={{ width: i % 2 === 0 ? 240 : '100%', height: i % 2 === 0 ? 44 : 80 }}
+                  />
+                </div>
+              ))}
             </div>
           ) : messages.length === 0 ? (
             <div style={{ maxWidth: 640, margin: '14vh auto 0', textAlign: 'center' }}>
@@ -603,6 +648,44 @@ export function ChatPage() {
         </div>
       </Layout.Content>
       <SourceDrawer citation={sourceCitation} onClose={() => setSourceCitation(null)} />
+      <Modal
+        open={showShortcuts}
+        onCancel={() => setShowShortcuts(false)}
+        footer={null}
+        title="Keyboard shortcuts"
+        width={400}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
+          {[
+            { keys: `${MOD} + Shift + O`, label: 'New chat' },
+            { keys: '/', label: 'Focus the message box' },
+            { keys: 'Enter', label: 'Send · Shift + Enter for a new line' },
+            { keys: 'Esc', label: 'Stop a streaming answer' },
+            { keys: '?', label: 'Show this help' },
+          ].map((s) => (
+            <div
+              key={s.label}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}
+            >
+              <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{s.label}</span>
+              <kbd
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                  background: 'var(--celadon-tint)',
+                  color: 'var(--celadon-deep)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 6,
+                  padding: '2px 8px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {s.keys}
+              </kbd>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </Layout>
   );
 }

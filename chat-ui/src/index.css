@@ -22,6 +22,31 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* ── Dark glaze ─────────────────────────────────────────────────────
+   Not an inversion — the same Celadon & Ink identity at night. The ink rail
+   deepens, the warm paper canvas becomes a cool slate, and the celadon accent
+   is lifted a step so it still glows. --celadon stays a mid teal usable as a
+   chip/badge background under white; --celadon-deep becomes the light tint that
+   carries link + citation text on the dark canvas. */
+:root[data-theme='dark'] {
+  --ink: #0d1626;
+  --ink-soft: #1b2a44;
+  --ink-line: rgba(255, 255, 255, 0.08);
+  --ink-dim: rgba(231, 237, 246, 0.6);
+  --ink-bright: #eef3fa;
+
+  --canvas: #111d31;
+  --surface: #18263f;
+  --line: #283750;
+
+  --celadon: #46b3a0;
+  --celadon-deep: #7fd3c1;
+  --celadon-tint: #163a33;
+
+  --text: #e7edf6;
+  --text-muted: #97a4b8;
+}
+
 html,
 body,
 #root {
@@ -34,6 +59,30 @@ body {
   color: var(--text);
   background: var(--canvas);
   -webkit-font-smoothing: antialiased;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* Keyboard users get a clear celadon focus ring on every interactive element
+   (mouse users never see it). antd keeps its own component rings; this covers
+   our bare <button>/icon affordances. */
+:focus-visible {
+  outline: 2px solid var(--celadon);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Honor the OS "reduce motion" setting everywhere, not just the caret. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* A small caps-y mono eyebrow used for structural labels (Sources, brand tag) */
