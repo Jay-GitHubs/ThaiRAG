@@ -109,6 +109,28 @@ test('PDF source highlights the cited passage on the page (Phase 2.1)', async ({
   await expect(page.getByTestId('pdf-highlight').first()).toBeVisible({ timeout: 15_000 });
 });
 
+test('non-PDF table source renders a table with the cited row highlighted', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  // complex_table.docx (a Thai/English table) lives in KMs.
+  await page.getByPlaceholder(COMPOSER).fill('กลุ่ม A มีรายการอะไรบ้างและมูลค่าเท่าไร');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId('source-chip').first().click();
+  // The converted document renders as a real table (not raw text)…
+  await expect(page.locator('[data-testid="source-content"] table')).toBeVisible({ timeout: 10_000 });
+  // …with the cited row highlighted.
+  await expect(page.getByTestId('source-highlight').first()).toBeVisible({ timeout: 10_000 });
+});
+
 test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);
