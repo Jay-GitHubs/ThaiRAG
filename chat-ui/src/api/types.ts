@@ -50,6 +50,7 @@ export interface MessageRow {
   images: string;
   token_stats: string;
   created_at: string;
+  feedback: number;
 }
 
 export interface Citation {

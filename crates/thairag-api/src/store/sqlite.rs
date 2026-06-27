@@ -52,6 +52,7 @@ impl SqliteKmStore {
             "ALTER TABLE documents ADD COLUMN processing_provenance TEXT",
             "ALTER TABLE documents ADD COLUMN processing_timeline TEXT",
             "ALTER TABLE document_chunks ADD COLUMN metadata TEXT",
+            "ALTER TABLE messages ADD COLUMN feedback INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -3398,6 +3399,7 @@ impl KmStoreTrait for SqliteKmStore {
             images: images.to_string(),
             token_stats: token_stats.to_string(),
             created_at: now,
+            feedback: 0,
         })
     }
 
@@ -3405,7 +3407,7 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at, feedback
                  FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
             )
             .unwrap();
@@ -3419,11 +3421,28 @@ impl KmStoreTrait for SqliteKmStore {
                 images: row.get(5)?,
                 token_stats: row.get(6)?,
                 created_at: row.get(7)?,
+                feedback: row.get(8)?,
             })
         })
         .unwrap()
         .filter_map(|r| r.ok())
         .collect()
+    }
+
+    fn set_message_feedback(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        feedback: i32,
+    ) -> Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE messages SET feedback = ?1 WHERE id = ?2 AND conversation_id = ?3",
+                params![feedback, message_id, conversation_id],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Failed to set feedback: {e}")))?;
+        Ok(n as u64)
     }
 
     // ── Knowledge Graph ──────────────────────────────────────────────

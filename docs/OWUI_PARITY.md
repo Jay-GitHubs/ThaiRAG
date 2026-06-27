@@ -19,7 +19,7 @@ steps. Built after shipping #245–#254.
 | Stop / regenerate / edit | ✓ | ✗ | **GAP — G2** |
 | Mobile / responsive | ✓ | partial | **GAP — G3** |
 | Error / interrupt recovery | ✓ | partial | **GAP — G4** |
-| Feedback (thumbs) | ✓ (feedback sync) | ✗ | gap — G5 (optional) |
+| Feedback (thumbs) | ✓ (feedback sync) | ✓ (per-message, persisted) | **done** |
 | Conversation rename UI | ✓ | API only, no button | gap — G7 (minor) |
 | Model picker | ✓ | single model by design | not needed |
 | Admin / user mgmt / settings | ✓ | (admin-ui owns this) | not needed |
@@ -42,9 +42,15 @@ steps. Built after shipping #245–#254.
 - **G4 — Error/interrupt recovery.** Per the team's "edge-action analysis before
   PR" rule: mid-stream disconnect, refresh during send, double-submit, send to a
   deleted conversation. *Small.*
-- **G5 — Feedback thumbs (optional).** `/v1/chat/feedback` exists; OWUI feedback
-  was judged low-value at current scale and left off. Skip for cutover; add later
-  if wanted.
+- **G5 — Feedback thumbs. DONE.** Thumbs up/down on each assistant message,
+  stored on the message itself (new `messages.feedback` column: 1 / -1 / 0) via
+  `POST /api/chat/conversations/{id}/messages/{message_id}/feedback`
+  (owner-scoped, value clamped). The chat-ui shows like/dislike icons under each
+  finished answer; clicking the active rating clears it; the rating persists and
+  reloads. Deliberately self-contained — it does **not** feed the `/v1`
+  feedback/auto-tuning loop, because first-party turns don't (yet) write
+  `inference_logs`/`response_id` to correlate against. Wiring that in is the
+  follow-up if the online-tuning loop is ever turned on for first-party chat.
 - **G6 — Inline images live (config). DONE.** The `/api/chat` stream handler now
   reads the *effective* (scope-merged) chat-pipeline config via
   `get_effective_chat_pipeline_scoped`, so `inline_images_enabled` /

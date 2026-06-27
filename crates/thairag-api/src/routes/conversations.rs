@@ -38,6 +38,12 @@ pub struct RenameConversationRequest {
     pub title: String,
 }
 
+#[derive(Deserialize)]
+pub struct MessageFeedbackRequest {
+    /// 1 = thumbs up, -1 = thumbs down, 0 = clear. Clamped server-side.
+    pub feedback: i32,
+}
+
 /// A workspace the signed-in user can search, for the chat scope picker.
 #[derive(Serialize)]
 pub struct WorkspaceOption {
@@ -157,6 +163,26 @@ pub async fn list_messages(
 ) -> Result<Json<Vec<MessageRow>>, ApiError> {
     require_owned(&state, &claims, &id)?;
     Ok(Json(state.km_store.list_messages(&id)))
+}
+
+/// POST /api/chat/conversations/{id}/messages/{message_id}/feedback — set a
+/// thumbs rating on an assistant message. `feedback`: 1 = up, -1 = down, 0 =
+/// clear. Scoped to a conversation the caller owns; unknown message → 404.
+pub async fn set_message_feedback(
+    State(state): State<AppState>,
+    claims: axum::Extension<AuthClaims>,
+    Path((id, message_id)): Path<(String, String)>,
+    AppJson(body): AppJson<MessageFeedbackRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_owned(&state, &claims, &id)?;
+    let fb = body.feedback.clamp(-1, 1);
+    let updated = state.km_store.set_message_feedback(&id, &message_id, fb)?;
+    if updated == 0 {
+        return Err(ApiError(ThaiRagError::NotFound(
+            "message not found in conversation".into(),
+        )));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/chat/workspaces — the workspaces the user can search, for the chat

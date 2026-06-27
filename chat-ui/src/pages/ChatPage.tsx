@@ -8,6 +8,7 @@ import {
   deleteConversation,
   listMessages,
   renameConversation,
+  setMessageFeedback,
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
@@ -75,6 +76,7 @@ export function ChatPage() {
             content: r.content,
             citations: parseCitations(r.citations),
             images: parseImages(r.images),
+            feedback: r.feedback,
           })),
         );
       })
@@ -135,6 +137,28 @@ export function ChatPage() {
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  // Thumbs feedback on an assistant message. Optimistic; reverts on failure.
+  const handleFeedback = useCallback(
+    (messageId: string, value: number) => {
+      if (!activeId) return;
+      let prevValue = 0;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m;
+          prevValue = m.feedback ?? 0;
+          return { ...m, feedback: value };
+        }),
+      );
+      setMessageFeedback(activeId, messageId, value).catch(() => {
+        antdMessage.error('Failed to save feedback');
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, feedback: prevValue } : m)),
+        );
+      });
+    },
+    [activeId],
+  );
 
   const handleNew = useCallback(async () => {
     try {
@@ -416,7 +440,7 @@ export function ChatPage() {
           ) : (
             <div style={{ maxWidth: 820, margin: '0 auto' }}>
               {messages.map((m, i) => (
-                <MessageBubble key={m.id ?? i} message={m} />
+                <MessageBubble key={m.id ?? i} message={m} onFeedback={handleFeedback} />
               ))}
               {!sending && messages[messages.length - 1]?.role === 'assistant' && (
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>

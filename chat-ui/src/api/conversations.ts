@@ -42,6 +42,18 @@ export async function listMessages(id: string): Promise<MessageRow[]> {
   return res.data;
 }
 
+/** Set a thumbs rating on an assistant message: 1 = up, -1 = down, 0 = clear. */
+export async function setMessageFeedback(
+  conversationId: string,
+  messageId: string,
+  feedback: number,
+): Promise<void> {
+  await client.post(
+    `/api/chat/conversations/${conversationId}/messages/${messageId}/feedback`,
+    { feedback },
+  );
+}
+
 /**
  * Send a message and consume the first-party SSE protocol. Calls `onEvent` for
  * each `{type:...}` event as it arrives; resolves when the stream ends

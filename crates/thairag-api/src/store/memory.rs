@@ -1962,6 +1962,7 @@ impl KmStoreTrait for MemoryKmStore {
             images: images.to_string(),
             token_stats: token_stats.to_string(),
             created_at: now.clone(),
+            feedback: 0,
         };
         self.messages.write().unwrap().push(row.clone());
         if let Some(c) = self
@@ -1987,6 +1988,22 @@ impl KmStoreTrait for MemoryKmStore {
             .collect();
         rows.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         rows
+    }
+
+    fn set_message_feedback(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        feedback: i32,
+    ) -> Result<u64> {
+        let mut n = 0u64;
+        for m in self.messages.write().unwrap().iter_mut() {
+            if m.id == message_id && m.conversation_id == conversation_id {
+                m.feedback = feedback;
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     // ── Knowledge Graph ──────────────────────────────────────────────

@@ -3458,13 +3458,14 @@ impl KmStoreTrait for PostgresKmStore {
             images: images.to_string(),
             token_stats: token_stats.to_string(),
             created_at: now.to_rfc3339(),
+            feedback: 0,
         })
     }
 
     fn list_messages(&self, conversation_id: &str) -> Vec<super::MessageRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at, feedback
                  FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
             )
             .bind(conversation_id)
@@ -3484,9 +3485,28 @@ impl KmStoreTrait for PostgresKmStore {
                 images: row.get("images"),
                 token_stats: row.get("token_stats"),
                 created_at: created_at.to_rfc3339(),
+                feedback: row.get("feedback"),
             }
         })
         .collect()
+    }
+
+    fn set_message_feedback(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        feedback: i32,
+    ) -> Result<u64> {
+        let res = block_on(async {
+            sqlx::query("UPDATE messages SET feedback = $1 WHERE id = $2 AND conversation_id = $3")
+                .bind(feedback)
+                .bind(message_id)
+                .bind(conversation_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to set feedback: {e}")))?;
+        Ok(res.rows_affected())
     }
 
     // ── Knowledge Graph ──────────────────────────────────────────────
