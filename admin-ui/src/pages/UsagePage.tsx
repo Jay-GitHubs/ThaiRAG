@@ -209,7 +209,7 @@ export function UsagePage() {
                         style={{
                           borderBottom: '1px solid var(--line)',
                           fontWeight: isActive ? 'bold' : undefined,
-                          background: isActive ? 'rgba(24, 144, 255, 0.1)' : undefined,
+                          background: isActive ? 'var(--celadon-tint)' : undefined,
                         }}
                       >
                         <td style={{ padding: '4px 8px' }}>

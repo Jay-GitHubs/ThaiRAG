@@ -85,7 +85,7 @@ export function GuidesDrawer() {
                         <span>
                           {t(tour.labelKey)}{' '}
                           {completed && (
-                            <CheckCircleOutlined style={{ color: '#52c41a', marginLeft: 4 }} />
+                            <CheckCircleOutlined style={{ color: 'var(--success)', marginLeft: 4 }} />
                           )}
                         </span>
                       }

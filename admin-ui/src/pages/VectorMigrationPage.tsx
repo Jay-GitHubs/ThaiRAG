@@ -225,9 +225,12 @@ export default function VectorMigrationPage() {
 
   return (
     <div>
-      <Title level={2}>
-        <SwapOutlined /> Vector Database Migration
-      </Title>
+      <div style={{ marginBottom: 8 }}>
+        <div className="eyebrow">System</div>
+        <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+          <SwapOutlined /> Vector Database Migration
+        </Title>
+      </div>
       <Text type="secondary">
         Migrate vectors between vector store providers without re-embedding documents.
       </Text>

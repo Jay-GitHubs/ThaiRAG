@@ -805,7 +805,7 @@ function JobsTab() {
                 />
               </Space>
               <Paragraph
-                style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, fontSize: 12, fontFamily: 'monospace', margin: 0 }}
+                style={{ background: 'var(--celadon-tint)', padding: 12, borderRadius: 4, fontSize: 12, fontFamily: 'monospace', margin: 0 }}
               >
                 {`# Register with Ollama:\necho 'FROM ${record.output_model_path}' > Modelfile\nollama create my-finetuned-model -f Modelfile\nollama run my-finetuned-model`}
               </Paragraph>
@@ -988,8 +988,8 @@ function JobsTab() {
         }
       >
         <pre style={{
-          background: '#1e1e1e',
-          color: '#d4d4d4',
+          background: 'var(--code-bg)',
+          color: 'var(--code-text)',
           padding: 12,
           borderRadius: 4,
           fontSize: 11,
@@ -1011,9 +1011,12 @@ function JobsTab() {
 export default function FinetunePage() {
   return (
     <div>
-      <Title level={3}>
-        <ExperimentOutlined /> Fine-tuning
-      </Title>
+      <div style={{ marginBottom: 8 }}>
+        <div className="eyebrow">AI / Models</div>
+        <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+          <ExperimentOutlined /> Fine-tuning
+        </Title>
+      </div>
       <Tabs
         defaultActiveKey="datasets"
         items={[

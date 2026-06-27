@@ -143,9 +143,12 @@ export default function SearchAnalyticsPage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Search Analytics
-          </Typography.Title>
+          <div>
+            <div className="eyebrow">Chat &amp; Search</div>
+            <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              Search Analytics
+            </Typography.Title>
+          </div>
           <Tooltip title="Insights into search query patterns, zero-result queries, and latency trends.">
             <QuestionCircleOutlined style={{ fontSize: 16 }} />
           </Tooltip>
@@ -200,10 +203,10 @@ export default function SearchAnalyticsPage() {
                   valueStyle={{
                     color:
                       summary.zero_result_rate > 0.2
-                        ? '#cf1322'
+                        ? 'var(--danger)'
                         : summary.zero_result_rate > 0.1
-                        ? '#faad14'
-                        : '#52c41a',
+                        ? 'var(--warning)'
+                        : 'var(--success)',
                   }}
                 />
               </Card>
