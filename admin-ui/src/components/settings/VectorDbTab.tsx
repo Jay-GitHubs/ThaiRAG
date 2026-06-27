@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import type { VectorDbInfo } from '../../api/types';
 import { clearVectorDb, getVectorDbInfo } from '../../api/settings';
+import { FactoryResetPanel } from './FactoryResetPanel';
 
 const backendColors: Record<string, string> = {
   InMemory: 'orange',
@@ -145,6 +146,11 @@ export function VectorDbTab() {
                     Clear All Vectors
                   </Button>
                 </Popconfirm>
+
+                <Typography.Title level={5} style={{ marginTop: 28 }}>
+                  Factory Reset
+                </Typography.Title>
+                <FactoryResetPanel onDone={fetchInfo} />
               </>
             ),
           },

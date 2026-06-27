@@ -3126,6 +3126,82 @@ async fn chat_message_feedback_persists_and_clamps() {
 }
 
 #[tokio::test]
+async fn factory_reset_global_content_wipes_content_keeps_user() {
+    let app = build_app(true);
+    // First registered user is the super-admin (bootstrap).
+    let token = register_and_get_token(&app, "root@test.com", "Root", "Pass1234").await;
+    let _conv = create_conversation_id(&app, &token).await;
+
+    // Sanity: one conversation exists.
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/conversations", &token))
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(resp.into_body()).await.as_array().unwrap().len(),
+        1
+    );
+
+    // Missing confirmation → 400 (guard against accidental wipes).
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/factory-reset",
+            serde_json::json!({"scope": {"level": "global"}, "mode": "content"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Confirmed global content reset → 200.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/factory-reset",
+            serde_json::json!({"scope": {"level": "global"}, "mode": "content", "confirm": "RESET"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Content is gone, but the user (kept) can still authenticate.
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/conversations", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(resp.into_body()).await.as_array().unwrap().len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn factory_reset_requires_super_admin() {
+    let app = build_app(true);
+    // First user = super-admin; second user is a regular user.
+    let _root = register_and_get_token(&app, "root@test.com", "Root", "Pass1234").await;
+    let user = register_and_get_token(&app, "user@test.com", "User", "Pass1234").await;
+
+    let resp = app
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/factory-reset",
+            serde_json::json!({"scope": {"level": "global"}, "confirm": "RESET"}),
+            &user,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn chat_stream_rejects_empty_content() {
     let app = build_app(true);
     let token = register_and_get_token(&app, "empty@test.com", "E", "Pass1234").await;

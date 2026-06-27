@@ -1355,6 +1355,90 @@ impl KmStoreTrait for PostgresKmStore {
         Ok(())
     }
 
+    // ── Factory reset ───────────────────────────────────────────────
+
+    fn factory_reset(&self, full: bool) -> Result<()> {
+        // Structural/config tables preserved in a content-only reset. Everything
+        // else (KB content + derivatives) is wiped. Table list is discovered at
+        // runtime so new tables are wiped by default in content mode.
+        const KEEP: &[&str] = &[
+            "users",
+            "organizations",
+            "departments",
+            "workspaces",
+            "permissions",
+            "workspace_acls",
+            "custom_roles",
+            "settings",
+            "identity_providers",
+            "llm_profiles",
+            "api_keys",
+            "api_key_vault",
+            "tenants",
+            "tenant_org_mapping",
+            "tenant_quotas",
+            "mcp_connectors",
+            "prompt_templates",
+        ];
+        block_on(async {
+            let tables: Vec<(String,)> =
+                sqlx::query_as("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+                    .fetch_all(&self.pool)
+                    .await?;
+            let wipe: Vec<String> = tables
+                .into_iter()
+                .map(|(t,)| t)
+                .filter(|t| full || !KEEP.contains(&t.as_str()))
+                .collect();
+            if !wipe.is_empty() {
+                let list = wipe
+                    .iter()
+                    .map(|t| format!("\"{t}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                sqlx::query(&format!("TRUNCATE TABLE {list} RESTART IDENTITY CASCADE"))
+                    .execute(&self.pool)
+                    .await?;
+            }
+            Ok::<(), sqlx::Error>(())
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Factory reset failed: {e}")))?;
+        Ok(())
+    }
+
+    fn factory_reset_workspaces(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<DocId>> {
+        if workspace_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let ws: Vec<Uuid> = workspace_ids.iter().map(|w| w.0).collect();
+        let ws_str: Vec<String> = ws.iter().map(|u| u.to_string()).collect();
+        let docs = block_on(async {
+            // Collect doc ids first so the caller can purge the search indexes.
+            let docs: Vec<(Uuid,)> =
+                sqlx::query_as("SELECT id FROM documents WHERE workspace_id = ANY($1)")
+                    .bind(&ws)
+                    .fetch_all(&self.pool)
+                    .await?;
+            // Documents cascade to chunks/blobs/image_blobs/acls/trees/versions/
+            // entity_doc_links/relations; entities cascade to relations/links.
+            sqlx::query("DELETE FROM documents WHERE workspace_id = ANY($1)")
+                .bind(&ws)
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("DELETE FROM entities WHERE workspace_id = ANY($1)")
+                .bind(&ws)
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("DELETE FROM conversations WHERE workspace_scope = ANY($1)")
+                .bind(&ws_str)
+                .execute(&self.pool)
+                .await?;
+            Ok::<Vec<(Uuid,)>, sqlx::Error>(docs)
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Scoped factory reset failed: {e}")))?;
+        Ok(docs.into_iter().map(|(u,)| DocId(u)).collect())
+    }
+
     // ── User ────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {

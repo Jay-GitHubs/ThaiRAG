@@ -39,6 +39,7 @@ pub enum AuditAction {
     PromptUpdated,
     PromptDeleted,
     VectorDbCleared,
+    FactoryReset,
     ApiKeyCreated,
     ApiKeyRevoked,
 }

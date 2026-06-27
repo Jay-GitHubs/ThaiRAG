@@ -127,6 +127,11 @@ pub trait TextSearch: Send + Sync {
     async fn index(&self, chunks: &[DocumentChunk]) -> Result<()>;
     async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>>;
     async fn delete_by_doc(&self, doc_id: crate::types::DocId) -> Result<()>;
+    /// Remove every document from the index (factory reset). Default no-op for
+    /// backends that don't keep a persistent index.
+    async fn delete_all(&self) -> Result<()> {
+        Ok(())
+    }
     /// Number of documents in the index. Used by startup rebuild logic.
     fn doc_count(&self) -> u64 {
         0

@@ -1412,6 +1412,94 @@ impl KmStoreTrait for SqliteKmStore {
         Ok(())
     }
 
+    // ── Factory reset ───────────────────────────────────────────────
+
+    fn factory_reset(&self, full: bool) -> Result<()> {
+        const KEEP: &[&str] = &[
+            "users",
+            "organizations",
+            "departments",
+            "workspaces",
+            "permissions",
+            "workspace_acls",
+            "custom_roles",
+            "settings",
+            "identity_providers",
+            "llm_profiles",
+            "api_keys",
+            "api_key_vault",
+            "tenants",
+            "tenant_org_mapping",
+            "tenant_quotas",
+            "mcp_connectors",
+            "prompt_templates",
+        ];
+        let conn = self.conn.lock().unwrap();
+        let tables: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                .map_err(|e| ThaiRagError::Database(format!("Factory reset (list): {e}")))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| ThaiRagError::Database(format!("Factory reset (list): {e}")))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        // Disable FK enforcement so we can delete in any order; cascades are
+        // irrelevant when every content table is emptied anyway.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .map_err(|e| ThaiRagError::Database(format!("Factory reset (pragma): {e}")))?;
+        for t in &tables {
+            if full || !KEEP.contains(&t.as_str()) {
+                conn.execute(&format!("DELETE FROM \"{t}\""), [])
+                    .map_err(|e| ThaiRagError::Database(format!("Factory reset ({t}): {e}")))?;
+            }
+        }
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| ThaiRagError::Database(format!("Factory reset (pragma): {e}")))?;
+        Ok(())
+    }
+
+    fn factory_reset_workspaces(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<DocId>> {
+        if workspace_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").ok();
+        let mut deleted = Vec::new();
+        for ws in workspace_ids {
+            let ws_s = ws.0.to_string();
+            let mut stmt = conn
+                .prepare("SELECT id FROM documents WHERE workspace_id = ?1")
+                .map_err(|e| ThaiRagError::Database(format!("Scoped reset (list): {e}")))?;
+            let ids: Vec<String> = stmt
+                .query_map(params![ws_s], |r| r.get::<_, String>(0))
+                .map_err(|e| ThaiRagError::Database(format!("Scoped reset (list): {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+            for id in &ids {
+                if let Ok(u) = id.parse() {
+                    deleted.push(DocId(u));
+                }
+            }
+            conn.execute(
+                "DELETE FROM documents WHERE workspace_id = ?1",
+                params![ws_s],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Scoped reset (docs): {e}")))?;
+            conn.execute(
+                "DELETE FROM entities WHERE workspace_id = ?1",
+                params![ws_s],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Scoped reset (entities): {e}")))?;
+            conn.execute(
+                "DELETE FROM conversations WHERE workspace_scope = ?1",
+                params![ws_s],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Scoped reset (convs): {e}")))?;
+        }
+        Ok(deleted)
+    }
+
     // ── User ──────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {

@@ -222,6 +222,27 @@ impl TextSearch for TantivySearch {
         Ok(())
     }
 
+    async fn delete_all(&self) -> Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy writer lock poisoned: {e}")))?;
+
+        writer
+            .delete_all_documents()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy delete_all error: {e}")))?;
+        writer
+            .commit()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy commit error: {e}")))?;
+
+        self.reader
+            .reload()
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy reader reload error: {e}")))?;
+
+        info!("Cleared all documents from Tantivy index");
+        Ok(())
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         // No access: not unrestricted and no workspace permissions
         if !query.unrestricted && query.workspace_ids.is_empty() {

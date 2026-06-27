@@ -5960,6 +5960,132 @@ pub async fn clear_vectordb(
     })))
 }
 
+// ── Factory reset ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "level", rename_all = "lowercase")]
+pub enum FactoryResetScope {
+    Global,
+    Org { id: String },
+    Dept { id: String },
+    Workspace { id: String },
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FactoryResetMode {
+    #[default]
+    Content,
+    Full,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FactoryResetRequest {
+    pub scope: FactoryResetScope,
+    #[serde(default)]
+    pub mode: FactoryResetMode,
+    /// Must equal "RESET" — a server-side guard against accidental wipes.
+    #[serde(default)]
+    pub confirm: String,
+}
+
+/// POST /api/km/settings/factory-reset — destructive wipe (super-admin only).
+///
+/// `scope=global` clears all knowledge-base content (and, with `mode=full`, the
+/// users/orgs/workspaces/settings too — back to first-run) plus both search
+/// indexes. A scoped reset (org/dept/workspace) wipes only that subtree's
+/// content and purges its documents from the indexes; structure is preserved.
+pub async fn factory_reset(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(req): AppJson<FactoryResetRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use thairag_core::types::{DeptId, OrgId, WorkspaceId};
+    require_super_admin(&claims, &state)?;
+    if req.confirm != "RESET" {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Factory reset requires confirm=\"RESET\".".into(),
+        )));
+    }
+    let p = state.providers();
+
+    let summary = match &req.scope {
+        FactoryResetScope::Global => {
+            let full = req.mode == FactoryResetMode::Full;
+            state.km_store.factory_reset(full)?;
+            p.search_engine
+                .delete_all_indexes()
+                .await
+                .map_err(ApiError)?;
+            if full {
+                "global full reset (content + users/orgs/settings)".to_string()
+            } else {
+                "global content reset".to_string()
+            }
+        }
+        FactoryResetScope::Org { id } => {
+            let org = OrgId(
+                id.parse()
+                    .map_err(|_| ApiError(ThaiRagError::Validation("Invalid org UUID".into())))?,
+            );
+            let ws_ids: Vec<WorkspaceId> = state
+                .km_store
+                .dept_ids_in_org(org)
+                .into_iter()
+                .flat_map(|d| state.km_store.workspace_ids_in_dept(d))
+                .collect();
+            let docs = state.km_store.factory_reset_workspaces(&ws_ids)?;
+            for d in &docs {
+                let _ = p.search_engine.delete_doc(*d).await;
+            }
+            format!(
+                "org reset: {} workspace(s), {} document(s)",
+                ws_ids.len(),
+                docs.len()
+            )
+        }
+        FactoryResetScope::Dept { id } => {
+            let dept = DeptId(
+                id.parse()
+                    .map_err(|_| ApiError(ThaiRagError::Validation("Invalid dept UUID".into())))?,
+            );
+            let ws_ids = state.km_store.workspace_ids_in_dept(dept);
+            let docs = state.km_store.factory_reset_workspaces(&ws_ids)?;
+            for d in &docs {
+                let _ = p.search_engine.delete_doc(*d).await;
+            }
+            format!(
+                "dept reset: {} workspace(s), {} document(s)",
+                ws_ids.len(),
+                docs.len()
+            )
+        }
+        FactoryResetScope::Workspace { id } => {
+            let ws = WorkspaceId(id.parse().map_err(|_| {
+                ApiError(ThaiRagError::Validation("Invalid workspace UUID".into()))
+            })?);
+            let docs = state.km_store.factory_reset_workspaces(&[ws])?;
+            for d in &docs {
+                let _ = p.search_engine.delete_doc(*d).await;
+            }
+            format!("workspace reset: {} document(s)", docs.len())
+        }
+    };
+
+    audit::audit_log(
+        &state.km_store,
+        &claims.sub,
+        audit::AuditAction::FactoryReset,
+        "factory_reset",
+        true,
+        Some(&summary),
+    );
+
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "summary": summary }),
+    ))
+}
+
 // ── Config Snapshots ─────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
