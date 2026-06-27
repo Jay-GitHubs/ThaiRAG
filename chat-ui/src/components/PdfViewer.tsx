@@ -113,7 +113,9 @@ export function PdfViewer({
                 box.style.top = `${(top / viewport.height) * 100}%`;
                 box.style.width = `${(w / viewport.width) * 100}%`;
                 box.style.height = `${(fontH / viewport.height) * 100}%`;
-                box.style.background = 'var(--mark-bg)';
+                // Translucent overlay so the page text shows THROUGH the highlight.
+                // (var() keeps it live across theme switches.)
+                box.style.background = 'var(--mark-overlay)';
                 box.style.borderRadius = '2px';
                 box.style.pointerEvents = 'none';
                 wrap.appendChild(box);
