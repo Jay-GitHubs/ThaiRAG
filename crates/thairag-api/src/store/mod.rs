@@ -375,6 +375,9 @@ pub struct MessageRow {
     pub images: String,
     pub token_stats: String,
     pub created_at: String,
+    /// User feedback on an assistant message: 1 = thumbs up, -1 = thumbs down,
+    /// 0 = none. Always 0 for user messages.
+    pub feedback: i32,
 }
 
 // ── Inference Log Types ──────────────────────────────────────────────
@@ -1149,6 +1152,15 @@ pub trait KmStoreTrait: Send + Sync {
     /// Delete a single message by id (used by regenerate to drop the prior
     /// assistant turn before producing a fresh one).
     fn delete_message(&self, message_id: &str) -> Result<()>;
+    /// Set thumbs feedback (1 / -1 / 0) on a message, scoped to its
+    /// conversation so callers can only rate messages in a conversation they
+    /// own. Returns the number of rows updated (0 = no such message in scope).
+    fn set_message_feedback(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        feedback: i32,
+    ) -> Result<u64>;
 
     // ── Knowledge Graph ──────────────────────────────────────────────
     /// Upsert an entity by name+type+workspace (returns existing if found).

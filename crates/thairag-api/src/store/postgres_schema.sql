@@ -591,6 +591,8 @@ CREATE TABLE IF NOT EXISTS messages (
     citations       TEXT NOT NULL DEFAULT '[]',
     images          TEXT NOT NULL DEFAULT '[]',
     token_stats     TEXT NOT NULL DEFAULT '{}',
-    created_at      TIMESTAMPTZ NOT NULL
+    created_at      TIMESTAMPTZ NOT NULL,
+    feedback        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS feedback INTEGER NOT NULL DEFAULT 0;
