@@ -17,9 +17,8 @@
      CHROME  --scrollbar/--shadow-* : depth that must flip light↔dark
    ════════════════════════════════════════════════════════════════════ */
 
-:root,
-:root[data-theme='celadon'] {
-  /* ── Celadon & Ink — warm paper, Thai celadon glaze, ink rail ──── */
+:root {
+  /* ── Celadon & Ink — warm paper, Thai celadon glaze, ink rail (default) ─ */
   --ink: #14223b;
   --ink-soft: #1f3252;
   --ink-line: rgba(255, 255, 255, 0.1);
@@ -384,6 +383,42 @@
   --scrollbar: rgba(255, 255, 255, 0.16);
   --shadow-sm: rgba(0, 0, 0, 0.4);
   --shadow-md: rgba(52, 211, 153, 0.2);
+}
+
+/* ── 1 · Celadon — explicit block (selecting it re-asserts the defaults) ─── */
+:root[data-theme='celadon'] {
+  --ink: #14223b;
+  --ink-soft: #1f3252;
+  --ink-line: rgba(255, 255, 255, 0.1);
+  --ink-dim: rgba(233, 238, 246, 0.62);
+  --ink-bright: #f3f6fb;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
+
+  --canvas: #faf8f3;
+  --surface: #ffffff;
+  --line: #e9e3d7;
+
+  --text: #1a2330;
+  --text-muted: #5b6675;
+
+  --celadon: #2f8e7e;
+  --celadon-deep: #246b5f;
+  --celadon-tint: #e8f1ee;
+  --on-accent: #ffffff;
+
+  --code-bg: #11233a;
+  --code-text: #e8eef7;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #fff3bf;
+  --mark-text: #1a2330;
+  --mark-overlay: rgba(47, 142, 126, 0.3);
+  --chip-border: #cfe3dd;
+
+  --scrollbar: rgba(120, 120, 120, 0.28);
+  --shadow-sm: rgba(20, 34, 59, 0.06);
+  --shadow-md: rgba(20, 34, 59, 0.16);
 }
 
 html,
