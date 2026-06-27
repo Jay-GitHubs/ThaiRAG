@@ -108,7 +108,7 @@ function DashboardTab({ from, to }: { from?: string; to?: string }) {
             <Statistic
               title="Violations"
               value={stats.violations_total}
-              valueStyle={{ color: stats.violations_total > 0 ? '#cf1322' : undefined }}
+              valueStyle={{ color: stats.violations_total > 0 ? 'var(--danger)' : undefined }}
               prefix={<CloseCircleOutlined />}
             />
           </Card>
@@ -385,9 +385,12 @@ export default function GuardrailsPage() {
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space align="center">
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          <SafetyOutlined /> Guardrails
-        </Typography.Title>
+        <div>
+          <div className="eyebrow">Analytics &amp; Quality</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            <SafetyOutlined /> Guardrails
+          </Typography.Title>
+        </div>
         <RangePicker
           showTime
           value={range as [Dayjs, Dayjs] | null}

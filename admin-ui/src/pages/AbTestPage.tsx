@@ -182,7 +182,7 @@ export default function AbTestPage() {
         if (!record.results?.winner) return <Text type="secondary">-</Text>;
         return (
           <Space>
-            <TrophyOutlined style={{ color: '#faad14' }} />
+            <TrophyOutlined style={{ color: 'var(--warning)' }} />
             <Text strong>{record.results.winner}</Text>
           </Space>
         );
@@ -243,7 +243,12 @@ export default function AbTestPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Title level={3} style={{ margin: 0 }}>A/B Testing</Title>
+          <div>
+            <div className="eyebrow">Analytics &amp; Quality</div>
+            <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              A/B Testing
+            </Title>
+          </div>
           <TourGuideButton tourId="ab-tests" />
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="ab-create">
@@ -421,7 +426,7 @@ export default function AbTestPage() {
             {results.winner && (
               <Card size="small" style={{ marginBottom: 16, textAlign: 'center' }}>
                 <Space>
-                  <TrophyOutlined style={{ fontSize: 24, color: '#faad14' }} />
+                  <TrophyOutlined style={{ fontSize: 24, color: 'var(--warning)' }} />
                   <Title level={4} style={{ margin: 0 }}>Winner: {results.winner}</Title>
                 </Space>
               </Card>

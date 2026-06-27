@@ -54,9 +54,9 @@ const { TextArea } = Input;
 // ── Metric Display Helpers ──────────────────────────────────────────
 
 function metricColor(value: number): string {
-  if (value >= 0.8) return '#52c41a';
-  if (value >= 0.5) return '#faad14';
-  return '#ff4d4f';
+  if (value >= 0.8) return 'var(--success)';
+  if (value >= 0.5) return 'var(--warning)';
+  return 'var(--danger)';
 }
 
 function MetricCard({ title, value, suffix }: { title: string; value: number; suffix?: string }) {
@@ -408,9 +408,12 @@ export default function EvalPage() {
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Title level={3} style={{ margin: 0 }}>
-              Search Quality Evaluation
-            </Title>
+            <div>
+              <div className="eyebrow">Analytics &amp; Quality</div>
+              <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+                Search Quality Evaluation
+              </Title>
+            </div>
             <TourGuideButton tourId="eval" />
           </div>
         </Col>

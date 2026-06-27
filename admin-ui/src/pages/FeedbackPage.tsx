@@ -53,9 +53,12 @@ export function FeedbackPage() {
     <>
       <Space align="baseline" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Feedback & Auto-Tuning
-          </Typography.Title>
+          <div>
+            <div className="eyebrow">Analytics &amp; Quality</div>
+            <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              Feedback &amp; Auto-Tuning
+            </Typography.Title>
+          </div>
           <TourGuideButton tourId="feedback" />
         </div>
         <Tooltip title="User feedback from Test Chat is collected here. The system uses this data to automatically improve answer quality: document relevance scoring, quality thresholds, and retrieval parameters.">
@@ -94,7 +97,7 @@ function OverviewTab() {
   if (!stats.data) return <Empty description="No feedback data" />;
 
   const { total, positive, negative, positive_rate, current_threshold, adaptive_threshold, adaptive_enabled } = stats.data;
-  const satisfactionColor = positive_rate >= 0.8 ? '#52c41a' : positive_rate >= 0.5 ? '#faad14' : '#cf1322';
+  const satisfactionColor = positive_rate >= 0.8 ? 'var(--success)' : positive_rate >= 0.5 ? 'var(--warning)' : 'var(--danger)';
 
   return (
     <>
@@ -110,7 +113,7 @@ function OverviewTab() {
               title="Positive"
               value={positive}
               prefix={<LikeOutlined />}
-              valueStyle={{ color: '#52c41a' }}
+              valueStyle={{ color: 'var(--success)' }}
             />
           </Card>
         </Col>
@@ -120,7 +123,7 @@ function OverviewTab() {
               title="Negative"
               value={negative}
               prefix={<DislikeOutlined />}
-              valueStyle={{ color: '#cf1322' }}
+              valueStyle={{ color: 'var(--danger)' }}
             />
           </Card>
         </Col>
