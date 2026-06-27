@@ -269,7 +269,7 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
     value: c.value,
     label: (
       <span>
-        {c.recommended && <span style={{ color: '#faad14' }}>★ </span>}
+        {c.recommended && <span style={{ color: 'var(--warning)' }}>★ </span>}
         {c.display}
       </span>
     ),
@@ -586,7 +586,7 @@ function MemoryEstimate({ llmMode, sharedForm, agentLlms, orchestratorEnabled, e
   const unknownCount = Array.from(uniqueModels.values()).filter((v) => v.size === null).length;
 
   return (
-    <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(22,119,255,0.04)', border: '1px solid rgba(22,119,255,0.15)', borderRadius: 6 }}>
+    <div style={{ marginTop: 12, padding: '10px 14px', background: 'var(--celadon-tint)', border: '1px solid var(--chip-border)', borderRadius: 6 }}>
       <Text strong style={{ fontSize: 13 }}>
         Estimated Local Memory (VRAM/RAM)
       </Text>
