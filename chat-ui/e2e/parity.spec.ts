@@ -38,6 +38,22 @@ test('scoped chat streams an answer with source citations (scope + citations)', 
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
 });
 
+test('scanned-doc answer renders inline source images (Phase 3)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  await page.getByPlaceholder(COMPOSER).fill('สรุปสาระสำคัญของเอกสารนี้');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  // The cited page render shows in the Sources strip (page-image linkage).
+  await expect(page.getByTestId('source-image').first()).toBeVisible({ timeout: 10_000 });
+});
+
 test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);

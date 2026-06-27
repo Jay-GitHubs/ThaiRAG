@@ -104,6 +104,7 @@ function Sources({
             {images.map((img) => (
               <div
                 key={img.image_id}
+                data-testid="source-image"
                 style={{
                   border: '1px solid var(--line)',
                   borderRadius: 8,
