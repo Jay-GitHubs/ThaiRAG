@@ -86,8 +86,10 @@ export function ChatPage() {
   useEffect(() => {
     // When activeId became the conversation we're actively streaming into (a
     // first-message lazy-create), the optimistic turn + live stream are
-    // authoritative — don't abort the stream or reload empty over it.
-    if (streamingConvRef.current === activeId) return;
+    // authoritative — don't abort the stream or reload empty over it. Guard on a
+    // non-null ref so this doesn't also short-circuit the activeId→null case
+    // (e.g. deleting the active conversation), which must still clear the pane.
+    if (streamingConvRef.current && streamingConvRef.current === activeId) return;
     abortRef.current?.abort();
     if (!activeId) {
       setMessages([]);

@@ -104,6 +104,24 @@ test('streaming shows pipeline progress before the answer (progress events)', as
   expect(text.length).toBeGreaterThan(0);
 });
 
+test('deleting the active conversation clears the message pane', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill('hello');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByTestId('msg-user')).toHaveCount(1);
+
+  // Delete the (active) conversation from the sidebar.
+  await page.locator('.anticon-delete').first().click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+
+  // The active chat's messages must clear too (not just the sidebar entry).
+  await expect(page.getByTestId('msg-user')).toHaveCount(0);
+  await expect(page.getByTestId('msg-assistant')).toHaveCount(0);
+});
+
 test('thumbs feedback persists across reload (G5)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
