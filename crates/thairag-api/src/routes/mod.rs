@@ -784,6 +784,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/api/chat/documents/{doc_id}/source",
             get(conversations::get_document_source),
         )
+        .route(
+            "/api/chat/documents/{doc_id}/original",
+            get(conversations::get_document_original),
+        )
         .route("/v1/chat/feedback", post(feedback::submit_feedback))
         .layer(middleware::from_fn(csrf_guard))
         .layer(middleware::from_fn(move |req, next| {
