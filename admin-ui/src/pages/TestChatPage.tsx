@@ -53,6 +53,11 @@ import {
 } from '../api/attachments';
 import { submitFeedback } from '../api/feedback';
 import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress, Citation } from '../api/types';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
+import { TestChatSourceDrawer } from '../components/TestChatSourceDrawer';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
 import { getTestChatSteps } from '../tours/steps/testChat';
@@ -69,24 +74,6 @@ interface ChatEntry {
   citations?: Citation[];
   feedback?: 'up' | 'down';
   query?: string;
-}
-
-/** Expand a citation marker interior like "1, 2-4" to [1, 2, 3, 4]. */
-function expandMarkerNumbers(interior: string): number[] {
-  const out: number[] = [];
-  for (const token of interior.split(',')) {
-    const t = token.trim();
-    if (!t) continue;
-    const range = t.match(/^(\d+)\s*-\s*(\d+)$/);
-    if (range) {
-      const a = Number(range[1]);
-      const b = Number(range[2]);
-      for (let n = Math.min(a, b); n <= Math.max(a, b); n++) out.push(n);
-    } else if (/^\d+$/.test(t)) {
-      out.push(Number(t));
-    }
-  }
-  return out;
 }
 
 const TIMEOUT_PRESETS = [
@@ -147,6 +134,10 @@ export function TestChatPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   // Which assistant messages have their retrieved-chunks panel expanded.
   const [chunkPanelOpen, setChunkPanelOpen] = useState<Record<number, boolean>>({});
+  // Citation whose source is open in the in-app viewer (null = closed).
+  const [sourceSel, setSourceSel] = useState<{ citation: Citation; chunk?: RetrievedChunk } | null>(
+    null,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { token: themeToken } = theme.useToken();
@@ -405,45 +396,20 @@ export function TestChatPage() {
     STAGE_INFO[stage]?.task ?? '';
 
   /** Expand a message's chunk panel and scroll to a cited chunk. */
-  const scrollToCitation = (msgIndex: number, chunkId: string) => {
-    setChunkPanelOpen((prev) => ({ ...prev, [msgIndex]: true }));
-    // Wait for the panel to render before scrolling.
-    setTimeout(() => {
-      document
-        .getElementById(`chunk-${msgIndex}-${chunkId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 120);
+  // Open the in-app source viewer for a citation (resolves its chunk for the
+  // full text + metadata to highlight).
+  const openSource = (citation: Citation, chunks?: RetrievedChunk[]) => {
+    const chunk = chunks?.find((c) => c.chunk_id === citation.chunk_id);
+    setSourceSel({ citation, chunk });
   };
 
-  /**
-   * Render an answer string with inline `[N]` citation markers turned into
-   * clickable chips. Each chip tooltips its source document and, when
-   * clicked, expands and scrolls to the cited chunk.
-   */
-  const renderAnswer = (msgIndex: number, content: string, citations?: Citation[]) => {
-    if (!citations || citations.length === 0) return content;
-    const parts = content.split(/(\[\d[\d\s,-]*\])/g);
-    return parts.map((part, idx) => {
-      const m = part.match(/^\[(\d[\d\s,-]*)\]$/);
-      if (!m) return <span key={idx}>{part}</span>;
-      const nums = expandMarkerNumbers(m[1]);
-      const cited = citations.filter((c) => nums.includes(c.marker));
-      if (cited.length === 0) return <span key={idx}>{part}</span>;
-      const sources = Array.from(
-        new Set(cited.map((c) => c.doc_title || c.doc_id)),
-      ).join(', ');
-      return (
-        <Tooltip key={idx} title={`Source: ${sources}`}>
-          <Tag
-            color="blue"
-            style={{ cursor: 'pointer', marginInline: 2 }}
-            onClick={() => scrollToCitation(msgIndex, cited[0].chunk_id)}
-          >
-            {part}
-          </Tag>
-        </Tooltip>
-      );
-    });
+  // The unique, marker-ordered citations for an answer's "Sources" strip.
+  const sourcesFor = (citations?: Citation[]): Citation[] => {
+    if (!citations) return [];
+    const seen = new Set<number>();
+    return citations
+      .filter((c) => (seen.has(c.marker) ? false : (seen.add(c.marker), true)))
+      .sort((a, b) => a.marker - b.marker);
   };
 
   return (
@@ -554,11 +520,45 @@ export function TestChatPage() {
                         : themeToken.colorBgElevated,
                   }}
                 >
-                  <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {msg.role === 'assistant'
-                      ? renderAnswer(i, msg.content, msg.citations)
-                      : msg.content}
-                  </div>
+                  {msg.role === 'assistant' ? (
+                    <>
+                      <div className="md-body" style={{ wordBreak: 'break-word' }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                      {sourcesFor(msg.citations).length > 0 && (
+                        <div
+                          style={{
+                            marginTop: 12,
+                            paddingTop: 10,
+                            borderTop: '1px solid var(--line)',
+                          }}
+                        >
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>
+                            Sources
+                          </div>
+                          <Space size={[6, 6]} wrap>
+                            {sourcesFor(msg.citations).map((c) => (
+                              <Tag
+                                key={c.marker}
+                                data-testid="source-chip"
+                                color="blue"
+                                style={{ cursor: 'pointer', margin: 0 }}
+                                onClick={() => openSource(c, msg.chunks)}
+                              >
+                                [{c.marker}] {c.doc_title || c.doc_id}
+                              </Tag>
+                            ))}
+                          </Space>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {msg.content}
+                    </div>
+                  )}
                 </Card>
 
                 {/* Feedback buttons + Timing */}
@@ -1093,6 +1093,13 @@ export function TestChatPage() {
         steps={getTestChatSteps(t)}
         onClose={tour.end}
         onFinish={tour.complete}
+      />
+      <TestChatSourceDrawer
+        open={!!sourceSel}
+        onClose={() => setSourceSel(null)}
+        citation={sourceSel?.citation ?? null}
+        chunk={sourceSel?.chunk}
+        workspaceId={wsId}
       />
     </>
   );
