@@ -103,10 +103,12 @@ test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) 
   await waitForAnswer(page);
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
 
-  // Clicking a source chip opens the in-app drawer with the document text,
-  // instead of navigating to a new tab.
+  // Clicking a source chip opens the in-app drawer (PDF docs default to the
+  // Document view, others to the text view) instead of navigating to a new tab.
   await page.getByTestId('source-chip').first().click();
-  await expect(page.getByTestId('source-content')).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.getByTestId('pdf-viewer').or(page.getByTestId('source-content')),
+  ).toBeVisible({ timeout: 20_000 });
 });
 
 test('regenerate replaces the answer without duplicating the turn (G2)', async ({ page }) => {
