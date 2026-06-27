@@ -35,21 +35,21 @@ export function DocumentPreviewPanel({ preview }: { preview: DocumentPreview }) 
       />
 
       {/* Fidelity-tier split */}
-      <div style={{ marginBottom: 8, fontSize: 12, color: '#888' }}>Fidelity routing</div>
+      <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--text-muted)' }}>Fidelity routing</div>
       <div style={{ display: 'flex', height: 22, borderRadius: 4, overflow: 'hidden', marginBottom: 4 }}>
         {native_regions > 0 && (
           <Tooltip title={`${native_regions} native (deterministic, no model)`}>
-            <div style={{ width: `${pct(native_regions)}%`, background: '#52c41a' }} />
+            <div style={{ width: `${pct(native_regions)}%`, background: 'var(--success)' }} />
           </Tooltip>
         )}
         {deterministic_ocr_regions > 0 && (
           <Tooltip title={`${deterministic_ocr_regions} deterministic OCR`}>
-            <div style={{ width: `${pct(deterministic_ocr_regions)}%`, background: '#faad14' }} />
+            <div style={{ width: `${pct(deterministic_ocr_regions)}%`, background: 'var(--warning)' }} />
           </Tooltip>
         )}
         {vision_llm_regions > 0 && (
           <Tooltip title={`${vision_llm_regions} vision LLM`}>
-            <div style={{ width: `${pct(vision_llm_regions)}%`, background: '#722ed1' }} />
+            <div style={{ width: `${pct(vision_llm_regions)}%`, background: 'var(--vision)' }} />
           </Tooltip>
         )}
       </div>
@@ -58,12 +58,12 @@ export function DocumentPreviewPanel({ preview }: { preview: DocumentPreview }) 
         <span><Tag color="gold">Det. OCR</Tag>{deterministic_ocr_regions}</span>
         <span><Tag color="purple">Vision LLM</Tag>{vision_llm_regions}</span>
         {!preview.ocr_tier_available && deterministic_ocr_regions > 0 && (
-          <span style={{ color: '#fa8c16' }}>⚠ OCR tier not configured</span>
+          <span style={{ color: 'var(--warning)' }}>⚠ OCR tier not configured</span>
         )}
       </div>
 
       {/* Per-class counts */}
-      <div style={{ marginBottom: 6, fontSize: 12, color: '#888' }}>Region classes</div>
+      <div style={{ marginBottom: 6, fontSize: 12, color: 'var(--text-muted)' }}>Region classes</div>
       <div style={{ marginBottom: 12 }}>
         {Object.entries(preview.classes)
           .sort((a, b) => b[1] - a[1])
@@ -75,7 +75,7 @@ export function DocumentPreviewPanel({ preview }: { preview: DocumentPreview }) 
       </div>
 
       {/* Thresholds behind the decision */}
-      <div style={{ fontSize: 11, color: '#999' }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         Thresholds: image-coverage ≥ {preview.thresholds.image_coverage_threshold}, min-chars/page{' '}
         {preview.thresholds.min_chars_per_page}, garble-ratio ≥ {preview.thresholds.garble_ratio_threshold}
       </div>

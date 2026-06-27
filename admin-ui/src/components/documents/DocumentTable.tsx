@@ -68,7 +68,7 @@ function agentStatusIcon(status: string) {
       return <CloseCircleTwoTone twoToneColor="#ff4d4f" />;
     case 'skipped':
     default:
-      return <MinusCircleOutlined style={{ color: '#bfbfbf' }} />;
+      return <MinusCircleOutlined style={{ color: 'var(--text-muted)' }} />;
   }
 }
 
@@ -121,13 +121,13 @@ function ProvenanceDetail({ prov }: { prov: ProcessingProvenance }) {
       <div style={{ marginBottom: 8 }}>
         <strong>Agents</strong>
         <div style={{ marginTop: 4 }}>
-          {prov.agents.length === 0 && <div style={{ color: '#999' }}>None (no AI agents)</div>}
+          {prov.agents.length === 0 && <div style={{ color: 'var(--text-muted)' }}>None (no AI agents)</div>}
           {prov.agents.map((a) => (
             <div key={a.agent} style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: '20px' }}>
               {agentStatusIcon(a.status)}
               <span style={{ minWidth: 72, display: 'inline-block' }}>{AGENT_LABELS[a.agent] ?? a.agent}</span>
-              <span style={{ color: '#555', fontFamily: 'monospace' }}>{a.model ?? '—'}</span>
-              {a.note && <span style={{ color: '#999' }}>({a.note})</span>}
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{a.model ?? '—'}</span>
+              {a.note && <span style={{ color: 'var(--text-muted)' }}>({a.note})</span>}
             </div>
           ))}
         </div>
@@ -147,7 +147,7 @@ function ProvenanceDetail({ prov }: { prov: ProcessingProvenance }) {
 /// breakdown (agents + models + fallback) in a popover.
 function ProvenanceCell({ doc }: { doc: Document }) {
   const prov = doc.processing_provenance;
-  if (!prov) return <span style={{ color: '#bbb' }}>—</span>;
+  if (!prov) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
   const usedAi = prov.agents.some((a) => a.status === 'ran' && a.model);
   const color = prov.mechanical_fallback ? 'warning' : usedAi ? 'geekblue' : 'default';
   return (
@@ -163,7 +163,7 @@ function ProvenanceCell({ doc }: { doc: Document }) {
 /// in the original (e.g. scanned).
 function FidelityCell({ doc }: { doc: Document }) {
   const f = doc.processing_provenance?.fidelity;
-  if (!f) return <span style={{ color: '#bbb' }}>—</span>;
+  if (!f) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
   const meta: Record<string, { color: string; label: string }> = {
     verified: { color: 'success', label: 'Verified' },
     review: { color: 'warning', label: 'Review' },
@@ -181,7 +181,7 @@ function FidelityCell({ doc }: { doc: Document }) {
             Numbers matched: {f.numbers_matched}/{f.numbers_total}
           </div>
           {f.numbers_fabricated > 0 && (
-            <div style={{ color: '#cf1322' }}>
+            <div style={{ color: 'var(--danger)' }}>
               Fabricated numbers: {f.numbers_fabricated}
             </div>
           )}
@@ -189,7 +189,7 @@ function FidelityCell({ doc }: { doc: Document }) {
         </>
       )}
       {f.status === 'unverifiable' && (
-        <div style={{ color: '#999' }}>
+        <div style={{ color: 'var(--text-muted)' }}>
           The original has no extractable text layer (e.g. a scanned PDF), so the
           conversion cannot be verified against it.
         </div>
