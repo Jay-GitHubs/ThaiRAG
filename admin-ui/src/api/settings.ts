@@ -327,6 +327,25 @@ export async function clearVectorDb() {
   return res.data;
 }
 
+export type FactoryResetScope =
+  | { level: 'global' }
+  | { level: 'org' | 'dept' | 'workspace'; id: string };
+
+export interface FactoryResetResponse {
+  status: string;
+  summary: string;
+}
+
+/** Destructive wipe. `mode: 'full'` (global only) also clears users/orgs/settings. */
+export async function factoryReset(body: {
+  scope: FactoryResetScope;
+  mode?: 'content' | 'full';
+  confirm: string;
+}) {
+  const res = await client.post<FactoryResetResponse>('/api/km/settings/factory-reset', body);
+  return res.data;
+}
+
 // ── Config Snapshots ────────────────────────────────────────────
 
 export async function listSnapshots() {

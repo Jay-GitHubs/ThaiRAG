@@ -247,6 +247,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         // Settings — vector database management
         .route("/settings/vectordb/info", get(settings::get_vectordb_info))
         .route("/settings/vectordb/clear", post(settings::clear_vectordb))
+        .route("/settings/factory-reset", post(settings::factory_reset))
         // Settings — config snapshots
         .route(
             "/settings/snapshots",
