@@ -39,7 +39,10 @@ export function RichTextView({ content, snippet }: { content: string; snippet?: 
   };
   const hl = (children: ReactNode) =>
     isHit(children)
-      ? { 'data-testid': 'source-highlight', style: { background: '#fff3bf' } }
+      ? {
+          'data-testid': 'source-highlight',
+          style: { background: 'var(--mark-bg)', color: 'var(--mark-text)' },
+        }
       : {};
 
   // Scroll the first highlighted block into view once rendered.

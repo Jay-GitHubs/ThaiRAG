@@ -10,14 +10,14 @@ export function BrandMark({
   tone?: 'light' | 'dark';
   size?: number;
 }) {
-  const word = tone === 'light' ? '#f3f6fb' : '#1a2330';
+  const word = tone === 'light' ? 'var(--ink-bright)' : 'var(--text)';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true">
-        <rect x="0.5" y="0.5" width="27" height="27" rx="7" fill="#14223b" />
-        <rect x="7" y="8" width="14" height="2" rx="1" fill="rgba(255,255,255,0.5)" />
-        <rect x="7" y="13" width="14" height="2" rx="1" fill="#2f8e7e" />
-        <rect x="7" y="18" width="9" height="2" rx="1" fill="rgba(255,255,255,0.5)" />
+        <rect x="0.5" y="0.5" width="27" height="27" rx="7" fill="var(--ink)" />
+        <rect x="7" y="8" width="14" height="2" rx="1" fill="var(--ink-bright)" fillOpacity="0.5" />
+        <rect x="7" y="13" width="14" height="2" rx="1" fill="var(--celadon)" />
+        <rect x="7" y="18" width="9" height="2" rx="1" fill="var(--ink-bright)" fillOpacity="0.5" />
       </svg>
       <span
         style={{

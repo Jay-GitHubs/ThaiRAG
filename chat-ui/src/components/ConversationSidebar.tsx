@@ -5,15 +5,13 @@ import {
   EditOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
-  MoonOutlined,
   SearchOutlined,
-  SunOutlined,
 } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
 import type { Conversation } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
-import { useTheme } from '../theme/ThemeProvider';
 import { BrandMark } from './BrandMark';
+import { ThemePicker } from './ThemePicker';
 
 // Bucket a conversation by how recently it was updated, for sidebar grouping.
 const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 days', 'Previous 30 days', 'Older'];
@@ -48,7 +46,6 @@ export function ConversationSidebar({
   onCollapse?: () => void;
 }) {
   const { user, logout } = useAuth();
-  const { mode, toggle } = useTheme();
   const [hovered, setHovered] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -101,7 +98,7 @@ export function ConversationSidebar({
           background: active
             ? 'var(--ink-soft)'
             : hovered === c.id
-              ? 'rgba(255,255,255,0.05)'
+              ? 'var(--ink-hover)'
               : 'transparent',
           borderLeft: `2px solid ${active ? 'var(--celadon)' : 'transparent'}`,
           color: active ? 'var(--ink-bright)' : 'var(--ink-dim)',
@@ -142,7 +139,7 @@ export function ConversationSidebar({
                   e.stopPropagation();
                   startEdit(c.id, c.title || '');
                 }}
-                style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}
+                style={{ color: 'var(--ink-icon)', fontSize: 13 }}
               />
             </Tooltip>
             <Popconfirm
@@ -157,7 +154,7 @@ export function ConversationSidebar({
             >
               <DeleteOutlined
                 onClick={(e) => e.stopPropagation()}
-                style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}
+                style={{ color: 'var(--ink-icon)', fontSize: 13 }}
               />
             </Popconfirm>
           </span>
@@ -191,7 +188,7 @@ export function ConversationSidebar({
               type="text"
               aria-label="Collapse sidebar"
               data-testid="sidebar-collapse"
-              icon={<MenuFoldOutlined style={{ color: 'rgba(255,255,255,0.55)' }} />}
+              icon={<MenuFoldOutlined style={{ color: 'var(--ink-icon)' }} />}
               onClick={onCollapse}
             />
           </Tooltip>
@@ -210,7 +207,7 @@ export function ConversationSidebar({
         <Input
           size="small"
           allowClear
-          prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.4)' }} />}
+          prefix={<SearchOutlined style={{ color: 'var(--ink-dim)' }} />}
           placeholder="Search conversations"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -232,7 +229,7 @@ export function ConversationSidebar({
             <div key={g.label}>
               <div
                 className="eyebrow"
-                style={{ padding: '10px 10px 4px', color: 'rgba(255,255,255,0.4)' }}
+                style={{ padding: '10px 10px 4px', color: 'var(--ink-dim)' }}
               >
                 {g.label}
               </div>
@@ -269,26 +266,12 @@ export function ConversationSidebar({
           )}
         </div>
         <div style={{ display: 'flex', flexShrink: 0 }}>
-          <Tooltip title={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
-            <Button
-              type="text"
-              aria-label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-              data-testid="theme-toggle"
-              icon={
-                mode === 'dark' ? (
-                  <SunOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />
-                ) : (
-                  <MoonOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />
-                )
-              }
-              onClick={toggle}
-            />
-          </Tooltip>
+          <ThemePicker />
           <Tooltip title="Sign out">
             <Button
               type="text"
               aria-label="Sign out"
-              icon={<LogoutOutlined style={{ color: 'rgba(255,255,255,0.6)' }} />}
+              icon={<LogoutOutlined style={{ color: 'var(--ink-icon)' }} />}
               onClick={logout}
             />
           </Tooltip>
