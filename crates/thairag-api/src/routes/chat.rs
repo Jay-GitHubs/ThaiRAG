@@ -2182,9 +2182,11 @@ pub async fn stream_conversation_message(
             && !cite_base.is_empty()
             && let Some(jwt) = state.jwt.as_deref()
         {
-            for (img_id, page) in
-                select_inline_images(&footer_meta.retrieved_chunks, inline_images_max)
-            {
+            for (img_id, page) in resolve_inline_images(
+                &*state.km_store,
+                &footer_meta.retrieved_chunks,
+                inline_images_max,
+            ) {
                 // Sign a single-image, time-limited token (reusing the citation
                 // token model with the image id as subject) so a browser <img>
                 // can load it from the public media route without auth headers.
@@ -2277,21 +2279,53 @@ pub async fn stream_conversation_message(
     Ok(response)
 }
 
-/// Select the source images to surface inline for an answer: retrieved chunks
-/// that carry an `image_blob_id`, deduped by image, capped at `max`, preserving
-/// retrieval order. Returns `(image_id, first_page)` pairs.
-fn select_inline_images(
+/// Resolve the source images to surface inline, deduped by image and capped.
+///
+/// A vision-derived chunk uses its own `image_blob_id` directly. A text-layer
+/// chunk has no image of its own, so it's linked to its **page-render** image by
+/// page number — that's what lets text-layer PDFs still show the source page.
+/// Per-doc page→image maps are built lazily so we hit the store at most once per
+/// cited document.
+fn resolve_inline_images(
+    store: &dyn crate::store::KmStoreTrait,
     chunks: &[thairag_core::types::RetrievedChunkMeta],
     max: usize,
 ) -> Vec<(thairag_core::types::ImageId, Option<usize>)> {
-    let mut seen = std::collections::HashSet::new();
+    use std::collections::{HashMap, HashSet};
+    let mut seen: HashSet<thairag_core::types::ImageId> = HashSet::new();
+    let mut page_maps: HashMap<String, HashMap<u32, thairag_core::types::ImageId>> = HashMap::new();
     let mut out = Vec::new();
+
     for c in chunks {
-        if let Some(img) = c.image_blob_id
-            && seen.insert(img)
+        let first_page = c.page_numbers.as_ref().and_then(|p| p.first().copied());
+        let img = if let Some(id) = c.image_blob_id {
+            Some(id)
+        } else if let Some(page) = first_page {
+            let map = page_maps.entry(c.doc_id.clone()).or_insert_with(|| {
+                let mut m = HashMap::new();
+                if let Ok(uuid) = c.doc_id.parse()
+                    && let Ok(blobs) =
+                        store.list_image_blobs_for_doc(thairag_core::types::DocId(uuid))
+                {
+                    for b in blobs {
+                        if b.source == crate::store::ImageSource::PdfPageRender
+                            && let Some(pn) = b.page_num
+                        {
+                            m.entry(pn).or_insert(b.image_id);
+                        }
+                    }
+                }
+                m
+            });
+            map.get(&(page as u32)).copied()
+        } else {
+            None
+        };
+
+        if let Some(id) = img
+            && seen.insert(id)
         {
-            let page = c.page_numbers.as_ref().and_then(|p| p.first().copied());
-            out.push((img, page));
+            out.push((id, first_page));
             if out.len() >= max {
                 break;
             }
@@ -2545,31 +2579,62 @@ mod citation_tests {
     }
 
     #[test]
-    fn select_inline_images_dedupes_caps_and_skips_imageless() {
-        use thairag_core::types::ImageId;
-        let img_a = ImageId::new();
-        let img_b = ImageId::new();
-        let mk = |img: Option<ImageId>, page: Option<usize>| RetrievedChunkMeta {
-            image_blob_id: img,
-            page_numbers: page.map(|p| vec![p]),
+    fn resolve_inline_images_direct_and_page_linked() {
+        use crate::store::{ImageBlobRecord, ImageSource, KmStoreTrait, memory::MemoryKmStore};
+        use thairag_core::types::{DocId, ImageId, WorkspaceId};
+
+        let store = MemoryKmStore::new();
+        let img_direct = ImageId::new();
+        let img_page = ImageId::new();
+        let doc = DocId(Uuid::new_v4());
+        let doc_str = doc.0.to_string();
+
+        // A page-render image for page 6 of `doc`.
+        store
+            .save_image_blob(ImageBlobRecord {
+                image_id: img_page,
+                doc_id: doc,
+                workspace_id: WorkspaceId(Uuid::new_v4()),
+                bytes: vec![0u8; 4],
+                mime: "image/png".into(),
+                width: None,
+                height: None,
+                page_num: Some(6),
+                source: ImageSource::PdfPageRender,
+            })
+            .unwrap();
+
+        let direct = RetrievedChunkMeta {
+            image_blob_id: Some(img_direct),
+            page_numbers: Some(vec![2]),
             ..Default::default()
         };
-        let chunks = vec![
-            mk(Some(img_a), Some(2)),
-            mk(None, None),           // no image → skipped
-            mk(Some(img_a), Some(9)), // duplicate of img_a → skipped
-            mk(Some(img_b), None),
-        ];
+        // Text-layer chunk: no image of its own, but page 6 links to the render.
+        let text_layer = RetrievedChunkMeta {
+            doc_id: doc_str,
+            image_blob_id: None,
+            page_numbers: Some(vec![6]),
+            ..Default::default()
+        };
+        let no_image = RetrievedChunkMeta {
+            image_blob_id: None,
+            page_numbers: None,
+            ..Default::default()
+        };
 
-        // Dedup by image, preserve order, carry first page.
+        // Direct image used as-is; text-layer chunk linked to its page render;
+        // the page-less imageless chunk is skipped.
         assert_eq!(
-            select_inline_images(&chunks, 10),
-            vec![(img_a, Some(2)), (img_b, None)]
+            resolve_inline_images(&store, &[direct.clone(), text_layer.clone(), no_image], 10),
+            vec![(img_direct, Some(2)), (img_page, Some(6))]
         );
         // Cap respected.
-        assert_eq!(select_inline_images(&chunks, 1), vec![(img_a, Some(2))]);
+        assert_eq!(
+            resolve_inline_images(&store, &[direct, text_layer], 1),
+            vec![(img_direct, Some(2))]
+        );
         // Empty input → empty.
-        assert!(select_inline_images(&[], 10).is_empty());
+        assert!(resolve_inline_images(&store, &[], 10).is_empty());
     }
 
     fn cite(marker: u32, chunk_id: &str, title: &str, score: f32) -> Citation {
