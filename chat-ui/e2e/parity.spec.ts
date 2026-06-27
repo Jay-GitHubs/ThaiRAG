@@ -53,6 +53,21 @@ test('regenerate replaces the answer without duplicating the turn (G2)', async (
   await expect(page.getByTestId('msg-assistant')).toHaveCount(1);
 });
 
+test('thumbs feedback persists across reload (G5)', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill('rate this answer');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+
+  // Thumbs-up the answer; it survives a reload.
+  await page.getByTestId('fb-up').last().click();
+  await page.reload();
+  await expect(page.getByTestId('msg-assistant').last()).toBeVisible({ timeout: 15_000 });
+  // The filled (active) like icon renders with the celadon-deep accent colour.
+  await expect(page.getByLabel('Remove positive feedback').last()).toBeVisible({ timeout: 10_000 });
+});
+
 test('stop halts a streaming answer (G2)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();

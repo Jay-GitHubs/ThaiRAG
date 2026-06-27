@@ -3047,6 +3047,85 @@ async fn chat_stream_persists_turn_and_streams_protocol() {
 }
 
 #[tokio::test]
+async fn chat_message_feedback_persists_and_clamps() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "fb@test.com", "Fb", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // Produce an assistant turn to rate. The body must be drained for the
+    // stream to run to completion and persist the turn.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "hello"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let _ = resp.into_body().collect().await.unwrap().to_bytes();
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let msgs = body_json(resp.into_body()).await;
+    let assistant_id = msgs.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(msgs.as_array().unwrap()[1]["feedback"], 0);
+
+    // Out-of-range value clamps to -1/1.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages/{assistant_id}/feedback"),
+            serde_json::json!({"feedback": 5}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let msgs = body_json(resp.into_body()).await;
+    assert_eq!(
+        msgs.as_array().unwrap()[1]["feedback"],
+        1,
+        "feedback=5 should clamp to 1 and persist: {msgs}"
+    );
+
+    // Unknown message id → 404.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!(
+                "/api/chat/conversations/{conv_id}/messages/00000000-0000-0000-0000-000000000000/feedback"
+            ),
+            serde_json::json!({"feedback": -1}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn chat_stream_rejects_empty_content() {
     let app = build_app(true);
     let token = register_and_get_token(&app, "empty@test.com", "E", "Pass1234").await;

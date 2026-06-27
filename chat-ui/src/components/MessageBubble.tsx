@@ -1,7 +1,13 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Image, Tag, Tooltip } from 'antd';
-import { FileTextOutlined } from '@ant-design/icons';
+import {
+  DislikeFilled,
+  DislikeOutlined,
+  FileTextOutlined,
+  LikeFilled,
+  LikeOutlined,
+} from '@ant-design/icons';
 import type { Citation, ImageRef } from '../api/types';
 
 export interface UiMessage {
@@ -13,6 +19,8 @@ export interface UiMessage {
   /** Names of files attached to a user turn (display only). */
   attachments?: string[];
   streaming?: boolean;
+  /** Thumbs rating on an assistant turn: 1 up, -1 down, 0/undefined none. */
+  feedback?: number;
 }
 
 /** Small celadon document mark that stands in for the assistant. */
@@ -181,7 +189,70 @@ function Sources({ citations, images }: { citations: Citation[]; images: ImageRe
   );
 }
 
-function AssistantMessage({ message }: { message: UiMessage }) {
+/** Thumbs up/down on a finished assistant answer. Clicking the active rating
+ *  again clears it. Hidden while streaming or before the turn has an id. */
+function FeedbackBar({
+  message,
+  onFeedback,
+}: {
+  message: UiMessage;
+  onFeedback: (messageId: string, value: number) => void;
+}) {
+  if (!message.id || message.streaming) return null;
+  const rating = message.feedback ?? 0;
+  const toggle = (value: number) => onFeedback(message.id!, rating === value ? 0 : value);
+  const iconStyle = (active: boolean) => ({
+    cursor: 'pointer',
+    fontSize: 14,
+    color: active ? 'var(--celadon-deep)' : 'var(--text-muted)',
+  });
+  return (
+    <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
+      <Tooltip title="Good answer">
+        {rating === 1 ? (
+          <LikeFilled
+            data-testid="fb-up"
+            aria-label="Remove positive feedback"
+            onClick={() => toggle(1)}
+            style={iconStyle(true)}
+          />
+        ) : (
+          <LikeOutlined
+            data-testid="fb-up"
+            aria-label="Good answer"
+            onClick={() => toggle(1)}
+            style={iconStyle(false)}
+          />
+        )}
+      </Tooltip>
+      <Tooltip title="Bad answer">
+        {rating === -1 ? (
+          <DislikeFilled
+            data-testid="fb-down"
+            aria-label="Remove negative feedback"
+            onClick={() => toggle(-1)}
+            style={iconStyle(true)}
+          />
+        ) : (
+          <DislikeOutlined
+            data-testid="fb-down"
+            aria-label="Bad answer"
+            onClick={() => toggle(-1)}
+            style={iconStyle(false)}
+          />
+        )}
+      </Tooltip>
+    </div>
+  );
+}
+
+function AssistantMessage({
+  message,
+  onFeedback,
+}: {
+  message: UiMessage;
+  onFeedback?: (messageId: string, value: number) => void;
+}) {
   return (
     <div
       data-testid="msg-assistant"
@@ -194,15 +265,22 @@ function AssistantMessage({ message }: { message: UiMessage }) {
           {message.streaming && <span className="caret" />}
         </div>
         <Sources citations={message.citations} images={message.images} />
+        {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
       </div>
     </div>
   );
 }
 
-export function MessageBubble({ message }: { message: UiMessage }) {
+export function MessageBubble({
+  message,
+  onFeedback,
+}: {
+  message: UiMessage;
+  onFeedback?: (messageId: string, value: number) => void;
+}) {
   return message.role === 'user' ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} />
+    <AssistantMessage message={message} onFeedback={onFeedback} />
   );
 }
