@@ -2286,6 +2286,22 @@ pub async fn stream_conversation_message(
 /// page number — that's what lets text-layer PDFs still show the source page.
 /// Per-doc page→image maps are built lazily so we hit the store at most once per
 /// cited document.
+/// The 1-indexed page a chunk came from. Prefers the structured `page_numbers`,
+/// but falls back to the enricher's `section_title` "Page N" convention — which
+/// is how the AI chunker actually records pages in practice (it rarely populates
+/// `page_numbers`). Without this fallback, page→image linkage never fires.
+fn chunk_page(c: &thairag_core::types::RetrievedChunkMeta) -> Option<usize> {
+    if let Some(p) = c.page_numbers.as_ref().and_then(|p| p.first().copied()) {
+        return Some(p);
+    }
+    let s = c.section_title.as_deref()?.trim();
+    let rest = s
+        .strip_prefix("Page ")
+        .or_else(|| s.strip_prefix("page "))
+        .or_else(|| s.strip_prefix("หน้า "))?;
+    rest.trim().parse::<usize>().ok()
+}
+
 fn resolve_inline_images(
     store: &dyn crate::store::KmStoreTrait,
     chunks: &[thairag_core::types::RetrievedChunkMeta],
@@ -2297,7 +2313,7 @@ fn resolve_inline_images(
     let mut out = Vec::new();
 
     for c in chunks {
-        let first_page = c.page_numbers.as_ref().and_then(|p| p.first().copied());
+        let first_page = chunk_page(c);
         let img = if let Some(id) = c.image_blob_id {
             Some(id)
         } else if let Some(page) = first_page {
@@ -2604,6 +2620,22 @@ mod citation_tests {
             })
             .unwrap();
 
+        // A page-render image for page 3 — linked via the "Page N" section_title.
+        let img_page3 = ImageId::new();
+        store
+            .save_image_blob(ImageBlobRecord {
+                image_id: img_page3,
+                doc_id: doc,
+                workspace_id: WorkspaceId(Uuid::new_v4()),
+                bytes: vec![0u8; 4],
+                mime: "image/png".into(),
+                width: None,
+                height: None,
+                page_num: Some(3),
+                source: ImageSource::PdfPageRender,
+            })
+            .unwrap();
+
         let direct = RetrievedChunkMeta {
             image_blob_id: Some(img_direct),
             page_numbers: Some(vec![2]),
@@ -2611,9 +2643,18 @@ mod citation_tests {
         };
         // Text-layer chunk: no image of its own, but page 6 links to the render.
         let text_layer = RetrievedChunkMeta {
-            doc_id: doc_str,
+            doc_id: doc_str.clone(),
             image_blob_id: None,
             page_numbers: Some(vec![6]),
+            ..Default::default()
+        };
+        // Vision chunk recording its page in section_title ("Page 3") rather than
+        // page_numbers — the real-world case. Must still link to the render.
+        let section_chunk = RetrievedChunkMeta {
+            doc_id: doc_str,
+            image_blob_id: None,
+            page_numbers: None,
+            section_title: Some("Page 3".to_string()),
             ..Default::default()
         };
         let no_image = RetrievedChunkMeta {
@@ -2622,11 +2663,19 @@ mod citation_tests {
             ..Default::default()
         };
 
-        // Direct image used as-is; text-layer chunk linked to its page render;
-        // the page-less imageless chunk is skipped.
+        // Direct image used as-is; text-layer chunk linked by page_numbers;
+        // section_chunk linked by "Page 3"; the page-less chunk is skipped.
         assert_eq!(
-            resolve_inline_images(&store, &[direct.clone(), text_layer.clone(), no_image], 10),
-            vec![(img_direct, Some(2)), (img_page, Some(6))]
+            resolve_inline_images(
+                &store,
+                &[direct.clone(), text_layer.clone(), section_chunk, no_image],
+                10
+            ),
+            vec![
+                (img_direct, Some(2)),
+                (img_page, Some(6)),
+                (img_page3, Some(3))
+            ]
         );
         // Cap respected.
         assert_eq!(
