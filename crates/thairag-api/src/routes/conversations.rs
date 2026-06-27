@@ -11,7 +11,8 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use thairag_auth::AuthClaims;
@@ -241,6 +242,53 @@ pub async fn get_document_source(
         mime_type: doc.mime_type,
         content,
     }))
+}
+
+/// GET /api/chat/documents/{doc_id}/original — stream the original uploaded file
+/// bytes (e.g. the source PDF for the in-app PDF viewer). Same owner/scope check
+/// as the source-text route. 404 if the document kept no original bytes.
+pub async fn get_document_original(
+    State(state): State<AppState>,
+    claims: axum::Extension<AuthClaims>,
+    Path(doc_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = current_user_id(&claims)?;
+    let uid = UserId(
+        user_id
+            .parse()
+            .map_err(|_| ApiError(ThaiRagError::Auth("Invalid user id in token".into())))?,
+    );
+    let did = DocId(
+        doc_id
+            .parse()
+            .map_err(|_| ApiError(ThaiRagError::Validation("invalid document id".into())))?,
+    );
+    let doc = state
+        .km_store
+        .get_document(did)
+        .map_err(|_| ApiError(ThaiRagError::NotFound("document not found".into())))?;
+    if !state
+        .km_store
+        .get_user_workspace_ids(uid)
+        .contains(&doc.workspace_id)
+    {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "You do not have access to this document".into(),
+        )));
+    }
+    let bytes = state
+        .km_store
+        .get_document_file(did)?
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("no original file stored".into())))?;
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, doc.mime_type),
+            (header::CACHE_CONTROL, "private, max-age=300".to_string()),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// GET /api/chat/workspaces — the workspaces the user can search, for the chat

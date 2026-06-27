@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Drawer, Grid, Spin } from 'antd';
+import { Alert, Drawer, Grid, Segmented, Spin } from 'antd';
 import { getDocumentSource } from '../api/conversations';
 import type { Citation, DocumentSource } from '../api/types';
+import { PdfViewer } from './PdfViewer';
 
 /**
  * Locate the cited passage inside the full document text so we can highlight it.
@@ -36,6 +37,8 @@ export function SourceDrawer({
   const [doc, setDoc] = useState<DocumentSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Original-PDF view vs converted-text view. Defaults to the PDF for PDFs.
+  const [view, setView] = useState<'pdf' | 'text'>('text');
   const markRef = useRef<HTMLElement>(null);
   const screens = Grid.useBreakpoint();
 
@@ -46,13 +49,19 @@ export function SourceDrawer({
     setError(null);
     setDoc(null);
     getDocumentSource(citation.doc_id)
-      .then((d) => !cancelled && setDoc(d))
+      .then((d) => {
+        if (cancelled) return;
+        setDoc(d);
+        setView(d.mime_type === 'application/pdf' ? 'pdf' : 'text');
+      })
       .catch(() => !cancelled && setError('Could not load this source.'))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
   }, [citation]);
+
+  const isPdf = doc?.mime_type === 'application/pdf';
 
   // Scroll the highlighted passage into view once the document renders.
   useEffect(() => {
@@ -101,40 +110,58 @@ export function SourceDrawer({
               Cited from {prov}
             </div>
           )}
-          {!hl && citation?.snippet && (
-            <Alert
-              type="info"
-              showIcon
+          {isPdf && (
+            <Segmented
+              value={view}
+              onChange={(v) => setView(v as 'pdf' | 'text')}
+              options={[
+                { label: 'Document', value: 'pdf' },
+                { label: 'Text', value: 'text' },
+              ]}
               style={{ marginBottom: 14 }}
-              message="Couldn't pinpoint the exact passage — showing the full document."
             />
           )}
-          <div
-            data-testid="source-content"
-            style={{
-              whiteSpace: 'pre-wrap',
-              wordWrap: 'break-word',
-              fontSize: 14,
-              lineHeight: 1.7,
-              color: 'var(--ink)',
-            }}
-          >
-            {hl ? (
-              <>
-                {hl.before}
-                <mark
-                  ref={markRef}
-                  data-testid="source-highlight"
-                  style={{ background: '#fff3bf', padding: '1px 2px', borderRadius: 3 }}
-                >
-                  {hl.match}
-                </mark>
-                {hl.after}
-              </>
-            ) : (
-              doc.content
-            )}
-          </div>
+
+          {view === 'pdf' && isPdf ? (
+            <PdfViewer docId={doc.doc_id} page={citation?.page} />
+          ) : (
+            <>
+              {!hl && citation?.snippet && (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 14 }}
+                  message="Couldn't pinpoint the exact passage — showing the full document."
+                />
+              )}
+              <div
+                data-testid="source-content"
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  wordWrap: 'break-word',
+                  fontSize: 14,
+                  lineHeight: 1.7,
+                  color: 'var(--ink)',
+                }}
+              >
+                {hl ? (
+                  <>
+                    {hl.before}
+                    <mark
+                      ref={markRef}
+                      data-testid="source-highlight"
+                      style={{ background: '#fff3bf', padding: '1px 2px', borderRadius: 3 }}
+                    >
+                      {hl.match}
+                    </mark>
+                    {hl.after}
+                  </>
+                ) : (
+                  doc.content
+                )}
+              </div>
+            </>
+          )}
           {citation?.url && (
             <div style={{ marginTop: 18, fontSize: 12.5 }}>
               <a href={citation.url} target="_blank" rel="noreferrer" style={{ color: 'var(--celadon-deep)' }}>
