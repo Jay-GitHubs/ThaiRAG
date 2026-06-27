@@ -55,7 +55,7 @@ const lineageColumns = [
     render: (v: number) => (
       <span
         style={{
-          color: v >= 0.8 ? '#52c41a' : v >= 0.5 ? '#faad14' : '#cf1322',
+          color: v >= 0.8 ? 'var(--success)' : v >= 0.5 ? 'var(--warning)' : 'var(--danger)',
         }}
       >
         {v.toFixed(4)}
@@ -235,9 +235,12 @@ export default function LineagePage() {
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
         <ApartmentOutlined style={{ fontSize: 18 }} />
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Lineage
-        </Typography.Title>
+        <div>
+          <div className="eyebrow">Chat &amp; Search</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Lineage
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="lineage" />
       </div>
 

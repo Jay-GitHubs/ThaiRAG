@@ -77,9 +77,12 @@ export default function PluginsPage() {
   return (
     <>
       <Space style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Title level={3} style={{ margin: 0 }}>
-          Plugins ({plugins.length})
-        </Title>
+        <div>
+          <div className="eyebrow">System</div>
+          <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Plugins ({plugins.length})
+          </Title>
+        </div>
         <Button icon={<ReloadOutlined />} onClick={fetchPlugins} loading={loading}>
           Refresh
         </Button>

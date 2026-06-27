@@ -225,9 +225,12 @@ export default function RateLimitPage() {
         style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }}
         align="center"
       >
-        <Title level={3} style={{ margin: 0 }}>
-          <DashboardOutlined /> Rate Limiting Dashboard
-        </Title>
+        <div>
+          <div className="eyebrow">System</div>
+          <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            <DashboardOutlined /> Rate Limiting Dashboard
+          </Title>
+        </div>
         <Space>
           <span>Auto-refresh (10s):</span>
           <Switch checked={autoRefresh} onChange={setAutoRefresh} />
@@ -243,8 +246,8 @@ export default function RateLimitPage() {
             <Statistic
               title="Total Blocked (IP)"
               value={g?.total_ip_blocked ?? 0}
-              prefix={<StopOutlined style={{ color: '#f5222d' }} />}
-              valueStyle={{ color: '#f5222d' }}
+              prefix={<StopOutlined style={{ color: 'var(--danger)' }} />}
+              valueStyle={{ color: 'var(--danger)' }}
             />
           </Card>
         </Col>
@@ -253,8 +256,8 @@ export default function RateLimitPage() {
             <Statistic
               title="Total Blocked (User)"
               value={g?.total_user_blocked ?? 0}
-              prefix={<StopOutlined style={{ color: '#fa8c16' }} />}
-              valueStyle={{ color: '#fa8c16' }}
+              prefix={<StopOutlined style={{ color: 'var(--warning)' }} />}
+              valueStyle={{ color: 'var(--warning)' }}
             />
           </Card>
         </Col>
@@ -332,7 +335,7 @@ export default function RateLimitPage() {
       <Card
         title={
           <span>
-            <StopOutlined style={{ color: '#f5222d' }} /> Recently Blocked Requests (Last 100)
+            <StopOutlined style={{ color: 'var(--danger)' }} /> Recently Blocked Requests (Last 100)
           </span>
         }
       >

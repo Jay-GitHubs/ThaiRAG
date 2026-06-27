@@ -58,7 +58,7 @@ function SimpleBarChart({
   data,
   labelKey,
   valueKey,
-  color = '#1677ff',
+  color = 'var(--celadon)',
   height = 200,
 }: {
   data: Record<string, unknown>[];
@@ -339,10 +339,10 @@ function AnalyticsTab() {
                   valueStyle={{
                     color:
                       (analytics.success_rate ?? 1) >= 0.95
-                        ? '#52c41a'
+                        ? 'var(--success)'
                         : (analytics.success_rate ?? 1) >= 0.8
-                        ? '#faad14'
-                        : '#cf1322',
+                        ? 'var(--warning)'
+                        : 'var(--danger)',
                   }}
                 />
               </Card>
@@ -357,7 +357,7 @@ function AnalyticsTab() {
                     data={(analytics.actions_by_type ?? []).map(([action, count]) => ({ action, count })) as unknown as Record<string, unknown>[]}
                     labelKey="action"
                     valueKey="count"
-                    color="#1677ff"
+                    color="var(--celadon)"
                     height={220}
                   />
                 ) : (
@@ -372,7 +372,7 @@ function AnalyticsTab() {
                     data={(analytics.events_per_day ?? []).map(([date, count]) => ({ date, count })) as unknown as Record<string, unknown>[]}
                     labelKey="date"
                     valueKey="count"
-                    color="#52c41a"
+                    color="var(--success)"
                     height={220}
                   />
                 ) : (
@@ -398,9 +398,12 @@ export default function AuditLogPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Space align="baseline" style={{ marginBottom: 16 }}>
           <AuditOutlined style={{ fontSize: 18 }} />
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Audit Log
-          </Typography.Title>
+          <div>
+            <div className="eyebrow">System</div>
+            <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              Audit Log
+            </Typography.Title>
+          </div>
           <Tooltip title="A tamper-evident record of all admin and system actions for compliance and security review.">
             <QuestionCircleOutlined style={{ fontSize: 16 }} />
           </Tooltip>

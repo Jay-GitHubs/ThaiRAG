@@ -172,7 +172,7 @@ export function QuickStartCard() {
     <Card
       title={
         <Space>
-          <RocketOutlined style={{ color: '#1677ff' }} />
+          <RocketOutlined style={{ color: 'var(--celadon)' }} />
           <span>{t('quickstart.title')}</span>
         </Space>
       }
@@ -200,7 +200,7 @@ export function QuickStartCard() {
                   <span style={step.done ? { textDecoration: 'line-through', opacity: 0.5 } : undefined}>
                     {step.title}
                   </span>
-                  {step.done && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
+                  {step.done && <CheckCircleOutlined style={{ color: 'var(--success)' }} />}
                 </Space>
               ),
               description: (
@@ -222,7 +222,7 @@ export function QuickStartCard() {
                   )}
                 </div>
               ),
-              icon: step.done ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : step.icon,
+              icon: step.done ? <CheckCircleOutlined style={{ color: 'var(--success)' }} /> : step.icon,
               status: step.done ? 'finish' as const : undefined,
             }))}
           />

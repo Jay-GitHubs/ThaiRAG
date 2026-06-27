@@ -251,9 +251,12 @@ export default function PromptMarketplacePage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Title level={2} style={{ margin: 0 }}>
-            {t('prompts.title')}
-          </Title>
+          <div>
+            <div className="eyebrow">AI / Models</div>
+            <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+              {t('prompts.title')}
+            </Title>
+          </div>
           <TourGuideButton tourId="prompts" />
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} data-tour="prompts-create">
@@ -318,7 +321,7 @@ export default function PromptMarketplacePage() {
                               title={t('prompts.deleteConfirm')}
                               onConfirm={() => handleDelete(template.id)}
                             >
-                              <DeleteOutlined style={{ color: '#ff4d4f' }} />
+                              <DeleteOutlined style={{ color: 'var(--danger)' }} />
                             </Popconfirm>
                           </Tooltip>,
                         ]
@@ -331,11 +334,11 @@ export default function PromptMarketplacePage() {
                     </Tag>
                     {template.is_public ? (
                       <Tooltip title={t('prompts.public')}>
-                        <GlobalOutlined style={{ color: '#52c41a' }} />
+                        <GlobalOutlined style={{ color: 'var(--success)' }} />
                       </Tooltip>
                     ) : (
                       <Tooltip title={t('prompts.private')}>
-                        <LockOutlined style={{ color: '#8c8c8c' }} />
+                        <LockOutlined style={{ color: 'var(--text-muted)' }} />
                       </Tooltip>
                     )}
                   </div>
@@ -359,8 +362,8 @@ export default function PromptMarketplacePage() {
                         key={v}
                         count={`{${v}}`}
                         style={{
-                          backgroundColor: '#f0f0f0',
-                          color: '#595959',
+                          backgroundColor: 'var(--celadon-tint)',
+                          color: 'var(--text-muted)',
                           marginRight: 4,
                           marginBottom: 4,
                           fontSize: 11,
@@ -453,7 +456,7 @@ export default function PromptMarketplacePage() {
             <Divider orientation="left">{t('prompts.content')}</Divider>
             <pre
               style={{
-                background: '#f5f5f5',
+                background: 'var(--celadon-tint)',
                 padding: 16,
                 borderRadius: 8,
                 whiteSpace: 'pre-wrap',
