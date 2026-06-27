@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Image, Tag, Tooltip } from 'antd';
+import { Image, Spin, Tag, Tooltip } from 'antd';
 import {
   DislikeFilled,
   DislikeOutlined,
@@ -21,6 +21,9 @@ export interface UiMessage {
   streaming?: boolean;
   /** Thumbs rating on an assistant turn: 1 up, -1 down, 0/undefined none. */
   feedback?: number;
+  /** Friendly label for the current pipeline stage, shown while the answer is
+   *  still being prepared (before any tokens arrive). */
+  progress?: string;
 }
 
 /** Small celadon document mark that stands in for the assistant. */
@@ -262,7 +265,24 @@ function AssistantMessage({
       <div style={{ minWidth: 0, flex: 1, paddingTop: 1 }}>
         <div className="md-body">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-          {message.streaming && <span className="caret" />}
+          {message.streaming &&
+            (message.content.length === 0 ? (
+              <div
+                data-testid="msg-progress"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 9,
+                  color: 'var(--text-muted)',
+                  fontSize: 14,
+                }}
+              >
+                <Spin size="small" />
+                <span>{message.progress ?? 'Working…'}</span>
+              </div>
+            ) : (
+              <span className="caret" />
+            ))}
         </div>
         <Sources citations={message.citations} images={message.images} />
         {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
