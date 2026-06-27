@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Drawer, Grid, Layout, Spin, Tag, message as antdMessage } from 'antd';
-import { DatabaseOutlined, MenuOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, DownOutlined, MenuOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   listConversations,
   listWorkspaces,
@@ -49,6 +49,9 @@ export function ChatPage() {
   // Scope chosen for the *next* new conversation (null = all workspaces).
   const [newScope, setNewScope] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const streamStartRef = useRef(0);
+  const [atBottom, setAtBottom] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   // Conversation id we're currently streaming into. Lets the activeId effect
   // tell a real conversation *switch* (abort + reload) from the activeId change
@@ -128,9 +131,21 @@ export function ChatPage() {
   // Abort a running stream if the page unmounts.
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Autoscroll only when the user is already near the bottom, so scrolling up to
+  // read isn't yanked back down while the answer streams.
   useEffect(() => {
+    if (atBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, atBottom]);
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, []);
 
   const updateLastAssistant = useCallback((fn: (m: UiMessage) => UiMessage) => {
     setMessages((prev) => {
@@ -162,7 +177,14 @@ export function ChatPage() {
           updateLastAssistant((m) => ({ ...m, images: evt.images }));
           break;
         case 'done':
-          updateLastAssistant((m) => ({ ...m, id: evt.message_id, streaming: false, progress: undefined }));
+          updateLastAssistant((m) => ({
+            ...m,
+            id: evt.message_id,
+            streaming: false,
+            progress: undefined,
+            usage: evt.usage,
+            elapsedMs: streamStartRef.current ? Date.now() - streamStartRef.current : undefined,
+          }));
           break;
         case 'error':
           antdMessage.error(evt.message);
@@ -265,6 +287,7 @@ export function ChatPage() {
       const controller = new AbortController();
       abortRef.current = controller;
       streamingConvRef.current = convId;
+      streamStartRef.current = Date.now();
 
       try {
         await streamMessage(convId, text, handleStreamEvent, controller.signal, attachments);
@@ -312,6 +335,7 @@ export function ChatPage() {
     const controller = new AbortController();
     abortRef.current = controller;
     streamingConvRef.current = activeId;
+    streamStartRef.current = Date.now();
     try {
       await streamMessage(activeId, '', handleStreamEvent, controller.signal, undefined, true);
     } catch (e) {
@@ -378,6 +402,7 @@ export function ChatPage() {
           flexDirection: 'column',
           height: '100%',
           background: 'var(--canvas)',
+          position: 'relative',
         }}
       >
         {isMobile && (
@@ -421,7 +446,12 @@ export function ChatPage() {
             </Tag>
           </div>
         )}
-        <div className="thin-scroll" style={{ flex: 1, overflowY: 'auto', padding: '28px 20px' }}>
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="thin-scroll"
+          style={{ flex: 1, overflowY: 'auto', padding: '28px 20px' }}
+        >
           {loadingMsgs ? (
             <div style={{ textAlign: 'center', marginTop: 100 }}>
               <Spin />
@@ -501,6 +531,23 @@ export function ChatPage() {
             </div>
           )}
         </div>
+        {!atBottom && messages.length > 0 && (
+          <Button
+            shape="circle"
+            icon={<DownOutlined />}
+            onClick={scrollToBottom}
+            data-testid="scroll-to-bottom"
+            aria-label="Scroll to latest"
+            style={{
+              position: 'absolute',
+              bottom: 88,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
+              zIndex: 5,
+            }}
+          />
+        )}
         <div style={{ borderTop: '1px solid var(--line)', background: 'var(--canvas)' }}>
           <div style={{ maxWidth: 820, margin: '0 auto', width: '100%' }}>
             <MessageComposer disabled={sending} onSend={handleSend} onStop={handleStop} />

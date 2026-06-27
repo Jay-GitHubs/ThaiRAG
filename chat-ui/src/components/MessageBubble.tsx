@@ -1,7 +1,12 @@
+import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Image, Spin, Tag, Tooltip } from 'antd';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github.css';
+import { Image, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
+  CheckOutlined,
+  CopyOutlined,
   DislikeFilled,
   DislikeOutlined,
   FileTextOutlined,
@@ -24,6 +29,49 @@ export interface UiMessage {
   /** Friendly label for the current pipeline stage, shown while the answer is
    *  still being prepared (before any tokens arrive). */
   progress?: string;
+  /** Token usage for the finished answer (surfaced under the message). */
+  usage?: { prompt_tokens: number; completion_tokens: number };
+  /** Wall-clock time from send to first/last token (ms), for the meta line. */
+  elapsedMs?: number;
+}
+
+/** A fenced code block with a copy button (markdown renderer override). */
+function CodeBlock({ children, ...props }: { children?: React.ReactNode }) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    const text = preRef.current?.innerText ?? '';
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        data-testid="copy-code"
+        onClick={copy}
+        style={{
+          position: 'absolute',
+          top: 6,
+          right: 6,
+          border: 'none',
+          background: 'rgba(0,0,0,0.06)',
+          borderRadius: 6,
+          padding: '2px 8px',
+          fontSize: 11.5,
+          cursor: 'pointer',
+          color: 'var(--text-muted)',
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <pre ref={preRef} {...props}>
+        {children}
+      </pre>
+    </div>
+  );
 }
 
 /** Small celadon document mark that stands in for the assistant. */
@@ -234,7 +282,7 @@ function FeedbackBar({
     color: active ? 'var(--celadon-deep)' : 'var(--text-muted)',
   });
   return (
-    <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
+    <div style={{ display: 'flex', gap: 14 }}>
       <Tooltip title="Good answer">
         {rating === 1 ? (
           <LikeFilled
@@ -273,6 +321,46 @@ function FeedbackBar({
   );
 }
 
+/** Action row under a finished answer: copy, feedback thumbs, and a usage meta. */
+function AnswerActions({
+  message,
+  onFeedback,
+}: {
+  message: UiMessage;
+  onFeedback?: (messageId: string, value: number) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      antdMessage.success('Answer copied');
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  const meta = [
+    message.elapsedMs != null ? `${(message.elapsedMs / 1000).toFixed(1)}s` : null,
+    message.usage
+      ? `${(message.usage.prompt_tokens + message.usage.completion_tokens).toLocaleString()} tokens`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const icon = { cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)' };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
+      <Tooltip title={copied ? 'Copied' : 'Copy answer'}>
+        {copied ? (
+          <CheckOutlined data-testid="copy-answer" style={{ ...icon, color: 'var(--celadon-deep)' }} />
+        ) : (
+          <CopyOutlined data-testid="copy-answer" onClick={copy} style={icon} />
+        )}
+      </Tooltip>
+      {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
+      {meta && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{meta}</span>}
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   onFeedback,
@@ -290,7 +378,13 @@ function AssistantMessage({
       <AssistantMark />
       <div style={{ minWidth: 0, flex: 1, paddingTop: 1 }}>
         <div className="md-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{ pre: CodeBlock }}
+          >
+            {message.content}
+          </ReactMarkdown>
           {message.streaming &&
             (message.content.length === 0 ? (
               <div
@@ -315,7 +409,9 @@ function AssistantMessage({
           images={message.images}
           onSourceClick={onSourceClick}
         />
-        {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
+        {!message.streaming && message.content.length > 0 && (
+          <AnswerActions message={message} onFeedback={onFeedback} />
+        )}
       </div>
     </div>
   );

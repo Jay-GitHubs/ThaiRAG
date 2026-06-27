@@ -15,11 +15,13 @@
     "antd": "^5.24.2",
     "axios": "^1.7.9",
     "dayjs": "^1.11.13",
+    "highlight.js": "^11.11.1",
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-router-dom": "^6.28.2",
+    "rehype-highlight": "^7.0.2",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.0"
