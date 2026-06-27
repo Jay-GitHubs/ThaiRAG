@@ -19,8 +19,6 @@ import {
   CloudDownloadOutlined,
   NodeIndexOutlined,
   LogoutOutlined,
-  SunOutlined,
-  MoonOutlined,
   GlobalOutlined,
   MenuOutlined,
   SwapOutlined,
@@ -35,7 +33,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
-import { useThemeMode } from '../theme/ThemeContext';
+import { ThemePicker } from '../components/ThemePicker';
 import { useI18n } from '../i18n';
 import type { Locale } from '../i18n';
 import { QuestionCircleOutlined } from '@ant-design/icons';
@@ -151,7 +149,6 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const { mode, toggle: toggleTheme } = useThemeMode();
   const { token: themeToken } = theme.useToken();
   const { locale, setLocale, t } = useI18n();
   const tourCtx = useContext(TourContext);
@@ -220,7 +217,7 @@ export function AdminLayout() {
   const sidebarContent = (
     <>
       <div style={{ padding: 16, textAlign: 'center' }}>
-        <Typography.Text strong style={{ color: '#fff', fontSize: 18 }}>
+        <Typography.Text strong style={{ color: 'var(--ink-bright)', fontSize: 18 }}>
           ThaiRAG Admin
         </Typography.Text>
       </div>
@@ -231,6 +228,7 @@ export function AdminLayout() {
         defaultOpenKeys={openKeys}
         items={menuItems}
         onClick={handleMenuClick}
+        style={{ background: 'transparent', borderInlineEnd: 'none' }}
       />
     </>
   );
@@ -239,9 +237,15 @@ export function AdminLayout() {
     <Layout style={{ minHeight: '100vh' }}>
       {/* Desktop sidebar */}
       {!isMobile && (
-        <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} data-tour="sidebar">
+        <Sider
+          collapsible
+          collapsed={collapsed}
+          onCollapse={setCollapsed}
+          data-tour="sidebar"
+          style={{ background: 'var(--ink)' }}
+        >
           <div style={{ padding: 16, textAlign: 'center' }}>
-            <Typography.Text strong style={{ color: '#fff', fontSize: collapsed ? 14 : 18 }}>
+            <Typography.Text strong style={{ color: 'var(--ink-bright)', fontSize: collapsed ? 14 : 18 }}>
               {collapsed ? 'TR' : 'ThaiRAG Admin'}
             </Typography.Text>
           </div>
@@ -252,6 +256,7 @@ export function AdminLayout() {
             defaultOpenKeys={openKeys}
             items={menuItems}
             onClick={handleMenuClick}
+            style={{ background: 'transparent', borderInlineEnd: 'none' }}
           />
         </Sider>
       )}
@@ -264,7 +269,7 @@ export function AdminLayout() {
           onClose={() => setDrawerOpen(false)}
           width={screens.xs ? 240 : 280}
           styles={{
-            body: { padding: 0, backgroundColor: '#001529' },
+            body: { padding: 0, background: 'var(--ink)' },
             header: { display: 'none' },
           }}
         >
@@ -325,12 +330,7 @@ export function AdminLayout() {
                 {!isMobile && locale.toUpperCase()}
               </Button>
             </Dropdown>
-            <Button
-              icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-              onClick={toggleTheme}
-              title={mode === 'dark' ? t('header.lightMode') : t('header.darkMode')}
-              size={isMobile ? 'small' : 'middle'}
-            />
+            <ThemePicker size={isMobile ? 'small' : 'middle'} />
             <Button icon={<LogoutOutlined />} onClick={logout} size={isMobile ? 'small' : 'middle'}>
               <span className="header-btn-text">{t('header.logout')}</span>
             </Button>

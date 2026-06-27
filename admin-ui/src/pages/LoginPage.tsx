@@ -4,7 +4,7 @@ import { LockOutlined, MailOutlined, SunOutlined, MoonOutlined } from '@ant-desi
 import { Navigate, useNavigate } from 'react-router-dom';
 import { setToken } from '../api/client';
 import { useAuth } from '../auth/useAuth';
-import { useThemeMode } from '../theme/ThemeContext';
+import { useThemeMode } from '../theme/ThemeProvider';
 import { useEnabledProviders } from '../hooks/useEnabledProviders';
 
 export function LoginPage() {

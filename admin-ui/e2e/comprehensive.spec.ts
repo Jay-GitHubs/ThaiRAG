@@ -316,48 +316,32 @@ test.describe('Permissions Page', () => {
 // ─── Theme Toggle ─────────────────────────────────────────────────────
 
 test.describe('Theme', () => {
-  test('toggle on login page switches theme', async ({ page }) => {
-    await page.goto('/login');
-    await page.waitForTimeout(300);
-
-    const toggleBtn = page.getByTitle(/Switch to dark mode|Switch to light mode/);
-    await expect(toggleBtn).toBeVisible();
-
-    await toggleBtn.click();
-    await page.waitForTimeout(300);
-
-    const bg = await page.evaluate(() => document.body.style.background);
-    expect(bg).toBeTruthy();
-  });
-
-  test('toggle on dashboard persists across navigation', async ({ page }) => {
+  test('theme picker switches + persists across navigation', async ({ page }) => {
     await login(page);
 
-    const initialBg = await page.evaluate(() => document.body.style.background);
+    await page.getByTestId('theme-picker').click();
+    await page.getByTestId('theme-option-ink').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'ink');
 
-    const toggleBtn = page.getByTitle(/Switch to dark mode|Switch to light mode/);
-    await toggleBtn.click();
+    // Navigate — the theme persists.
+    await navigateTo(page, 'Health');
     await page.waitForTimeout(300);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'ink');
 
-    const newBg = await page.evaluate(() => document.body.style.background);
-    expect(newBg).not.toBe(initialBg);
-
-    // Navigate — theme should persist
-    await navigateTo(page, 'Users');
-    await page.waitForTimeout(300);
-
-    const afterNavBg = await page.evaluate(() => document.body.style.background);
-    expect(afterNavBg).toBe(newBg);
+    // Restore the default for a clean slate.
+    await page.getByTestId('theme-picker').click();
+    await page.getByTestId('theme-option-celadon').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'celadon');
   });
 
-  test('theme preference persists across page refresh', async ({ page }) => {
+  test('legacy dark preference migrates + persists across refresh', async ({ page }) => {
     await page.goto('/login');
+    // The old two-state toggle stored 'light' | 'dark' — those must map onto the
+    // new theme ids (dark -> ink) so existing users don't lose their preference.
     await page.evaluate(() => localStorage.setItem('thairag-theme', 'dark'));
     await page.reload();
     await page.waitForTimeout(500);
-
-    const bg = await page.evaluate(() => document.body.style.background);
-    expect(bg).toContain('20'); // #141414 contains "20" in decimal
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'ink');
   });
 });
 
