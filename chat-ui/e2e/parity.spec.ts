@@ -283,14 +283,15 @@ test('edit & resend a user message replaces the turn (UX batch C)', async ({ pag
   await expect(page.getByTestId('msg-user').filter({ hasText: 'edittest-alpha' })).toHaveCount(0);
 });
 
-test('dark mode persists + keyboard shortcuts (UX batch D)', async ({ page }) => {
+test('theme picker switches + persists, keyboard shortcuts (UX batch D)', async ({ page }) => {
   await login(page);
 
-  // Toggle to dark; the theme is reflected on <html> and survives a reload.
-  await page.getByTestId('theme-toggle').click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  // Pick a dark theme via the picker; reflected on <html> and survives reload.
+  await page.getByTestId('theme-picker').click();
+  await page.getByTestId('theme-option-synthwave').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'synthwave');
   await page.reload();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'synthwave');
 
   // "?" opens the shortcuts help.
   await page.locator('body').click();
@@ -303,9 +304,38 @@ test('dark mode persists + keyboard shortcuts (UX batch D)', async ({ page }) =>
   await page.keyboard.press('/');
   await expect(page.getByTestId('composer-input')).toBeFocused();
 
-  // Restore light theme for a clean slate.
-  await page.getByTestId('theme-toggle').click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  // Restore the default theme for a clean slate.
+  await page.getByTestId('theme-picker').click();
+  await page.getByTestId('theme-option-celadon').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'celadon');
+});
+
+test('citations stay legible under a dark theme (theme compatibility)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+
+  // Switch to a vivid dark theme, then produce a cited answer.
+  await page.getByTestId('theme-picker').click();
+  await page.getByTestId('theme-option-nebula').click();
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  await page
+    .getByPlaceholder(COMPOSER)
+    .fill('วิธีเข้าสู่ระบบ (log-in) ของแอป Micro Pay ทำอย่างไร');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+
+  await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('source-chip').first()).toBeVisible();
+  // The white-on-bright-accent bug is fixed: on bright accents, text-on-accent is dark.
+  const onAccent = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--on-accent').trim(),
+  );
+  expect(onAccent).toBe('#04181d');
 });
 
 test('sidebar collapses (desktop) and the edit button shows without hover', async ({ page }) => {

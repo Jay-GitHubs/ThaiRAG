@@ -113,7 +113,7 @@ export function PdfViewer({
                 box.style.top = `${(top / viewport.height) * 100}%`;
                 box.style.width = `${(w / viewport.width) * 100}%`;
                 box.style.height = `${(fontH / viewport.height) * 100}%`;
-                box.style.background = 'rgba(255,213,0,0.4)';
+                box.style.background = 'var(--mark-bg)';
                 box.style.borderRadius = '2px';
                 box.style.pointerEvents = 'none';
                 wrap.appendChild(box);

@@ -1,50 +1,377 @@
-:root {
-  /* ── Celadon & Ink palette ─────────────────────────────────────── */
-  --ink: #14223b; /* sidebar / rail */
-  --ink-soft: #1f3252; /* rail hover */
+/* ════════════════════════════════════════════════════════════════════
+   ThaiRAG chat-ui theming
+   --------------------------------------------------------------------
+   A semantic token contract. EVERY color a component paints comes from a
+   variable here — nothing hardcoded — so swapping `data-theme` on <html>
+   re-skins the whole app (citations, code, highlights, source viewer and
+   all) with no broken contrast. 10 themes live below; :root is Celadon.
+
+   Token groups:
+     RAIL    --ink* : the sidebar/login panel (its own surface; may be a
+              dark slate, a colored panel, whatever the theme wants)
+     CANVAS  --canvas/--surface/--line : the chat reading area
+     TEXT    --text/--text-muted
+     ACCENT  --celadon* : the one brand accent (name kept for history;
+              each theme repaints it) + --on-accent = readable text ON it
+     CONTENT --code-*/--mark-*/--chip-border : the bits the audit caught
+     CHROME  --scrollbar/--shadow-* : depth that must flip light↔dark
+   ════════════════════════════════════════════════════════════════════ */
+
+:root,
+:root[data-theme='celadon'] {
+  /* ── Celadon & Ink — warm paper, Thai celadon glaze, ink rail ──── */
+  --ink: #14223b;
+  --ink-soft: #1f3252;
   --ink-line: rgba(255, 255, 255, 0.1);
   --ink-dim: rgba(233, 238, 246, 0.62);
   --ink-bright: #f3f6fb;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
 
-  --canvas: #faf8f3; /* warm paper chat surface */
+  --canvas: #faf8f3;
   --surface: #ffffff;
-  --line: #e9e3d7; /* warm hairline */
-
-  --celadon: #2f8e7e; /* the one accent — Thai celadon glaze */
-  --celadon-deep: #246b5f;
-  --celadon-tint: #e8f1ee;
+  --line: #e9e3d7;
 
   --text: #1a2330;
   --text-muted: #5b6675;
+
+  --celadon: #2f8e7e;
+  --celadon-deep: #246b5f;
+  --celadon-tint: #e8f1ee;
+  --on-accent: #ffffff;
+
+  --code-bg: #11233a;
+  --code-text: #e8eef7;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #fff3bf;
+  --mark-text: #1a2330;
+  --chip-border: #cfe3dd;
+
+  --scrollbar: rgba(120, 120, 120, 0.28);
+  --shadow-sm: rgba(20, 34, 59, 0.06);
+  --shadow-md: rgba(20, 34, 59, 0.16);
 
   --font-display: 'IBM Plex Sans Thai', 'IBM Plex Sans', -apple-system, sans-serif;
   --font-body: 'IBM Plex Sans Thai', 'IBM Plex Sans', -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-/* ── Dark glaze ─────────────────────────────────────────────────────
-   Not an inversion — the same Celadon & Ink identity at night. The ink rail
-   deepens, the warm paper canvas becomes a cool slate, and the celadon accent
-   is lifted a step so it still glows. --celadon stays a mid teal usable as a
-   chip/badge background under white; --celadon-deep becomes the light tint that
-   carries link + citation text on the dark canvas. */
-:root[data-theme='dark'] {
+/* ── 2 · Ink — deep slate night, the original dark ─────────────────── */
+:root[data-theme='ink'] {
   --ink: #0d1626;
   --ink-soft: #1b2a44;
   --ink-line: rgba(255, 255, 255, 0.08);
   --ink-dim: rgba(231, 237, 246, 0.6);
   --ink-bright: #eef3fa;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
 
   --canvas: #111d31;
   --surface: #18263f;
   --line: #283750;
 
+  --text: #e7edf6;
+  --text-muted: #97a4b8;
+
   --celadon: #46b3a0;
   --celadon-deep: #7fd3c1;
   --celadon-tint: #163a33;
+  --on-accent: #06231e;
 
-  --text: #e7edf6;
-  --text-muted: #97a4b8;
+  --code-bg: #0b1524;
+  --code-text: #dfe7f2;
+  --code-btn-bg: rgba(255, 255, 255, 0.1);
+
+  --mark-bg: rgba(127, 211, 193, 0.24);
+  --mark-text: #eef3fa;
+  --chip-border: #2c4a44;
+
+  --scrollbar: rgba(255, 255, 255, 0.18);
+  --shadow-sm: rgba(0, 0, 0, 0.3);
+  --shadow-md: rgba(0, 0, 0, 0.5);
+}
+
+/* ── 3 · Lanna Indigo — parchment + Thai indigo textile ───────────── */
+:root[data-theme='lanna'] {
+  --ink: #1b2447;
+  --ink-soft: #2a3766;
+  --ink-line: rgba(255, 255, 255, 0.1);
+  --ink-dim: rgba(230, 233, 245, 0.62);
+  --ink-bright: #f1f3fb;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
+
+  --canvas: #f6f3ec;
+  --surface: #fffdf8;
+  --line: #e4ddcd;
+
+  --text: #20242e;
+  --text-muted: #5d6373;
+
+  --celadon: #3a4f9c;
+  --celadon-deep: #2c3d7d;
+  --celadon-tint: #e8ebf7;
+  --on-accent: #ffffff;
+
+  --code-bg: #1b2447;
+  --code-text: #e8ebf7;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #ffe9a8;
+  --mark-text: #20242e;
+  --chip-border: #c9d0ec;
+
+  --scrollbar: rgba(100, 100, 120, 0.3);
+  --shadow-sm: rgba(27, 36, 71, 0.07);
+  --shadow-md: rgba(27, 36, 71, 0.18);
+}
+
+/* ── 4 · Cinnabar — porcelain + Thai lacquer/seal red ─────────────── */
+:root[data-theme='cinnabar'] {
+  --ink: #241616;
+  --ink-soft: #3a2020;
+  --ink-line: rgba(255, 255, 255, 0.1);
+  --ink-dim: rgba(245, 235, 233, 0.62);
+  --ink-bright: #fdf4f2;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
+
+  --canvas: #f7f2ef;
+  --surface: #fffdfb;
+  --line: #ecdfd8;
+
+  --text: #2a2020;
+  --text-muted: #6b5b56;
+
+  --celadon: #c0392b;
+  --celadon-deep: #9e2b20;
+  --celadon-tint: #f7e4e0;
+  --on-accent: #ffffff;
+
+  --code-bg: #241616;
+  --code-text: #f7e4e0;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #ffd9b3;
+  --mark-text: #2a2020;
+  --chip-border: #ecc9c1;
+
+  --scrollbar: rgba(120, 90, 90, 0.3);
+  --shadow-sm: rgba(42, 20, 20, 0.07);
+  --shadow-md: rgba(42, 20, 20, 0.18);
+}
+
+/* ── 5 · Sakura — soft blush + rose (beautiful) ───────────────────── */
+:root[data-theme='sakura'] {
+  --ink: #3a2733;
+  --ink-soft: #4d3645;
+  --ink-line: rgba(255, 255, 255, 0.1);
+  --ink-dim: rgba(245, 235, 242, 0.64);
+  --ink-bright: #fdf3f8;
+  --ink-icon: rgba(255, 255, 255, 0.62);
+  --ink-hover: rgba(255, 255, 255, 0.07);
+
+  --canvas: #fbf3f5;
+  --surface: #fffafc;
+  --line: #f0dde4;
+
+  --text: #3a2b33;
+  --text-muted: #7a6470;
+
+  --celadon: #d56a93;
+  --celadon-deep: #b24e78;
+  --celadon-tint: #fbe4ee;
+  --on-accent: #ffffff;
+
+  --code-bg: #3a2733;
+  --code-text: #fbe4ee;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #ffe1b0;
+  --mark-text: #3a2b33;
+  --chip-border: #f2cfde;
+
+  --scrollbar: rgba(150, 110, 130, 0.3);
+  --shadow-sm: rgba(58, 39, 51, 0.07);
+  --shadow-md: rgba(58, 39, 51, 0.18);
+}
+
+/* ── 6 · Daylight — clean cool slate + blue ───────────────────────── */
+:root[data-theme='daylight'] {
+  --ink: #1e293b;
+  --ink-soft: #2c3a52;
+  --ink-line: rgba(255, 255, 255, 0.1);
+  --ink-dim: rgba(226, 232, 240, 0.62);
+  --ink-bright: #f1f5f9;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
+
+  --canvas: #f8fafc;
+  --surface: #ffffff;
+  --line: #e2e8f0;
+
+  --text: #1e293b;
+  --text-muted: #64748b;
+
+  --celadon: #2563eb;
+  --celadon-deep: #1d4ed8;
+  --celadon-tint: #e6efff;
+  --on-accent: #ffffff;
+
+  --code-bg: #0f172a;
+  --code-text: #e2e8f0;
+  --code-btn-bg: rgba(255, 255, 255, 0.14);
+
+  --mark-bg: #fde68a;
+  --mark-text: #1e293b;
+  --chip-border: #cdd9ec;
+
+  --scrollbar: rgba(100, 116, 139, 0.35);
+  --shadow-sm: rgba(15, 23, 42, 0.06);
+  --shadow-md: rgba(15, 23, 42, 0.16);
+}
+
+/* ── 7 · Nebula — deep space violet + electric cyan (sci-fi) ──────── */
+:root[data-theme='nebula'] {
+  --ink: #0d0a1f;
+  --ink-soft: #1c1638;
+  --ink-line: rgba(255, 255, 255, 0.08);
+  --ink-dim: rgba(224, 221, 245, 0.6);
+  --ink-bright: #f0edff;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.07);
+
+  --canvas: #110d24;
+  --surface: #1a1535;
+  --line: #2e2752;
+
+  --text: #e9e6fb;
+  --text-muted: #9b93c4;
+
+  --celadon: #22d3ee;
+  --celadon-deep: #67e8f9;
+  --celadon-tint: #15303a;
+  --on-accent: #04181d;
+
+  --code-bg: #0b0820;
+  --code-text: #d9d4f5;
+  --code-btn-bg: rgba(255, 255, 255, 0.1);
+
+  --mark-bg: rgba(34, 211, 238, 0.24);
+  --mark-text: #f0edff;
+  --chip-border: #34406a;
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --shadow-sm: rgba(0, 0, 0, 0.4);
+  --shadow-md: rgba(34, 211, 238, 0.2);
+}
+
+/* ── 8 · Synthwave — neon magenta on dark purple (sci-fi) ─────────── */
+:root[data-theme='synthwave'] {
+  --ink: #14091f;
+  --ink-soft: #261238;
+  --ink-line: rgba(255, 255, 255, 0.08);
+  --ink-dim: rgba(245, 224, 245, 0.6);
+  --ink-bright: #ffeaff;
+  --ink-icon: rgba(255, 255, 255, 0.62);
+  --ink-hover: rgba(255, 255, 255, 0.07);
+
+  --canvas: #1a0e2e;
+  --surface: #251539;
+  --line: #3d2257;
+
+  --text: #ffe6fb;
+  --text-muted: #c09cc9;
+
+  --celadon: #ff2e97;
+  --celadon-deep: #ff6ec7;
+  --celadon-tint: #3a1430;
+  --on-accent: #25041a;
+
+  --code-bg: #120824;
+  --code-text: #ffd9f4;
+  --code-btn-bg: rgba(255, 255, 255, 0.1);
+
+  --mark-bg: rgba(56, 224, 214, 0.26);
+  --mark-text: #ffeaff;
+  --chip-border: #4a2a5e;
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --shadow-sm: rgba(0, 0, 0, 0.45);
+  --shadow-md: rgba(255, 46, 151, 0.28);
+}
+
+/* ── 9 · Amber Terminal — black + amber phosphor, mono display ─────── */
+:root[data-theme='amber'] {
+  --ink: #0a0a08;
+  --ink-soft: #1a1813;
+  --ink-line: rgba(255, 255, 255, 0.08);
+  --ink-dim: rgba(245, 224, 180, 0.55);
+  --ink-bright: #ffe6b8;
+  --ink-icon: rgba(255, 200, 100, 0.65);
+  --ink-hover: rgba(255, 176, 0, 0.08);
+
+  --canvas: #0d0c0a;
+  --surface: #16140f;
+  --line: #2c2719;
+
+  --text: #efe4cf;
+  --text-muted: #a8946e;
+
+  --celadon: #ffb000;
+  --celadon-deep: #ffc94d;
+  --celadon-tint: #2a1f08;
+  --on-accent: #1a1200;
+
+  --code-bg: #080806;
+  --code-text: #ffcf87;
+  --code-btn-bg: rgba(255, 176, 0, 0.14);
+
+  --mark-bg: rgba(255, 176, 0, 0.24);
+  --mark-text: #ffe6b8;
+  --chip-border: #4a3a16;
+
+  --scrollbar: rgba(255, 176, 0, 0.25);
+  --shadow-sm: rgba(0, 0, 0, 0.5);
+  --shadow-md: rgba(255, 176, 0, 0.2);
+
+  --font-display: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── 10 · Aurora — deep teal night + aurora green (beautiful) ──────── */
+:root[data-theme='aurora'] {
+  --ink: #07181a;
+  --ink-soft: #103034;
+  --ink-line: rgba(255, 255, 255, 0.08);
+  --ink-dim: rgba(214, 240, 236, 0.6);
+  --ink-bright: #e8fbf6;
+  --ink-icon: rgba(255, 255, 255, 0.6);
+  --ink-hover: rgba(255, 255, 255, 0.06);
+
+  --canvas: #0a1f22;
+  --surface: #103034;
+  --line: #1f4a4a;
+
+  --text: #dff4ee;
+  --text-muted: #84a8a2;
+
+  --celadon: #34d399;
+  --celadon-deep: #6ee7b7;
+  --celadon-tint: #0f3a30;
+  --on-accent: #042018;
+
+  --code-bg: #07191b;
+  --code-text: #d3eee6;
+  --code-btn-bg: rgba(255, 255, 255, 0.1);
+
+  --mark-bg: rgba(52, 211, 153, 0.24);
+  --mark-text: #e8fbf6;
+  --chip-border: #235049;
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --shadow-sm: rgba(0, 0, 0, 0.4);
+  --shadow-md: rgba(52, 211, 153, 0.2);
 }
 
 html,
@@ -64,7 +391,7 @@ body {
     color 0.2s ease;
 }
 
-/* Keyboard users get a clear celadon focus ring on every interactive element
+/* Keyboard users get a clear accent focus ring on every interactive element
    (mouse users never see it). antd keeps its own component rings; this covers
    our bare <button>/icon affordances. */
 :focus-visible {
@@ -102,7 +429,7 @@ body {
   width: 8px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 120, 0.28);
+  background: var(--scrollbar);
   border-radius: 8px;
 }
 
@@ -126,8 +453,8 @@ body {
   margin: 1em 0 0.4em;
 }
 .md-body pre {
-  background: #11233a;
-  color: #e8eef7;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: 14px 16px;
   border-radius: 10px;
   overflow-x: auto;
@@ -209,7 +536,7 @@ body {
   right: -90px;
   width: 320px;
   height: 320px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ink-line);
   border-radius: 18px;
   transform: rotate(12deg);
 }
