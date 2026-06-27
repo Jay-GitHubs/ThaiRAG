@@ -249,6 +249,24 @@ test('finished answer offers a copy button (answer ergonomics)', async ({ page }
   await expect(page.getByTestId('copy-answer').last()).toBeVisible({ timeout: 10_000 });
 });
 
+test('sidebar search + date grouping (UX batch B)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  // Create a conversation with a unique title (robust against prior test runs).
+  const tag = `srchtest-${Date.now()}`;
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill(`${tag} ตอบสั้น ๆ`);
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+
+  // Date grouping: the just-created conversation is under a "Today" header.
+  await expect(page.getByText('Today', { exact: true }).first()).toBeVisible({ timeout: 10_000 });
+
+  // Search narrows the list to exactly the matching conversation.
+  await page.getByTestId('conversation-search').fill(tag);
+  await expect(page.getByTestId('conversation-row')).toHaveCount(1);
+});
+
 test('thumbs feedback persists across reload (G5)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
