@@ -5,6 +5,7 @@ import { useDepts } from '../hooks/useDepts';
 import { useWorkspaces } from '../hooks/useWorkspaces';
 import { DocumentTable } from '../components/documents/DocumentTable';
 import { JobsTable } from '../components/documents/JobsTable';
+import { PageHeader } from '../components/PageHeader';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
 import { getDocumentsSteps } from '../tours/steps/documents';
@@ -26,10 +27,9 @@ export function DocumentsPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>{t('documents.title')}</Typography.Title>
+      <PageHeader eyebrow="Content" title={t('documents.title')}>
         <TourGuideButton tourId="documents" />
-      </div>
+      </PageHeader>
       <Space style={{ marginBottom: 16 }} wrap>
         <span data-tour="doc-org-select">
           <Select

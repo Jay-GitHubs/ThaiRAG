@@ -4,6 +4,7 @@ import { KmTree } from '../components/km/KmTree';
 import { OrgPanel } from '../components/km/OrgPanel';
 import { DeptPanel } from '../components/km/DeptPanel';
 import { WorkspacePanel } from '../components/km/WorkspacePanel';
+import { PageHeader } from '../components/PageHeader';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
 import { getKmHierarchySteps } from '../tours/steps/kmHierarchy';
@@ -32,10 +33,9 @@ export function KmPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>KM Hierarchy</Typography.Title>
+      <PageHeader eyebrow="Content" title="KM Hierarchy">
         <TourGuideButton tourId="km-hierarchy" />
-      </div>
+      </PageHeader>
       <Row gutter={16}>
         <Col xs={24} md={8} lg={6} data-tour="km-tree">
           <KmTree onSelect={setSelection} refreshKey={refreshKey} onMutated={onMutated} />

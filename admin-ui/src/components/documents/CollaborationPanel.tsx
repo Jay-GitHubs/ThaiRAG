@@ -99,7 +99,7 @@ function CommentsTab({ wsId, docId }: { wsId: string; docId: string }) {
     <div key={c.id} style={{ marginLeft: indent * 24, marginBottom: 8 }}>
       <div
         style={{
-          background: 'rgba(0,0,0,0.03)',
+          background: 'var(--celadon-tint)',
           borderRadius: 6,
           padding: '8px 12px',
           position: 'relative',
