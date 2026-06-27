@@ -123,7 +123,7 @@ export function SourceDrawer({
           )}
 
           {view === 'pdf' && isPdf ? (
-            <PdfViewer docId={doc.doc_id} page={citation?.page} />
+            <PdfViewer docId={doc.doc_id} page={citation?.page} snippet={citation?.snippet} />
           ) : (
             <>
               {!hl && citation?.snippet && (

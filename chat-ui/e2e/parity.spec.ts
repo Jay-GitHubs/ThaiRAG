@@ -87,6 +87,28 @@ test('source drawer renders the original PDF (Phase 2)', async ({ page }) => {
   await expect(page.getByTestId('source-content')).toBeVisible({ timeout: 10_000 });
 });
 
+test('PDF source highlights the cited passage on the page (Phase 2.1)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  // Born-digital sales-table PDF (text layer) lives in KMs — its passage can be
+  // located + highlighted on the PDF canvas.
+  await page.getByPlaceholder(COMPOSER).fill('What were the Q1 and Q2 sales for the North and South regions?');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId('source-chip').first().click();
+  await expect(page.getByTestId('pdf-page').first()).toBeVisible({ timeout: 45_000 });
+  // The cited passage is highlighted directly on the rendered PDF page.
+  await expect(page.getByTestId('pdf-highlight').first()).toBeVisible({ timeout: 15_000 });
+});
+
 test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);
@@ -103,10 +125,12 @@ test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) 
   await waitForAnswer(page);
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
 
-  // Clicking a source chip opens the in-app drawer with the document text,
-  // instead of navigating to a new tab.
+  // Clicking a source chip opens the in-app drawer (PDF docs default to the
+  // Document view, others to the text view) instead of navigating to a new tab.
   await page.getByTestId('source-chip').first().click();
-  await expect(page.getByTestId('source-content')).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.getByTestId('pdf-viewer').or(page.getByTestId('source-content')),
+  ).toBeVisible({ timeout: 20_000 });
 });
 
 test('regenerate replaces the answer without duplicating the turn (G2)', async ({ page }) => {
