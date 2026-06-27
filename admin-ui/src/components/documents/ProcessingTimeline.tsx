@@ -241,13 +241,13 @@ export function ProcessingTimeline({ doc }: Props) {
         </Text>
       ),
       status: 'finish',
-      icon: <CheckCircleFilled style={{ color: '#52c41a' }} />,
+      icon: <CheckCircleFilled style={{ color: 'var(--success)' }} />,
     });
   } else if (failed) {
     items.push({
       title: 'Failed',
       status: 'error',
-      icon: <CloseCircleFilled style={{ color: '#ff4d4f' }} />,
+      icon: <CloseCircleFilled style={{ color: 'var(--danger)' }} />,
     });
   } else if (phases.length === 0) {
     // Processing accepted but no stage reported yet.

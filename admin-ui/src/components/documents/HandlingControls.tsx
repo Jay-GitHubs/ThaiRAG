@@ -27,7 +27,7 @@ export function HandlingControls({
 }: Props) {
   return (
     <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Handling</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>Handling</div>
       <Radio.Group
         value={handlingMode}
         onChange={(e) => onHandlingMode(e.target.value)}
@@ -50,7 +50,7 @@ export function HandlingControls({
       <Space size="large" style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12 }}>
           <Tooltip title="Override the image-coverage threshold for this document (blank = default)">
-            <span style={{ color: '#888', marginRight: 6 }}>Image-coverage ≥</span>
+            <span style={{ color: 'var(--text-muted)', marginRight: 6 }}>Image-coverage ≥</span>
           </Tooltip>
           <InputNumber
             size="small"
@@ -65,7 +65,7 @@ export function HandlingControls({
         </span>
         <span style={{ fontSize: 12 }}>
           <Tooltip title="Override the min-chars/page threshold for this document (blank = default)">
-            <span style={{ color: '#888', marginRight: 6 }}>Min chars/page</span>
+            <span style={{ color: 'var(--text-muted)', marginRight: 6 }}>Min chars/page</span>
           </Tooltip>
           <InputNumber
             size="small"
