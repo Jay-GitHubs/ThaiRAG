@@ -359,6 +359,18 @@ impl HybridSearchEngine {
         self.vector_store.delete_all().await
     }
 
+    /// Clear BOTH indexes — vector store and text (BM25) index. Used by a global
+    /// factory reset so no stale search state survives the Postgres wipe.
+    pub async fn delete_all_indexes(&self) -> Result<()> {
+        let (v_res, t_res) = tokio::join!(
+            self.vector_store.delete_all(),
+            self.text_search.delete_all()
+        );
+        v_res?;
+        t_res?;
+        Ok(())
+    }
+
     /// Return statistics about the underlying vector store.
     pub async fn vector_store_stats(&self) -> Result<thairag_core::types::VectorStoreStats> {
         self.vector_store.collection_stats().await

@@ -898,6 +898,20 @@ pub trait KmStoreTrait: Send + Sync {
     /// document delete and on reprocess (before new blobs are written).
     fn delete_image_blobs_for_doc(&self, doc_id: DocId) -> Result<()>;
 
+    // ── Factory reset ───────────────────────────────────────────────
+    /// Wipe knowledge-base content (documents, chunks, blobs, image blobs,
+    /// knowledge graph, conversations + messages, inference logs, lineage,
+    /// analytics, personal memories, training data…). When `full` is true, also
+    /// wipes structural/config tables (users, orgs, departments, workspaces,
+    /// permissions, settings, identity providers…) — a first-run state. The
+    /// caller is responsible for clearing the search indexes (vector + BM25).
+    fn factory_reset(&self, full: bool) -> Result<()>;
+    /// Scoped factory reset: wipe content for the given workspaces only
+    /// (documents + their derivatives, knowledge-graph entities, conversations
+    /// pinned to them). Structure/permissions are preserved. Returns the deleted
+    /// document ids so the caller can purge their search-index entries.
+    fn factory_reset_workspaces(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<DocId>>;
+
     /// Update document version number and content hash.
     fn update_document_version_info(
         &self,

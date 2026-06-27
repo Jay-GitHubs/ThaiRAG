@@ -681,6 +681,121 @@ impl KmStoreTrait for MemoryKmStore {
         Ok(())
     }
 
+    // ── Factory reset ───────────────────────────────────────────────
+
+    fn factory_reset(&self, full: bool) -> Result<()> {
+        // Content collections — always cleared.
+        self.documents.write().unwrap().clear();
+        self.document_blobs.write().unwrap().clear();
+        self.document_trees.write().unwrap().clear();
+        self.chunks.write().unwrap().clear();
+        self.document_versions.write().unwrap().clear();
+        self.inference_logs.write().unwrap().clear();
+        self.entities.write().unwrap().clear();
+        self.entity_doc_links.write().unwrap().clear();
+        self.relations.write().unwrap().clear();
+        self.document_acls.write().unwrap().clear();
+        self.search_events.write().unwrap().clear();
+        self.lineage_records.write().unwrap().clear();
+        self.personal_memories.write().unwrap().clear();
+        self.doc_comments.write().unwrap().clear();
+        self.doc_annotations.write().unwrap().clear();
+        self.doc_reviews.write().unwrap().clear();
+        self.regression_runs.write().unwrap().clear();
+        self.prompt_ratings.write().unwrap().clear();
+        self.training_datasets.write().unwrap().clear();
+        self.training_pairs.write().unwrap().clear();
+        self.finetune_jobs.write().unwrap().clear();
+        self.image_blobs.write().unwrap().clear();
+        self.conversations.write().unwrap().clear();
+        self.messages.write().unwrap().clear();
+        self.sync_runs.write().unwrap().clear();
+        self.sync_states.write().unwrap().clear();
+        if full {
+            // Structure/config — only cleared on a full first-run reset.
+            self.orgs.write().unwrap().clear();
+            self.depts.write().unwrap().clear();
+            self.workspaces.write().unwrap().clear();
+            self.users.write().unwrap().clear();
+            self.user_by_email.write().unwrap().clear();
+            self.permissions.write().unwrap().clear();
+            self.workspace_acls.write().unwrap().clear();
+            self.identity_providers.write().unwrap().clear();
+            self.settings.write().unwrap().clear();
+            self.connectors.write().unwrap().clear();
+            self.vault_keys.write().unwrap().clear();
+            self.llm_profiles.write().unwrap().clear();
+            self.api_keys_m2m.write().unwrap().clear();
+            self.tenants.write().unwrap().clear();
+            self.tenant_quotas.write().unwrap().clear();
+            self.tenant_org_mapping.write().unwrap().clear();
+            self.custom_roles.write().unwrap().clear();
+            self.prompt_templates.write().unwrap().clear();
+        }
+        Ok(())
+    }
+
+    fn factory_reset_workspaces(&self, workspace_ids: &[WorkspaceId]) -> Result<Vec<DocId>> {
+        let ws: std::collections::HashSet<WorkspaceId> = workspace_ids.iter().copied().collect();
+        if ws.is_empty() {
+            return Ok(vec![]);
+        }
+        let doc_ids: Vec<DocId> = self
+            .documents
+            .read()
+            .unwrap()
+            .values()
+            .filter(|d| ws.contains(&d.workspace_id))
+            .map(|d| d.id)
+            .collect();
+        let docs: std::collections::HashSet<DocId> = doc_ids.iter().copied().collect();
+
+        self.documents
+            .write()
+            .unwrap()
+            .retain(|id, _| !docs.contains(id));
+        self.document_blobs
+            .write()
+            .unwrap()
+            .retain(|id, _| !docs.contains(id));
+        self.document_trees
+            .write()
+            .unwrap()
+            .retain(|id, _| !docs.contains(id));
+        self.document_versions
+            .write()
+            .unwrap()
+            .retain(|v| !docs.contains(&v.doc_id));
+        self.image_blobs
+            .write()
+            .unwrap()
+            .retain(|_, r| !docs.contains(&r.doc_id));
+        self.chunks
+            .write()
+            .unwrap()
+            .retain(|c| !docs.contains(&c.doc_id));
+        self.entity_doc_links
+            .write()
+            .unwrap()
+            .retain(|(_, d)| !docs.contains(d));
+        self.relations
+            .write()
+            .unwrap()
+            .retain(|r| !docs.contains(&r.doc_id));
+        self.entities
+            .write()
+            .unwrap()
+            .retain(|_, e| !ws.contains(&e.workspace_id));
+        self.conversations.write().unwrap().retain(|c| {
+            !c.workspace_scope
+                .as_deref()
+                .and_then(|s| s.parse().ok())
+                .map(|w| ws.contains(&WorkspaceId(w)))
+                .unwrap_or(false)
+        });
+        Ok(doc_ids)
+    }
+
     // ── User ──────────────────────────────────────────────────────────
 
     fn insert_user(&self, email: String, name: String, password_hash: String) -> Result<User> {
