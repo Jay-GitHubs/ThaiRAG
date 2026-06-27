@@ -179,7 +179,12 @@ export default function BackupPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Title level={4}>Backup & Restore</Title>
+        <div>
+          <div className="eyebrow">System</div>
+          <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Backup &amp; Restore
+          </Title>
+        </div>
         <TourGuideButton tourId="backup" />
       </div>
 

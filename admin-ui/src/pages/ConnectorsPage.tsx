@@ -274,9 +274,12 @@ export function ConnectorsPage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Typography.Title level={4}>
-          <ApiOutlined /> MCP Connectors
-        </Typography.Title>
+        <div>
+          <div className="eyebrow">System</div>
+          <Typography.Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            <ApiOutlined /> MCP Connectors
+          </Typography.Title>
+        </div>
         <TourGuideButton tourId="connectors" />
       </div>
 

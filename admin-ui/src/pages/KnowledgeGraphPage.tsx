@@ -499,7 +499,12 @@ export default function KnowledgeGraphPage() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Title level={3} style={{ margin: 0 }}>Knowledge Graph</Title>
+        <div>
+          <div className="eyebrow">Content</div>
+          <Title level={4} style={{ margin: 0, fontFamily: 'var(--font-display)' }}>
+            Knowledge Graph
+          </Title>
+        </div>
         <TourGuideButton tourId="knowledge-graph" />
       </div>
       <Text type="secondary">
