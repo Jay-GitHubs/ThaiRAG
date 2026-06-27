@@ -167,10 +167,10 @@ function UserMessage({
               onClick={begin}
               style={{
                 fontSize: 13,
-                color: 'var(--text-muted)',
+                color: hovered ? 'var(--celadon)' : 'var(--text-muted)',
                 cursor: 'pointer',
-                opacity: hovered ? 1 : 0,
-                transition: 'opacity 0.12s',
+                opacity: hovered ? 1 : 0.6,
+                transition: 'color 0.12s, opacity 0.12s',
               }}
             />
           </Tooltip>
