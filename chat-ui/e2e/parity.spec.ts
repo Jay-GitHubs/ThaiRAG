@@ -108,6 +108,16 @@ test('PDF source highlights the cited passage on the page (Phase 2.1)', async ({
   await expect(page.getByTestId('pdf-page').first()).toBeVisible({ timeout: 45_000 });
   // The cited passage is highlighted directly on the rendered PDF page.
   await expect(page.getByTestId('pdf-highlight').first()).toBeVisible({ timeout: 15_000 });
+  // The highlight must paint the dedicated --mark-overlay token — which every
+  // theme defines as a translucent rgba — so the page text shows THROUGH it. An
+  // opaque box (e.g. a regression back to --mark-bg) would hide the content.
+  const inlineBg = await page
+    .getByTestId('pdf-highlight')
+    .first()
+    .evaluate(
+      (el) => (el as HTMLElement).style.background || (el as HTMLElement).style.backgroundColor,
+    );
+  expect(inlineBg).toContain('--mark-overlay');
 });
 
 test('non-PDF table source renders a table with the cited row highlighted', async ({ page }) => {
