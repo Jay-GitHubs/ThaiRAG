@@ -240,6 +240,15 @@ test('deleting the active conversation clears the message pane', async ({ page }
   await expect(page.getByTestId('msg-assistant')).toHaveCount(0);
 });
 
+test('finished answer offers a copy button (answer ergonomics)', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByPlaceholder(COMPOSER).fill('สวัสดี ตอบสั้น ๆ');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByTestId('copy-answer').last()).toBeVisible({ timeout: 10_000 });
+});
+
 test('thumbs feedback persists across reload (G5)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
