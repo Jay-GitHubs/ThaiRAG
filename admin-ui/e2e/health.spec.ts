@@ -11,9 +11,9 @@ test.describe('Health page', () => {
     await expect(page.getByRole('heading', { name: 'System Health' })).toBeVisible();
   });
 
-  test('shows health status badge', async ({ page }) => {
+  test('shows health status', async ({ page }) => {
     await expect(page.getByText('Status', { exact: true })).toBeVisible();
-    await expect(page.locator('.ant-badge')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('ok', { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 
   test('has Run Deep Check button', async ({ page }) => {
@@ -22,13 +22,11 @@ test.describe('Health page', () => {
 
   test('shows Prometheus metrics', async ({ page }) => {
     await expect(page.getByText('Prometheus Metrics')).toBeVisible();
-    // Metrics rendered as <Typography.Text code> → <code> element
-    const metricsBlock = page.locator('code');
+    // Metrics render in a themed <pre> code panel.
+    const metricsBlock = page.locator('pre').last();
     await expect(metricsBlock).toBeVisible({ timeout: 10_000 });
-    // Wait until actual metrics load (not just "Loading...")
-    await expect(metricsBlock).not.toHaveText('Loading...', { timeout: 10_000 });
-    const text = await metricsBlock.textContent();
-    expect(text?.length).toBeGreaterThan(0);
+    // Wait until actual metrics load (not just the loading placeholder).
+    await expect(metricsBlock).toContainText('active_sessions_total', { timeout: 10_000 });
   });
 
   test('deep check works', async ({ page }) => {

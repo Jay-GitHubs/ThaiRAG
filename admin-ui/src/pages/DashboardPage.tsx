@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
-import { Row, Col, Card, Statistic, Badge, Typography, Spin, Tour } from 'antd';
+import { Row, Col, Card, Badge, Typography, Spin, Tour } from 'antd';
 import {
   BankOutlined,
   TeamOutlined,
   AppstoreOutlined,
   FolderOutlined,
   FileTextOutlined,
+  HeartOutlined,
 } from '@ant-design/icons';
 import { useOrgs } from '../hooks/useOrgs';
 import { useUsers } from '../hooks/useUsers';
@@ -14,6 +15,8 @@ import { parsePrometheusMetric } from '../api/metrics';
 import { useI18n } from '../i18n';
 import { useTour, TourGuideButton } from '../tours';
 import { QuickStartCard } from '../components/dashboard/QuickStartCard';
+import { PageHeader } from '../components/PageHeader';
+import { StatCard } from '../components/StatCard';
 import { isFirstVisit } from '../tours/tourStorage';
 import { getDashboardSteps } from '../tours/steps/dashboard';
 
@@ -42,70 +45,67 @@ export function DashboardPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>Dashboard</Typography.Title>
+      <PageHeader eyebrow="Overview" title="Dashboard">
         <TourGuideButton tourId="dashboard" />
-      </div>
+      </PageHeader>
       <QuickStartCard />
       <Row gutter={[16, 16]} data-tour="stats-row">
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Organizations"
-              value={orgs.data?.total ?? '-'}
-              prefix={<BankOutlined />}
-            />
-          </Card>
+          <StatCard label="Organizations" value={orgs.data?.total ?? '-'} icon={<BankOutlined />} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Users"
-              value={users.data?.total ?? '-'}
-              prefix={<TeamOutlined />}
-            />
-          </Card>
+          <StatCard label="Users" value={users.data?.total ?? '-'} icon={<TeamOutlined />} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="Active Sessions"
-              value={activeSessions}
-              prefix={<AppstoreOutlined />}
-            />
-          </Card>
+          <StatCard label="Active Sessions" value={activeSessions} icon={<AppstoreOutlined />} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="HTTP Requests"
-              value={httpRequests}
-              prefix={<FolderOutlined />}
-            />
-          </Card>
+          <StatCard label="HTTP Requests" value={httpRequests} icon={<FolderOutlined />} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="LLM Tokens Used"
-              value={llmTokens}
-              prefix={<FileTextOutlined />}
-            />
-          </Card>
+          <StatCard label="LLM Tokens Used" value={llmTokens} icon={<FileTextOutlined />} />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card data-tour="health-card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>Health Status</span>
-              {health.isLoading ? (
-                <Spin size="small" />
-              ) : (
-                <Badge status={isHealthy ? 'success' : 'error'} text={isHealthy ? 'OK' : 'Down'} />
-              )}
+          <Card size="small" data-tour="health-card" style={{ height: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <span
+                aria-hidden
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 10,
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: isHealthy ? 'var(--celadon-tint)' : 'transparent',
+                  color: isHealthy ? 'var(--success)' : 'var(--danger)',
+                  fontSize: 20,
+                }}
+              >
+                <HeartOutlined />
+              </span>
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 3 }}>
+                  Health Status
+                </div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 600 }}>
+                  {health.isLoading ? (
+                    <Spin size="small" />
+                  ) : (
+                    <Badge
+                      status={isHealthy ? 'success' : 'error'}
+                      text={isHealthy ? 'OK' : 'Down'}
+                    />
+                  )}
+                </div>
+                {health.data?.version && (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                    v{health.data.version}
+                  </div>
+                )}
+              </div>
             </div>
-            {health.data?.version && (
-              <Typography.Text type="secondary">v{health.data.version}</Typography.Text>
-            )}
           </Card>
         </Col>
       </Row>

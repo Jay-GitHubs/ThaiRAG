@@ -262,7 +262,7 @@ test.describe('Health Page', () => {
     await navigateTo(page, 'Health');
 
     await expect(page.getByText('System Health')).toBeVisible();
-    await expect(page.getByText('Health Check')).toBeVisible();
+    await expect(page.getByText('Status', { exact: true })).toBeVisible();
     await expect(page.getByText('Prometheus Metrics')).toBeVisible();
 
     // Health status should show ok
