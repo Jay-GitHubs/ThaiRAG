@@ -38,6 +38,28 @@ test('scoped chat streams an answer with source citations (scope + citations)', 
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
 });
 
+test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  await page
+    .getByPlaceholder(COMPOSER)
+    .fill('วิธีเข้าสู่ระบบ (log-in) ของแอป Micro Pay ทำอย่างไร');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  // Clicking a source chip opens the in-app drawer with the document text,
+  // instead of navigating to a new tab.
+  await page.getByTestId('source-chip').first().click();
+  await expect(page.getByTestId('source-content')).toBeVisible({ timeout: 10_000 });
+});
+
 test('regenerate replaces the answer without duplicating the turn (G2)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();

@@ -47,6 +47,10 @@ pub struct PersistedCitation {
     /// Optional signed viewer link (the Phase 2 citation URL).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Snippet of the cited chunk's text, used by the in-app source viewer to
+    /// locate and highlight the passage within the full document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 /// Token accounting persisted alongside an assistant message. Stored as a JSON
@@ -236,6 +240,7 @@ mod tests {
             page: Some(4),
             section: Some("Setup".into()),
             url: None,
+            snippet: None,
         }];
         let stats = PersistedTokenStats {
             prompt_tokens: 12,
@@ -276,6 +281,7 @@ mod tests {
             page: None,
             section: None,
             url: None,
+            snippet: None,
         };
         let json = serde_json::to_string(&c).unwrap();
         assert_eq!(json, r#"{"doc_id":"d","title":"t"}"#);

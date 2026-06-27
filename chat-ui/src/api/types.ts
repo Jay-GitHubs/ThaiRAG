@@ -59,6 +59,15 @@ export interface Citation {
   page?: number;
   section?: string;
   url?: string;
+  /** Snippet of the cited passage, used to locate + highlight it in the viewer. */
+  snippet?: string;
+}
+
+export interface DocumentSource {
+  doc_id: string;
+  title: string;
+  mime_type: string;
+  content: string;
 }
 
 export interface ImageRef {

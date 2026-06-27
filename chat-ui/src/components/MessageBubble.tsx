@@ -76,7 +76,15 @@ function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
-function Sources({ citations, images }: { citations: Citation[]; images: ImageRef[] }) {
+function Sources({
+  citations,
+  images,
+  onSourceClick,
+}: {
+  citations: Citation[];
+  images: ImageRef[];
+  onSourceClick?: (c: Citation) => void;
+}) {
   if (citations.length === 0 && images.length === 0) return null;
   return (
     <div
@@ -172,6 +180,21 @@ function Sources({ citations, images }: { citations: Citation[]; images: ImageRe
             );
             const tip = c.section ? `${c.title} — ${c.section}` : c.title || c.doc_id;
             const chip = <Tooltip title={tip}>{inner}</Tooltip>;
+            // Open the in-app source viewer if available; otherwise fall back to
+            // the new-tab citation link (e.g. when no doc_id to fetch).
+            if (onSourceClick && c.doc_id) {
+              return (
+                <button
+                  key={`${c.doc_id}-${i}`}
+                  type="button"
+                  data-testid="source-chip"
+                  onClick={() => onSourceClick(c)}
+                  style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}
+                >
+                  {chip}
+                </button>
+              );
+            }
             return c.url ? (
               <a
                 key={`${c.doc_id}-${i}`}
@@ -252,9 +275,11 @@ function FeedbackBar({
 function AssistantMessage({
   message,
   onFeedback,
+  onSourceClick,
 }: {
   message: UiMessage;
   onFeedback?: (messageId: string, value: number) => void;
+  onSourceClick?: (c: Citation) => void;
 }) {
   return (
     <div
@@ -284,7 +309,11 @@ function AssistantMessage({
               <span className="caret" />
             ))}
         </div>
-        <Sources citations={message.citations} images={message.images} />
+        <Sources
+          citations={message.citations}
+          images={message.images}
+          onSourceClick={onSourceClick}
+        />
         {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
       </div>
     </div>
@@ -294,13 +323,15 @@ function AssistantMessage({
 export function MessageBubble({
   message,
   onFeedback,
+  onSourceClick,
 }: {
   message: UiMessage;
   onFeedback?: (messageId: string, value: number) => void;
+  onSourceClick?: (c: Citation) => void;
 }) {
   return message.role === 'user' ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} onFeedback={onFeedback} />
+    <AssistantMessage message={message} onFeedback={onFeedback} onSourceClick={onSourceClick} />
   );
 }

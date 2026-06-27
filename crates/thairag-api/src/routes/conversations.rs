@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use thairag_auth::AuthClaims;
 use thairag_core::ThaiRagError;
-use thairag_core::types::UserId;
+use thairag_core::types::{DocId, UserId};
 
 use crate::app_state::AppState;
 use crate::error::{ApiError, AppJson};
@@ -49,6 +49,17 @@ pub struct MessageFeedbackRequest {
 pub struct WorkspaceOption {
     pub id: String,
     pub name: String,
+}
+
+/// A cited document's content for the in-app source viewer.
+#[derive(Serialize)]
+pub struct DocumentSource {
+    pub doc_id: String,
+    pub title: String,
+    pub mime_type: String,
+    /// Converted/extracted text of the document (the in-app viewer renders this
+    /// and highlights the cited passage). Phase 2 will add original-file render.
+    pub content: String,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -183,6 +194,53 @@ pub async fn set_message_feedback(
         )));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/chat/documents/{doc_id}/source — fetch a cited document's converted
+/// text for the in-app source viewer. Permission-checked: the document must live
+/// in a workspace the signed-in user can search (the same scope retrieval uses),
+/// so this never widens access beyond what produced the citation.
+pub async fn get_document_source(
+    State(state): State<AppState>,
+    claims: axum::Extension<AuthClaims>,
+    Path(doc_id): Path<String>,
+) -> Result<Json<DocumentSource>, ApiError> {
+    let user_id = current_user_id(&claims)?;
+    let uid = UserId(
+        user_id
+            .parse()
+            .map_err(|_| ApiError(ThaiRagError::Auth("Invalid user id in token".into())))?,
+    );
+    let did = DocId(
+        doc_id
+            .parse()
+            .map_err(|_| ApiError(ThaiRagError::Validation("invalid document id".into())))?,
+    );
+    let doc = state
+        .km_store
+        .get_document(did)
+        .map_err(|_| ApiError(ThaiRagError::NotFound("document not found".into())))?;
+    if !state
+        .km_store
+        .get_user_workspace_ids(uid)
+        .contains(&doc.workspace_id)
+    {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "You do not have access to this document".into(),
+        )));
+    }
+    let content = state
+        .km_store
+        .get_document_content(did)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Ok(Json(DocumentSource {
+        doc_id: doc.id.0.to_string(),
+        title: doc.title,
+        mime_type: doc.mime_type,
+        content,
+    }))
 }
 
 /// GET /api/chat/workspaces — the workspaces the user can search, for the chat

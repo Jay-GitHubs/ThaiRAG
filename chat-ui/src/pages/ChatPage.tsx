@@ -12,11 +12,12 @@ import {
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
-import type { Attachment, Conversation, StreamEvent, WorkspaceOption } from '../api/types';
+import type { Attachment, Citation, Conversation, StreamEvent, WorkspaceOption } from '../api/types';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
 import { ScopeSelector } from '../components/ScopeSelector';
+import { SourceDrawer } from '../components/SourceDrawer';
 
 // Friendly labels for the backend's pipeline stage names (the `progress` SSE
 // event), so the "preparing answer" state reads in plain language. Unknown
@@ -57,6 +58,8 @@ export function ChatPage() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Citation whose source is open in the in-app source viewer (null = closed).
+  const [sourceCitation, setSourceCitation] = useState<Citation | null>(null);
 
   // Initial conversation list + the user's workspaces (for the scope picker).
   useEffect(() => {
@@ -480,7 +483,12 @@ export function ChatPage() {
           ) : (
             <div style={{ maxWidth: 820, margin: '0 auto' }}>
               {messages.map((m, i) => (
-                <MessageBubble key={m.id ?? i} message={m} onFeedback={handleFeedback} />
+                <MessageBubble
+                  key={m.id ?? i}
+                  message={m}
+                  onFeedback={handleFeedback}
+                  onSourceClick={setSourceCitation}
+                />
               ))}
               {!sending && messages[messages.length - 1]?.role === 'assistant' && (
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
@@ -499,6 +507,7 @@ export function ChatPage() {
           </div>
         </div>
       </Layout.Content>
+      <SourceDrawer citation={sourceCitation} onClose={() => setSourceCitation(null)} />
     </Layout>
   );
 }
