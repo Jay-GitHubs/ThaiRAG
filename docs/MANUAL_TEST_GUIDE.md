@@ -65,6 +65,25 @@ Notes:
 - **Expected:** The thumb shows as selected and stays selected after reload.
   Clicking it again clears it.
 
+### 1.10 Edit & resend a question
+- **Action:** Hover your most recent question (the last user bubble) → click the
+  pencil → change the text → **Send** (or Enter; Esc cancels).
+- **Expected:** The edited question replaces the original (no duplicate turn) and
+  a fresh answer streams. After reload, only the edited question is there — the
+  original is gone (the backend swapped the rows, it did not orphan them).
+
+### 1.11 Find a conversation
+- **Action:** Type in the sidebar **Search** box.
+- **Expected:** The list filters to matching titles instantly; conversations are
+  grouped by recency (Today / Yesterday / Previous 7 days / …). Clearing the box
+  restores the full grouped list.
+
+### 1.12 Attach by drag-drop or paste
+- **Action:** Drag a file onto the composer (it highlights), or paste an image
+  (⌘V) into the text box.
+- **Expected:** The file is staged as a chip showing its name **and size**.
+  Over 10 MB (or more than 5 files) is rejected with a friendly message.
+
 ---
 
 ## 2. Scope selector
