@@ -49,7 +49,7 @@ THAIRAG_TAG=abc1234
 
 ### Services
 
-> **Which compose file?** The base `docker-compose.yml` (below) includes redis, prometheus, and grafana. The pre-built registry stack `docker-compose.registry.yml` is leaner — only postgres, qdrant, thairag, admin-ui, and open-webui (no redis/prometheus/grafana).
+> **Which compose file?** The base `docker-compose.yml` (below) includes redis, prometheus, and grafana. The pre-built registry stack `docker-compose.registry.yml` is leaner — only postgres, qdrant, thairag, and admin-ui (no redis/prometheus/grafana).
 
 The `docker-compose.yml` defines these services:
 
@@ -63,7 +63,6 @@ The `docker-compose.yml` defines these services:
 | `prometheus` | prom/prometheus | 9091 | Metrics collection (host 9091 → container 9090) |
 | `grafana` | grafana/grafana | 3001 | Dashboards & visualization |
 | `ollama` | ollama/ollama (commented) | 11435 | Local LLM (free tier) |
-| `open-webui` | open-webui (commented) | 3000 | Chat interface (optional) |
 | `paddleocr` | Built from services/paddleocr-sidecar | 8086 | Deterministic Thai OCR tier (opt-in, `--profile ocr`) |
 
 ### Setup
@@ -111,7 +110,7 @@ THAIRAG__ADMIN__PASSWORD=SecurePassword123
 # Core services only (API + Admin UI + PostgreSQL + Qdrant)
 docker compose up --build -d
 
-# Full stack with Keycloak (OIDC) + Open WebUI
+# Full stack with Keycloak (OIDC SSO)
 docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
 ```
 
@@ -126,7 +125,6 @@ open http://localhost:8081
 
 # If using full stack (only present when -f docker-compose.test-idp.yml is included):
 # Keycloak:   http://localhost:9090  (admin / admin)
-# Open WebUI: http://localhost:3000  (login via Keycloak SSO)
 ```
 
 > **Note:** Keycloak is defined only in `docker-compose.test-idp.yml` (on port 9090). The base `docker-compose.yml` and the registry stack do not include Keycloak — it appears only when you add `-f docker-compose.test-idp.yml`.
@@ -168,27 +166,23 @@ ollama pull llama3.2
 THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11435
 ```
 
-### Adding Open WebUI
+### Chat UI
 
-Uncomment the `open-webui` service in `docker-compose.yml`. Configure it to point at ThaiRAG's OpenAI-compatible API:
+The first-party **chat-ui** (`chat-ui/`, port 8082) is the recommended end-user
+interface and ships with the stack. Open WebUI, the original third-party chat
+client, has been decommissioned — chat-ui replaces it at full parity (streaming
+chat, durable history, native citations + inline images, scope selector, file
+upload, native + SSO login).
 
-```yaml
-open-webui:
-  image: ghcr.io/open-webui/open-webui:v0.9.6
-  ports:
-    - "3000:8080"
-  environment:
-    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-    OPENAI_API_KEYS: "sk-thairag-openwebui"
-    # Forward real user identity to ThaiRAG for per-user permission enforcement
-    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-    # Increase timeout for multi-agent pipeline (can take 60+ seconds)
-    AIOHTTP_CLIENT_TIMEOUT: "600"
-  depends_on:
-    - thairag
-```
+### Connecting an external OpenAI-compatible client
 
-See [Integration Guide](INTEGRATION_GUIDE.md) for detailed Open WebUI setup including per-user permission enforcement.
+Any OpenAI-compatible client can use ThaiRAG's `/v1` surface as a drop-in
+backend. Point it at `http://<host>:8080/v1` and authenticate with a static API
+key (set `THAIRAG_API_KEY` in `.env`, sent as `X-API-Key` or as the bearer
+token, depending on the client). Allow long timeouts — the multi-agent pipeline
+can take 60+ seconds. See the [Integration Guide](INTEGRATION_GUIDE.md) for the
+full client setup, including how API-key scope differs from per-user (chat-ui)
+permission enforcement.
 
 ### PaddleOCR Sidecar (Optional — Deterministic Thai OCR)
 

@@ -1,30 +1,31 @@
 # Integration Guide
 
-## Open WebUI Integration
+## Chat UI (first-party)
 
-[Open WebUI](https://github.com/open-webui/open-webui) is a self-hosted chat interface that supports OpenAI-compatible APIs. ThaiRAG exposes the standard `/v1/chat/completions` and `/v1/models` endpoints, making it a drop-in backend.
+ThaiRAG ships its own ChatGPT-style frontend, **chat-ui** (`chat-ui/`, served on
+port 8082), as the recommended end-user interface. It talks to the backend over
+the first-party `/api/chat` surface with per-user JWT auth, giving streaming
+chat, durable per-user history, native source citations + inline source images, a
+workspace scope selector, file upload, and native or SSO login — and workspace
+permissions are enforced per signed-in user out of the box.
 
-### Setup with Docker Compose (Recommended)
+> Open WebUI (OWUI) was the original third-party chat client and has been
+> **decommissioned** — chat-ui replaces it at full parity. The OWUI-specific
+> integration paths from earlier releases (the bundled `open-webui` compose
+> service, `X-OpenWebUI-User-*` identity forwarding, and the OWUI feedback-sync
+> poller) have all been removed. The `/v1` OpenAI-compatible surface below
+> remains for external API clients.
 
-Open WebUI is already configured in `docker-compose.test-idp.yml`. Start the full stack:
+## OpenAI-compatible API (`/v1`)
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
-```
-
-This starts ThaiRAG API, Admin UI, PostgreSQL, Qdrant, Keycloak (OIDC), and Open WebUI.
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Admin UI | http://localhost:8081 | `admin@thairag.local` / `Admin123` |
-| Open WebUI | http://localhost:3000 | Login via Keycloak SSO |
-| Keycloak | http://localhost:9090 | `admin` / `admin` |
+ThaiRAG exposes the standard `/v1/chat/completions` and `/v1/models` endpoints,
+so any OpenAI-compatible client can use it as a drop-in backend.
 
 ### API Key Authentication
 
-ThaiRAG supports API key authentication as an alternative to JWT tokens.
+ThaiRAG supports API key authentication as an alternative to JWT tokens, using
+the `X-API-Key` header:
 
-API keys use the `X-API-Key` header:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "X-API-Key: trag_your_api_key_here" \
@@ -33,6 +34,7 @@ curl http://localhost:8080/v1/chat/completions \
 ```
 
 Create API keys via the Admin UI or API:
+
 ```bash
 curl -X POST http://localhost:8080/api/auth/api-keys \
   -H "Authorization: Bearer $TOKEN" \
@@ -40,152 +42,58 @@ curl -X POST http://localhost:8080/api/auth/api-keys \
   -d '{"name": "My Integration Key"}'
 ```
 
-### Authentication & User Identity
+A deploy-wide static key can also be set via `THAIRAG__AUTH__API_KEYS`
+(comma-separated). The compose stack wires this from `THAIRAG_API_KEY` in `.env`:
 
-Open WebUI authenticates to ThaiRAG using a static API key (configured automatically via `THAIRAG_OPENWEBUI_API_KEY` in `.env`). No JWT token management needed.
-
-To use a custom API key, set in your `.env`:
 ```bash
-THAIRAG_OPENWEBUI_API_KEY=sk-your-custom-key
+THAIRAG_API_KEY=sk-your-custom-key
 ```
 
-### Per-User Permission Enforcement
+### Permission Scope of API-Key Requests
 
-By default, API key auth grants unrestricted access to all knowledge bases. To enforce per-user workspace permissions through Open WebUI, enable **user identity forwarding**:
+API-key auth grants the key's configured access scope — unrestricted by default,
+and **not** per-end-user. Per-user workspace permission enforcement is a property
+of the first-party chat-ui, where each user signs in with their own JWT. For
+multi-tenant API access, issue a separate API key per tenant and scope it
+accordingly.
 
-```yaml
-# In docker-compose.test-idp.yml (or your Open WebUI config)
-open-webui:
-  environment:
-    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-```
-
-When enabled, Open WebUI sends `X-OpenWebUI-User-Email` and `X-OpenWebUI-User-Name` headers with every API request. ThaiRAG resolves the real user from these headers and applies their workspace permissions:
-
-1. **User lookup** — ThaiRAG looks up the user by email in its database
-2. **Auto-provisioning** — If the user doesn't exist, they are auto-created with `viewer` role
-3. **Permission scoping** — The user's workspace permissions determine which knowledge bases are searched
-4. **Session tracking** — Sessions are associated with the resolved user for permission enforcement
-
-> **Without** `ENABLE_FORWARD_USER_INFO_HEADERS`, all Open WebUI users share the API key's unrestricted access — no per-user permission enforcement.
+> Earlier releases resolved a per-request end user from Open WebUI's
+> `X-OpenWebUI-User-Email` header and auto-provisioned/scoped them; that path was
+> removed with OWUI. Use chat-ui (per-user JWT) for per-user enforcement.
 
 ### Permission Revocation Behavior
 
 When an admin revokes a user's workspace permission via the Admin UI:
 
-- **New sessions** — The user immediately loses access to the revoked workspace's content
-- **Existing sessions** — Server-side session history and personal memories for the revoked user are cleared to prevent stale context leaks
-- **Open WebUI client-side history** — Messages already displayed in Open WebUI's chat window remain visible (client-side cache), but starting a new chat enforces the updated permissions
+- **New sessions** — the user immediately loses access to the revoked workspace's
+  content.
+- **Existing sessions** — server-side session history and personal memories for
+  the revoked user are cleared to prevent stale context leaks.
 
-### Feedback Sync (OWUI ratings → ThaiRAG auto-tuning)
+### What Works over `/v1`
 
-Open WebUI's native thumbs-up/down can flow back into ThaiRAG to drive adaptive
-retrieval tuning and per-document boosts. This is **independent of SSO/OIDC** — it
-works with plain local Open WebUI accounts, no IDP required. It is **disabled by
-default** (strict no-op until enabled).
+- Model listing — clients discover "ThaiRAG-1.0" automatically
+- Chat completions — both streaming and non-streaming
+- RAG — responses are automatically augmented with knowledge base content
+- Portable citations — `delta.annotations[].url_citation` plus a plain-text
+  `Sources:` footer
+- Context compaction — long conversations are summarized to stay within the
+  context budget (when enabled)
+- Personal memory — per-user memory retrieval across sessions (when enabled)
+- SSE keepalive — long pipeline processing (60+ seconds) stays connected via
+  periodic ping comments
 
-How it works: for OWUI-originated requests, ThaiRAG stamps a response id into the
-OpenAI `usage` object, which OWUI persists verbatim in its feedback snapshot. A
-gated poller reads OWUI's admin feedback-export endpoint, correlates each rating
-back to the originating request via that id, and enriches it with the query plus
-the retrieved doc/chunk lineage. Synced ratings are then visible via
-`GET /api/km/settings/feedback/entries`.
-
-Prerequisites (none of these require an IDP):
-
-1. **User-identity forwarding** on the Open WebUI service:
-   `ENABLE_FORWARD_USER_INFO_HEADERS: "true"`. The forwarded `X-OpenWebUI-User-Email`
-   header is what tags a request as OWUI-originated — without it the response id is
-   never stamped and ratings can't be correlated.
-2. **Open WebUI API keys enabled**: `ENABLE_API_KEYS: "true"`. The feedback-export
-   endpoint is admin-gated.
-3. **An OWUI admin user's API key** (Open WebUI → Settings → Account → API Keys).
-4. **The ThaiRAG model's "Usage" capability enabled** in Open WebUI's model settings,
-   so OWUI persists the `usage` object that carries the correlation id.
-
-Then enable the sync on the **thairag** service (the base URL is the *internal*,
-browser-unreachable OWUI address):
-
-```yaml
-thairag:
-  environment:
-    THAIRAG__OWUI_FEEDBACK_SYNC__ENABLED: "true"
-    THAIRAG__OWUI_FEEDBACK_SYNC__BASE_URL: "http://open-webui:8080"
-    THAIRAG__OWUI_FEEDBACK_SYNC__ADMIN_API_KEY: "${OWUI_ADMIN_API_KEY}"
-    THAIRAG__OWUI_FEEDBACK_SYNC__INTERVAL_SECS: "300"  # optional, default 300
-```
-
-Keep the admin key out of the compose file by putting `OWUI_ADMIN_API_KEY=…` in
-`.env`. On startup the log line `Starting OWUI feedback sync base_url=… interval_secs=…`
-confirms the poller is running; `admin_api_key is empty; not starting` means the key
-didn't reach the container.
-
-### Manual Setup (without docker-compose.test-idp.yml)
-
-Add the Open WebUI service to `docker-compose.yml`:
-
-```yaml
-open-webui:
-  image: ghcr.io/open-webui/open-webui:v0.9.6
-  ports:
-    - "3000:8080"
-  volumes:
-    - open-webui-data:/app/backend/data
-  environment:
-    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-    OPENAI_API_KEYS: "sk-thairag-openwebui"
-    # Enable per-user permission enforcement (recommended)
-    ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-    # Enable API keys so ThaiRAG can poll the feedback-export endpoint (optional;
-    # only needed for the feedback sync described above)
-    ENABLE_API_KEYS: "true"
-    # Increase timeout for pipeline responses (multi-agent processing can take 60+ seconds)
-    AIOHTTP_CLIENT_TIMEOUT: "600"
-  depends_on:
-    - thairag
-```
-
-And add the matching API key to the thairag service environment:
-```yaml
-THAIRAG__AUTH__API_KEYS: "sk-thairag-openwebui"
-```
-
-### Standalone Open WebUI
-
-If running Open WebUI outside Docker Compose:
-
-```bash
-docker run -d \
-  -p 3000:8080 \
-  -e OPENAI_API_BASE_URLS="http://host.docker.internal:8080/v1" \
-  -e OPENAI_API_KEYS="your-jwt-token" \
-  -v open-webui-data:/app/backend/data \
-  ghcr.io/open-webui/open-webui:main
-```
-
-### What Works
-
-- Model listing — Open WebUI discovers "ThaiRAG-1.0" automatically
-- Chat completions — Both streaming and non-streaming
-- Session management — Conversation history is maintained server-side
-- RAG — All responses are automatically augmented with knowledge base content
-- Context compaction — Long conversations are automatically summarized to stay within context limits (when enabled)
-- Personal memory — Per-user memory retrieval across sessions for personalized responses (when enabled)
-- Per-user permissions — When `ENABLE_FORWARD_USER_INFO_HEADERS` is set, each user only sees content from workspaces they have access to
-- SSE keepalive — Long pipeline processing (60+ seconds) stays connected via automatic ping comments every 15 seconds
-- Feedback sync — Native thumbs-up/down can flow back into ThaiRAG's adaptive tuning (opt-in; see *Feedback Sync* above)
-
-### What Doesn't Work (by design)
+### Not Supported (by design)
 
 - Image generation endpoints — ThaiRAG is text-only
-- Function calling / tool use — Not part of the RAG pipeline
-- Fine-tuning endpoints — Not applicable
+- Function calling / tool use — not part of the RAG pipeline
+- Fine-tuning endpoints — not applicable
 
 ---
 
 ## OpenID Connect (OIDC) Integration
 
-ThaiRAG supports managing OIDC identity providers through the Admin UI. The management and configuration layer is fully implemented; actual protocol flows (token exchange, userinfo) are prepared for implementation.
+ThaiRAG supports managing OIDC identity providers through the Admin UI, and the OAuth login flow (authorize → callback → token) is implemented — it powers SSO for both the Admin UI and chat-ui.
 
 ### Supported Identity Providers
 
@@ -306,38 +214,16 @@ LDAP login uses a different flow — the login page shows an inline username/pas
 
 ---
 
-## Open WebUI with SSO
+## SSO for the Chat UI
 
-You can configure both ThaiRAG and Open WebUI to use the same identity provider for a unified SSO experience.
-
-### Docker Compose with OIDC
-
-```yaml
-thairag:
-  build: .
-  ports:
-    - "8080:8080"
-  env_file: .env
-
-open-webui:
-  image: ghcr.io/open-webui/open-webui:main
-  ports:
-    - "3000:8080"
-  environment:
-    OPENAI_API_BASE_URLS: "http://thairag:8080/v1"
-    OPENAI_API_KEYS: "your-jwt-token"
-    # OIDC SSO for Open WebUI
-    ENABLE_OAUTH_SIGNUP: "true"
-    OAUTH_PROVIDER_NAME: "SSO"
-    OAUTH_CLIENT_ID: "open-webui"
-    OAUTH_CLIENT_SECRET: "open-webui-secret"
-    OPENID_PROVIDER_URL: "https://auth.example.com/.well-known/openid-configuration"
-    OAUTH_SCOPES: "openid profile email"
-  depends_on:
-    - thairag
-```
-
-In this setup, both ThaiRAG (Admin UI) and Open WebUI (Chat UI) authenticate against the same OIDC provider, giving users a single sign-on experience.
+The first-party chat-ui supports OIDC/SSO login: it lists enabled providers
+(`GET /api/auth/providers`) and starts the OAuth flow at
+`GET /api/auth/oauth/{id}/authorize`, consuming the backend's `#token=…&user=…`
+callback fragment — the same OIDC layer the Admin UI uses. Point chat-ui and the
+Admin UI at the same identity provider (see *Configuring an OIDC Provider* above)
+for unified single sign-on across both UIs. Ensure the IdP's `redirect_uri`
+allows each UI's origin (e.g. `http://localhost:8082/api/auth/oauth/callback`
+for chat-ui).
 
 ---
 
