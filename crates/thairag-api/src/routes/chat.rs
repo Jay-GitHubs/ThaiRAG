@@ -1850,6 +1850,10 @@ pub struct SendMessageRequest {
     /// fresh one for the same last user message. `content` is ignored.
     #[serde(default)]
     pub regenerate: bool,
+    /// Edit-and-resend the last user message: drop the trailing assistant turn
+    /// *and* the last user message, then answer `content` as the new last turn.
+    #[serde(default)]
+    pub edit: bool,
 }
 
 /// POST /api/chat/conversations/{id}/messages — first-party streaming chat.
@@ -1933,7 +1937,32 @@ pub async fn stream_conversation_message(
         ),
     })?;
 
-    let full_messages = if req.regenerate {
+    let full_messages = if req.edit {
+        // Edit-and-resend: drop (and delete) the trailing assistant turn *and* the
+        // old user message, then answer `content` as a fresh last turn. Persisted
+        // like a normal send (is_regenerate stays false) so the edited prompt and
+        // its new answer both land in history, replacing the original pair.
+        let mut rows = state.km_store.list_messages(&conversation_id);
+        if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
+            let last = rows.pop().expect("checked non-empty");
+            state.km_store.delete_message(&last.id)?;
+        }
+        if rows.last().map(|m| m.role.as_str()) != Some("user") {
+            return Err(ApiError(ThaiRagError::Validation("nothing to edit".into())));
+        }
+        let old_user = rows.pop().expect("checked non-empty");
+        state.km_store.delete_message(&old_user.id)?;
+        if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
+            rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
+        }
+        let mut msgs = crate::chat_history::rows_to_chat_messages(&rows);
+        msgs.push(ChatMessage {
+            role: "user".to_string(),
+            content: content.clone(),
+            images: vec![],
+        });
+        msgs
+    } else if req.regenerate {
         // Replace the last answer: drop (and delete) the trailing assistant turn,
         // then re-run generation for the last user message already in history.
         let mut rows = state.km_store.list_messages(&conversation_id);

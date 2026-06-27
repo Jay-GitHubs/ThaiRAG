@@ -350,6 +350,52 @@ export function ChatPage() {
     }
   }, [activeId, sending, handleStreamEvent, updateLastAssistant]);
 
+  const handleEdit = useCallback(
+    async (text: string) => {
+      const edited = text.trim();
+      if (!activeId || sending || !edited) return;
+      // Replace the last user turn: drop it (and its answer) from view, then
+      // stream a fresh answer for the edited prompt. The backend deletes the old
+      // user+assistant rows and persists the edited pair in their place.
+      setMessages((prev) => {
+        let i = prev.length - 1;
+        while (i >= 0 && prev[i].role !== 'user') i--;
+        if (i < 0) return prev;
+        const next = prev.slice(0, i);
+        next.push({ role: 'user', content: edited, citations: [], images: [], attachments: [] });
+        next.push({ role: 'assistant', content: '', citations: [], images: [], streaming: true });
+        return next;
+      });
+      setSending(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      streamingConvRef.current = activeId;
+      streamStartRef.current = Date.now();
+      try {
+        await streamMessage(activeId, edited, handleStreamEvent, controller.signal, undefined, false, true);
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          antdMessage.error(e instanceof Error ? e.message : 'Edit failed');
+        }
+        updateLastAssistant((m) => ({ ...m, streaming: false }));
+      } finally {
+        abortRef.current = null;
+        streamingConvRef.current = null;
+        setSending(false);
+      }
+    },
+    [activeId, sending, handleStreamEvent, updateLastAssistant],
+  );
+
+  // Index of the last user turn — the only one offered an edit affordance (and
+  // only while idle, since editing re-runs the conversation tail).
+  const lastUserIdx = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return i;
+    }
+    return -1;
+  }, [messages]);
+
   const suggestions = [
     'สรุปขั้นตอนการขอสินเชื่อ',
     'What documents do I need to apply?',
@@ -518,6 +564,8 @@ export function ChatPage() {
                   message={m}
                   onFeedback={handleFeedback}
                   onSourceClick={setSourceCitation}
+                  editable={!sending && i === lastUserIdx}
+                  onEdit={handleEdit}
                 />
               ))}
               {!sending && messages[messages.length - 1]?.role === 'assistant' && (
