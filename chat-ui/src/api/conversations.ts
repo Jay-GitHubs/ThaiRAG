@@ -49,6 +49,14 @@ export async function getDocumentSource(docId: string): Promise<DocumentSource> 
   return res.data;
 }
 
+/** Fetch a cited document's original file bytes (e.g. the source PDF). */
+export async function getDocumentOriginal(docId: string): Promise<ArrayBuffer> {
+  const res = await client.get<ArrayBuffer>(`/api/chat/documents/${docId}/original`, {
+    responseType: 'arraybuffer',
+  });
+  return res.data;
+}
+
 /** Set a thumbs rating on an assistant message: 1 = up, -1 = down, 0 = clear. */
 export async function setMessageFeedback(
   conversationId: string,

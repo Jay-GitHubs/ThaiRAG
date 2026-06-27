@@ -54,6 +54,39 @@ test('scanned-doc answer renders inline source images (Phase 3)', async ({ page 
   await expect(page.getByTestId('source-image').first()).toBeVisible({ timeout: 10_000 });
 });
 
+test('source drawer renders the original PDF (Phase 2)', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('requestfailed', (r) => errors.push(`reqfail ${r.url()} ${r.failure()?.errorText}`));
+
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+  await page.getByPlaceholder(COMPOSER).fill('เอกสารฉบับนี้เกี่ยวกับอะไร');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+  await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId('source-chip').first().click();
+  // The drawer should default to the Document (PDF) view → the viewer mounts.
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible({ timeout: 10_000 });
+  // The original PDF renders a canvas page (first render also cold-loads the
+  // ~1.3MB PDF.js worker, so allow generous time).
+  await expect(page.getByTestId('pdf-page').first(), `console/net errors: ${errors.join(' | ')}`).toBeVisible({
+    timeout: 45_000,
+  });
+  // Toggling to Text shows the converted text instead.
+  await page.getByText('Text', { exact: true }).click();
+  await expect(page.getByTestId('source-content')).toBeVisible({ timeout: 10_000 });
+});
+
 test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) => {
   test.setTimeout(150_000);
   await login(page);
