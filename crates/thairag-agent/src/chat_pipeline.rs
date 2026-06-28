@@ -485,6 +485,11 @@ impl ChatPipeline {
         if !self.config.structured_citations_enabled {
             return;
         }
+        // A "no relevant info" answer often lists the retrieved chunks with [N]
+        // markers while rejecting them — those aren't real citations.
+        if crate::citation_parser::is_refusal(answer) {
+            return;
+        }
         let citations = crate::citation_parser::parse_citations(answer, context);
         if citations.is_empty() {
             return;
@@ -496,6 +501,27 @@ impl ChatPipeline {
         Self::update_metadata(metadata, |m| {
             m.citations = citations;
         });
+    }
+
+    /// LLM self-rated confidence (1–10) for how well the context supports the
+    /// answer. One short extra call; stored in metadata. No-op when disabled.
+    async fn maybe_assess_confidence(
+        &self,
+        query: &str,
+        answer: &str,
+        context: &CuratedContext,
+        metadata: &Option<MetadataCell>,
+    ) {
+        if !self.config.confidence_scoring_enabled {
+            return;
+        }
+        if let Some(score) =
+            crate::confidence::assess(self.main_llm.as_ref(), query, answer, context).await
+        {
+            Self::update_metadata(metadata, |m| {
+                m.confidence = Some(score);
+            });
+        }
     }
 
     /// Run input guardrails on the user query.
@@ -1135,6 +1161,8 @@ impl ChatPipeline {
                     )
                     .await?;
                 self.maybe_record_citations(&response.content, &context, &metadata);
+                self.maybe_assess_confidence(user_query, &response.content, &context, &metadata)
+                    .await;
                 self.maybe_adapt(response, &analysis).await
             }
             PipelineRoute::FullPipeline => {
@@ -1703,6 +1731,8 @@ impl ChatPipeline {
 
         // ── Structured citations: parse [N] markers against the context ──
         self.maybe_record_citations(&response.content, &context, metadata);
+        self.maybe_assess_confidence(user_query, &response.content, &context, metadata)
+            .await;
 
         // ── RAGAS evaluation (async, sampled — no budget impact) ──
         self.maybe_run_ragas(user_query, &context, &response.content)
@@ -2152,8 +2182,12 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                let stream =
-                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
+                let stream = self.wrap_stream_recording_citations(
+                    stream,
+                    context.clone(),
+                    metadata.clone(),
+                    user_query,
+                );
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2280,8 +2314,12 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                let stream =
-                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
+                let stream = self.wrap_stream_recording_citations(
+                    stream,
+                    context.clone(),
+                    metadata.clone(),
+                    user_query,
+                );
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2405,11 +2443,18 @@ impl ChatPipeline {
         inner: LlmStreamResponse,
         context: CuratedContext,
         metadata: Option<MetadataCell>,
+        user_query: &str,
     ) -> LlmStreamResponse {
-        if !self.config.structured_citations_enabled {
+        // Citations + confidence both need the full answer, so even with
+        // citations off we still wrap if confidence scoring is on.
+        if !self.config.structured_citations_enabled && !self.config.confidence_scoring_enabled {
             return inner;
         }
         let usage = inner.usage.clone();
+        let cite_enabled = self.config.structured_citations_enabled;
+        let conf_enabled = self.config.confidence_scoring_enabled;
+        let llm = self.main_llm.clone();
+        let query = user_query.to_string();
         let stream = async_stream::stream! {
             let mut inner_stream = inner.stream;
             let mut collected = String::new();
@@ -2417,9 +2462,19 @@ impl ChatPipeline {
                 if let Ok(text) = &chunk { collected.push_str(text) }
                 yield chunk;
             }
-            let citations = crate::citation_parser::parse_citations(&collected, &context);
-            if !citations.is_empty() {
-                Self::update_metadata(&metadata, |m| { m.citations = citations; });
+            // Citations — skip for refusal answers that merely list rejected chunks.
+            if cite_enabled && !crate::citation_parser::is_refusal(&collected) {
+                let citations = crate::citation_parser::parse_citations(&collected, &context);
+                if !citations.is_empty() {
+                    Self::update_metadata(&metadata, |m| { m.citations = citations; });
+                }
+            }
+            // Confidence — one short extra LLM call once the answer is complete.
+            if conf_enabled
+                && let Some(score) =
+                    crate::confidence::assess(llm.as_ref(), &query, &collected, &context).await
+            {
+                Self::update_metadata(&metadata, |m| { m.confidence = Some(score); });
             }
         };
         LlmStreamResponse {

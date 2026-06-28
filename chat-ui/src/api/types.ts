@@ -95,7 +95,12 @@ export type StreamEvent =
   | { type: 'token'; text: string }
   | { type: 'citation'; citations: Citation[] }
   | { type: 'image'; images: ImageRef[] }
-  | { type: 'done'; message_id: string; usage: { prompt_tokens: number; completion_tokens: number } }
+  | {
+      type: 'done';
+      message_id: string;
+      usage: { prompt_tokens: number; completion_tokens: number };
+      confidence?: number | null;
+    }
   | { type: 'error'; message: string };
 
 export function parseCitations(json: string): Citation[] {

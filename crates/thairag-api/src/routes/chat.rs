@@ -2300,6 +2300,7 @@ pub async fn stream_conversation_message(
                 "prompt_tokens": llm_usage.prompt_tokens,
                 "completion_tokens": llm_usage.completion_tokens,
             },
+            "confidence": footer_meta.confidence,
         });
         yield Ok(Event::default().data(done.to_string()));
         yield Ok(Event::default().data("[DONE]"));

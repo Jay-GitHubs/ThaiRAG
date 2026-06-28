@@ -64,6 +64,41 @@ pub fn parse_citations(answer: &str, context: &CuratedContext) -> Vec<Citation> 
     citations
 }
 
+/// True when the answer is a "no relevant information" / refusal response.
+///
+/// Such answers commonly *enumerate* the retrieved chunks with `[N]` markers
+/// while explicitly rejecting them ("the context only contains [1][2][3]… so I
+/// can't answer"). Recording those as citations is misleading — they support
+/// nothing — so callers skip citation recording when this returns true. Matched
+/// case-insensitively (English) plus Thai phrases.
+pub fn is_refusal(answer: &str) -> bool {
+    let a = answer.to_lowercase();
+    const EN: &[&str] = &[
+        "no information",
+        "no relevant information",
+        "not available in the",
+        "cannot answer",
+        "can't answer",
+        "could not find",
+        "couldn't find",
+        "does not contain",
+        "doesn't contain",
+        "unable to answer",
+        "no data",
+        "not enough information",
+        "i don't have",
+        "i do not have",
+    ];
+    const TH: &[&str] = &[
+        "ไม่มีข้อมูล",
+        "ไม่สามารถตอบ",
+        "ไม่พบข้อมูล",
+        "ไม่สามารถให้คำตอบ",
+        "ไม่เพียงพอ",
+    ];
+    EN.iter().any(|p| a.contains(p)) || TH.iter().any(|p| answer.contains(p))
+}
+
 /// A parsed `[...]` marker group: its byte offset in the answer and the
 /// (range-expanded) chunk numbers it references.
 struct Marker {
@@ -304,5 +339,21 @@ mod tests {
     fn duplicate_marker_in_same_claim_deduped() {
         let c = parse_citations("Repeated [1] claim [1].", &ctx(2));
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn detects_refusals_en_and_th() {
+        // English + Thai "no info" answers — even with [N] markers.
+        assert!(is_refusal(
+            "The context has no information about that [1][2]."
+        ));
+        assert!(is_refusal(
+            "I cannot answer this from the provided context."
+        ));
+        assert!(is_refusal("บริบทข้อมูลที่ให้มาไม่มีข้อมูลเกี่ยวกับเรื่องนี้ [1]"));
+        assert!(is_refusal("ไม่สามารถตอบคำถามนี้ได้"));
+        // A real answer is not a refusal.
+        assert!(!is_refusal("North Q1 sales were 100 and Q2 were 200 [1]."));
+        assert!(!is_refusal("ยอดขายไตรมาส 1 คือ 100 [1]"));
     }
 }

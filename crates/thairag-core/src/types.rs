@@ -217,6 +217,9 @@ pub struct PipelineMetadata {
     pub self_rag_confidence: Option<f32>,
     pub chunks_retrieved: Option<u32>,
     pub avg_chunk_score: Option<f32>,
+    /// LLM self-rated answer confidence, 1–10 (how well the retrieved context
+    /// supports the answer). Populated when confidence scoring is enabled.
+    pub confidence: Option<u8>,
     pub quality_guard_pass: Option<bool>,
     pub relevance_score: Option<f32>,
     pub hallucination_score: Option<f32>,

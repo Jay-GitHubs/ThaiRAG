@@ -1124,6 +1124,11 @@ pub struct ChatPipelineConfig {
     /// API response. Cheap (no extra LLM call) — default on.
     #[serde(default = "default_true_val")]
     pub structured_citations_enabled: bool,
+    /// Confidence scoring: after the answer, ask the response LLM to rate 1–10
+    /// how well the retrieved context supports it. One short extra LLM call;
+    /// surfaced in the chat UI and admin test-chat. Default on.
+    #[serde(default = "default_true_val")]
+    pub confidence_scoring_enabled: bool,
     /// Emit OpenAI-standard `delta.annotations[].url_citation` entries in the
     /// streaming response so any compatible client renders native, clickable
     /// citations instead of the plain-text footer. Portable across clients.
@@ -1461,6 +1466,7 @@ impl Default for ChatPipelineConfig {
             source_footer_enabled: true,
             source_footer_max: default_source_footer_max(),
             structured_citations_enabled: true,
+            confidence_scoring_enabled: true,
             citation_annotations_enabled: true,
             citation_base_url: String::new(),
             inline_images_enabled: false,
