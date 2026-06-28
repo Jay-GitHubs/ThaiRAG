@@ -230,14 +230,14 @@ test.describe('Chat & Response Pipeline Tab', () => {
     await label.scrollIntoViewIfNeeded();
     await expect(label).toBeVisible();
 
-    // Its slider reflects the backend value (calibrated default 0.40).
+    // Its slider reflects the backend value (calibrated default 0.30).
     const slider = label.locator('xpath=following::*[@role="slider"][1]');
-    await expect(slider).toHaveAttribute('aria-valuenow', '0.4');
+    await expect(slider).toHaveAttribute('aria-valuenow', '0.3');
 
-    // Round-trip: nudge it down one step (0.35), save, reload, verify persisted.
+    // Round-trip: nudge it down one step (0.25), save, reload, verify persisted.
     await slider.focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(slider).toHaveAttribute('aria-valuenow', '0.35');
+    await expect(slider).toHaveAttribute('aria-valuenow', '0.25');
 
     const pipelineCard = page.locator('.ant-card').filter({ hasText: 'Response Pipeline' });
     await pipelineCard.getByRole('button', { name: 'Save' }).click();
@@ -252,12 +252,12 @@ test.describe('Chat & Response Pipeline Tab', () => {
       .first()
       .locator('xpath=following::*[@role="slider"][1]');
     await reloaded.scrollIntoViewIfNeeded();
-    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.35');
+    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.25');
 
     // Restore the calibrated default for other tests.
     await reloaded.focus();
     await page.keyboard.press('ArrowRight');
-    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.4');
+    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.3');
     await pipelineCard.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByText('saved')).toBeVisible({ timeout: 5000 });
   });

@@ -1215,14 +1215,15 @@ fn default_quality_guard_threshold() -> f32 {
 }
 fn default_min_vector_relevance() -> f32 {
     // Calibrated against live cosine values (qwen3-embedding, temp-0 so
-    // deterministic): measured out-of-domain queries scored 0.24–0.37 (Thai
-    // cooking 0.235, EN football 0.241, EN fictional-product 0.368) while
-    // grounded queries scored 0.72–0.74 (EN sales 0.736, Thai app-manual 0.723).
-    // 0.40 sits above every observed out-of-domain value yet leaves wide
-    // headroom below the grounded floor, so it refuses junk without false-
-    // refusing legitimate (incl. cross-lingual) queries. Tune from the logged
-    // `retrieval_vector_score`; set 0.0 to disable.
-    0.40
+    // deterministic). Junk — out-of-domain or absent-doc — queries cluster low:
+    // Thai cooking 0.235, EN football 0.241, an absent doc 0.265. Legitimate
+    // in-corpus queries sit higher: a Thai query about a document that IS present
+    // (Royal Gazette) measured 0.353, and EN table/sales queries 0.41–0.74. 0.30
+    // is centered in the gap (0.24 → 0.35): it refuses the junk without
+    // false-refusing low-embedding Thai queries whose document is present. NOTE:
+    // 0.40 over-refused real Thai queries — don't raise this without
+    // re-measuring. Tune from the logged `retrieval_vector_score`; 0.0 disables.
+    0.30
 }
 fn default_max_context_tokens() -> usize {
     4096

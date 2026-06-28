@@ -1937,21 +1937,24 @@ pub async fn stream_conversation_message(
         ),
     })?;
 
+    // Rows that an edit/regenerate replaces. We do NOT delete them up front:
+    // deletion is deferred until the new answer is ready to persist, so a stream
+    // that drops mid-way (e.g. a gateway flake — mid-stream is not retried)
+    // leaves the original turn intact instead of silently losing it on reload.
+    let mut defer_delete_ids: Vec<String> = Vec::new();
     let full_messages = if req.edit {
-        // Edit-and-resend: drop (and delete) the trailing assistant turn *and* the
-        // old user message, then answer `content` as a fresh last turn. Persisted
-        // like a normal send (is_regenerate stays false) so the edited prompt and
-        // its new answer both land in history, replacing the original pair.
+        // Edit-and-resend: replace the trailing assistant turn *and* the old user
+        // message, then answer `content` as a fresh last turn. Persisted like a
+        // normal send (is_regenerate stays false) so the edited prompt and its new
+        // answer both land in history, replacing the original pair.
         let mut rows = state.km_store.list_messages(&conversation_id);
         if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
-            let last = rows.pop().expect("checked non-empty");
-            state.km_store.delete_message(&last.id)?;
+            defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
         }
         if rows.last().map(|m| m.role.as_str()) != Some("user") {
             return Err(ApiError(ThaiRagError::Validation("nothing to edit".into())));
         }
-        let old_user = rows.pop().expect("checked non-empty");
-        state.km_store.delete_message(&old_user.id)?;
+        defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
         if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
             rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
         }
@@ -1963,12 +1966,11 @@ pub async fn stream_conversation_message(
         });
         msgs
     } else if req.regenerate {
-        // Replace the last answer: drop (and delete) the trailing assistant turn,
-        // then re-run generation for the last user message already in history.
+        // Replace the last answer: drop the trailing assistant turn, then re-run
+        // generation for the last user message already in history.
         let mut rows = state.km_store.list_messages(&conversation_id);
         if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
-            let last = rows.pop().expect("checked non-empty");
-            state.km_store.delete_message(&last.id)?;
+            defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
         }
         if rows.last().map(|m| m.role.as_str()) != Some("user") {
             return Err(ApiError(ThaiRagError::Validation(
@@ -2272,6 +2274,14 @@ pub async fn stream_conversation_message(
             prompt_tokens: llm_usage.prompt_tokens,
             completion_tokens: llm_usage.completion_tokens,
         };
+        // Deferred swap: now that the answer is ready, delete the rows the
+        // edit/regenerate replaces, then persist the new turn. Done here (not up
+        // front) so a failed/aborted stream never loses the original.
+        for old_id in &defer_delete_ids {
+            if let Err(e) = state.km_store.delete_message(old_id) {
+                tracing::warn!(error = %e, old_id, "failed to delete replaced message");
+            }
+        }
         let persist_result = if is_regenerate {
             crate::chat_history::persist_assistant(
                 &state.km_store,
