@@ -730,6 +730,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
   const [qualityMaxRetries, setQualityMaxRetries] = useState(1);
   const [qualityThreshold, setQualityThreshold] = useState(0.6);
   const [retrievalMode, setRetrievalMode] = useState<'vector' | 'vectorless'>('vector');
+  const [minVectorRelevance, setMinVectorRelevance] = useState(0.4);
   const [maxContextTokens, setMaxContextTokens] = useState(4096);
   const [agentMaxTokens, setAgentMaxTokens] = useState(2048);
   const [requestTimeoutSecs, setRequestTimeoutSecs] = useState(120);
@@ -839,6 +840,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
       setQualityMaxRetries(data.quality_guard_max_retries);
       setQualityThreshold(data.quality_guard_threshold);
       setRetrievalMode(data.retrieval_mode ?? 'vector');
+      setMinVectorRelevance(data.min_vector_relevance ?? 0.4);
       setMaxContextTokens(data.max_context_tokens);
       setAgentMaxTokens(data.agent_max_tokens);
       setRequestTimeoutSecs(data.request_timeout_secs);
@@ -1008,6 +1010,7 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
         quality_guard_max_retries: qualityMaxRetries,
         quality_guard_threshold: qualityThreshold,
         retrieval_mode: retrievalMode,
+        min_vector_relevance: minVectorRelevance,
         max_context_tokens: maxContextTokens,
         agent_max_tokens: agentMaxTokens,
         request_timeout_secs: requestTimeoutSecs,
@@ -1300,6 +1303,19 @@ export function ChatPipelineCard({ scope }: { scope?: SettingsScopeParam }) {
                   user resolves to Global — change the Global scope and restart
                   to affect it.
                 </Text>
+              </Space>
+            </Tooltip>
+            <Tooltip title="No-context refusal floor. The best retrieved chunk's dense-vector cosine (0–1) must reach this to attempt an answer; below it, the question is treated as out-of-domain and refused with a 'No answer' result instead of answering from irrelevant context. Calibrated default 0.40 (out-of-domain queries measure ~0.24–0.37, grounded ~0.72+). Set 0 to disable. Tune from the 'retrieval_vector_score' logged per request.">
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">Min Vector Relevance <QuestionCircleOutlined /></Text>
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={minVectorRelevance}
+                  onChange={setMinVectorRelevance}
+                  style={{ width: 200 }}
+                />
               </Space>
             </Tooltip>
             <Tooltip title="Maximum estimated tokens for the context window passed to the response generator. Larger values give more context but cost more.">

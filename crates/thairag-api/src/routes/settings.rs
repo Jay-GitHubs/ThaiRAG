@@ -2833,6 +2833,9 @@ pub struct ChatPipelineConfigResponse {
     pub quality_guard_llm: Option<LlmProviderInfo>,
     pub quality_guard_max_retries: u32,
     pub quality_guard_threshold: f32,
+    /// No-context refusal floor: min absolute dense cosine (0..1) the best
+    /// retrieved chunk must reach to attempt an answer (0.0 disables).
+    pub min_vector_relevance: f32,
     pub language_adapter_enabled: bool,
     pub language_adapter_llm: Option<LlmProviderInfo>,
     pub orchestrator_enabled: bool,
@@ -2979,6 +2982,7 @@ pub struct UpdateChatPipelineRequest {
     pub remove_quality_guard_llm: Option<bool>,
     pub quality_guard_max_retries: Option<u32>,
     pub quality_guard_threshold: Option<f32>,
+    pub min_vector_relevance: Option<f32>,
     pub language_adapter_enabled: Option<bool>,
     pub language_adapter_llm: Option<UpdateLlmConfig>,
     pub remove_language_adapter_llm: Option<bool>,
@@ -3558,6 +3562,7 @@ fn build_chat_pipeline_response_from_config(
         quality_guard_llm: eff.quality_guard_llm.as_ref().map(llm_config_to_info),
         quality_guard_max_retries: eff.quality_guard_max_retries,
         quality_guard_threshold: eff.quality_guard_threshold,
+        min_vector_relevance: eff.min_vector_relevance,
         language_adapter_enabled: eff.language_adapter_enabled,
         language_adapter_llm: eff.language_adapter_llm.as_ref().map(llm_config_to_info),
         orchestrator_enabled: eff.orchestrator_enabled,
@@ -3736,6 +3741,7 @@ pub async fn update_chat_pipeline_config(
         quality_guard_threshold,
         "chat_pipeline.quality_guard_threshold"
     );
+    persist_num!(min_vector_relevance, "chat_pipeline.min_vector_relevance");
     persist_num!(max_context_tokens, "chat_pipeline.max_context_tokens");
     persist_num!(agent_max_tokens, "chat_pipeline.agent_max_tokens");
     persist_num!(request_timeout_secs, "chat_pipeline.request_timeout_secs");
