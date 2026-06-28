@@ -1079,6 +1079,8 @@ export interface TestQueryResponse {
   provider_info: TestQueryProviderInfo;
   pipeline_stages: PipelineStage[];
   citations?: Citation[];
+  /** LLM self-rated confidence (1–10) that the context supports the answer. */
+  confidence?: number;
 }
 
 // ── Usage Stats ────────────────────────────────────────────────────
