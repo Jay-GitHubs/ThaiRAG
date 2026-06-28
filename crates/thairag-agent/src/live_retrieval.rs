@@ -110,6 +110,7 @@ impl LiveRetrieval {
                 index: idx,
                 content: fetched.content,
                 relevance_score: 0.5, // Neutral — let response generator judge
+                vector_score: None,
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: Some(fetched.title),

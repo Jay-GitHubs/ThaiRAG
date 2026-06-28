@@ -2172,8 +2172,17 @@ pub async fn stream_conversation_message(
 
         // 3) Citations — resolved once, in the clean first-party shape.
         let footer_meta = metadata_cell.lock().unwrap().clone();
+        // A refusal cites nothing and must surface no sources: the no-context
+        // guard records no citations, and without this the image step below would
+        // fall back to ALL retrieved (irrelevant) chunks — showing source
+        // thumbnails on a "no relevant information" answer. Detected via the
+        // no-answer metadata state (guard refusal) or the answer text (model
+        // refusal).
+        let is_refusal_answer = (footer_meta.confidence.is_none()
+            && footer_meta.confidence_summary.is_some())
+            || thairag_agent::citation_parser::is_refusal(&accumulated);
         let mut persisted_citations: Vec<crate::chat_history::PersistedCitation> = Vec::new();
-        if cite_enabled {
+        if cite_enabled && !is_refusal_answer {
             let sources = build_citation_sources(
                 &footer_meta,
                 source_max,
@@ -2208,7 +2217,10 @@ pub async fn stream_conversation_message(
         // no structured citations), so images track the citations, not raw
         // retrieval. Gated (default off); needs a browser-reachable base + key.
         let image_chunks: Vec<thairag_core::types::RetrievedChunkMeta> =
-            if footer_meta.citations.is_empty() {
+            if is_refusal_answer {
+                // Refusal → no sources at all (don't fall back to retrieval).
+                Vec::new()
+            } else if footer_meta.citations.is_empty() {
                 footer_meta.retrieved_chunks.clone()
             } else {
                 let cited: std::collections::HashSet<&str> = footer_meta

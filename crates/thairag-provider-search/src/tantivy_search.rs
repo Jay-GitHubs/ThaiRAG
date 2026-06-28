@@ -340,6 +340,7 @@ impl TextSearch for TantivySearch {
                     metadata: None,
                 },
                 score,
+                vector_score: None,
             });
         }
 

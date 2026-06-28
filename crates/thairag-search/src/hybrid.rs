@@ -385,6 +385,15 @@ impl HybridSearchEngine {
         let k = self.config.rrf_k as f32;
         let mut scores: HashMap<String, (f32, SearchResult)> = HashMap::new();
 
+        // Capture each chunk's absolute dense cosine BEFORE fusion. RRF
+        // normalization below scales the top hit to 1.0, erasing absolute
+        // relevance; the no-context refusal gate reads this preserved value so it
+        // works even when no reranker supplies absolute scores.
+        let vector_cosine: HashMap<String, f32> = vector_results
+            .iter()
+            .map(|r| (r.chunk.chunk_id.to_string(), r.score))
+            .collect();
+
         let mut fold = |results: &[SearchResult], weight: f32| {
             // A zero weight contributes nothing; skip so a disabled source never
             // injects zero-score entries into the merged set.
@@ -436,6 +445,11 @@ impl HybridSearchEngine {
             for r in &mut merged {
                 r.score /= max;
             }
+        }
+
+        // Re-attach the absolute cosine (survives the normalization above).
+        for r in &mut merged {
+            r.vector_score = vector_cosine.get(&r.chunk.chunk_id.to_string()).copied();
         }
 
         merged
@@ -532,6 +546,7 @@ mod tests {
                 metadata: None,
             },
             score,
+            vector_score: None,
         }
     }
 

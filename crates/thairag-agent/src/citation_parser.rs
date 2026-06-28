@@ -244,6 +244,7 @@ mod tests {
                 index: i,
                 content: format!("chunk {i}"),
                 relevance_score: 0.9 - (i as f32) * 0.1,
+                vector_score: None,
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: Some(format!("Doc {i}")),

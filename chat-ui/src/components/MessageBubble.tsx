@@ -485,6 +485,20 @@ function AnswerActions({
           </span>
         </Tooltip>
       )}
+      {/* No-answer state: retrieval found nothing relevant, so the turn is a
+          refusal rather than a scored answer — show a neutral marker, not a
+          (misleading) 1–10 confidence number. */}
+      {conf == null && message.confidenceSummary && (
+        <Tooltip title={message.confidenceSummary}>
+          <span
+            data-testid="no-answer"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'help' }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-muted)' }} />
+            No answer
+          </span>
+        </Tooltip>
+      )}
       {meta && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{meta}</span>}
     </div>
   );

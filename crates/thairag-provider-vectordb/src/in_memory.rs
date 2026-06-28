@@ -60,6 +60,7 @@ impl VectorStore for InMemoryVectorStore {
                     SearchResult {
                         chunk: chunk.clone(),
                         score,
+                        vector_score: None,
                     }
                 })
             })

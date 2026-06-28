@@ -348,6 +348,7 @@ mod vision_routing_tests {
                 index: 0,
                 content: "a chunk".into(),
                 relevance_score: 1.0,
+                vector_score: None,
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: None,

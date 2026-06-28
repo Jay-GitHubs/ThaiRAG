@@ -222,7 +222,10 @@ pub struct PipelineMetadata {
     pub confidence: Option<u8>,
     /// One-line, human-readable rationale for `confidence` (e.g.
     /// "5 of 6 claims cite a source across 2 documents"). Shown in the UI so
-    /// the score is explainable rather than opaque.
+    /// the score is explainable rather than opaque. When this is `Some` but
+    /// `confidence` is `None`, the turn is a "no answer" refusal (retrieval
+    /// found nothing relevant): the UI shows a neutral "No answer" marker
+    /// instead of a 1–10 score, since a refusal isn't an answer to score.
     #[serde(default)]
     pub confidence_summary: Option<String>,
     /// Per-factor breakdown behind `confidence`, surfaced in the UI tooltip so
@@ -774,6 +777,14 @@ pub struct SearchQuery {
 pub struct SearchResult {
     pub chunk: DocumentChunk,
     pub score: f32,
+    /// Absolute dense-vector cosine similarity for this chunk (0..1), preserved
+    /// independently of `score`. RRF fusion normalizes `score` so the top hit is
+    /// always 1.0, which destroys the absolute relevance signal; the no-context
+    /// refusal gate reads this instead so it can detect an all-irrelevant result
+    /// set even when no reranker supplies absolute scores. `None` for chunks that
+    /// matched only lexical (BM25) or image search.
+    #[serde(default)]
+    pub vector_score: Option<f32>,
 }
 
 // ── ACL Types ────────────────────────────────────────────────────────

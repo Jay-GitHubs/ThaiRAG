@@ -186,6 +186,7 @@ mod tests {
                 index: i + 1,
                 content: format!("chunk {}", i + 1),
                 relevance_score: 0.9,
+                vector_score: None,
                 source_doc_id: *d,
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: Some(format!("Doc {}", i + 1)),

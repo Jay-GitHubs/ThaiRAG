@@ -72,6 +72,7 @@ mod tests {
                 metadata,
             },
             score,
+            vector_score: None,
         }
     }
 

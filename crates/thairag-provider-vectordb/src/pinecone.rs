@@ -160,6 +160,7 @@ impl VectorStore for PineconeVectorStore {
                                 metadata: None,
                             },
                             score,
+                            vector_score: None,
                         })
                     })
                     .collect()

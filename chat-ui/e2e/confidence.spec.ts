@@ -50,3 +50,30 @@ test('grounded answer shows a confidence score with an explainable breakdown', a
     timeout: 10_000,
   });
 });
+
+test('out-of-domain query refuses with a No-answer marker (not a confidence score)', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+
+  await page.locator('.ant-select-selector').first().click();
+  await page
+    .locator('.ant-select-item-option')
+    .filter({ hasText: /^KMs$/ })
+    .click();
+
+  // Thai cooking is absent from the SME/sales KB → dense cosine below the floor
+  // → the pipeline refuses. The turn shows a neutral "No answer" marker, NOT a
+  // 1–10 confidence number, and cites nothing.
+  await page
+    .getByPlaceholder(COMPOSER)
+    .fill('วิธีทำต้มยำกุ้งที่อร่อยต้องทำอย่างไร');
+  await page.getByRole('button', { name: 'Send' }).click();
+
+  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
+  await expect(page.getByTestId('no-answer')).toHaveCount(1, { timeout: 30_000 });
+  expect(await page.getByTestId('confidence').count()).toBe(0);
+  expect(await page.getByTestId('source-chip').count()).toBe(0);
+});

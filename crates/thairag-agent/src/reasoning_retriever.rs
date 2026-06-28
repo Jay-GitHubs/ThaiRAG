@@ -199,6 +199,7 @@ impl ReasoningRetriever {
                 results.push(SearchResult {
                     chunk: chunk.clone(),
                     score,
+                    vector_score: None,
                 });
                 if results.len() >= MAX_RESULT_CHUNKS {
                     return Ok(results);
@@ -454,6 +455,7 @@ fn section_result(
             }),
         },
         score,
+        vector_score: None,
     }
 }
 

@@ -1124,11 +1124,21 @@ pub struct ChatPipelineConfig {
     /// API response. Cheap (no extra LLM call) — default on.
     #[serde(default = "default_true_val")]
     pub structured_citations_enabled: bool,
-    /// Confidence scoring: after the answer, ask the response LLM to rate 1–10
-    /// how well the retrieved context supports it. One short extra LLM call;
-    /// surfaced in the chat UI and admin test-chat. Default on.
+    /// Confidence scoring: after the answer, deterministically score 1–10 how
+    /// grounded it is (citation coverage, corroboration, retrieval) — no extra
+    /// LLM call. Surfaced in the chat UI and admin test-chat. Default on.
     #[serde(default = "default_true_val")]
     pub confidence_scoring_enabled: bool,
+    /// No-context refusal floor: minimum absolute dense-vector cosine (0..1) the
+    /// best retrieved chunk must reach for the pipeline to attempt an answer. If
+    /// even the top chunk is below this, retrieval found nothing semantically
+    /// relevant (e.g. an out-of-domain question) and the pipeline refuses rather
+    /// than answering from irrelevant context. Unlike the reranker-score gate,
+    /// this works without a reranker (RRF normalization makes the top `score`
+    /// always 1.0). Set to 0.0 to disable. Hot-reloadable — tune from the
+    /// `retrieval_vector_score` values logged on each request.
+    #[serde(default = "default_min_vector_relevance")]
+    pub min_vector_relevance: f32,
     /// Emit OpenAI-standard `delta.annotations[].url_citation` entries in the
     /// streaming response so any compatible client renders native, clickable
     /// citations instead of the plain-text footer. Portable across clients.
@@ -1202,6 +1212,17 @@ fn default_quality_guard_max_retries() -> u32 {
 }
 fn default_quality_guard_threshold() -> f32 {
     0.6
+}
+fn default_min_vector_relevance() -> f32 {
+    // Calibrated against live cosine values (qwen3-embedding, temp-0 so
+    // deterministic): measured out-of-domain queries scored 0.24–0.37 (Thai
+    // cooking 0.235, EN football 0.241, EN fictional-product 0.368) while
+    // grounded queries scored 0.72–0.74 (EN sales 0.736, Thai app-manual 0.723).
+    // 0.40 sits above every observed out-of-domain value yet leaves wide
+    // headroom below the grounded floor, so it refuses junk without false-
+    // refusing legitimate (incl. cross-lingual) queries. Tune from the logged
+    // `retrieval_vector_score`; set 0.0 to disable.
+    0.40
 }
 fn default_max_context_tokens() -> usize {
     4096
@@ -1467,6 +1488,7 @@ impl Default for ChatPipelineConfig {
             source_footer_max: default_source_footer_max(),
             structured_citations_enabled: true,
             confidence_scoring_enabled: true,
+            min_vector_relevance: default_min_vector_relevance(),
             citation_annotations_enabled: true,
             citation_base_url: String::new(),
             inline_images_enabled: false,
