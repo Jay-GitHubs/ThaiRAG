@@ -503,11 +503,11 @@ impl ChatPipeline {
         });
     }
 
-    /// LLM self-rated confidence (1–10) for how well the context supports the
-    /// answer. One short extra call; stored in metadata. No-op when disabled.
-    async fn maybe_assess_confidence(
+    /// Deterministic confidence (1–10) for how well the answer is grounded in
+    /// the retrieved context, plus an explainable breakdown. No LLM call — it
+    /// reads signals the pipeline already produced. No-op when disabled.
+    fn maybe_assess_confidence(
         &self,
-        query: &str,
         answer: &str,
         context: &CuratedContext,
         metadata: &Option<MetadataCell>,
@@ -515,11 +515,11 @@ impl ChatPipeline {
         if !self.config.confidence_scoring_enabled {
             return;
         }
-        if let Some(score) =
-            crate::confidence::assess(self.main_llm.as_ref(), query, answer, context).await
-        {
+        if let Some(assessment) = crate::confidence::assess(answer, context) {
             Self::update_metadata(metadata, |m| {
-                m.confidence = Some(score);
+                m.confidence = Some(assessment.score);
+                m.confidence_summary = Some(assessment.summary);
+                m.confidence_factors = assessment.factors;
             });
         }
     }
@@ -1161,8 +1161,7 @@ impl ChatPipeline {
                     )
                     .await?;
                 self.maybe_record_citations(&response.content, &context, &metadata);
-                self.maybe_assess_confidence(user_query, &response.content, &context, &metadata)
-                    .await;
+                self.maybe_assess_confidence(&response.content, &context, &metadata);
                 self.maybe_adapt(response, &analysis).await
             }
             PipelineRoute::FullPipeline => {
@@ -1731,8 +1730,7 @@ impl ChatPipeline {
 
         // ── Structured citations: parse [N] markers against the context ──
         self.maybe_record_citations(&response.content, &context, metadata);
-        self.maybe_assess_confidence(user_query, &response.content, &context, metadata)
-            .await;
+        self.maybe_assess_confidence(&response.content, &context, metadata);
 
         // ── RAGAS evaluation (async, sampled — no budget impact) ──
         self.maybe_run_ragas(user_query, &context, &response.content)
@@ -2182,12 +2180,8 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                let stream = self.wrap_stream_recording_citations(
-                    stream,
-                    context.clone(),
-                    metadata.clone(),
-                    user_query,
-                );
+                let stream =
+                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2314,12 +2308,8 @@ impl ChatPipeline {
                     remaining_budget = budget.remaining(),
                     "Pipeline: complete"
                 );
-                let stream = self.wrap_stream_recording_citations(
-                    stream,
-                    context.clone(),
-                    metadata.clone(),
-                    user_query,
-                );
+                let stream =
+                    self.wrap_stream_recording_citations(stream, context.clone(), metadata.clone());
                 let stream = self.wrap_stream_with_quality_guard(stream, user_query, context);
                 Ok(self.wrap_stream_with_output_guardrails(
                     stream,
@@ -2443,7 +2433,6 @@ impl ChatPipeline {
         inner: LlmStreamResponse,
         context: CuratedContext,
         metadata: Option<MetadataCell>,
-        user_query: &str,
     ) -> LlmStreamResponse {
         // Citations + confidence both need the full answer, so even with
         // citations off we still wrap if confidence scoring is on.
@@ -2453,8 +2442,6 @@ impl ChatPipeline {
         let usage = inner.usage.clone();
         let cite_enabled = self.config.structured_citations_enabled;
         let conf_enabled = self.config.confidence_scoring_enabled;
-        let llm = self.main_llm.clone();
-        let query = user_query.to_string();
         let stream = async_stream::stream! {
             let mut inner_stream = inner.stream;
             let mut collected = String::new();
@@ -2469,12 +2456,13 @@ impl ChatPipeline {
                     Self::update_metadata(&metadata, |m| { m.citations = citations; });
                 }
             }
-            // Confidence — one short extra LLM call once the answer is complete.
-            if conf_enabled
-                && let Some(score) =
-                    crate::confidence::assess(llm.as_ref(), &query, &collected, &context).await
-            {
-                Self::update_metadata(&metadata, |m| { m.confidence = Some(score); });
+            // Confidence — deterministic, computed once the answer is complete.
+            if conf_enabled && let Some(a) = crate::confidence::assess(&collected, &context) {
+                Self::update_metadata(&metadata, |m| {
+                    m.confidence = Some(a.score);
+                    m.confidence_summary = Some(a.summary);
+                    m.confidence_factors = a.factors;
+                });
             }
         };
         LlmStreamResponse {

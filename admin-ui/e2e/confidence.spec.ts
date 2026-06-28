@@ -2,9 +2,11 @@ import { test, expect } from '@playwright/test';
 import { login, navigateTo } from './helpers';
 
 /**
- * Confidence scoring + refusal-gated citations in the admin Test Chat.
- * Live-stack gated (KMs workspace). A no-info/refusal answer scores LOW and
- * shows no source chips; a grounded answer scores higher and cites its source.
+ * Deterministic confidence scoring + refusal-gated citations in the admin Test
+ * Chat. Live-stack gated (KMs workspace). A no-info/refusal answer scores LOW
+ * and shows no source chips; a grounded answer scores higher and cites its
+ * source. The confidence tag also exposes an explainable factor breakdown on
+ * hover (the "show how it scored" feature).
  */
 test('refusal vs grounded: confidence + citation gating', async ({ page }) => {
   test.setTimeout(420_000);
@@ -36,4 +38,10 @@ test('refusal vs grounded: confidence + citation gating', async ({ page }) => {
 
   expect(refusalConf).toBeLessThan(relConf);
   expect(refusalConf).toBeLessThanOrEqual(4);
+
+  // Explainable breakdown: hovering the grounded answer's tag shows the factors.
+  await page.getByTestId('confidence-tag').nth(1).hover();
+  await expect(page.getByText('Citation coverage', { exact: false })).toBeVisible({
+    timeout: 10_000,
+  });
 });
