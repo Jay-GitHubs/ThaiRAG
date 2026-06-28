@@ -1,6 +1,6 @@
 # OIDC Integration Testing with Keycloak
 
-This guide walks through setting up a local Keycloak instance as an OIDC identity provider to test SSO integration for both the ThaiRAG Admin UI and Open WebUI.
+This guide walks through setting up a local Keycloak instance as an OIDC identity provider to test SSO integration for the ThaiRAG Admin UI. The first-party chat-ui supports OIDC login the same way — register it as an additional Keycloak client mirroring the Admin UI client below.
 
 ## Architecture
 
@@ -12,12 +12,10 @@ Browser (localhost)
   |         +-- OIDC callback: /api/auth/oauth/callback (proxied to ThaiRAG)
   |         +-- SPA: /login#token=... (served by nginx)
   |
-  +---> Open WebUI (localhost:3000) ---OIDC---> Keycloak (localhost:9090)
-  |
-  +---> Keycloak (localhost:9090) <--- identity provider for both UIs
+  +---> Keycloak (localhost:9090) <--- identity provider
 ```
 
-Both UIs are registered as separate OIDC clients in the same Keycloak realm. Users sign in once via Keycloak and get access to both applications.
+The Admin UI is registered as an OIDC client in the Keycloak realm. Users sign in via Keycloak and get access to the application.
 
 ## Key Networking Rule
 
@@ -49,9 +47,9 @@ This means:
 docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d
 ```
 
-This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
+This starts: PostgreSQL, ThaiRAG API, Admin UI, and Keycloak.
 
-> The command composes two files (`-f docker-compose.yml -f docker-compose.test-idp.yml`). The `test-idp.yml` override only adds Keycloak and Open WebUI (and wires OIDC env onto ThaiRAG); PostgreSQL, the Admin UI, Redis, Qdrant, Prometheus, and Grafana all come from the base `docker-compose.yml`.
+> The command composes two files (`-f docker-compose.yml -f docker-compose.test-idp.yml`). The `test-idp.yml` override only adds Keycloak (and wires OIDC env onto ThaiRAG); PostgreSQL, the Admin UI, Redis, Qdrant, Prometheus, and Grafana all come from the base `docker-compose.yml`.
 
 > **Note:** `scripts/keycloak-init.sh` only bootstraps the permanent Keycloak **ADMIN** account in the `master` realm. The `thairag` realm, its OIDC clients, and the `testuser` are created manually via the steps below.
 
@@ -60,7 +58,6 @@ This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
 | Keycloak    | http://localhost:9090       | admin / admin            |
 | ThaiRAG API | http://localhost:8080       | (internal, accessed via nginx) |
 | Admin UI    | http://localhost:8081       | admin@thairag.local / admin123 |
-| Open WebUI  | http://localhost:3000       | via Keycloak SSO         |
 
 ## 2. Configure Keycloak
 
@@ -89,29 +86,7 @@ This starts: PostgreSQL, ThaiRAG API, Admin UI, Keycloak, and Open WebUI.
 7. Click **Save**
 8. Go to the **Credentials** tab → copy the **Client secret** (you'll need this later)
 
-### 2c. Create the Open WebUI Client
-
-1. Go to **Clients** → **Create client**
-2. Configure:
-   - **Client ID**: `open-webui`
-   - **Client type**: OpenID Connect
-3. Click **Next**
-4. Enable:
-   - **Client authentication**: ON
-   - **Authentication flow**: check "Standard flow" only
-5. Click **Next**
-6. Set:
-   - **Root URL**: `http://localhost:3000`
-   - **Valid redirect URIs**: `http://localhost:3000/oauth/oidc/callback`
-   - **Web origins**: `http://localhost:3000`
-7. Click **Save**
-8. Go to the **Credentials** tab → copy the **Client secret** (Keycloak auto-generates it)
-9. Update `OAUTH_CLIENT_SECRET` in `docker-compose.test-idp.yml` with the copied value, then recreate:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d --force-recreate open-webui
-   ```
-
-### 2d. Create a Test User
+### 2c. Create a Test User
 
 1. Go to **Users** → **Add user**
 2. Fill in:
@@ -184,13 +159,6 @@ curl -s http://localhost:8080/api/km/settings/identity-providers \
 5. You'll be redirected back to the Admin UI at `localhost:8081`, logged in as the test user
 6. Check the **Users** page — the test user should appear with provider type "OIDC"
 
-### Open WebUI
-
-1. Open http://localhost:3000
-2. Click **"Keycloak"** on the login page
-3. If you already authenticated with Keycloak (SSO session active), you'll be logged in automatically
-4. Otherwise, sign in with `testuser` / `test123`
-
 ## 5. Testing Entra ID Federation (Optional)
 
 To simulate a production setup where Keycloak federates to Microsoft Entra ID:
@@ -257,7 +225,7 @@ For production, Keycloak must run behind HTTPS. For local testing, HTTP is fine 
 docker compose -f docker-compose.yml -f docker-compose.test-idp.yml down -v
 ```
 
-This removes all containers and volumes (Keycloak data, Open WebUI data, etc.).
+This removes all containers and volumes (Keycloak data, etc.).
 
 ## Troubleshooting
 
@@ -269,7 +237,5 @@ This removes all containers and volumes (Keycloak data, Open WebUI data, etc.).
 | "Missing authorization header" on callback | The redirect URI must go through **port 8081** (admin-ui nginx), not port 8080 (ThaiRAG directly). Nginx proxies `/api/` to ThaiRAG. |
 | "Invalid or expired OAuth state" | The state parameter has a 10-minute TTL. Try the flow again. Also check for clock skew between containers. |
 | "Failed to seed super admin" with column error | The Postgres database has an old schema. Rebuild: `docker compose build --no-cache thairag` then restart. The schema migration adds missing columns automatically. |
-| Open WebUI shows "Internal Server Error" | Check Open WebUI logs: `docker logs thairag-open-webui-1`. Common issue: `OPENID_PROVIDER_URL` not reachable from within the container. |
-| Open WebUI "Invalid client credentials" | The `OAUTH_CLIENT_SECRET` in `docker-compose.test-idp.yml` must match the Keycloak `open-webui` client's secret. Copy from Keycloak → Clients → open-webui → Credentials, update compose, then `docker compose ... up -d --force-recreate open-webui`. |
 | User created but not super admin | External OIDC users are created as regular users. Only env-var-seeded users are super admins. |
 | Keycloak "temporary admin" warning | Remove the Keycloak volume and restart: `docker volume rm thairag_keycloak-data`. The init script creates a permanent admin. |

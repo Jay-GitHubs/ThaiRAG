@@ -779,7 +779,7 @@ The script runs 55+ checks covering health, auth, KM hierarchy, documents, chat,
 # Basic stack (ThaiRAG + Postgres + Admin UI)
 docker compose up -d
 
-# With test identity provider (Keycloak + Open WebUI)
+# With test identity provider (Keycloak for OIDC SSO)
 docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d
 ```
 

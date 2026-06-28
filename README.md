@@ -6,7 +6,7 @@ Production-ready Retrieval-Augmented Generation platform with Thai language supp
 
 - **Hybrid Search** — Vector similarity + BM25 full-text search (disk-persisted Tantivy with auto-recovery) with Reciprocal Rank Fusion and optional reranking
 - **Thai NLP** — Built-in Thai word segmentation via `nlpo3` for accurate tokenization
-- **OpenAI-Compatible API** — Drop-in replacement at `/v1/chat/completions` and `/v1/models`, works with Open WebUI and any OpenAI-compatible client
+- **OpenAI-Compatible API** — Drop-in replacement at `/v1/chat/completions` and `/v1/models`, works with any OpenAI-compatible client
 - **Hierarchical Knowledge Management** — Organization → Department → Workspace → Documents with scoped permissions
 - **Multi-Format Documents** — PDF, DOCX, XLSX, ODT, HTML, Markdown, CSV, plain text, and images (PNG/JPEG/WebP/GIF) with automatic chunking
 - **Smart Document Extraction** — pdfium-based per-page PDF processing where a region router classifies each page (native text / reconstructed table / mixed / image-heavy / scanned / corrupted text) and serves it at the cheapest faithful fidelity tier: native extraction, deterministic OCR, or vision LLM — following the golden rule of never OCRing a deterministic table. Embedded images from PDF/DOCX/XLSX/ODT/HTML are stored as retrievable KM content
@@ -150,14 +150,14 @@ cp .env.example .env  # Edit with your API keys
 # 2a. Core services (API + Admin UI + PostgreSQL + Qdrant)
 docker compose up --build -d
 
-# 2b. Full stack with Keycloak (OIDC) + Open WebUI
+# 2b. Full stack with Keycloak (OIDC) for SSO testing
 docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d
 
 # 3. Access
 #    API:        http://localhost:8080
 #    Admin UI:   http://localhost:8081
+#    Chat UI:    http://localhost:8082
 #    Keycloak:   http://localhost:9090  (full stack only)
-#    Open WebUI: http://localhost:3000  (full stack only)
 ```
 
 ### Option 2: Local Development
@@ -361,7 +361,7 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 | [Admin UI Guide](docs/ADMIN_UI_GUIDE.md) | Complete manual for all 25+ admin pages |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Docker, configuration, production setup |
 | [API Reference](docs/API_REFERENCE.md) | All endpoints with request/response schemas |
-| [Integration Guide](docs/INTEGRATION_GUIDE.md) | Open WebUI, OIDC/SSO, external systems |
+| [Integration Guide](docs/INTEGRATION_GUIDE.md) | OpenAI-compatible clients, OIDC/SSO, external systems |
 | [Scaling Guide](docs/scaling.md) | Horizontal scaling with Redis, load balancing |
 | [Python SDK](sdks/python/README.md) | Typed `httpx` client — installation, quickstart, API reference |
 | [TypeScript SDK](sdks/typescript/README.md) | Typed `fetch` client — installation, quickstart, API reference |

@@ -169,10 +169,9 @@ THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11435
 ### Chat UI
 
 The first-party **chat-ui** (`chat-ui/`, port 8082) is the recommended end-user
-interface and ships with the stack. Open WebUI, the original third-party chat
-client, has been decommissioned — chat-ui replaces it at full parity (streaming
-chat, durable history, native citations + inline images, scope selector, file
-upload, native + SSO login).
+interface and ships with the stack. It provides streaming chat, durable history,
+native citations + inline images, scope selector, file upload, and native + SSO
+login.
 
 ### Connecting an external OpenAI-compatible client
 

@@ -73,7 +73,7 @@ services:
 
   # ── Qdrant (vector database) ───────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.17.0
     restart: unless-stopped
     volumes:
       - qdrant-data:/qdrant/storage
@@ -152,7 +152,7 @@ services:
 
   # ── Prometheus ────────────────────────────────────────────────────────────
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.10.0
     restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -187,7 +187,7 @@ services:
 
   # ── Grafana ───────────────────────────────────────────────────────────────
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.4.2
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}

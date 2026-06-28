@@ -9,13 +9,6 @@ chat, durable per-user history, native source citations + inline source images, 
 workspace scope selector, file upload, and native or SSO login — and workspace
 permissions are enforced per signed-in user out of the box.
 
-> Open WebUI (OWUI) was the original third-party chat client and has been
-> **decommissioned** — chat-ui replaces it at full parity. The OWUI-specific
-> integration paths from earlier releases (the bundled `open-webui` compose
-> service, `X-OpenWebUI-User-*` identity forwarding, and the OWUI feedback-sync
-> poller) have all been removed. The `/v1` OpenAI-compatible surface below
-> remains for external API clients.
-
 ## OpenAI-compatible API (`/v1`)
 
 ThaiRAG exposes the standard `/v1/chat/completions` and `/v1/models` endpoints,
@@ -55,11 +48,8 @@ API-key auth grants the key's configured access scope — unrestricted by defaul
 and **not** per-end-user. Per-user workspace permission enforcement is a property
 of the first-party chat-ui, where each user signs in with their own JWT. For
 multi-tenant API access, issue a separate API key per tenant and scope it
-accordingly.
-
-> Earlier releases resolved a per-request end user from Open WebUI's
-> `X-OpenWebUI-User-Email` header and auto-provisioned/scoped them; that path was
-> removed with OWUI. Use chat-ui (per-user JWT) for per-user enforcement.
+accordingly. For per-user enforcement, use chat-ui, where each user signs in with
+their own JWT.
 
 ### Permission Revocation Behavior
 

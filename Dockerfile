@@ -1,5 +1,7 @@
 # ── Builder ────────────────────────────────────────────────────────────
-FROM rust:1.88-bookworm AS builder
+# Keep in lockstep with rust-toolchain.toml (pinned channel) so image builds
+# match local + CI; a drift here silently builds with a different compiler.
+FROM rust:1.95-bookworm AS builder
 
 WORKDIR /app
 

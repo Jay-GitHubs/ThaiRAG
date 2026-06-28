@@ -1,8 +1,8 @@
 # ThaiRAG first-party Chat UI — implementation roadmap
 
 Goal: a focused, ChatGPT-like end-user chat frontend built on the ThaiRAG
-backend/core, replacing Open WebUI (OWUI). OWUI runs in parallel until a parity
-gate passes, then is decommissioned.
+backend/core, replacing the legacy third-party chat client. That client ran in
+parallel until a parity gate passed, then was decommissioned (Phase 7).
 
 ## Decisions (locked)
 
@@ -12,13 +12,14 @@ gate passes, then is decommissioned.
   config. Own port (8082), independent deploy. End users vs admins = different
   audiences.
 - **New first-party endpoint surface under `/api/chat`**, NOT `/v1`. Keep
-  `/v1/chat/completions` clean as the OpenAI-compat surface so OWUI and external
+  `/v1/chat/completions` clean as the OpenAI-compatible surface so external
   clients keep working untouched during the whole transition.
 - **Auth: configurable (native JWT + OIDC)** — native `/api/auth/login` by
   default, optional Keycloak/OIDC for enterprise tenants. Both supported.
 - **File upload in v1** — per-conversation upload flows into the existing ingest
   pipeline.
-- **Run OWUI in parallel** until parity, then remove in one cleanup PR.
+- **Run the legacy third-party client in parallel** until parity, then remove in
+  one cleanup PR.
 
 ## Phase 1 — Conversation persistence (backend, the blocker)
 
@@ -54,7 +55,7 @@ SSE endpoint — owner-checked, loads history via `chat_history::load_history`,
 runs the pipeline, streams a clean first-party protocol (`progress` / `token` /
 `citation` / `done` / `error` + `[DONE]`), and persists the turn via
 `chat_history::persist_turn`. New handler reuses the `/v1` setup helpers but has
-its own SSE loop — `/v1` is untouched (OWUI/OpenAI clients unaffected).
+its own SSE loop — `/v1` is untouched (OpenAI-compatible clients unaffected).
 PR 2b (this) shipped inline source images: `image_blob_id` threaded into
 `RetrievedChunkMeta`; token-gated `GET /api/chat/media/{image_id}?token=…`
 (reuses the citation-token model); the stream emits `{"type":"image",…}` events
@@ -102,7 +103,7 @@ a "Searching &lt;workspace&gt;" chip on active conversations.
 
 
 - Native inline citations (render `citation` events, ThaiRAG-styled).
-- Inline source images (render `image` events inline — the OWUI blocker).
+- Inline source images (render `image` events inline).
 - Scope/workspace selector baked into chat (hard filter; supports the near-clone
   "one product per scope" guidance).
 - Exit: image-bearing manual answer shows screenshots inline; live-stack e2e.
@@ -147,17 +148,17 @@ G5/G6/G7 optional.
 
 - Mobile/responsive, error/timeout/interrupt recovery (edge-action analysis).
 - Dockerfile + nginx (clone admin-ui, port 8082) + compose service.
-- Parity checklist = OWUI removal trigger: streaming chat, durable per-user
-  history, citations, images, scope selector, login (native+OIDC), mobile,
-  file upload.
+- Parity checklist = legacy-client removal trigger: streaming chat, durable
+  per-user history, citations, images, scope selector, login (native+OIDC),
+  mobile, file upload.
 
-## Phase 7 — OWUI decommission (only after parity)
+## Phase 7 — Legacy chat-client decommission (done, after parity)
 
-- Remove OWUI service from compose + `webui.db` volume.
-- Remove OWUI-only backend code: `x-openwebui-user-email` resolution +
-  `is_openwebui` branching in `chat.rs`/`v2_chat.rs`/`ws_chat.rs`,
-  `owui_feedback_sync.rs`, Keycloak/OIDC bits used only by OWUI. Keep `/v1`
-  OpenAI-compat surface + citation viewer. Update CLAUDE.md citation section.
+The legacy third-party chat client was removed once chat-ui reached parity: its
+compose service and data volume were dropped, and the backend code paths that
+existed only to serve it (its bespoke user-identity forwarding, the matching
+request branching across the chat handlers, and the feedback-sync poller) were
+deleted. The `/v1` OpenAI-compatible surface and the citation viewer were kept.
 
 ## Sequencing
 
