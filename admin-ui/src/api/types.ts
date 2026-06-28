@@ -625,6 +625,8 @@ export interface ChatPipelineConfigResponse {
   quality_guard_llm?: LlmProviderInfo;
   quality_guard_max_retries: number;
   quality_guard_threshold: number;
+  /** No-context refusal floor: min dense cosine (0..1) the best chunk must reach to answer (0 disables). */
+  min_vector_relevance: number;
   retrieval_mode: 'vector' | 'vectorless';
   // Reasoning-based ("PageIndex") retrieval
   reasoning_nav_llm?: LlmProviderInfo;
@@ -769,6 +771,7 @@ export interface UpdateChatPipelineRequest {
   remove_quality_guard_llm?: boolean;
   quality_guard_max_retries?: number;
   quality_guard_threshold?: number;
+  min_vector_relevance?: number;
   retrieval_mode?: 'vector' | 'vectorless';
   // Reasoning-based ("PageIndex") retrieval
   reasoning_nav_llm?: LlmConfigUpdate;
