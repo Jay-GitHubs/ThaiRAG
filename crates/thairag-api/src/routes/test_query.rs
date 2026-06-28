@@ -46,6 +46,9 @@ pub struct TestQueryResponse {
     /// Per-claim source attributions parsed from the answer's `[N]` markers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub citations: Vec<thairag_core::types::Citation>,
+    /// LLM self-rated confidence (1–10) that the context supports the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<u8>,
 }
 
 #[derive(Serialize)]
@@ -520,6 +523,7 @@ pub async fn test_query(
         provider_info,
         pipeline_stages,
         citations: metadata_cell.lock().unwrap().citations.clone(),
+        confidence: metadata_cell.lock().unwrap().confidence,
     }))
 }
 
@@ -895,6 +899,7 @@ pub async fn test_query_stream(
                 }
 
                 let stream_citations = metadata_cell.lock().unwrap().citations.clone();
+                let stream_confidence = metadata_cell.lock().unwrap().confidence;
                 let response = TestQueryResponse {
                     response_id: stream_response_id,
                     query: query_text,
@@ -915,6 +920,7 @@ pub async fn test_query_stream(
                     },
                     pipeline_stages: vec![], // Stages were streamed in real-time
                     citations: stream_citations,
+                    confidence: stream_confidence,
                 };
 
                 let data = serde_json::to_string(&response).unwrap();

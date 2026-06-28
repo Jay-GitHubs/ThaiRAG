@@ -2,6 +2,7 @@ pub mod active_learning;
 pub mod chat_pipeline;
 pub mod citation_parser;
 pub mod colbert_reranker;
+pub mod confidence;
 pub mod context_compactor;
 pub mod context_curator;
 pub mod contextual_compression;

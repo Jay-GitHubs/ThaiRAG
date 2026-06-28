@@ -206,6 +206,7 @@ export function ChatPage() {
             streaming: false,
             progress: undefined,
             usage: evt.usage,
+            confidence: evt.confidence ?? undefined,
             elapsedMs: streamStartRef.current ? Date.now() - streamStartRef.current : undefined,
           }));
           break;

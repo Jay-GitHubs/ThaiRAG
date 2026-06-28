@@ -34,6 +34,8 @@ export interface UiMessage {
   progress?: string;
   /** Token usage for the finished answer (surfaced under the message). */
   usage?: { prompt_tokens: number; completion_tokens: number };
+  /** LLM self-rated confidence 1–10 that the context supports the answer. */
+  confidence?: number;
   /** Wall-clock time from send to first/last token (ms), for the meta line. */
   elapsedMs?: number;
 }
@@ -436,6 +438,10 @@ function AnswerActions({
     .filter(Boolean)
     .join(' · ');
   const icon = { cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)' };
+  const conf = message.confidence;
+  // Status hues are theme-agnostic mid-tones (read on light + dark themes).
+  const confColor =
+    conf == null ? 'var(--text-muted)' : conf >= 7 ? '#369e62' : conf >= 4 ? '#d9962a' : '#d6453d';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
       <Tooltip title={copied ? 'Copied' : 'Copy answer'}>
@@ -446,6 +452,17 @@ function AnswerActions({
         )}
       </Tooltip>
       {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
+      {conf != null && (
+        <Tooltip title="How well the retrieved sources support this answer (LLM-rated)">
+          <span
+            data-testid="confidence"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)' }}
+          >
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: confColor }} />
+            Confidence {conf}/10
+          </span>
+        </Tooltip>
+      )}
       {meta && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{meta}</span>}
     </div>
   );

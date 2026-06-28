@@ -72,6 +72,7 @@ interface ChatEntry {
   providerInfo?: TestQueryProviderInfo;
   pipelineStages?: PipelineStage[];
   citations?: Citation[];
+  confidence?: number;
   feedback?: 'up' | 'down';
   query?: string;
 }
@@ -241,6 +242,7 @@ export function TestChatPage() {
           providerInfo: res.provider_info,
           pipelineStages: collectedStages.length > 0 ? collectedStages : res.pipeline_stages,
           citations: res.citations,
+          confidence: res.confidence,
           query: q,
         },
       ]);
@@ -603,6 +605,20 @@ export function TestChatPage() {
                           }}
                         />
                       </Tooltip>
+
+                      {/* Confidence (LLM self-rated 1–10) */}
+                      {msg.confidence != null && (
+                        <Tooltip title="How well the retrieved context supports this answer (LLM-rated 1–10)">
+                          <Tag
+                            data-testid="confidence-tag"
+                            color={
+                              msg.confidence >= 7 ? 'green' : msg.confidence >= 4 ? 'gold' : 'red'
+                            }
+                          >
+                            Confidence: {msg.confidence}/10
+                          </Tag>
+                        </Tooltip>
+                      )}
 
                       {/* Timing tags */}
                       {msg.timing && (
