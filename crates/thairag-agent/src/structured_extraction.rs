@@ -232,6 +232,7 @@ mod tests {
                 index: i + 1,
                 content: c.to_string(),
                 relevance_score: 0.8,
+                vector_score: None,
                 source_doc_id: DocId::new(),
                 source_chunk_id: ChunkId::new(),
                 source_doc_title: None,

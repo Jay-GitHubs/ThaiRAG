@@ -642,6 +642,15 @@ export function TestChatPage() {
                         </Tooltip>
                       )}
 
+                      {/* No-answer state: retrieval found nothing relevant, so
+                          this is a refusal, not a scored answer — a neutral
+                          marker rather than a misleading 1–10 number. */}
+                      {msg.confidence == null && msg.confidenceSummary && (
+                        <Tooltip title={msg.confidenceSummary}>
+                          <Tag data-testid="no-answer-tag">No answer</Tag>
+                        </Tooltip>
+                      )}
+
                       {/* Timing tags */}
                       {msg.timing && (
                         <>

@@ -102,6 +102,7 @@ pub fn has_client_supplied_context(messages: &[ChatMessage]) -> bool {
 pub(crate) fn insufficient_context_message(
     context: &CuratedContext,
     has_external_context: bool,
+    min_vector_relevance: f32,
 ) -> Option<String> {
     // When the client supplied its own context (e.g. an Open WebUI file
     // upload injects the retrieved file text as a system message), an empty
@@ -139,6 +140,40 @@ pub(crate) fn insufficient_context_message(
              Could you rephrase your query or provide more details?"
                 .to_string(),
         );
+    }
+
+    // Absolute dense-relevance gate. The `best_score` check above is dead without
+    // a reranker: RRF normalization scales the top `relevance_score` to 1.0. The
+    // dense cosine is preserved separately as an absolute signal — if even the
+    // best chunk's cosine is below the floor, retrieval surfaced nothing
+    // semantically relevant (e.g. an out-of-domain question), so refuse rather
+    // than answer from junk. Skipped when no chunk carries a cosine (lexical or
+    // image-only retrieval) or the floor is disabled (0.0).
+    let best_vector = context
+        .chunks
+        .iter()
+        .filter_map(|c| c.vector_score)
+        .fold(f32::MIN, f32::max);
+    if best_vector > f32::MIN {
+        // One line per request: the operator calibrates `min_vector_relevance`
+        // from these observed values (genuine hits sit well above the floor).
+        info!(
+            retrieval_vector_score = best_vector,
+            threshold = min_vector_relevance,
+            "Pipeline: best dense cosine for retrieval"
+        );
+        if min_vector_relevance > 0.0 && best_vector < min_vector_relevance {
+            info!(
+                retrieval_vector_score = best_vector,
+                threshold = min_vector_relevance,
+                "Pipeline: best chunk below vector-relevance floor, returning insufficient-info response"
+            );
+            return Some(
+                "I found some documents but they don't appear to be relevant to your question. \
+                 Could you rephrase your query or provide more details?"
+                    .to_string(),
+            );
+        }
     }
 
     None
@@ -1106,7 +1141,8 @@ impl ChatPipeline {
                 // ── Layer-1 context guard (parity with the streaming path):
                 // refuse on empty/irrelevant retrieval instead of answering
                 // from general knowledge. ──
-                if let Some(msg) = self.context_insufficient_message(&context, has_external_context)
+                if let Some(msg) =
+                    self.context_insufficient_message(&context, has_external_context, &metadata)
                 {
                     return Ok(LlmResponse {
                         content: msg,
@@ -1654,7 +1690,9 @@ impl ChatPipeline {
         // their chance — if there is still nothing relevant and the client
         // supplied no context of its own, refuse instead of letting the
         // generator answer from general knowledge. ──
-        if let Some(msg) = self.context_insufficient_message(&context, has_external_context) {
+        if let Some(msg) =
+            self.context_insufficient_message(&context, has_external_context, metadata)
+        {
             return Ok(LlmResponse {
                 content: msg,
                 usage: LlmUsage::default(),
@@ -1872,6 +1910,7 @@ impl ChatPipeline {
                         metadata: None,
                     },
                     score: c.relevance_score,
+                    vector_score: c.vector_score,
                 })
                 .collect();
             alt_results.extend(prev_results);
@@ -2160,7 +2199,7 @@ impl ChatPipeline {
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
                 if let Some(resp) =
-                    self.context_insufficient_response(&context, has_external_context)
+                    self.context_insufficient_response(&context, has_external_context, &metadata)
                 {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
@@ -2288,7 +2327,7 @@ impl ChatPipeline {
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
                 if let Some(resp) =
-                    self.context_insufficient_response(&context, has_external_context)
+                    self.context_insufficient_response(&context, has_external_context, &metadata)
                 {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
@@ -2399,21 +2438,42 @@ impl ChatPipeline {
 
     /// Layer 1: Pre-stream context guard.
     /// See [`insufficient_context_message`] — method wrapper for call-site
-    /// symmetry with the other pipeline stages.
+    /// symmetry with the other pipeline stages. When the guard fires it marks
+    /// the turn as a "no answer" state in `metadata` — a `confidence_summary`
+    /// with NO numeric `confidence` — so the UI shows a neutral "No answer"
+    /// indicator instead of forcing a refusal onto the 1–10 answer-confidence
+    /// scale (a refusal isn't an answer to be scored: a low score reads as a bad
+    /// answer, a high score as a good one — both mislead). No citations are
+    /// recorded either: a refusal has nothing to cite.
     fn context_insufficient_message(
         &self,
         context: &CuratedContext,
         has_external_context: bool,
+        metadata: &Option<MetadataCell>,
     ) -> Option<String> {
-        insufficient_context_message(context, has_external_context)
+        let msg = insufficient_context_message(
+            context,
+            has_external_context,
+            self.config.min_vector_relevance,
+        )?;
+        if self.config.confidence_scoring_enabled {
+            Self::update_metadata(metadata, |m| {
+                m.confidence = None;
+                m.confidence_summary =
+                    Some("No relevant sources were found to answer this question".to_string());
+                m.confidence_factors = Vec::new();
+            });
+        }
+        Some(msg)
     }
 
     fn context_insufficient_response(
         &self,
         context: &CuratedContext,
         has_external_context: bool,
+        metadata: &Option<MetadataCell>,
     ) -> Option<LlmStreamResponse> {
-        self.context_insufficient_message(context, has_external_context)
+        self.context_insufficient_message(context, has_external_context, metadata)
             .map(|msg| LlmStreamResponse {
                 stream: Box::pin(tokio_stream::once(Ok(msg))),
                 usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -3053,6 +3113,7 @@ impl ChatPipeline {
                     index: enhanced.chunks.len() + 1,
                     content: distilled,
                     relevance_score: 0.5,
+                    vector_score: None,
                     source_doc_id: Default::default(),
                     source_chunk_id: Default::default(),
                     source_doc_title: Some("Web Search".to_string()),
@@ -3170,13 +3231,22 @@ mod tests {
     use thairag_core::types::{ChunkId, DocId};
 
     fn ctx(scores: &[f32]) -> CuratedContext {
+        ctx_vec(scores, &[])
+    }
+
+    /// Build a context with per-chunk `relevance_score` and optional matching
+    /// `vector_score` (cosine). When `cosines` is shorter than `scores`, the
+    /// remaining chunks carry no cosine (lexical-only).
+    fn ctx_vec(scores: &[f32], cosines: &[f32]) -> CuratedContext {
         CuratedContext {
             chunks: scores
                 .iter()
-                .map(|&s| CuratedChunk {
+                .enumerate()
+                .map(|(i, &s)| CuratedChunk {
                     index: 0,
                     content: "c".into(),
                     relevance_score: s,
+                    vector_score: cosines.get(i).copied(),
                     source_doc_id: DocId::new(),
                     source_chunk_id: ChunkId::new(),
                     source_doc_title: None,
@@ -3190,15 +3260,37 @@ mod tests {
 
     #[test]
     fn empty_context_refuses_unless_client_supplied_context() {
-        assert!(insufficient_context_message(&ctx(&[]), false).is_some());
+        assert!(insufficient_context_message(&ctx(&[]), false, 0.25).is_some());
         // OWUI-style injected file context suppresses the short-circuit.
-        assert!(insufficient_context_message(&ctx(&[]), true).is_none());
+        assert!(insufficient_context_message(&ctx(&[]), true, 0.25).is_none());
+    }
+
+    #[test]
+    fn low_vector_cosine_refuses_even_when_relevance_is_normalized_to_one() {
+        // The post-RRF case with no reranker: relevance_score is 1.0 (top hit
+        // normalized) but the absolute cosine is junk → must still refuse.
+        assert!(
+            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.12, 0.08]), false, 0.25)
+                .is_some()
+        );
+        // A genuinely relevant top hit (cosine above the floor) is answered.
+        assert!(
+            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.55, 0.3]), false, 0.25)
+                .is_none()
+        );
+        // Floor of 0.0 disables the vector gate (back to relevance-only behavior).
+        assert!(
+            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.12, 0.08]), false, 0.0)
+                .is_none()
+        );
+        // No cosine at all (lexical/image-only) → vector gate is skipped.
+        assert!(insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[]), false, 0.25).is_none());
     }
 
     #[test]
     fn low_relevance_context_refuses() {
-        assert!(insufficient_context_message(&ctx(&[0.05, 0.1]), false).is_some());
-        assert!(insufficient_context_message(&ctx(&[0.6, 0.8]), false).is_none());
+        assert!(insufficient_context_message(&ctx(&[0.05, 0.1]), false, 0.25).is_some());
+        assert!(insufficient_context_message(&ctx(&[0.6, 0.8]), false, 0.25).is_none());
     }
     use thairag_core::types::ChatMessage;
 

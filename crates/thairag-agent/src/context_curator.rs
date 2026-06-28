@@ -14,6 +14,12 @@ pub struct CuratedChunk {
     pub index: usize,
     pub content: String,
     pub relevance_score: f32,
+    /// Absolute dense-vector cosine similarity (0..1) for this chunk, carried
+    /// from [`SearchResult::vector_score`]. Unlike `relevance_score` (which RRF
+    /// fusion normalizes so the top hit is always 1.0), this survives as an
+    /// absolute signal the no-context refusal gate can threshold on. `None` for
+    /// lexical/image-only matches.
+    pub vector_score: Option<f32>,
     pub source_doc_id: DocId,
     pub source_chunk_id: ChunkId,
     /// Document title (resolved after curation for richer LLM context).
@@ -342,6 +348,7 @@ fn build_curated_context(
             index: rank + 1,
             content: r.chunk.content.clone(),
             relevance_score: r.score,
+            vector_score: r.vector_score,
             source_doc_id: r.chunk.doc_id,
             source_chunk_id: r.chunk.chunk_id,
             source_doc_title: None,
@@ -390,6 +397,7 @@ mod tests {
                 }),
             },
             score: 0.9,
+            vector_score: None,
         }
     }
 

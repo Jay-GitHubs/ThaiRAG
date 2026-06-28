@@ -2,13 +2,16 @@ import { test, expect } from '@playwright/test';
 import { login, navigateTo } from './helpers';
 
 /**
- * Deterministic confidence scoring + refusal-gated citations in the admin Test
- * Chat. Live-stack gated (KMs workspace). A no-info/refusal answer scores LOW
- * and shows no source chips; a grounded answer scores higher and cites its
- * source. The confidence tag also exposes an explainable factor breakdown on
- * hover (the "show how it scored" feature).
+ * No-context refusal + deterministic confidence in the admin Test Chat.
+ * Live-stack gated (KMs workspace).
+ *
+ * - An out-of-domain query retrieves nothing semantically relevant (dense cosine
+ *   below the floor), so the pipeline refuses: a neutral "No answer" marker (NO
+ *   1–10 number — a refusal isn't an answer to score) and no source chips.
+ * - A grounded query answers with a numeric confidence, cites its source, and
+ *   exposes the factor breakdown on hover.
  */
-test('refusal vs grounded: confidence + citation gating', async ({ page }) => {
+test('out-of-domain refuses with a No-answer marker; grounded scores + cites', async ({ page }) => {
   test.setTimeout(420_000);
   await login(page);
   await navigateTo(page, 'Test Chat');
@@ -19,28 +22,28 @@ test('refusal vs grounded: confidence + citation gating', async ({ page }) => {
   await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
   await page.getByTitle('KMs').click();
 
-  const ask = async (q: string, expectN: number) => {
+  const send = async (q: string) => {
     await page.getByPlaceholder('Ask a question').fill(q);
     await page.getByRole('button', { name: 'Send' }).click();
-    await expect(page.getByTestId('confidence-tag')).toHaveCount(expectN, { timeout: 200_000 });
   };
   const num = (s: string) => Number(s.match(/(\d+)\s*\/\s*10/)?.[1] ?? '0');
 
-  // Refusal: no source chips, low confidence.
-  await ask('วิธีเข้าสู่ระบบ ของแอป Micro Pay ทำอย่างไร', 1);
+  // Out-of-domain (Thai cooking, absent from an SME/sales KB) → refusal:
+  // a "No answer" marker, no numeric confidence, no citations.
+  await send('วิธีทำต้มยำกุ้งที่อร่อยต้องทำอย่างไร');
+  await expect(page.getByTestId('no-answer-tag')).toHaveCount(1, { timeout: 200_000 });
+  expect(await page.getByTestId('confidence-tag').count()).toBe(0);
   expect(await page.getByTestId('source-chip').count()).toBe(0);
-  const refusalConf = num(await page.getByTestId('confidence-tag').nth(0).innerText());
 
-  // Grounded: cites its source, higher confidence than the refusal.
-  await ask('What were the Q1 and Q2 sales for the North and South regions?', 2);
+  // Grounded → numeric confidence above the floor + cited source.
+  await send('What were the Q1 and Q2 sales for the North and South regions?');
+  await expect(page.getByTestId('confidence-tag')).toHaveCount(1, { timeout: 200_000 });
   expect(await page.getByTestId('source-chip').count()).toBeGreaterThan(0);
-  const relConf = num(await page.getByTestId('confidence-tag').nth(1).innerText());
+  const relConf = num(await page.getByTestId('confidence-tag').innerText());
+  expect(relConf).toBeGreaterThanOrEqual(4);
 
-  expect(refusalConf).toBeLessThan(relConf);
-  expect(refusalConf).toBeLessThanOrEqual(4);
-
-  // Explainable breakdown: hovering the grounded answer's tag shows the factors.
-  await page.getByTestId('confidence-tag').nth(1).hover();
+  // Explainable breakdown: hovering the grounded score shows the factors.
+  await page.getByTestId('confidence-tag').hover();
   await expect(page.getByText('Citation coverage', { exact: false })).toBeVisible({
     timeout: 10_000,
   });

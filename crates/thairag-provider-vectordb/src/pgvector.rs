@@ -194,6 +194,7 @@ impl VectorStore for PgvectorStore {
                             metadata: None,
                         },
                         score: score as f32,
+                        vector_score: None,
                     })
                 })
                 .collect())
@@ -220,6 +221,7 @@ impl VectorStore for PgvectorStore {
                             metadata: None,
                         },
                         score: score as f32,
+                        vector_score: None,
                     })
                 })
                 .collect())
