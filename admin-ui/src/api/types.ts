@@ -1079,8 +1079,18 @@ export interface TestQueryResponse {
   provider_info: TestQueryProviderInfo;
   pipeline_stages: PipelineStage[];
   citations?: Citation[];
-  /** LLM self-rated confidence (1–10) that the context supports the answer. */
+  /** Deterministic answer-grounding confidence (1–10). */
   confidence?: number;
+  /** One-line rationale for `confidence`. */
+  confidence_summary?: string;
+  /** Per-factor breakdown behind `confidence`. */
+  confidence_factors?: ConfidenceFactor[];
+}
+
+/** One named contributor to the deterministic confidence score. */
+export interface ConfidenceFactor {
+  label: string;
+  detail: string;
 }
 
 // ── Usage Stats ────────────────────────────────────────────────────
