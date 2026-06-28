@@ -18,7 +18,7 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 8. [Chat Completions](#8-chat-completions)
 9. [RAG End-to-End](#9-rag-end-to-end)
 10. [Rate Limiting](#10-rate-limiting)
-11. [Open WebUI Integration](#11-open-webui-integration) — includes OIDC SSO option
+11. [OpenAI-Compatible Client Integration](#11-openai-compatible-client-integration) — model listing, streaming, RAG over `/v1`
 12. [Error Handling](#12-error-handling)
 13. [Observability](#13-observability)
 14. [Admin UI](#14-admin-ui) — includes Settings page, IdP management, user enhancements, role-based sidebar
@@ -26,7 +26,7 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 16. [OWASP LLM Top 10 Security](#16-owasp-llm-top-10-security) — prompt injection defense, error sanitization, input validation, CSRF, audit log
 17. [Smoke Testing](#17-smoke-testing) — end-to-end smoke test script
 18. [Context Compaction & Personal Memory](#18-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
-19. [Open WebUI Permission Enforcement](#19-open-webui-permission-enforcement) — user identity passthrough, per-user scoping, revocation, SSE keepalive
+19. [Per-User Permission Enforcement (chat-ui)](#19-per-user-permission-enforcement-chat-ui) — per-user JWT scoping, revocation, SSE keepalive
 20. [Live Source Retrieval](#20-live-source-retrieval) — MCP connector fallback, timeout handling, feature toggle
 21. [Search Analytics](#21-search-analytics) — event recording, popular queries, zero-result queries, summary stats, date filtering
 22. [Document Lineage](#22-document-lineage) — attribution chain, chunks used in responses, lineage record creation
@@ -1882,28 +1882,27 @@ done
 
 ---
 
-## 11. Open WebUI Integration
+## 11. OpenAI-Compatible Client Integration
 
 ### Purpose
 
-Verify that Open WebUI can connect to ThaiRAG as an OpenAI-compatible backend and that chat, streaming, and model listing work end-to-end through the UI.
+Verify that any OpenAI-compatible client can connect to ThaiRAG's `/v1` surface as a drop-in backend and that model listing, chat, streaming, and RAG work end-to-end. (The first-party end-user UI is `chat-ui`, served on port 8082 over the `/api/chat` surface; it has its own live-stack e2e suite under `chat-ui/e2e/`.)
 
 ### Prerequisites
 
 - ThaiRAG running and healthy (`curl http://localhost:8080/health`)
-- Open WebUI running (existing instance or new via Docker)
-- Documents already ingested (from Section 8) to test RAG through the UI
+- Documents already ingested (from Section 8) to test RAG
+- An OpenAI-compatible client or just `curl` (the steps below use `curl`)
 
-### Important: Auth and Open WebUI
+### Important: Auth and the `/v1` surface
 
-Open WebUI sends the configured API key as `Authorization: Bearer <key>` on every request to the backend. When ThaiRAG has auth **enabled**, it validates this header as a JWT token — so a dummy string like `"sk-dummy"` will be rejected with `401 Missing authorization header`.
+OpenAI-compatible clients send their key as `Authorization: Bearer <key>` on every request. When ThaiRAG has auth **enabled**, it validates this as a JWT token (or a configured static API key) — so a dummy string like `"sk-dummy"` will be rejected with `401 Missing authorization header`.
 
-**Recommended approach for Open WebUI testing:**
-
-| Scenario | ThaiRAG auth | Open WebUI API Key | Notes |
+| Scenario | ThaiRAG auth | Client key | Notes |
 |---|---|---|---|
-| Simplest setup | Disabled | Any non-empty string (e.g., `sk-dummy`) | Best for Open WebUI integration testing |
-| Auth-enabled | Enabled | A valid JWT from `/api/auth/login` | Token expires after 24h — impractical for long-running setups |
+| Simplest setup | Disabled | Any non-empty string (e.g., `sk-dummy`) | Best for quick integration testing |
+| Static API key | Enabled | A `THAIRAG_API_KEY` value | Recommended for long-lived integrations (see Integration Guide) |
+| JWT | Enabled | A valid JWT from `/api/auth/login` | Token expires after 24h |
 | OIDC SSO | Enabled | N/A (users authenticate via IdP) | Use `docker-compose.test-idp.yml` — see [OIDC_TESTING.md](OIDC_TESTING.md) |
 
 For this section, **disable ThaiRAG auth** to focus on verifying the OpenAI-compatible integration:
@@ -1920,113 +1919,59 @@ THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11434 \
   docker compose up -d thairag
 ```
 
-> **Note:** Auth-specific tests (register, login, JWT, permissions) are covered separately in Sections 3 and 5 via curl. This section focuses on the Open WebUI user experience.
+> **Note:** Auth-specific tests (register, login, JWT, permissions) are covered separately in Sections 3 and 5.
 
 ### Steps
 
-#### 10.1 Configure Open WebUI to connect to ThaiRAG
+#### 11.1 Verify model discovery
 
-If you already have Open WebUI running:
-
-1. Open Open WebUI in a browser (typically `http://localhost:3000` or `http://localhost:8080` depending on your setup)
-2. Go to **Admin Panel** (click your avatar > Admin Panel)
-3. Navigate to **Settings > Connections**
-4. Under **OpenAI API**, add a new connection:
-   - **URL:** `http://host.docker.internal:8080/v1` (if Open WebUI is in Docker and ThaiRAG is on host) or `http://thairag:8080/v1` (if both are in the same Docker compose network) or `http://localhost:8080/v1` (if both run on the host)
-   - **API Key:** `sk-dummy` (any non-empty string when auth is disabled)
-5. Click the refresh/verify button next to the URL
-
-**Pass criteria:** The connection verification succeeds (green checkmark or no error).
-
-**If you don't have Open WebUI yet**, start it with Docker:
 ```bash
-docker run -d -p 3000:8080 \
-  -e OPENAI_API_BASE_URLS="http://host.docker.internal:8080/v1" \
-  -e OPENAI_API_KEYS="sk-dummy" \
-  -v open-webui-data:/app/backend/data \
-  --name open-webui \
-  ghcr.io/open-webui/open-webui:main
+curl -s http://localhost:8080/v1/models | jq .
 ```
 
-#### 10.2 Verify model discovery
+**Pass criteria:** The model **ThaiRAG-1.0** appears in the returned `data` list. This is the call an OpenAI-compatible client makes to populate its model picker.
 
-1. Go to the chat page in Open WebUI
-2. Click the model selector dropdown at the top
+#### 11.2 Basic streaming chat
 
-**Pass criteria:** The model **ThaiRAG-1.0** appears in the dropdown list. This confirms Open WebUI successfully called `GET /v1/models` on ThaiRAG.
-
-#### 10.3 Basic chat
-
-1. Select **ThaiRAG-1.0** as the model
-2. Type a message (e.g., "Hello, what can you help me with?")
-3. Send the message
+```bash
+curl -N http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","stream":true,"messages":[{"role":"user","content":"Hello, what can you help me with?"}]}'
+```
 
 **Pass criteria:**
-- The assistant response streams in token-by-token (not all at once)
-- The response completes with coherent text
-- No error banners or network errors in the UI
+- The response streams as SSE `data:` chunks (token-by-token), not one block
+- The stream ends with `data: [DONE]`
+- The concatenated content is coherent text
 
-#### 10.4 RAG verification through Open WebUI
+#### 11.3 RAG verification
 
 > **Prerequisite:** Documents must already be ingested via the API (see [Section 8](#8-rag-end-to-end)).
 
-1. Select **ThaiRAG-1.0**
-2. Ask a question about ingested content (e.g., "What is the pricing for Product X?")
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","messages":[{"role":"user","content":"What is the pricing for Product X?"}]}' | jq -r '.choices[0].message.content'
+```
 
-**Pass criteria:** The response contains information from the ingested documents (e.g., "$499/month"), confirming the RAG pipeline works end-to-end through Open WebUI.
+**Pass criteria:** The response contains information from the ingested documents (e.g., "$499/month"), confirming the RAG pipeline works end-to-end over `/v1`.
 
-#### 10.5 Multi-turn conversation
+#### 11.4 Multi-turn conversation
 
-1. Send: "My name is Bob."
-2. Wait for the response
-3. Send: "What is my name?"
+Send a two-turn conversation in a single request to confirm context continuity:
 
-**Pass criteria:** The assistant remembers "Bob" from the previous turn, confirming session/context continuity.
+```bash
+curl -s http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"ThaiRAG-1.0","messages":[
+        {"role":"user","content":"My name is Bob."},
+        {"role":"assistant","content":"Nice to meet you, Bob."},
+        {"role":"user","content":"What is my name?"}]}' | jq -r '.choices[0].message.content'
+```
 
-#### 10.6 (Optional) Auth-enabled mode with JWT
+**Pass criteria:** The assistant answers "Bob", confirming multi-turn context is honored.
 
-> This test is optional since JWT tokens expire after 24 hours, making it impractical for production Open WebUI setups. A dedicated API key mechanism would be more suitable for long-lived integrations.
-
-1. Re-enable ThaiRAG auth:
-   ```bash
-   THAIRAG__AUTH__ENABLED=true \
-   THAIRAG__AUTH__JWT_SECRET=test-secret-key-123 \
-   THAIRAG__PROVIDERS__LLM__BASE_URL=http://host.docker.internal:11434 \
-     docker compose up -d thairag
-   ```
-2. Obtain a JWT token:
-   ```bash
-   TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email":"alice@example.com","password":"Secret123"}' | jq -r '.token')
-   echo $TOKEN
-   ```
-3. In Open WebUI, go to **Admin Panel > Settings > Connections**
-4. Update the API Key for the ThaiRAG connection to the JWT token value
-5. Click verify, then try a chat
-
-**Pass criteria:** Chat works with the JWT token. Model appears and responses stream correctly.
-
-**After this test**, re-enable or disable auth as needed for remaining sections.
-
-#### 10.7 (Optional) OIDC SSO with Open WebUI
-
-> This test uses the full test IdP stack with Keycloak. See [OIDC_TESTING.md](OIDC_TESTING.md) for complete setup.
-
-1. Start the test IdP stack:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up -d
-   ```
-2. Configure Keycloak with the `thairag` realm, clients, and test user (see OIDC testing guide)
-3. Open http://localhost:3000 (Open WebUI)
-4. Click the **"Keycloak"** SSO button on the login page
-5. Authenticate with the test user at Keycloak
-
-**Pass criteria:**
-- Redirected to Keycloak login page
-- After authentication, redirected back to Open WebUI and logged in
-- If you also logged into the ThaiRAG Admin UI via Keycloak in the same browser, SSO session is shared (no second login prompt)
-- Chat with ThaiRAG-1.0 works through Open WebUI
+> **OIDC SSO:** end-user SSO login is handled by chat-ui and the Admin UI via Keycloak — see [OIDC_TESTING.md](OIDC_TESTING.md).
 
 ---
 
@@ -3126,71 +3071,71 @@ cargo test -p thairag-provider-vectordb -- personal_memory
 
 ---
 
-## 19. Open WebUI Permission Enforcement
+## 19. Per-User Permission Enforcement (chat-ui)
 
 ### Purpose
 
-Verify that per-user workspace permissions are enforced when users access ThaiRAG through Open WebUI, even though Open WebUI uses a shared API key.
+Verify that per-user workspace permissions are enforced for end users in the first-party **chat-ui** (port 8082), where each user signs in with their own JWT (native login or OIDC SSO) and retrieval is scoped to that user's permissions.
 
 ### Prerequisites
 
 - Full stack running: `docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -d`
-- Open WebUI at `http://localhost:3000` with `ENABLE_FORWARD_USER_INFO_HEADERS: "true"`
+- chat-ui at `http://localhost:8082`
 - At least one workspace with uploaded documents
 - Two user accounts with different workspace permissions
 
-### 19.1 Verify User Identity Forwarding
+### 19.1 Verify User Identity
 
-1. Log in to Open WebUI via Keycloak SSO as **User A**
-2. Send a chat message in Open WebUI
+1. Log in to chat-ui as **User A** (native login or Keycloak SSO)
+2. Send a chat message
 3. Check ThaiRAG logs for the resolved identity:
 
 ```bash
 docker compose logs thairag 2>&1 | grep -i "user.*email\|resolved.*user\|auto.*provision" | tail -5
 ```
 
-**Pass criteria:** Logs show that ThaiRAG resolved User A's email from the `X-OpenWebUI-User-Email` header, not the generic `api-key` identity.
+**Pass criteria:** Logs show that ThaiRAG resolved User A's identity from their JWT (`claims.sub`), not a generic shared identity.
 
 ### 19.2 Test Per-User Permission Scoping
 
 1. As **admin**, grant User A access to workspace "BA101" via Admin UI → Permissions
 2. Grant User B access to workspace "HR-Docs" only (no access to BA101)
-3. In Open WebUI, log in as **User A** and ask about BA101 content
+3. In chat-ui, log in as **User A** and ask about BA101 content
 4. Log out, log in as **User B** and ask the same question about BA101
 
 **Pass criteria:**
 - User A gets a relevant answer with BA101 document content
 - User B gets a response indicating no relevant information found (permission denied)
 
-### 19.3 Test Auto-Provisioning
+### 19.3 Test Auto-Provisioning (OIDC SSO)
 
 1. Create a new user in Keycloak that does not exist in ThaiRAG
-2. Log in to Open WebUI with this new user
+2. Log in to chat-ui with this new user via Keycloak SSO
 3. Send a chat message
 4. Check Admin UI → Users page
 
 **Pass criteria:**
 - The new user appears in ThaiRAG's user list with role `viewer`
-- The user was auto-created from the `X-OpenWebUI-User-Email` header
+- The user was auto-created on first OIDC login
 - The user has no workspace permissions (cannot access any knowledge base content)
 
 ### 19.4 Test Permission Revocation
 
 1. As admin, grant User A access to workspace "BA101"
-2. In Open WebUI as User A, ask about BA101 → should get an answer
+2. In chat-ui as User A, ask about BA101 → should get an answer
 3. As admin, **revoke** User A's access to BA101
-4. In Open WebUI as User A, **start a new chat** and ask the same question
+4. In chat-ui as User A, **start a new chat** and ask the same question
 
 **Pass criteria:**
 - After revocation, the new chat does NOT return BA101 content
 - ThaiRAG responds with "no relevant information" or similar
 
-> **Note:** The old chat window in Open WebUI may still display previous messages (client-side cache). This is expected — only server-side data is cleared on revocation. Always test with a **new chat session**.
+> **Note:** An already-open conversation may still display previous messages (client-side state). This is expected — only server-side data is cleared on revocation. Always test with a **new chat session**.
 
 ### 19.5 Test Session Clearing on Revocation
 
 1. Grant User A access to workspace "BA101"
-2. In Open WebUI as User A, have a multi-turn conversation about BA101 (3+ messages)
+2. In chat-ui as User A, have a multi-turn conversation about BA101 (3+ messages)
 3. As admin, revoke User A's BA101 access
 4. Check ThaiRAG logs:
 
@@ -3205,7 +3150,7 @@ docker compose logs thairag 2>&1 | grep -i "clear.*session\|session.*clear\|revo
 When the chat pipeline is enabled with multiple agents, processing can take 60+ seconds. The SSE keepalive prevents client disconnection.
 
 1. Enable the full pipeline in Admin UI → Settings → Chat & Response Pipeline (all agents ON)
-2. In Open WebUI, send a message that triggers the full pipeline
+2. In chat-ui, send a message that triggers the full pipeline
 3. Observe that the response arrives even if processing takes longer than 30 seconds
 
 **Pass criteria:**
@@ -3213,14 +3158,9 @@ When the chat pipeline is enabled with multiple agents, processing can take 60+ 
 - The response streams normally after the pipeline finishes processing
 - If using Chrome DevTools Network tab, you should see SSE `:ping` comments during the waiting period
 
-### 19.7 Test Without Identity Forwarding (Negative Test)
+### 19.7 Note: API-key access is not per-user
 
-1. Stop the stack and set `ENABLE_FORWARD_USER_INFO_HEADERS: "false"` in Open WebUI
-2. Restart the stack
-3. Log in to Open WebUI and send a message
-4. The user should have unrestricted access to all workspaces
-
-**Pass criteria:** All workspace content is accessible regardless of user permissions — confirming that without the header forwarding, the shared API key grants full access.
+Requests authenticated with a static API key (the OpenAI-compatible `/v1` path) carry the key's configured scope — unrestricted by default — and are **not** scoped per end user. Per-user enforcement is a property of chat-ui's per-user JWT. For multi-tenant API access, issue a separate API key per tenant and scope it accordingly (see the [Integration Guide](INTEGRATION_GUIDE.md)).
 
 ## 20. Live Source Retrieval
 

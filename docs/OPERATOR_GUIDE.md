@@ -5,7 +5,7 @@ How to run ThaiRAG in production: how to size and lay out the infrastructure, ho
 This is the missing middle between:
 
 - **DEPLOYMENT_GUIDE.md** — *how to install*. Compose files, env vars, config keys.
-- **INTEGRATION_GUIDE.md** — *how external clients talk to the server*. Open WebUI, SSO, API clients.
+- **INTEGRATION_GUIDE.md** — *how external clients talk to the server*. OpenAI-compatible clients, SSO, API clients.
 - **ARCHITECTURE.md** — *how the code is structured*. Crate layering, data flow.
 
 If you're reading this, you've installed the system and now you have to *run* it.

@@ -88,7 +88,7 @@ Default proposal: `streaming_window_chars = 256`.
 
 ## 7. SSE protocol — decided: Option α (inline)
 
-When a redaction fires mid-stream, the matched characters are replaced with `policy.redaction_token` (default `[REDACTED]`) inline in the SSE text stream. No new event types are added. Every existing client — Open WebUI, the admin UI, custom integrations — renders the marker as part of the response text with zero integration work.
+When a redaction fires mid-stream, the matched characters are replaced with `policy.redaction_token` (default `[REDACTED]`) inline in the SSE text stream. No new event types are added. Every existing client — chat-ui, the admin UI, custom integrations — renders the marker as part of the response text with zero integration work.
 
 Option β (separate `event: redacted` channel with the matched chars silently dropped) was considered. It produces cleaner-looking output and lets the admin UI render a chip, but every client would need to be updated or the redaction becomes invisible. Logged as a future enhancement; not in scope for PR-1.
 
