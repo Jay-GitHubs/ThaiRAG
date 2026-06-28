@@ -9,9 +9,13 @@
 use std::time::Duration;
 
 /// Number of retries after the initial attempt (total tries = `1 + MAX_RETRIES`).
-pub const MAX_RETRIES: u32 = 3;
-/// Base backoff; attempt `n` (1-based) waits `BASE_DELAY_MS << (n-1)`.
+/// Sized to ride out a flaky gateway that 5xx-flaps for several seconds (a 502 on
+/// the query-embedding call → empty retrieval → no answer).
+pub const MAX_RETRIES: u32 = 5;
+/// Base backoff; attempt `n` (1-based) waits `min(BASE_DELAY_MS << (n-1), MAX_DELAY_MS)`.
 const BASE_DELAY_MS: u64 = 400;
+/// Cap on a single backoff so the later attempts don't add excessive latency.
+const MAX_DELAY_MS: u64 = 3000;
 
 /// Whether an HTTP status is a transient upstream failure worth retrying.
 pub fn is_retryable_status(status: reqwest::StatusCode) -> bool {
@@ -23,9 +27,10 @@ pub fn is_retryable_error(err: &reqwest::Error) -> bool {
     err.is_timeout() || err.is_connect() || err.is_request()
 }
 
-/// Backoff delay before retry attempt `attempt` (1-based).
+/// Backoff delay before retry attempt `attempt` (1-based), capped at `MAX_DELAY_MS`.
 fn backoff_delay(attempt: u32) -> Duration {
-    Duration::from_millis(BASE_DELAY_MS << (attempt - 1))
+    let raw = BASE_DELAY_MS.checked_shl(attempt - 1).unwrap_or(u64::MAX);
+    Duration::from_millis(raw.min(MAX_DELAY_MS))
 }
 
 /// Send a request, retrying transient transport errors and retryable HTTP
@@ -96,9 +101,11 @@ mod tests {
     }
 
     #[test]
-    fn backoff_is_exponential() {
+    fn backoff_is_exponential_then_capped() {
         assert_eq!(backoff_delay(1), Duration::from_millis(400));
         assert_eq!(backoff_delay(2), Duration::from_millis(800));
         assert_eq!(backoff_delay(3), Duration::from_millis(1600));
+        assert_eq!(backoff_delay(4), Duration::from_millis(3000));
+        assert_eq!(backoff_delay(5), Duration::from_millis(3000));
     }
 }
