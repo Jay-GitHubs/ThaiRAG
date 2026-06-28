@@ -9,7 +9,7 @@ import { login, navigateTo } from './helpers';
  *   below the floor), so the pipeline refuses: a neutral "No answer" marker (NO
  *   1–10 number — a refusal isn't an answer to score) and no source chips.
  * - A grounded query answers with a numeric confidence, cites its source, and
- *   exposes the factor breakdown on hover.
+ *   exposes the factor breakdown on click.
  */
 test('out-of-domain refuses with a No-answer marker; grounded scores + cites', async ({ page }) => {
   test.setTimeout(420_000);
@@ -42,8 +42,8 @@ test('out-of-domain refuses with a No-answer marker; grounded scores + cites', a
   const relConf = num(await page.getByTestId('confidence-tag').innerText());
   expect(relConf).toBeGreaterThanOrEqual(4);
 
-  // Explainable breakdown: hovering the grounded score shows the factors.
-  await page.getByTestId('confidence-tag').hover();
+  // Explainable breakdown opens on click (not hover, which blocked source clicks).
+  await page.getByTestId('confidence-tag').click();
   await expect(page.getByText('Citation coverage', { exact: false })).toBeVisible({
     timeout: 10_000,
   });

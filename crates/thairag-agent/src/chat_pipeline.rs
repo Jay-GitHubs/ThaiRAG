@@ -552,7 +552,9 @@ impl ChatPipeline {
         }
         if let Some(assessment) = crate::confidence::assess(answer, context) {
             Self::update_metadata(metadata, |m| {
-                m.confidence = Some(assessment.score);
+                // `score` is None for a refusal → the UI shows "No answer" (no
+                // number), consistent with the no-context gate's refusal state.
+                m.confidence = assessment.score;
                 m.confidence_summary = Some(assessment.summary);
                 m.confidence_factors = assessment.factors;
             });
@@ -2519,7 +2521,7 @@ impl ChatPipeline {
             // Confidence — deterministic, computed once the answer is complete.
             if conf_enabled && let Some(a) = crate::confidence::assess(&collected, &context) {
                 Self::update_metadata(&metadata, |m| {
-                    m.confidence = Some(a.score);
+                    m.confidence = a.score; // None for a refusal → "No answer"
                     m.confidence_summary = Some(a.summary);
                     m.confidence_factors = a.factors;
                 });

@@ -27,10 +27,12 @@ use crate::citation_parser::{is_refusal, parse_citations};
 use crate::context_curator::CuratedContext;
 
 /// The deterministic confidence verdict: a 1–10 score, a one-line rationale,
-/// and the per-factor breakdown behind it.
+/// and the per-factor breakdown behind it. `score` is `None` for a refusal —
+/// a non-answer isn't scored on the 1–10 scale; the UI shows a neutral "No
+/// answer" marker instead (matching the no-context gate's refusal state).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfidenceAssessment {
-    pub score: u8,
+    pub score: Option<u8>,
     pub summary: String,
     pub factors: Vec<ConfidenceFactor>,
 }
@@ -54,10 +56,11 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
         return None;
     }
 
-    // 1. Refusal: a correct "I couldn't find that" is a confident non-answer.
+    // 1. Refusal: a non-answer isn't scored — surface a "No answer" state (no
+    //    number), consistent with how the no-context gate marks a refusal.
     if is_refusal(answer) {
         return Some(ConfidenceAssessment {
-            score: 1,
+            score: None,
             summary: "The answer reports the information wasn't found in the sources".to_string(),
             factors: vec![ConfidenceFactor {
                 label: "No answer".to_string(),
@@ -134,7 +137,7 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
     let summary = confidence_summary(score, cited_claims, claims, distinct_sources, context);
 
     Some(ConfidenceAssessment {
-        score,
+        score: Some(score),
         summary,
         factors,
     })
@@ -201,13 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn refusal_scores_floor() {
+    fn refusal_is_unscored_no_answer() {
         let a = assess(
             "There is no information about that in the context.",
             &ctx(&[DocId::new()]),
         )
         .unwrap();
-        assert_eq!(a.score, 1);
+        // A refusal is a "No answer" state — no 1–10 number.
+        assert_eq!(a.score, None);
         assert_eq!(a.factors[0].label, "No answer");
     }
 
@@ -221,7 +225,7 @@ mod tests {
             &ctx(&[d1, d2]),
         )
         .unwrap();
-        assert!(a.score >= 9, "expected high, got {}", a.score);
+        assert!(a.score.unwrap() >= 9, "expected high, got {:?}", a.score);
         assert!(a.summary.contains("2 documents"));
     }
 
@@ -232,14 +236,14 @@ mod tests {
             &ctx(&[DocId::new(), DocId::new()]),
         )
         .unwrap();
-        assert_eq!(a.score, 3);
+        assert_eq!(a.score, Some(3));
         assert!(a.summary.contains("cites no sources"));
     }
 
     #[test]
     fn no_context_caps_low() {
         let a = assess("North Q1 was 100.", &CuratedContext::default()).unwrap();
-        assert!(a.score <= 2);
+        assert!(a.score.unwrap() <= 2);
     }
 
     #[test]
@@ -247,7 +251,8 @@ mod tests {
         let d1 = DocId::new();
         // Two claims, only one cited.
         let a = assess("North Q1 was 100 [1]. South Q2 was unknown.", &ctx(&[d1])).unwrap();
-        assert!(a.score >= 4 && a.score <= 7, "got {}", a.score);
+        let s = a.score.unwrap();
+        assert!((4..=7).contains(&s), "got {s}");
     }
 
     #[test]
