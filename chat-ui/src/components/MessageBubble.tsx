@@ -5,7 +5,7 @@ import rehypeHighlight from 'rehype-highlight';
 // The code surface (--code-bg) is a dark slate in every theme, so the dark
 // syntax palette reads well across all of them.
 import 'highlight.js/styles/github-dark.css';
-import { Button as AntButton, Image, Input, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
+import { Button as AntButton, Image, Input, Popover, Spin, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
   CheckOutlined,
   CopyOutlined,
@@ -115,6 +115,14 @@ function UserMessage({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   const begin = () => {
     setDraft(message.content);
@@ -176,6 +184,26 @@ function UserMessage({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Tooltip title={copied ? 'Copied' : 'Copy prompt'}>
+          {copied ? (
+            <CheckOutlined
+              data-testid="copy-prompt"
+              style={{ fontSize: 13, color: 'var(--celadon)', cursor: 'pointer' }}
+            />
+          ) : (
+            <CopyOutlined
+              data-testid="copy-prompt"
+              onClick={copy}
+              style={{
+                fontSize: 13,
+                color: hovered ? 'var(--celadon)' : 'var(--text-muted)',
+                cursor: 'pointer',
+                opacity: hovered ? 1 : 0.6,
+                transition: 'color 0.12s, opacity 0.12s',
+              }}
+            />
+          )}
+        </Tooltip>
         {editable && (
           <Tooltip title="Edit & resend">
             <EditOutlined
@@ -457,8 +485,14 @@ function AnswerActions({
       </Tooltip>
       {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
       {conf != null && (
-        <Tooltip
-          title={
+        // Click (not hover) to open the breakdown: a hover tooltip here popped
+        // open whenever the cursor passed over on its way to a citation,
+        // interrupting the click. Click-to-open is opt-in and stays out of the way.
+        <Popover
+          trigger="click"
+          placement="top"
+          title="Answer confidence"
+          content={
             <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 260 }}>
               {message.confidenceSummary && (
                 <div style={{ marginBottom: message.confidenceFactors?.length ? 6 : 0 }}>
@@ -478,12 +512,14 @@ function AnswerActions({
         >
           <span
             data-testid="confidence"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'help' }}
+            role="button"
+            tabIndex={0}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}
           >
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: confColor }} />
             Confidence {conf}/10
           </span>
-        </Tooltip>
+        </Popover>
       )}
       {/* No-answer state: retrieval found nothing relevant, so the turn is a
           refusal rather than a scored answer — show a neutral marker, not a

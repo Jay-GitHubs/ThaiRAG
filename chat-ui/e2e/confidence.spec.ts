@@ -43,9 +43,9 @@ test('grounded answer shows a confidence score with an explainable breakdown', a
   expect(score).toBeGreaterThanOrEqual(4);
   expect(score).toBeLessThanOrEqual(10);
 
-  // Explainable breakdown: hovering the score shows the factors behind it (the
-  // deterministic "show how" feature).
-  await page.getByTestId('confidence').hover();
+  // Explainable breakdown opens on CLICK (not hover, which interrupted clicking
+  // a citation). The factors show the deterministic "show how".
+  await page.getByTestId('confidence').click();
   await expect(page.getByText('Citation coverage', { exact: false })).toBeVisible({
     timeout: 10_000,
   });
