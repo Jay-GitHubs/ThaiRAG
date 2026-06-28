@@ -50,7 +50,7 @@ Attachments uploaded on turn 1 of a conversation remain available for follow-up 
 
 ### 3.2 Admin UI surface → **API + UI shipped together**
 
-PR-1 ships the backend; PR-2 ships a paperclip button on the Test Chat page plus a chip-style indicator showing which attachments are active in the current session. Both target the same release. External API clients (Open WebUI, custom integrations) can use the API the moment PR-1 lands; the UI is the canonical surface for super-admin and operator validation.
+PR-1 ships the backend; PR-2 ships a paperclip button on the Test Chat page plus a chip-style indicator showing which attachments are active in the current session. Both target the same release. External API clients (OpenAI-compatible clients, custom integrations) can use the API the moment PR-1 lands; the UI is the canonical surface for super-admin and operator validation.
 
 ### 3.3 Guardrails on attachment content → **yes, run input guardrails**
 
