@@ -270,7 +270,11 @@ impl VectorStore for QdrantVectorStore {
                     metadata: None,
                 };
 
-                Some(SearchResult { chunk, score })
+                Some(SearchResult {
+                    chunk,
+                    score,
+                    vector_score: None,
+                })
             })
             .collect();
 

@@ -237,6 +237,7 @@ impl VectorStore for ChromaDbVectorStore {
                         metadata: None,
                     },
                     score,
+                    vector_score: None,
                 });
             }
         }

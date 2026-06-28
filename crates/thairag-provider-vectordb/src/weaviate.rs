@@ -244,6 +244,7 @@ impl VectorStore for WeaviateVectorStore {
                         metadata: None,
                     },
                     score,
+                    vector_score: None,
                 })
             })
             .collect();

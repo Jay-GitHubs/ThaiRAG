@@ -3191,6 +3191,9 @@ where
         confidence_scoring_enabled: s("chat_pipeline.confidence_scoring_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.confidence_scoring_enabled),
+        min_vector_relevance: s("chat_pipeline.min_vector_relevance")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.min_vector_relevance),
         structured_extraction_enabled: s("chat_pipeline.structured_extraction_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.structured_extraction_enabled),

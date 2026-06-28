@@ -219,6 +219,7 @@ impl VectorStore for MilvusVectorStore {
                         metadata: None,
                     },
                     score,
+                    vector_score: None,
                 })
             })
             .collect();
