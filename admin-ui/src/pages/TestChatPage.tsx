@@ -12,6 +12,7 @@ import {
   Collapse,
   Empty,
   Tooltip,
+  Popover,
   Modal,
   message,
   theme,
@@ -610,10 +611,15 @@ export function TestChatPage() {
                         />
                       </Tooltip>
 
-                      {/* Confidence (deterministic answer-grounding 1–10) */}
+                      {/* Confidence (deterministic answer-grounding 1–10).
+                          Opens on CLICK, not hover — a hover popup got in the way
+                          of clicking a nearby source chip (parity with chat-ui). */}
                       {msg.confidence != null && (
-                        <Tooltip
-                          title={
+                        <Popover
+                          trigger="click"
+                          placement="top"
+                          title="Answer confidence"
+                          content={
                             <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 280 }}>
                               {msg.confidenceSummary && (
                                 <div style={{ marginBottom: msg.confidenceFactors?.length ? 6 : 0 }}>
@@ -633,13 +639,14 @@ export function TestChatPage() {
                         >
                           <Tag
                             data-testid="confidence-tag"
+                            style={{ cursor: 'pointer' }}
                             color={
                               msg.confidence >= 7 ? 'green' : msg.confidence >= 4 ? 'gold' : 'red'
                             }
                           >
                             Confidence: {msg.confidence}/10
                           </Tag>
-                        </Tooltip>
+                        </Popover>
                       )}
 
                       {/* No-answer state: retrieval found nothing relevant, so
