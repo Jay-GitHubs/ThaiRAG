@@ -46,9 +46,15 @@ pub struct TestQueryResponse {
     /// Per-claim source attributions parsed from the answer's `[N]` markers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub citations: Vec<thairag_core::types::Citation>,
-    /// LLM self-rated confidence (1–10) that the context supports the answer.
+    /// Deterministic answer-grounding confidence (1–10).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<u8>,
+    /// One-line rationale for `confidence` (shown in the UI tooltip).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_summary: Option<String>,
+    /// Per-factor breakdown behind `confidence`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub confidence_factors: Vec<thairag_core::types::ConfidenceFactor>,
 }
 
 #[derive(Serialize)]
@@ -524,6 +530,8 @@ pub async fn test_query(
         pipeline_stages,
         citations: metadata_cell.lock().unwrap().citations.clone(),
         confidence: metadata_cell.lock().unwrap().confidence,
+        confidence_summary: metadata_cell.lock().unwrap().confidence_summary.clone(),
+        confidence_factors: metadata_cell.lock().unwrap().confidence_factors.clone(),
     }))
 }
 
@@ -900,6 +908,8 @@ pub async fn test_query_stream(
 
                 let stream_citations = metadata_cell.lock().unwrap().citations.clone();
                 let stream_confidence = metadata_cell.lock().unwrap().confidence;
+                let stream_conf_summary = metadata_cell.lock().unwrap().confidence_summary.clone();
+                let stream_conf_factors = metadata_cell.lock().unwrap().confidence_factors.clone();
                 let response = TestQueryResponse {
                     response_id: stream_response_id,
                     query: query_text,
@@ -921,6 +931,8 @@ pub async fn test_query_stream(
                     pipeline_stages: vec![], // Stages were streamed in real-time
                     citations: stream_citations,
                     confidence: stream_confidence,
+                    confidence_summary: stream_conf_summary,
+                    confidence_factors: stream_conf_factors,
                 };
 
                 let data = serde_json::to_string(&response).unwrap();

@@ -16,7 +16,7 @@ import {
   LikeFilled,
   LikeOutlined,
 } from '@ant-design/icons';
-import type { Citation, ImageRef } from '../api/types';
+import type { Citation, ConfidenceFactor, ImageRef } from '../api/types';
 
 export interface UiMessage {
   id?: string;
@@ -34,8 +34,12 @@ export interface UiMessage {
   progress?: string;
   /** Token usage for the finished answer (surfaced under the message). */
   usage?: { prompt_tokens: number; completion_tokens: number };
-  /** LLM self-rated confidence 1–10 that the context supports the answer. */
+  /** Deterministic answer-grounding confidence, 1–10. */
   confidence?: number;
+  /** One-line rationale for `confidence` (shown in the tooltip). */
+  confidenceSummary?: string;
+  /** Per-factor breakdown behind `confidence` (shown in the tooltip). */
+  confidenceFactors?: ConfidenceFactor[];
   /** Wall-clock time from send to first/last token (ms), for the meta line. */
   elapsedMs?: number;
 }
@@ -453,10 +457,28 @@ function AnswerActions({
       </Tooltip>
       {onFeedback && <FeedbackBar message={message} onFeedback={onFeedback} />}
       {conf != null && (
-        <Tooltip title="How well the retrieved sources support this answer (LLM-rated)">
+        <Tooltip
+          title={
+            <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 260 }}>
+              {message.confidenceSummary && (
+                <div style={{ marginBottom: message.confidenceFactors?.length ? 6 : 0 }}>
+                  {message.confidenceSummary}
+                </div>
+              )}
+              {message.confidenceFactors?.map((f) => (
+                <div key={f.label} style={{ display: 'flex', gap: 6 }}>
+                  <span style={{ opacity: 0.7 }}>{f.label}:</span>
+                  <span>{f.detail}</span>
+                </div>
+              ))}
+              {!message.confidenceSummary && !message.confidenceFactors?.length &&
+                'How well this answer is grounded in the retrieved sources'}
+            </div>
+          }
+        >
           <span
             data-testid="confidence"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)' }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'help' }}
           >
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: confColor }} />
             Confidence {conf}/10

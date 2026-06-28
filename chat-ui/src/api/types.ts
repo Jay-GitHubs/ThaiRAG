@@ -70,6 +70,12 @@ export interface DocumentSource {
   content: string;
 }
 
+/** One named contributor to the deterministic confidence score. */
+export interface ConfidenceFactor {
+  label: string;
+  detail: string;
+}
+
 export interface ImageRef {
   image_id: string;
   url: string;
@@ -100,6 +106,8 @@ export type StreamEvent =
       message_id: string;
       usage: { prompt_tokens: number; completion_tokens: number };
       confidence?: number | null;
+      confidence_summary?: string | null;
+      confidence_factors?: ConfidenceFactor[] | null;
     }
   | { type: 'error'; message: string };
 

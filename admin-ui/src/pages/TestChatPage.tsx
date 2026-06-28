@@ -52,7 +52,7 @@ import {
   type Attachment,
 } from '../api/attachments';
 import { submitFeedback } from '../api/feedback';
-import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress, Citation } from '../api/types';
+import type { RetrievedChunk, TestQueryUsage, TestQueryTiming, TestQueryProviderInfo, PipelineStage, PipelineProgress, Citation, ConfidenceFactor } from '../api/types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -73,6 +73,8 @@ interface ChatEntry {
   pipelineStages?: PipelineStage[];
   citations?: Citation[];
   confidence?: number;
+  confidenceSummary?: string;
+  confidenceFactors?: ConfidenceFactor[];
   feedback?: 'up' | 'down';
   query?: string;
 }
@@ -243,6 +245,8 @@ export function TestChatPage() {
           pipelineStages: collectedStages.length > 0 ? collectedStages : res.pipeline_stages,
           citations: res.citations,
           confidence: res.confidence,
+          confidenceSummary: res.confidence_summary,
+          confidenceFactors: res.confidence_factors,
           query: q,
         },
       ]);
@@ -606,9 +610,27 @@ export function TestChatPage() {
                         />
                       </Tooltip>
 
-                      {/* Confidence (LLM self-rated 1–10) */}
+                      {/* Confidence (deterministic answer-grounding 1–10) */}
                       {msg.confidence != null && (
-                        <Tooltip title="How well the retrieved context supports this answer (LLM-rated 1–10)">
+                        <Tooltip
+                          title={
+                            <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 280 }}>
+                              {msg.confidenceSummary && (
+                                <div style={{ marginBottom: msg.confidenceFactors?.length ? 6 : 0 }}>
+                                  {msg.confidenceSummary}
+                                </div>
+                              )}
+                              {msg.confidenceFactors?.map((f) => (
+                                <div key={f.label} style={{ display: 'flex', gap: 6 }}>
+                                  <span style={{ opacity: 0.75 }}>{f.label}:</span>
+                                  <span>{f.detail}</span>
+                                </div>
+                              ))}
+                              {!msg.confidenceSummary && !msg.confidenceFactors?.length &&
+                                'How well this answer is grounded in the retrieved context'}
+                            </div>
+                          }
+                        >
                           <Tag
                             data-testid="confidence-tag"
                             color={

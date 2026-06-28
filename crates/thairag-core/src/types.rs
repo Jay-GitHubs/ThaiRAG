@@ -217,9 +217,18 @@ pub struct PipelineMetadata {
     pub self_rag_confidence: Option<f32>,
     pub chunks_retrieved: Option<u32>,
     pub avg_chunk_score: Option<f32>,
-    /// LLM self-rated answer confidence, 1–10 (how well the retrieved context
-    /// supports the answer). Populated when confidence scoring is enabled.
+    /// Deterministic answer confidence, 1–10 (how well the answer is grounded
+    /// in retrieved context). Populated when confidence scoring is enabled.
     pub confidence: Option<u8>,
+    /// One-line, human-readable rationale for `confidence` (e.g.
+    /// "5 of 6 claims cite a source across 2 documents"). Shown in the UI so
+    /// the score is explainable rather than opaque.
+    #[serde(default)]
+    pub confidence_summary: Option<String>,
+    /// Per-factor breakdown behind `confidence`, surfaced in the UI tooltip so
+    /// reviewers can see exactly how the score was derived.
+    #[serde(default)]
+    pub confidence_factors: Vec<ConfidenceFactor>,
     pub quality_guard_pass: Option<bool>,
     pub relevance_score: Option<f32>,
     pub hallucination_score: Option<f32>,
@@ -256,6 +265,17 @@ pub struct GuardrailViolationMeta {
     pub code: String,
     pub severity: String,
     pub stage: String,
+}
+
+/// One named contributor to the deterministic confidence score. Each factor is
+/// a short label plus a concrete detail (the measured value), so the UI can
+/// show *why* an answer scored the way it did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ConfidenceFactor {
+    /// What the factor measures, e.g. "Citation coverage".
+    pub label: String,
+    /// The measured value in plain words, e.g. "5 of 6 claims cite a source".
+    pub detail: String,
 }
 
 /// A per-claim source attribution, derived deterministically by parsing the
