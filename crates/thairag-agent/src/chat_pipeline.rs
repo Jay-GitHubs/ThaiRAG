@@ -2470,12 +2470,11 @@ impl ChatPipeline {
                 }
             }
             // Confidence — one short extra LLM call once the answer is complete.
-            if conf_enabled {
-                if let Some(score) =
+            if conf_enabled
+                && let Some(score) =
                     crate::confidence::assess(llm.as_ref(), &query, &collected, &context).await
-                {
-                    Self::update_metadata(&metadata, |m| { m.confidence = Some(score); });
-                }
+            {
+                Self::update_metadata(&metadata, |m| { m.confidence = Some(score); });
             }
         };
         LlmStreamResponse {
