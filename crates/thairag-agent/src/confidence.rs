@@ -67,13 +67,19 @@ pub async fn assess(
         return None;
     }
     let prompt = format!(
-        "You are scoring a retrieval-augmented answer for confidence.\n\n\
+        "You are scoring how much a user should trust an answer to their question.\n\n\
          Question:\n{query}\n\n\
          Retrieved context:\n{ctx}\n\n\
          Answer:\n{answer}\n\n\
-         On a scale of 1 to 10, how well is the Answer supported by the Retrieved \
-         context? 10 = every claim is directly supported; 1 = unsupported, or the \
-         answer states the context lacks the information. Reply with ONLY the integer.",
+         Rate from 1 to 10 how confident a user should be that the Answer actually \
+         answers the Question, with every claim grounded in the Retrieved context. \
+         Scoring rules (apply in order):\n\
+         - 1-2 if the Answer does NOT answer the question — e.g. it says the \
+         information is not in the context, declines, or only describes what the \
+         context contains instead of answering.\n\
+         - 3-5 if it answers only partially, or some claims are not supported by the context.\n\
+         - 6-10 if it directly and fully answers, with claims supported by the context.\n\
+         Reply with ONLY the integer.",
         query = query,
         ctx = context_excerpt(context, 4000),
         answer = answer.chars().take(2000).collect::<String>(),
