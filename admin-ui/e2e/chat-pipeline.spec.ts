@@ -215,6 +215,53 @@ test.describe('Chat & Response Pipeline Tab', () => {
     await expect(page.getByText('Post-stream:')).toBeVisible();
   });
 
+  test('min vector relevance control is exposed and round-trips', async ({ page }) => {
+    const pipelineSwitch = page.getByTestId('chat-pipeline-switch');
+    const checked = await pipelineSwitch.getAttribute('aria-checked');
+    if (checked !== 'true') {
+      await pipelineSwitch.click();
+      await page.waitForTimeout(300);
+    }
+
+    // The refusal-floor control lives in the Pipeline Parameters row.
+    const label = page
+      .locator('.ant-typography:visible', { hasText: 'Min Vector Relevance' })
+      .first();
+    await label.scrollIntoViewIfNeeded();
+    await expect(label).toBeVisible();
+
+    // Its slider reflects the backend value (calibrated default 0.40).
+    const slider = label.locator('xpath=following::*[@role="slider"][1]');
+    await expect(slider).toHaveAttribute('aria-valuenow', '0.4');
+
+    // Round-trip: nudge it down one step (0.35), save, reload, verify persisted.
+    await slider.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(slider).toHaveAttribute('aria-valuenow', '0.35');
+
+    const pipelineCard = page.locator('.ant-card').filter({ hasText: 'Response Pipeline' });
+    await pipelineCard.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('saved')).toBeVisible({ timeout: 5000 });
+
+    await page.reload();
+    await page.waitForTimeout(1000);
+    await page.getByRole('tab', { name: 'Chat & Response Pipeline' }).click();
+    await page.waitForTimeout(1000);
+    const reloaded = page
+      .locator('.ant-typography:visible', { hasText: 'Min Vector Relevance' })
+      .first()
+      .locator('xpath=following::*[@role="slider"][1]');
+    await reloaded.scrollIntoViewIfNeeded();
+    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.35');
+
+    // Restore the calibrated default for other tests.
+    await reloaded.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(reloaded).toHaveAttribute('aria-valuenow', '0.4');
+    await pipelineCard.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('saved')).toBeVisible({ timeout: 5000 });
+  });
+
   test('save pipeline settings succeeds', async ({ page }) => {
     const pipelineSwitch = page.getByTestId('chat-pipeline-switch');
     const checked = await pipelineSwitch.getAttribute('aria-checked');
