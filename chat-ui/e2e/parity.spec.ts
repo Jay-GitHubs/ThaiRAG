@@ -21,7 +21,7 @@ test('scoped chat streams an answer with source citations (scope + citations)', 
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
 
-  // Pin the conversation to the KMs workspace (which holds the Micro Pay manual).
+  // Pin the conversation to the KMs workspace (which holds the sales-table PDF).
   await page.locator('.ant-select-selector').first().click();
   await page
     .locator('.ant-select-item-option')
@@ -30,7 +30,7 @@ test('scoped chat streams an answer with source citations (scope + citations)', 
 
   await page
     .getByPlaceholder(COMPOSER)
-    .fill('วิธีเข้าสู่ระบบ (log-in) ของแอป Micro Pay ทำอย่างไร');
+    .fill('What were the Q1 and Q2 sales for the North and South regions?');
   await page.getByRole('button', { name: 'Send' }).click();
 
   await waitForAnswer(page);
@@ -153,7 +153,7 @@ test('clicking a source opens the in-app viewer (no new tab)', async ({ page }) 
     .click();
   await page
     .getByPlaceholder(COMPOSER)
-    .fill('วิธีเข้าสู่ระบบ (log-in) ของแอป Micro Pay ทำอย่างไร');
+    .fill('What were the Q1 and Q2 sales for the North and South regions?');
   await page.getByRole('button', { name: 'Send' }).click();
   await waitForAnswer(page);
   await expect(page.getByText('Sources', { exact: true })).toBeVisible({ timeout: 10_000 });
@@ -355,7 +355,7 @@ test('citations stay legible under a dark theme (theme compatibility)', async ({
     .click();
   await page
     .getByPlaceholder(COMPOSER)
-    .fill('วิธีเข้าสู่ระบบ (log-in) ของแอป Micro Pay ทำอย่างไร');
+    .fill('What were the Q1 and Q2 sales for the North and South regions?');
   await page.getByRole('button', { name: 'Send' }).click();
   await waitForAnswer(page);
 
