@@ -1889,7 +1889,8 @@ pub async fn generate_conversation_image(
     Path(conversation_id): Path<String>,
     AppJson(req): AppJson<ImagePromptRequest>,
 ) -> Result<Json<crate::store::MessageRow>, ApiError> {
-    let img = &state.config.general_chat.image_generation;
+    let gc = crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store);
+    let img = &gc.image_generation;
     if !img.enabled {
         return Err(ApiError(ThaiRagError::Validation(
             "Image generation is not enabled".into(),
@@ -1925,7 +1926,6 @@ pub async fn generate_conversation_image(
 
     // Resolve the image endpoint + key: image_generation overrides, else the
     // general_chat LLM, else the main LLM.
-    let gc = &state.config.general_chat;
     let base = [
         img.base_url.as_str(),
         gc.llm.as_ref().map(|l| l.base_url.as_str()).unwrap_or(""),
@@ -2186,10 +2186,11 @@ pub async fn stream_conversation_message(
 
     // General mode: build a plain LLM (the dedicated general_chat model, or the
     // main chat LLM if none) + system prompt. No retrieval/scope/citations.
+    // Read the effective config so admin edits apply without a restart.
+    let general_chat_cfg =
+        crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store);
     let general_llm = if is_general {
-        let cfg = state
-            .config
-            .general_chat
+        let cfg = general_chat_cfg
             .llm
             .clone()
             .unwrap_or_else(|| state.config.providers.llm.clone());
@@ -2197,7 +2198,7 @@ pub async fn stream_conversation_message(
     } else {
         None
     };
-    let general_system_prompt = state.config.general_chat.system_prompt.clone();
+    let general_system_prompt = general_chat_cfg.system_prompt.clone();
 
     let pipeline_handle = tokio::spawn(async move {
         if let Some(general_llm) = general_llm {

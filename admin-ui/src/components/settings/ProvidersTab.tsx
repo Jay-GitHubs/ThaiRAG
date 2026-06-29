@@ -54,6 +54,7 @@ import type {
 } from '../../api/types';
 import { ChatPipelineCard } from './ChatPipelineCard';
 import { RetrievalSettingsCard } from './RetrievalSettingsCard';
+import { GeneralChatCard } from './GeneralChatCard';
 
 const kindColors: Record<string, string> = {
   Ollama: 'blue',
@@ -1149,6 +1150,8 @@ export function ProvidersTab({ scope }: { scope?: SettingsScopeParam }) {
       <RetrievalSettingsCard />
 
       <ChatPipelineCard scope={scope} />
+
+      <GeneralChatCard />
     </Space>
   );
 }

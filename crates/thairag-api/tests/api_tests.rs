@@ -3227,6 +3227,88 @@ async fn factory_reset_requires_super_admin() {
 }
 
 #[tokio::test]
+async fn general_chat_settings_require_super_admin() {
+    let app = build_app(true);
+    let _root = register_and_get_token(&app, "gc-root@test.com", "Root", "Pass1234").await;
+    let user = register_and_get_token(&app, "gc-user@test.com", "User", "Pass1234").await;
+
+    let resp = app
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/general-chat",
+            serde_json::json!({"enabled": false}),
+            &user,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn general_chat_settings_roundtrip_and_features() {
+    let app = build_app(true);
+    let root = register_and_get_token(&app, "gc-admin@test.com", "Admin", "Pass1234").await;
+
+    // Turn General mode off; /api/chat/features must reflect it (effective config).
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/general-chat",
+            serde_json::json!({"enabled": false}),
+            &root,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/features", &root))
+        .await
+        .unwrap();
+    let feats = body_json(resp.into_body()).await;
+    assert_eq!(feats["general_chat_enabled"], false);
+
+    // Enabling image generation without a model must be rejected.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/general-chat",
+            serde_json::json!({"enabled": true, "image_generation": {"enabled": true}}),
+            &root,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // With a model it succeeds and features flip on.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/general-chat",
+            serde_json::json!({
+                "enabled": true,
+                "image_generation": {"enabled": true, "model": "dall-e-3"}
+            }),
+            &root,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(get_request_auth("/api/chat/features", &root))
+        .await
+        .unwrap();
+    let feats = body_json(resp.into_body()).await;
+    assert_eq!(feats["general_chat_enabled"], true);
+    assert_eq!(feats["image_generation_enabled"], true);
+}
+
+#[tokio::test]
 async fn chat_stream_rejects_empty_content() {
     let app = build_app(true);
     let token = register_and_get_token(&app, "empty@test.com", "E", "Pass1234").await;
