@@ -1872,6 +1872,141 @@ pub struct SendMessageRequest {
 ///
 /// followed by a `[DONE]` sentinel. Inline source images are added in a
 /// follow-up PR (a future `{"type":"image",…}` event).
+/// Request body for image generation.
+#[derive(serde::Deserialize)]
+pub struct ImagePromptRequest {
+    pub prompt: String,
+}
+
+/// POST /api/chat/conversations/{id}/images — generate an image from a prompt
+/// and persist it as a turn (user prompt + assistant image). Capability-gated:
+/// only works when `general_chat.image_generation` is enabled and points at an
+/// OpenAI-compatible `/v1/images/generations` endpoint; otherwise returns a
+/// clear error so the UI can keep the affordance hidden.
+pub async fn generate_conversation_image(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(conversation_id): Path<String>,
+    AppJson(req): AppJson<ImagePromptRequest>,
+) -> Result<Json<crate::store::MessageRow>, ApiError> {
+    let img = &state.config.general_chat.image_generation;
+    if !img.enabled {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Image generation is not enabled".into(),
+        )));
+    }
+    if img.model.trim().is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "No image-generation model configured".into(),
+        )));
+    }
+    let prompt = req.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "prompt must not be empty".into(),
+        )));
+    }
+
+    // Require a real signed-in user + ownership of the conversation.
+    let _uid = claims.sub.parse::<Uuid>().map_err(|_| {
+        ApiError(ThaiRagError::Auth(
+            "A signed-in user is required for chat conversations".into(),
+        ))
+    })?;
+    let conv = state
+        .km_store
+        .get_conversation(&conversation_id)
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Conversation not found".into())))?;
+    if conv.user_id != claims.sub {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "You do not have access to this conversation".into(),
+        )));
+    }
+
+    // Resolve the image endpoint + key: image_generation overrides, else the
+    // general_chat LLM, else the main LLM.
+    let gc = &state.config.general_chat;
+    let base = [
+        img.base_url.as_str(),
+        gc.llm.as_ref().map(|l| l.base_url.as_str()).unwrap_or(""),
+        state.config.providers.llm.base_url.as_str(),
+    ]
+    .into_iter()
+    .find(|s| !s.is_empty())
+    .unwrap_or("")
+    .trim_end_matches('/')
+    .to_string();
+    if base.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "No base URL configured for image generation".into(),
+        )));
+    }
+    let api_key = gc
+        .llm
+        .as_ref()
+        .map(|l| l.api_key.clone())
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| state.config.providers.llm.api_key.clone());
+
+    // OpenAI-compatible image generation; ask for base64 so the result is
+    // self-contained (no dependency on a provider-hosted, expiring URL).
+    let endpoint = format!("{base}/images/generations");
+    let body = serde_json::json!({
+        "model": img.model,
+        "prompt": prompt,
+        "n": 1,
+        "response_format": "b64_json",
+    });
+    let client = reqwest::Client::new();
+    let mut rb = client.post(&endpoint).json(&body);
+    if !api_key.is_empty() {
+        rb = rb.header("Authorization", format!("Bearer {api_key}"));
+    }
+    let resp = rb.send().await.map_err(|e| {
+        ApiError(ThaiRagError::Internal(format!(
+            "image generation request failed: {e}"
+        )))
+    })?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let detail = resp.text().await.unwrap_or_default();
+        return Err(ApiError(ThaiRagError::Internal(format!(
+            "image generation returned HTTP {status}: {}",
+            detail.chars().take(200).collect::<String>()
+        ))));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| {
+        ApiError(ThaiRagError::Internal(format!(
+            "failed to parse image response: {e}"
+        )))
+    })?;
+    let b64 = json["data"][0]["b64_json"].as_str().ok_or_else(|| {
+        ApiError(ThaiRagError::Internal(
+            "image response had no b64_json data".into(),
+        ))
+    })?;
+    let data_url = format!("data:image/png;base64,{b64}");
+
+    // Persist as a turn. The image rides in the `images` field (not content), so
+    // it is rendered by the UI but NOT replayed into the LLM context on later
+    // turns (which a giant data URL in content would otherwise bloat).
+    let image = crate::chat_history::PersistedImage {
+        image_id: Uuid::new_v4().to_string(),
+        url: data_url,
+        page: None,
+    };
+    let row = crate::chat_history::persist_turn(
+        &state.km_store,
+        &conversation_id,
+        &prompt,
+        "",
+        &[],
+        std::slice::from_ref(&image),
+        &crate::chat_history::PersistedTokenStats::default(),
+    )?;
+    Ok(Json(row))
+}
+
 pub async fn stream_conversation_message(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,

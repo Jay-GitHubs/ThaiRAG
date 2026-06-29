@@ -772,9 +772,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
                 .patch(conversations::rename_conversation)
                 .delete(conversations::delete_conversation),
         )
+        .route("/api/chat/features", get(conversations::chat_features))
         .route(
             "/api/chat/conversations/{id}/messages",
             get(conversations::list_messages).post(chat::stream_conversation_message),
+        )
+        .route(
+            "/api/chat/conversations/{id}/images",
+            post(chat::generate_conversation_image),
         )
         .route(
             "/api/chat/conversations/{id}/messages/{message_id}/feedback",
