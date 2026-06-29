@@ -1993,6 +1993,7 @@ impl KmStoreTrait for MemoryKmStore {
         user_id: &str,
         title: &str,
         workspace_scope: Option<&str>,
+        mode: &str,
     ) -> Result<super::ConversationRow> {
         let now = Utc::now().to_rfc3339();
         let row = super::ConversationRow {
@@ -2000,6 +2001,7 @@ impl KmStoreTrait for MemoryKmStore {
             user_id: user_id.to_string(),
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
+            mode: mode.to_string(),
             created_at: now.clone(),
             updated_at: now,
         };
@@ -3395,10 +3397,14 @@ mod tests {
         let bob = "22222222-2222-2222-2222-222222222222";
 
         let c1 = store
-            .create_conversation(alice, "Onboarding", Some("ws-1"))
+            .create_conversation(alice, "Onboarding", Some("ws-1"), "rag")
             .unwrap();
-        let c2 = store.create_conversation(alice, "Billing", None).unwrap();
-        store.create_conversation(bob, "Bob's chat", None).unwrap();
+        let c2 = store
+            .create_conversation(alice, "Billing", None, "rag")
+            .unwrap();
+        store
+            .create_conversation(bob, "Bob's chat", None, "rag")
+            .unwrap();
 
         assert_eq!(c1.workspace_scope.as_deref(), Some("ws-1"));
         assert_eq!(store.list_conversations(alice).len(), 2);
