@@ -137,7 +137,7 @@ export function GeneralChatCard() {
       ) : (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <Space size="middle">
-            <Switch checked={enabled} onChange={setEnabled} />
+            <Switch data-testid="gc-enabled" checked={enabled} onChange={setEnabled} />
             <Text strong>Offer General mode in the chat UI</Text>
           </Space>
 
@@ -155,7 +155,7 @@ export function GeneralChatCard() {
           <Divider style={{ margin: '4px 0' }} />
 
           <Space size="middle">
-            <Switch checked={useDedicated} onChange={setUseDedicated} />
+            <Switch data-testid="gc-dedicated" checked={useDedicated} onChange={setUseDedicated} />
             <Text strong>
               Use a dedicated model{' '}
               <Tooltip title="Off (default): general chat reuses the main chat LLM. On: route general chat to a separate provider/model.">
@@ -214,7 +214,7 @@ export function GeneralChatCard() {
           <Divider style={{ margin: '4px 0' }} />
 
           <Space size="middle">
-            <Switch checked={imgEnabled} onChange={setImgEnabled} />
+            <Switch data-testid="gc-image" checked={imgEnabled} onChange={setImgEnabled} />
             <Text strong>
               Image generation{' '}
               <Tooltip title="Lets General mode generate images via an OpenAI-compatible /images/generations endpoint. Requires a text-to-image model — leave off if your provider has none.">
