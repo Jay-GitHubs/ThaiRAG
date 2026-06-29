@@ -7,13 +7,14 @@
 #   2. cp .env.example .env  (edit with your settings)
 #   3. docker compose -f docker-compose.registry.yml up -d
 #
-# Images:
-#   GHCR:       ghcr.io/jay-githubs/thairag       / ghcr.io/jay-githubs/thairag-admin
-#   Docker Hub: jdevspecialist/thairag             / jdevspecialist/thairag-admin
+# Images (API, admin console, first-party chat UI, OCR sidecar):
+#   GHCR:       ghcr.io/jay-githubs/{thairag,thairag-admin,thairag-chat,thairag-paddleocr}
+#   Docker Hub: jdevspecialist/{thairag,thairag-admin,thairag-chat,thairag-paddleocr}
 #
 # To use Docker Hub instead of GHCR, set in .env:
 #   THAIRAG_IMAGE=jdevspecialist/thairag
 #   THAIRAG_ADMIN_IMAGE=jdevspecialist/thairag-admin
+#   THAIRAG_CHAT_IMAGE=jdevspecialist/thairag-chat
 #   THAIRAG_OCR_IMAGE=jdevspecialist/thairag-paddleocr
 #
 # Deterministic Thai OCR is opt-in via the `ocr` Compose profile:
@@ -98,6 +99,16 @@ services:
     image: ${THAIRAG_ADMIN_IMAGE:-ghcr.io/jay-githubs/thairag-admin}:${THAIRAG_TAG:-latest}
     ports:
       - "8081:80"
+    depends_on:
+      - thairag
+
+  # ── Chat UI (first-party end-user chat) ──────────────────────────────
+  # Nginx proxies /api and /v1 to the `thairag` service in-cluster. Add its
+  # public origin to THAIRAG__SERVER__CORS_ORIGINS in .env.
+  chat-ui:
+    image: ${THAIRAG_CHAT_IMAGE:-ghcr.io/jay-githubs/thairag-chat}:${THAIRAG_TAG:-latest}
+    ports:
+      - "8082:80"
     depends_on:
       - thairag
 
