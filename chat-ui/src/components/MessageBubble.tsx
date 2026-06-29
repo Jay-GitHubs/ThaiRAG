@@ -549,6 +549,14 @@ function AssistantMessage({
   onFeedback?: (messageId: string, value: number) => void;
   onSourceClick?: (c: Citation) => void;
 }) {
+  // A generated image turn carries image(s) but no answer text and no citations —
+  // render it as the answer itself (large, inline), not under a "Sources" heading.
+  const isGeneratedImage =
+    !message.streaming &&
+    message.citations.length === 0 &&
+    message.images.length > 0 &&
+    message.content.trim().length === 0;
+
   return (
     <div
       data-testid="msg-assistant"
@@ -556,6 +564,26 @@ function AssistantMessage({
     >
       <AssistantMark />
       <div style={{ minWidth: 0, flex: 1, paddingTop: 1 }}>
+        {isGeneratedImage && (
+          <div data-testid="generated-image" style={{ marginBottom: 6 }}>
+            <Image.PreviewGroup>
+              {message.images.map((img) => (
+                <Image
+                  key={img.image_id}
+                  src={img.url}
+                  alt="generated image"
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: 420,
+                    borderRadius: 10,
+                    border: '1px solid var(--line)',
+                    display: 'block',
+                  }}
+                />
+              ))}
+            </Image.PreviewGroup>
+          </div>
+        )}
         <div className="md-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -583,11 +611,13 @@ function AssistantMessage({
               <span className="caret" />
             ))}
         </div>
-        <Sources
-          citations={message.citations}
-          images={message.images}
-          onSourceClick={onSourceClick}
-        />
+        {!isGeneratedImage && (
+          <Sources
+            citations={message.citations}
+            images={message.images}
+            onSourceClick={onSourceClick}
+          />
+        )}
         {!message.streaming && message.content.length > 0 && (
           <AnswerActions message={message} onFeedback={onFeedback} />
         )}

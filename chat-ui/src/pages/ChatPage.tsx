@@ -15,6 +15,7 @@ import {
   DownOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
+  PictureOutlined,
   ReloadOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
@@ -23,13 +24,23 @@ import {
   listWorkspaces,
   createConversation,
   deleteConversation,
+  generateImage,
+  getChatFeatures,
   listMessages,
   renameConversation,
   setMessageFeedback,
   streamMessage,
 } from '../api/conversations';
 import { parseCitations, parseImages } from '../api/types';
-import type { Attachment, Citation, Conversation, StreamEvent, WorkspaceOption } from '../api/types';
+import type {
+  Attachment,
+  ChatFeatures,
+  Citation,
+  Conversation,
+  MessageRow,
+  StreamEvent,
+  WorkspaceOption,
+} from '../api/types';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
@@ -71,6 +82,14 @@ export function ChatPage() {
   // Mode chosen for the *next* new conversation: 'rag' (knowledge base) or
   // 'general' (non-RAG plain assistant).
   const [newMode, setNewMode] = useState<'rag' | 'general'>('rag');
+  // Server feature flags (general chat on/off, image generation available).
+  const [features, setFeatures] = useState<ChatFeatures>({
+    general_chat_enabled: true,
+    image_generation_enabled: false,
+  });
+  // In general mode with image-gen available: when true, the next send generates
+  // an image instead of a text reply.
+  const [imageMode, setImageMode] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamStartRef = useRef(0);
@@ -113,6 +132,11 @@ export function ChatPage() {
       .then(setWorkspaces)
       .catch(() => {
         /* no picker if this fails; chat still works across all workspaces */
+      });
+    getChatFeatures()
+      .then(setFeatures)
+      .catch(() => {
+        /* defaults: general on, image off — affordances stay hidden */
       });
   }, []);
 
@@ -313,6 +337,32 @@ export function ChatPage() {
         }
       }
 
+      // ── Image generation (general mode): one-shot, non-streaming ──
+      if (imageMode && features.image_generation_enabled) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: text, citations: [], images: [] },
+          { role: 'assistant', content: '', citations: [], images: [], streaming: true },
+        ]);
+        setSending(true);
+        try {
+          const row: MessageRow = await generateImage(convId, text);
+          updateLastAssistant((m) => ({
+            ...m,
+            id: row.id,
+            streaming: false,
+            content: row.content,
+            images: parseImages(row.images),
+          }));
+        } catch (e) {
+          antdMessage.error(e instanceof Error ? e.message : 'Image generation failed');
+          updateLastAssistant((m) => ({ ...m, streaming: false }));
+        } finally {
+          setSending(false);
+        }
+        return;
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -359,7 +409,16 @@ export function ChatPage() {
           });
       }
     },
-    [activeId, messages.length, newScope, newMode, handleStreamEvent, updateLastAssistant],
+    [
+      activeId,
+      messages.length,
+      newScope,
+      newMode,
+      imageMode,
+      features.image_generation_enabled,
+      handleStreamEvent,
+      updateLastAssistant,
+    ],
   );
 
   const handleRegenerate = useCallback(async () => {
@@ -467,6 +526,12 @@ export function ChatPage() {
   // for the next new chat. General mode = non-RAG (no corpus retrieval).
   const chatMode: 'rag' | 'general' = activeConversation?.mode ?? newMode;
   const isGeneral = chatMode === 'general';
+
+  // Image mode only makes sense in general chat with a configured model; reset it
+  // whenever we leave that context so a stray toggle can't reach the send path.
+  useEffect(() => {
+    if (!isGeneral || !features.image_generation_enabled) setImageMode(false);
+  }, [isGeneral, features.image_generation_enabled]);
 
   const suggestions = isGeneral
     ? ['Write a Python function to parse CSV', 'อธิบายเรื่อง machine learning แบบสั้น ๆ']
@@ -641,6 +706,22 @@ export function ChatPage() {
                   ]}
                 />
               </div>
+
+              {/* Image generation is a general-mode affordance, shown only when a
+                  text-to-image model is actually configured on the backend. */}
+              {isGeneral && features.image_generation_enabled && (
+                <div style={{ marginTop: 16 }}>
+                  <Segmented
+                    data-testid="image-mode-segmented"
+                    value={imageMode ? 'image' : 'text'}
+                    onChange={(v) => setImageMode(v === 'image')}
+                    options={[
+                      { label: 'Text', value: 'text', icon: <RobotOutlined /> },
+                      { label: 'Image', value: 'image', icon: <PictureOutlined /> },
+                    ]}
+                  />
+                </div>
+              )}
 
               {/* Scope picker only matters for RAG — general chat never searches the corpus. */}
               {!isGeneral && workspaces.length > 0 && (
