@@ -45,3 +45,21 @@ test('image toggle stays hidden when no image model is configured', async ({ pag
   await expect(page.getByTestId('mode-segmented')).toBeVisible();
   await expect(page.getByTestId('image-mode-segmented')).toHaveCount(0);
 });
+
+test('mode picker is hidden when the admin disables general chat', async ({ page }) => {
+  // Simulate the admin having turned General mode off. The picker would otherwise
+  // offer a "General" option that silently falls back to a RAG conversation.
+  await page.route('**/api/chat/features', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ general_chat_enabled: false, image_generation_enabled: false }),
+    }),
+  );
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+
+  // No mode toggle at all — RAG is the only mode, shown without a dead switch.
+  await expect(page.getByTestId('mode-segmented')).toHaveCount(0);
+  await expect(page.getByText('What do you want to find?')).toBeVisible();
+});

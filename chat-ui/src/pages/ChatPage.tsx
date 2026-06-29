@@ -533,6 +533,12 @@ export function ChatPage() {
     if (!isGeneral || !features.image_generation_enabled) setImageMode(false);
   }, [isGeneral, features.image_generation_enabled]);
 
+  // If the admin disables general chat, force the next-chat selection back to RAG
+  // (the picker is hidden, but the prior selection could still be 'general').
+  useEffect(() => {
+    if (!features.general_chat_enabled) setNewMode('rag');
+  }, [features.general_chat_enabled]);
+
   const suggestions = isGeneral
     ? ['Write a Python function to parse CSV', 'อธิบายเรื่อง machine learning แบบสั้น ๆ']
     : ['สรุปขั้นตอนการขอสินเชื่อ', 'What documents do I need to apply?'];
@@ -694,18 +700,22 @@ export function ChatPage() {
                   : 'ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง'}
               </p>
 
-              {/* Mode picker for the next new chat: Knowledge Base (RAG) vs General. */}
-              <div style={{ marginTop: 22 }}>
-                <Segmented
-                  data-testid="mode-segmented"
-                  value={newMode}
-                  onChange={(v) => setNewMode(v as 'rag' | 'general')}
-                  options={[
-                    { label: 'Knowledge base', value: 'rag', icon: <DatabaseOutlined /> },
-                    { label: 'General', value: 'general', icon: <RobotOutlined /> },
-                  ]}
-                />
-              </div>
+              {/* Mode picker for the next new chat: Knowledge Base (RAG) vs General.
+                  Hidden entirely when the admin has disabled general chat — there's
+                  only one mode then, so a dead toggle would just confuse. */}
+              {features.general_chat_enabled && (
+                <div style={{ marginTop: 22 }}>
+                  <Segmented
+                    data-testid="mode-segmented"
+                    value={newMode}
+                    onChange={(v) => setNewMode(v as 'rag' | 'general')}
+                    options={[
+                      { label: 'Knowledge base', value: 'rag', icon: <DatabaseOutlined /> },
+                      { label: 'General', value: 'general', icon: <RobotOutlined /> },
+                    ]}
+                  />
+                </div>
+              )}
 
               {/* Image generation is a general-mode affordance, shown only when a
                   text-to-image model is actually configured on the backend. */}
