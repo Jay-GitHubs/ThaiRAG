@@ -348,6 +348,14 @@ fn role_str(r: &Role) -> &'static str {
 // ── KmStoreTrait implementation ─────────────────────────────────────
 
 impl KmStoreTrait for SqliteKmStore {
+    fn health_check(&self) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute_batch("SELECT 1;")
+            .map_err(|e| ThaiRagError::Database(format!("sqlite health check failed: {e}")))
+    }
+
     // ── Organization ────────────────────────────────────────────────
 
     fn insert_org(&self, name: String) -> Result<Organization> {

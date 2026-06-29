@@ -2078,10 +2078,33 @@ async fn health_deep_returns_checks() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // 200 (all reachable) or 503 (a configured dep is unreachable in this env,
+    // e.g. no local LLM in CI) — both are valid deep-check outcomes.
+    assert!(
+        resp.status() == StatusCode::OK || resp.status() == StatusCode::SERVICE_UNAVAILABLE,
+        "unexpected status {}",
+        resp.status()
+    );
     let body = body_json(resp.into_body()).await;
-    assert_eq!(body["status"], "ok");
-    assert!(body["checks"]["embedding"].as_str().is_some());
+    // The readiness matrix reports each service as an object {status, detail}.
+    let checks = &body["checks"];
+    assert!(checks.is_object(), "checks should be a map");
+    for svc in [
+        "database",
+        "embedding",
+        "vector_store",
+        "reranker",
+        "llm",
+        "ocr_sidecar",
+        "redis",
+    ] {
+        assert!(
+            checks[svc]["status"].as_str().is_some(),
+            "missing status for {svc}"
+        );
+    }
+    // The in-memory store is always reachable.
+    assert_eq!(checks["database"]["status"], "ok");
 }
 
 #[tokio::test]

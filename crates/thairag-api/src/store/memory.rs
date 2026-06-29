@@ -130,6 +130,10 @@ impl MemoryKmStore {
 }
 
 impl KmStoreTrait for MemoryKmStore {
+    fn health_check(&self) -> Result<()> {
+        Ok(())
+    }
+
     // ── Organization ────────────────────────────────────────────────
 
     fn insert_org(&self, name: String) -> Result<Organization> {
