@@ -17,6 +17,8 @@ import type {
   ModelsResponse,
   OllamaPullResponse,
   RecommendationsStatus,
+  GeneralChatConfigResponse,
+  UpdateGeneralChatRequest,
   ResolveRecommendationsResponse,
   PresetInfo,
   PromptEntry,
@@ -170,6 +172,16 @@ export async function getSearchConfig() {
 
 export async function updateSearchConfig(data: UpdateSearchConfigRequest) {
   const res = await client.put<SearchConfigResponse>('/api/km/settings/search', data);
+  return res.data;
+}
+
+export async function getGeneralChatConfig() {
+  const res = await client.get<GeneralChatConfigResponse>('/api/km/settings/general-chat');
+  return res.data;
+}
+
+export async function updateGeneralChatConfig(data: UpdateGeneralChatRequest) {
+  const res = await client.put<GeneralChatConfigResponse>('/api/km/settings/general-chat', data);
   return res.data;
 }
 

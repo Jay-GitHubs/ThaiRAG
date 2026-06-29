@@ -2262,6 +2262,45 @@ pub fn build_effective_search_config(
     eff
 }
 
+/// Resolve the effective general-chat config by layering km_store overrides on
+/// top of the static config — the single source of truth read by both the admin
+/// settings API and the runtime chat path, so a saved change takes effect
+/// without a restart. (The dedicated LLM is built on demand per request, so no
+/// provider-bundle rebuild is needed here.)
+pub fn build_effective_general_chat(
+    config: &thairag_config::AppConfig,
+    store: &dyn crate::store::KmStoreTrait,
+) -> thairag_config::schema::GeneralChatConfig {
+    let mut eff = config.general_chat.clone();
+    if let Some(v) = store
+        .get_setting("general_chat.enabled")
+        .and_then(|v| v.parse().ok())
+    {
+        eff.enabled = v;
+    }
+    if let Some(v) = store.get_setting("general_chat.system_prompt") {
+        eff.system_prompt = v;
+    }
+    if let Some(v) = store.get_setting("general_chat.llm") {
+        // A literal "null" (or unparseable JSON) means "no dedicated model —
+        // reuse the main chat LLM".
+        eff.llm = serde_json::from_str(&v).ok();
+    }
+    if let Some(v) = store
+        .get_setting("general_chat.image_generation.enabled")
+        .and_then(|v| v.parse().ok())
+    {
+        eff.image_generation.enabled = v;
+    }
+    if let Some(v) = store.get_setting("general_chat.image_generation.model") {
+        eff.image_generation.model = v;
+    }
+    if let Some(v) = store.get_setting("general_chat.image_generation.base_url") {
+        eff.image_generation.base_url = v;
+    }
+    eff
+}
+
 /// Build the AI-preprocessing response from an already-resolved config (the
 /// scoped path). At global scope this is byte-identical to
 /// `build_ai_preprocessing_response`, since the scoped builder applies the same
@@ -2813,6 +2852,173 @@ pub async fn update_search_config(
         top_k: effective_search.top_k,
         rerank_top_k: effective_search.rerank_top_k,
     }))
+}
+
+// ── General (non-RAG) Chat Config ────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ImageGenerationConfigResponse {
+    pub enabled: bool,
+    pub model: String,
+    pub base_url: String,
+}
+
+#[derive(Serialize)]
+pub struct GeneralChatConfigResponse {
+    /// Whether the chat UI offers a non-RAG "General" mode at all.
+    pub enabled: bool,
+    /// System prompt that frames the general assistant.
+    pub system_prompt: String,
+    /// Optional dedicated model for general chat. `None` = reuse the main chat
+    /// LLM (the default).
+    pub llm: Option<LlmProviderInfo>,
+    /// Text-to-image generation (off unless a model is configured).
+    pub image_generation: ImageGenerationConfigResponse,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateImageGenerationConfig {
+    pub enabled: Option<bool>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateGeneralChatRequest {
+    pub enabled: Option<bool>,
+    pub system_prompt: Option<String>,
+    /// Configure a dedicated general-chat model. Fields merge onto the current
+    /// dedicated model (or the main LLM if none is set yet).
+    pub llm: Option<UpdateLlmConfig>,
+    /// When true, drop the dedicated model and reuse the main chat LLM.
+    pub clear_llm: Option<bool>,
+    pub image_generation: Option<UpdateImageGenerationConfig>,
+}
+
+fn build_general_chat_response(
+    eff: &thairag_config::schema::GeneralChatConfig,
+) -> GeneralChatConfigResponse {
+    GeneralChatConfigResponse {
+        enabled: eff.enabled,
+        system_prompt: eff.system_prompt.clone(),
+        llm: eff.llm.as_ref().map(llm_config_to_info),
+        image_generation: ImageGenerationConfigResponse {
+            enabled: eff.image_generation.enabled,
+            model: eff.image_generation.model.clone(),
+            base_url: eff.image_generation.base_url.clone(),
+        },
+    }
+}
+
+pub async fn get_general_chat_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<GeneralChatConfigResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+    let eff = build_effective_general_chat(&state.config, &*state.km_store);
+    Ok(Json(build_general_chat_response(&eff)))
+}
+
+pub async fn update_general_chat_config(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    AppJson(req): AppJson<UpdateGeneralChatRequest>,
+) -> Result<Json<GeneralChatConfigResponse>, ApiError> {
+    require_super_admin(&claims, &state)?;
+
+    if let Some(v) = req.enabled {
+        state
+            .km_store
+            .set_setting("general_chat.enabled", &v.to_string());
+    }
+    if let Some(p) = &req.system_prompt {
+        if p.trim().is_empty() {
+            return Err(ApiError(ThaiRagError::Validation(
+                "system_prompt cannot be empty".into(),
+            )));
+        }
+        state.km_store.set_setting("general_chat.system_prompt", p);
+    }
+
+    // Dedicated model: clear takes precedence over an update.
+    if req.clear_llm == Some(true) {
+        state.km_store.set_setting("general_chat.llm", "null");
+    } else if let Some(u) = &req.llm {
+        let current = build_effective_general_chat(&state.config, &*state.km_store).llm;
+        let mut cfg = current.unwrap_or_else(|| state.config.providers.llm.clone());
+        if let Some(kind) = &u.kind {
+            let new_kind =
+                parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+            if new_kind != cfg.kind {
+                cfg.kind = new_kind;
+                cfg.base_url = String::new();
+                cfg.api_key = match cfg.kind {
+                    thairag_core::types::LlmKind::Ollama => String::new(),
+                    _ => state.config.providers.llm.api_key.clone(),
+                };
+            }
+        }
+        if let Some(model) = &u.model {
+            cfg.model = model.clone();
+        }
+        if let Some(base_url) = &u.base_url {
+            cfg.base_url = base_url.clone();
+        }
+        if let Some(api_key) = &u.api_key
+            && !api_key.is_empty()
+        {
+            cfg.api_key = api_key.clone();
+        }
+        if let Some(max_tokens) = u.max_tokens {
+            cfg.max_tokens = Some(max_tokens);
+        }
+        if cfg.model.trim().is_empty() {
+            return Err(ApiError(ThaiRagError::Validation(
+                "a dedicated general-chat model needs a model name".into(),
+            )));
+        }
+        let json = serde_json::to_string(&cfg)
+            .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize: {e}"))))?;
+        state.km_store.set_setting("general_chat.llm", &json);
+    }
+
+    if let Some(ig) = &req.image_generation {
+        if let Some(v) = ig.enabled {
+            state
+                .km_store
+                .set_setting("general_chat.image_generation.enabled", &v.to_string());
+        }
+        if let Some(m) = &ig.model {
+            state
+                .km_store
+                .set_setting("general_chat.image_generation.model", m);
+        }
+        if let Some(u) = &ig.base_url {
+            state
+                .km_store
+                .set_setting("general_chat.image_generation.base_url", u);
+        }
+        // Image generation can't be on without a model to call.
+        let eff_ig = build_effective_general_chat(&state.config, &*state.km_store).image_generation;
+        if eff_ig.enabled && eff_ig.model.trim().is_empty() {
+            return Err(ApiError(ThaiRagError::Validation(
+                "image generation needs a model name to enable".into(),
+            )));
+        }
+    }
+
+    state.webhook_dispatcher.dispatch(
+        thairag_core::types::WebhookEvent::SettingsChanged,
+        serde_json::json!({ "section": "general_chat" }),
+    );
+
+    let eff = build_effective_general_chat(&state.config, &*state.km_store);
+    tracing::info!(
+        enabled = eff.enabled,
+        image_generation = eff.image_generation.enabled,
+        "General chat config updated by super admin"
+    );
+    Ok(Json(build_general_chat_response(&eff)))
 }
 
 // ── Chat Pipeline Config ─────────────────────────────────────────────
