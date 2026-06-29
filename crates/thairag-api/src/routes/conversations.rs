@@ -56,6 +56,22 @@ pub struct WorkspaceOption {
     pub name: String,
 }
 
+/// Chat capabilities the first-party UI reads to decide which affordances to
+/// show (e.g. the General-mode toggle, the image-generation button).
+#[derive(Serialize)]
+pub struct ChatFeatures {
+    pub general_chat_enabled: bool,
+    pub image_generation_enabled: bool,
+}
+
+/// GET /api/chat/features — feature flags for the chat client.
+pub async fn chat_features(State(state): State<AppState>) -> Json<ChatFeatures> {
+    Json(ChatFeatures {
+        general_chat_enabled: state.config.general_chat.enabled,
+        image_generation_enabled: state.config.general_chat.image_generation.enabled,
+    })
+}
+
 /// A cited document's content for the in-app source viewer.
 #[derive(Serialize)]
 pub struct DocumentSource {
