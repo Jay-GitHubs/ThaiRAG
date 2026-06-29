@@ -33,6 +33,12 @@ export interface ProviderInfo {
 /** Chat mode: 'rag' searches the knowledge base; 'general' is a plain assistant. */
 export type ChatMode = 'rag' | 'general';
 
+/** Feature flags the chat client reads to decide which affordances to show. */
+export interface ChatFeatures {
+  general_chat_enabled: boolean;
+  image_generation_enabled: boolean;
+}
+
 export interface Conversation {
   id: string;
   user_id: string;
