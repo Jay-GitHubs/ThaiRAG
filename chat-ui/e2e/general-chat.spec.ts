@@ -34,3 +34,14 @@ test('general mode answers without retrieving the corpus (no sources)', async ({
     .toBeGreaterThan(0);
   expect(await page.getByTestId('source-chip').count()).toBe(0);
 });
+
+test('image toggle stays hidden when no image model is configured', async ({ page }) => {
+  // The stack's gateway has no text-to-image model, so /api/chat/features reports
+  // image_generation_enabled:false and the Text/Image picker must never appear.
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await page.getByTestId('mode-segmented').getByText('General', { exact: true }).click();
+
+  await expect(page.getByTestId('mode-segmented')).toBeVisible();
+  await expect(page.getByTestId('image-mode-segmented')).toHaveCount(0);
+});

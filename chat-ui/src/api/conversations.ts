@@ -1,6 +1,7 @@
 import client, { getToken } from './client';
 import type {
   Attachment,
+  ChatFeatures,
   Conversation,
   DocumentSource,
   MessageRow,
@@ -15,6 +16,24 @@ export async function listConversations(): Promise<Conversation[]> {
 
 export async function listWorkspaces(): Promise<WorkspaceOption[]> {
   const res = await client.get<WorkspaceOption[]>('/api/chat/workspaces');
+  return res.data;
+}
+
+/** Feature flags (general chat on/off, image generation available). */
+export async function getChatFeatures(): Promise<ChatFeatures> {
+  const res = await client.get<ChatFeatures>('/api/chat/features');
+  return res.data;
+}
+
+/** Generate an image from a prompt and persist it as a turn (general mode). */
+export async function generateImage(
+  conversationId: string,
+  prompt: string,
+): Promise<MessageRow> {
+  const res = await client.post<MessageRow>(
+    `/api/chat/conversations/${conversationId}/images`,
+    { prompt },
+  );
   return res.data;
 }
 
