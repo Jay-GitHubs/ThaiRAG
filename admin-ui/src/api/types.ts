@@ -376,6 +376,10 @@ export interface RerankerProviderInfo {
   kind: string;
   model?: string;
   has_api_key: boolean;
+  /** Custom rerank endpoint (Jina-protocol), e.g. an OpenAI-compatible gateway. */
+  base_url?: string;
+  /** Sigmoid-normalize raw cross-encoder logits (e.g. rerank-bge) into 0–1. */
+  normalize_scores?: boolean;
 }
 
 export interface ProviderConfigResponse {
@@ -443,7 +447,7 @@ export interface UpdateProviderConfigRequest {
   llm?: { kind?: string; model?: string; base_url?: string; api_key?: string };
   embedding?: { kind?: string; model?: string; dimension?: number; api_key?: string };
   vector_store?: { kind?: string; url?: string; collection?: string; isolation?: string };
-  reranker?: { kind?: string; model?: string; api_key?: string };
+  reranker?: { kind?: string; model?: string; api_key?: string; base_url?: string; normalize_scores?: boolean };
   /** Set fields on the dedicated document-ingestion vision LLM. Unset fields preserve
    * existing values (or seed from primary `llm` if no vision config exists yet). */
   doc_vision_llm?: LlmConfigUpdate;

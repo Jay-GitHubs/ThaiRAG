@@ -248,6 +248,9 @@ function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
                   <Typography.Text code>{p.reranker.model}</Typography.Text>
                 </Descriptions.Item>
               )}
+              {p.reranker.base_url && (
+                <Descriptions.Item label="Base URL">{p.reranker.base_url}</Descriptions.Item>
+              )}
               <Descriptions.Item label="API Key">
                 {p.reranker.has_api_key ? (
                   <Tag color="success">Configured</Tag>
@@ -255,6 +258,11 @@ function ReadOnlyView({ config }: { config: ProviderConfigResponse }) {
                   <Tag color="default">Not set</Tag>
                 )}
               </Descriptions.Item>
+              {p.reranker.normalize_scores && (
+                <Descriptions.Item label="Normalize scores">
+                  <Tag color="blue">on</Tag>
+                </Descriptions.Item>
+              )}
             </Descriptions>
           ),
         },
@@ -298,6 +306,8 @@ function EditForm({
       rr_kind: config.reranker.kind,
       rr_model: config.reranker.model || '',
       rr_api_key: '',
+      rr_base_url: config.reranker.base_url || '',
+      rr_normalize_scores: config.reranker.normalize_scores ?? false,
     });
   }, [config, form]);
 
@@ -329,6 +339,9 @@ function EditForm({
     if (values.rr_kind !== config.reranker.kind) rr.kind = values.rr_kind;
     if (values.rr_model !== (config.reranker.model || '')) rr.model = values.rr_model;
     if (values.rr_api_key) rr.api_key = values.rr_api_key;
+    if (values.rr_base_url !== (config.reranker.base_url || '')) rr.base_url = values.rr_base_url;
+    if (values.rr_normalize_scores !== (config.reranker.normalize_scores ?? false))
+      rr.normalize_scores = values.rr_normalize_scores;
     if (Object.keys(rr).length > 0) req.reranker = rr;
 
     if (Object.keys(req).length === 0) {
@@ -635,6 +648,25 @@ function EditForm({
                 }
               />
             </Form.Item>
+            {rrKind === 'Jina' && (
+              <>
+                <Form.Item
+                  name="rr_base_url"
+                  label="Base URL"
+                  extra="Custom Jina-protocol /v1/rerank endpoint — e.g. an OpenAI-compatible gateway hosting a cross-encoder (https://llm.jay-tech-ai.com/v1). Leave blank for Jina's cloud API."
+                >
+                  <Input placeholder="https://your-gateway/v1" />
+                </Form.Item>
+                <Form.Item
+                  name="rr_normalize_scores"
+                  label="Normalize scores"
+                  valuePropName="checked"
+                  extra="Sigmoid-normalize raw cross-encoder logits (e.g. rerank-bge) into 0–1. Off for Jina's cloud API (already 0–1); on for gateway/self-hosted rerankers, or the relevance gate misreads their unbounded scores."
+                >
+                  <Switch />
+                </Form.Item>
+              </>
+            )}
           </>
         )}
       </Card>
