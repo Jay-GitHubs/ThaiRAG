@@ -1252,11 +1252,20 @@ export interface JobListResponse {
 }
 
 // ── Health ──────────────────────────────────────────────────────────
+export interface HealthCheck {
+  /** 'ok' (probed, reachable) | 'fail' (configured but unreachable) | 'not_configured' (off). */
+  status: string;
+  detail?: string;
+}
+
 export interface HealthResponse {
   status: string;
   version: string;
   uptime_secs?: number;
   embedding?: string;
+  /** Per-service readiness matrix (deep check): database, embedding, vector_store,
+   *  reranker, llm, ocr_sidecar, redis. */
+  checks?: Record<string, HealthCheck>;
 }
 
 // ── Vector Database ────────────────────────────────────────────────

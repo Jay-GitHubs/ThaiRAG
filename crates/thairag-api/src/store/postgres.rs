@@ -344,6 +344,12 @@ fn pg_row_to_sync_run(
 // ── KmStoreTrait implementation ─────────────────────────────────────
 
 impl KmStoreTrait for PostgresKmStore {
+    fn health_check(&self) -> Result<()> {
+        block_on(sqlx::query("SELECT 1").execute(&self.pool))
+            .map(|_| ())
+            .map_err(|e| ThaiRagError::Database(format!("postgres health check failed: {e}")))
+    }
+
     // ── Organization ────────────────────────────────────────────────
 
     fn insert_org(&self, name: String) -> Result<Organization> {

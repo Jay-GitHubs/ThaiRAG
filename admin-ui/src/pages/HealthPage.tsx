@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Button, Switch, Space, Row, Col } from 'antd';
+import { Card, Button, Switch, Space, Row, Col, Tag, Empty } from 'antd';
 import {
   ClockCircleOutlined,
   TagOutlined,
@@ -81,6 +81,55 @@ export function HealthPage() {
             />
           </Col>
         </Row>
+
+        {/* Per-service readiness matrix (deep check). 'fail' = configured but
+            unreachable (act on it); 'not configured' = off/not in use (neutral). */}
+        {deep && (
+          <div style={{ marginTop: 20 }} data-testid="readiness-matrix">
+            <div className="eyebrow" style={{ marginBottom: 10 }}>
+              Service readiness
+            </div>
+            {health.data?.checks ? (
+              <Row gutter={[12, 12]}>
+                {Object.entries(health.data.checks).map(([name, c]) => {
+                  const color =
+                    c.status === 'ok' ? 'success' : c.status === 'fail' ? 'error' : 'default';
+                  const label =
+                    c.status === 'ok' ? 'OK' : c.status === 'fail' ? 'UNREACHABLE' : 'NOT CONFIGURED';
+                  return (
+                    <Col xs={24} sm={12} lg={8} key={name}>
+                      <div
+                        data-testid={`svc-${name}`}
+                        style={{
+                          border: '1px solid var(--line)',
+                          borderRadius: 8,
+                          padding: '10px 12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 600 }}>{name.replace(/_/g, ' ')}</span>
+                          <Tag color={color} style={{ margin: 0 }}>
+                            {label}
+                          </Tag>
+                        </div>
+                        {c.detail && (
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-all' }}>
+                            {c.detail}
+                          </span>
+                        )}
+                      </div>
+                    </Col>
+                  );
+                })}
+              </Row>
+            ) : (
+              <Empty description="Run Deep Check to probe each service" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </div>
+        )}
       </Card>
 
       <Card
