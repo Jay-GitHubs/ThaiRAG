@@ -27,11 +27,15 @@ Images are pulled from GitHub Container Registry by default. Published as **mult
 |-------|------|------------|
 | ThaiRAG API | `ghcr.io/jay-githubs/thairag` | `jdevspecialist/thairag` |
 | Admin UI | `ghcr.io/jay-githubs/thairag-admin` | `jdevspecialist/thairag-admin` |
+| Chat UI | `ghcr.io/jay-githubs/thairag-chat` | `jdevspecialist/thairag-chat` |
+| PaddleOCR sidecar (opt-in) | `ghcr.io/jay-githubs/thairag-paddleocr` | `jdevspecialist/thairag-paddleocr` |
 
 To use Docker Hub instead, set in `.env`:
 ```bash
 THAIRAG_IMAGE=jdevspecialist/thairag
 THAIRAG_ADMIN_IMAGE=jdevspecialist/thairag-admin
+THAIRAG_CHAT_IMAGE=jdevspecialist/thairag-chat
+THAIRAG_OCR_IMAGE=jdevspecialist/thairag-paddleocr
 ```
 
 To pin a specific version (Git SHA):
@@ -49,7 +53,7 @@ THAIRAG_TAG=abc1234
 
 ### Services
 
-> **Which compose file?** The base `docker-compose.yml` (below) includes redis, prometheus, and grafana. The pre-built registry stack `docker-compose.registry.yml` is leaner — only postgres, qdrant, thairag, and admin-ui (no redis/prometheus/grafana).
+> **Which compose file?** The base `docker-compose.yml` (below) includes redis, prometheus, and grafana. The pre-built registry stack `docker-compose.registry.yml` is leaner — postgres, qdrant, thairag, admin-ui, and chat-ui (plus the opt-in `ocr` profile for the PaddleOCR sidecar); no redis/prometheus/grafana.
 
 The `docker-compose.yml` defines these services:
 
