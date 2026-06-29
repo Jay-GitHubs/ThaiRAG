@@ -32,6 +32,10 @@ pub struct CreateConversationRequest {
     /// Optional hard scope (workspace id) to pin this conversation to.
     #[serde(default)]
     pub workspace_scope: Option<String>,
+    /// Chat mode: `rag` (default, knowledge-base retrieval) or `general`
+    /// (non-RAG plain assistant). Invalid values fall back to `rag`.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -118,10 +122,17 @@ pub async fn create_conversation(
 ) -> Result<(StatusCode, Json<ConversationRow>), ApiError> {
     let user_id = current_user_id(&claims)?;
     let title = body.title.unwrap_or_default();
-    let conv =
-        state
-            .km_store
-            .create_conversation(&user_id, &title, body.workspace_scope.as_deref())?;
+    // `general` is allowed only when general chat is enabled; anything else → `rag`.
+    let mode = match body.mode.as_deref() {
+        Some("general") if state.config.general_chat.enabled => "general",
+        _ => "rag",
+    };
+    let conv = state.km_store.create_conversation(
+        &user_id,
+        &title,
+        body.workspace_scope.as_deref(),
+        mode,
+    )?;
     Ok((StatusCode::CREATED, Json(conv)))
 }
 

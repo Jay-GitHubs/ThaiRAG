@@ -128,6 +128,13 @@ impl PostgresKmStore {
             .execute(&pool)
             .await;
 
+        // Per-conversation chat mode: 'rag' (knowledge base) or 'general' (non-RAG).
+        let _ = sqlx::query(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'rag'",
+        )
+        .execute(&pool)
+        .await;
+
         // Guardrails columns on inference_logs (PR1).
         for stmt in [
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS input_guardrails_pass BOOLEAN",
@@ -3390,18 +3397,20 @@ impl KmStoreTrait for PostgresKmStore {
         user_id: &str,
         title: &str,
         workspace_scope: Option<&str>,
+        mode: &str,
     ) -> Result<super::ConversationRow> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         block_on(async {
             sqlx::query(
-                "INSERT INTO conversations (id, user_id, title, workspace_scope, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $5)",
+                "INSERT INTO conversations (id, user_id, title, workspace_scope, mode, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $6)",
             )
             .bind(&id)
             .bind(user_id)
             .bind(title)
             .bind(workspace_scope)
+            .bind(mode)
             .bind(now)
             .execute(&self.pool)
             .await
@@ -3412,6 +3421,7 @@ impl KmStoreTrait for PostgresKmStore {
             user_id: user_id.to_string(),
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
+            mode: mode.to_string(),
             created_at: now.to_rfc3339(),
             updated_at: now.to_rfc3339(),
         })
@@ -3420,7 +3430,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn list_conversations(&self, user_id: &str) -> Vec<super::ConversationRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
                  FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC",
             )
             .bind(user_id)
@@ -3437,6 +3447,7 @@ impl KmStoreTrait for PostgresKmStore {
                 user_id: row.get("user_id"),
                 title: row.get("title"),
                 workspace_scope: row.get("workspace_scope"),
+                mode: row.get("mode"),
                 created_at: created_at.to_rfc3339(),
                 updated_at: updated_at.to_rfc3339(),
             }
@@ -3447,7 +3458,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
                  FROM conversations WHERE id = $1",
             )
             .bind(conversation_id)
@@ -3464,6 +3475,7 @@ impl KmStoreTrait for PostgresKmStore {
                 user_id: row.get("user_id"),
                 title: row.get("title"),
                 workspace_scope: row.get("workspace_scope"),
+                mode: row.get("mode"),
                 created_at: created_at.to_rfc3339(),
                 updated_at: updated_at.to_rfc3339(),
             }

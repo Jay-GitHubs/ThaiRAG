@@ -358,6 +358,9 @@ pub struct ConversationRow {
     pub title: String,
     /// Optional hard scope (workspace id) this conversation is pinned to.
     pub workspace_scope: Option<String>,
+    /// Chat mode: `rag` (knowledge-base retrieval) or `general` (non-RAG plain
+    /// assistant). Set at creation; drives whether the RAG pipeline runs.
+    pub mode: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1145,6 +1148,7 @@ pub trait KmStoreTrait: Send + Sync {
         user_id: &str,
         title: &str,
         workspace_scope: Option<&str>,
+        mode: &str,
     ) -> Result<ConversationRow>;
     /// List a user's conversations, most-recently-updated first.
     fn list_conversations(&self, user_id: &str) -> Vec<ConversationRow>;

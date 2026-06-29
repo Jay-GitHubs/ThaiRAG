@@ -13,6 +13,11 @@ pub struct AppConfig {
     pub document: DocumentConfig,
     #[serde(default)]
     pub chat_pipeline: ChatPipelineConfig,
+    /// Non-RAG "general chat" mode: a plain assistant (general knowledge, coding,
+    /// image gen) that deliberately does NOT touch the KMs corpus. Separate from
+    /// the Agentic-RAG pipeline above.
+    #[serde(default)]
+    pub general_chat: GeneralChatConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
@@ -798,6 +803,61 @@ impl std::str::FromStr for RetrievalMode {
             _ => Err(()),
         }
     }
+}
+
+/// Non-RAG "general chat" mode — a plain assistant (general knowledge, coding,
+/// image generation) that never retrieves from the KMs corpus. A conversation
+/// runs in this mode when its `mode` is `general`; the RAG pipeline is bypassed
+/// entirely so general chat cannot leak corpus content.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct GeneralChatConfig {
+    /// Whether general (non-RAG) chat is offered at all.
+    #[serde(default = "default_true_val")]
+    pub enabled: bool,
+    /// Dedicated LLM for general chat. `None` = reuse the main chat LLM, so it
+    /// works out of the box; set it to point general chat at a different
+    /// (e.g. larger/cheaper general-purpose) model than the RAG pipeline.
+    #[serde(default)]
+    pub llm: Option<LlmConfig>,
+    /// System prompt / persona for the general assistant.
+    #[serde(default = "default_general_system_prompt")]
+    pub system_prompt: String,
+    /// Text-to-image generation (capability-gated on the provider).
+    #[serde(default)]
+    pub image_generation: ImageGenerationConfig,
+}
+
+impl Default for GeneralChatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            llm: None,
+            system_prompt: default_general_system_prompt(),
+            image_generation: ImageGenerationConfig::default(),
+        }
+    }
+}
+
+/// Text-to-image generation for general chat. Off by default; needs a provider
+/// that exposes an OpenAI-compatible `/v1/images/generations` endpoint.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct ImageGenerationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Image model id served by the endpoint (e.g. `dall-e-3`, or a gateway model).
+    #[serde(default)]
+    pub model: String,
+    /// Base URL for the images endpoint. Empty = reuse the general/main LLM base URL.
+    #[serde(default)]
+    pub base_url: String,
+}
+
+fn default_general_system_prompt() -> String {
+    "You are a helpful, knowledgeable general-purpose assistant. Answer clearly \
+     and concisely from your own knowledge, write and explain code when asked, \
+     and help with general tasks. You are NOT connected to the user's private \
+     knowledge base in this mode."
+        .to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -2168,6 +2228,7 @@ mod tests {
                 always_preview: false,
             },
             chat_pipeline: ChatPipelineConfig::default(),
+            general_chat: GeneralChatConfig::default(),
             mcp: McpConfig::default(),
             session: SessionConfig::default(),
             attachments: AttachmentsConfig::default(),

@@ -53,6 +53,7 @@ impl SqliteKmStore {
             "ALTER TABLE documents ADD COLUMN processing_timeline TEXT",
             "ALTER TABLE document_chunks ADD COLUMN metadata TEXT",
             "ALTER TABLE messages ADD COLUMN feedback INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'rag'",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -3365,14 +3366,15 @@ impl KmStoreTrait for SqliteKmStore {
         user_id: &str,
         title: &str,
         workspace_scope: Option<&str>,
+        mode: &str,
     ) -> Result<super::ConversationRow> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
         let now = ts(&chrono::Utc::now());
         conn.execute(
-            "INSERT INTO conversations (id, user_id, title, workspace_scope, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![id, user_id, title, workspace_scope, now],
+            "INSERT INTO conversations (id, user_id, title, workspace_scope, mode, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![id, user_id, title, workspace_scope, mode, now],
         )
         .map_err(|e| ThaiRagError::Database(format!("Failed to create conversation: {e}")))?;
         Ok(super::ConversationRow {
@@ -3380,6 +3382,7 @@ impl KmStoreTrait for SqliteKmStore {
             user_id: user_id.to_string(),
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
+            mode: mode.to_string(),
             created_at: now.clone(),
             updated_at: now,
         })
@@ -3389,7 +3392,7 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
                  FROM conversations WHERE user_id = ?1 ORDER BY updated_at DESC",
             )
             .unwrap();
@@ -3399,8 +3402,9 @@ impl KmStoreTrait for SqliteKmStore {
                 user_id: row.get(1)?,
                 title: row.get(2)?,
                 workspace_scope: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                mode: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })
         .unwrap()
@@ -3411,7 +3415,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, user_id, title, workspace_scope, created_at, updated_at
+            "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
              FROM conversations WHERE id = ?1",
             params![conversation_id],
             |row| {
@@ -3420,8 +3424,9 @@ impl KmStoreTrait for SqliteKmStore {
                     user_id: row.get(1)?,
                     title: row.get(2)?,
                     workspace_scope: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    mode: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             },
         )
@@ -5596,10 +5601,14 @@ mod tests {
         let bob = "22222222-2222-2222-2222-222222222222";
 
         let c1 = store
-            .create_conversation(alice, "Onboarding", Some("ws-1"))
+            .create_conversation(alice, "Onboarding", Some("ws-1"), "rag")
             .unwrap();
-        let c2 = store.create_conversation(alice, "Billing", None).unwrap();
-        let _cb = store.create_conversation(bob, "Bob's chat", None).unwrap();
+        let c2 = store
+            .create_conversation(alice, "Billing", None, "rag")
+            .unwrap();
+        let _cb = store
+            .create_conversation(bob, "Bob's chat", None, "rag")
+            .unwrap();
 
         assert_eq!(c1.title, "Onboarding");
         assert_eq!(c1.workspace_scope.as_deref(), Some("ws-1"));

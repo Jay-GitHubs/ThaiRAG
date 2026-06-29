@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn load_history_owner_returns_chronological() {
         let store = store();
-        let conv = store.create_conversation(ALICE, "T", None).unwrap();
+        let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         store
             .append_message(&conv.id, "user", "q1", "[]", "[]", "{}")
             .unwrap();
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn load_history_respects_limit_keeping_most_recent() {
         let store = store();
-        let conv = store.create_conversation(ALICE, "T", None).unwrap();
+        let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         for i in 0..5 {
             store
                 .append_message(&conv.id, "user", &format!("m{i}"), "[]", "[]", "{}")
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn load_history_cross_user_is_forbidden() {
         let store = store();
-        let conv = store.create_conversation(ALICE, "T", None).unwrap();
+        let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         assert_eq!(
             load_history(&store, &conv.id, BOB, 10).unwrap_err(),
             ConversationAccess::Forbidden
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn persist_turn_writes_user_and_assistant_with_metadata() {
         let store = store();
-        let conv = store.create_conversation(ALICE, "T", None).unwrap();
+        let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         let citations = vec![PersistedCitation {
             doc_id: "d1".into(),
             title: "Manual".into(),

@@ -1998,9 +1998,11 @@ pub async fn stream_conversation_message(
     // near-clone cross-contamination. An unknown/forbidden pin is ignored (falls
     // back to all the user's workspaces), so the pin can never widen access.
     let ws_ids = state.km_store.get_user_workspace_ids(uid);
-    let pinned_ws = state
-        .km_store
-        .get_conversation(&conversation_id)
+    let conv_row = state.km_store.get_conversation(&conversation_id);
+    // General (non-RAG) mode: a plain assistant that bypasses retrieval/scope
+    // entirely. Honoured per conversation (set at creation).
+    let is_general = conv_row.as_ref().map(|c| c.mode.as_str()) == Some("general");
+    let pinned_ws = conv_row
         .and_then(|c| c.workspace_scope)
         .and_then(|s| s.parse::<Uuid>().ok())
         .map(thairag_core::types::WorkspaceId);
@@ -2047,8 +2049,34 @@ pub async fn stream_conversation_message(
     let metadata_cell_clone = metadata_cell.clone();
     let scoped_pipeline = state.get_scoped_pipeline(&settings_scope);
 
+    // General mode: build a plain LLM (the dedicated general_chat model, or the
+    // main chat LLM if none) + system prompt. No retrieval/scope/citations.
+    let general_llm = if is_general {
+        let cfg = state
+            .config
+            .general_chat
+            .llm
+            .clone()
+            .unwrap_or_else(|| state.config.providers.llm.clone());
+        Some(thairag_provider_llm::create_llm_provider(&cfg))
+    } else {
+        None
+    };
+    let general_system_prompt = state.config.general_chat.system_prompt.clone();
+
     let pipeline_handle = tokio::spawn(async move {
-        if let Some(ref pipeline) = scoped_pipeline {
+        if let Some(general_llm) = general_llm {
+            // ── Non-RAG general chat: system prompt + history, straight to the LLM ──
+            drop(progress_tx);
+            let mut msgs = Vec::with_capacity(full_messages.len() + 1);
+            msgs.push(ChatMessage {
+                role: "system".to_string(),
+                content: general_system_prompt,
+                images: vec![],
+            });
+            msgs.extend(full_messages.clone());
+            general_llm.generate_stream(&msgs, None).await
+        } else if let Some(ref pipeline) = scoped_pipeline {
             if attachments.is_empty() {
                 pipeline
                     .process_stream(
