@@ -798,6 +798,10 @@ pub struct PromptRating {
 
 /// Trait abstracting the KM store. All methods are synchronous (`Send + Sync`).
 pub trait KmStoreTrait: Send + Sync {
+    /// Lightweight liveness probe (e.g. `SELECT 1`) for the deep health check.
+    /// Returns `Ok(())` if the backing store is reachable.
+    fn health_check(&self) -> Result<()>;
+
     // ── Organization ────────────────────────────────────────────────
     fn insert_org(&self, name: String) -> Result<Organization>;
     fn get_org(&self, id: OrgId) -> Result<Organization>;
