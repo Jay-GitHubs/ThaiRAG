@@ -284,6 +284,16 @@ jobs:
           cache-from: type=gha,scope=admin-${{ matrix.arch_tag }}
           cache-to: type=gha,mode=max,scope=admin-${{ matrix.arch_tag }}
 
+      - name: Build & push Chat UI by digest (GHCR)
+        id: build-chat
+        uses: docker/build-push-action@v6
+        with:
+          context: ./chat-ui
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/jay-githubs/thairag-chat,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=chat-${{ matrix.arch_tag }}
+          cache-to: type=gha,mode=max,scope=chat-${{ matrix.arch_tag }}
+
       - name: Build & push PaddleOCR sidecar by digest (GHCR)
         id: build-paddleocr
         uses: docker/build-push-action@v6
@@ -297,9 +307,10 @@ jobs:
       # Persist the per-platform digests so the merge job can pick them up.
       - name: Export digests
         run: |
-          mkdir -p /tmp/digests/api /tmp/digests/admin /tmp/digests/paddleocr
+          mkdir -p /tmp/digests/api /tmp/digests/admin /tmp/digests/chat /tmp/digests/paddleocr
           echo "${{ steps.build-api.outputs.digest }}" > /tmp/digests/api/${{ matrix.arch_tag }}
           echo "${{ steps.build-admin.outputs.digest }}" > /tmp/digests/admin/${{ matrix.arch_tag }}
+          echo "${{ steps.build-chat.outputs.digest }}" > /tmp/digests/chat/${{ matrix.arch_tag }}
           echo "${{ steps.build-paddleocr.outputs.digest }}" > /tmp/digests/paddleocr/${{ matrix.arch_tag }}
 
       - name: Upload digests
@@ -406,6 +417,36 @@ jobs:
               --tag "${GHCR}:${TAG}" \
               "${GHCR}@${ADMIN_DIGEST_AMD}" \
               "${GHCR}@${ADMIN_DIGEST_ARM}"
+            retry docker buildx imagetools create \
+              --tag "${HUB}:${TAG}" \
+              "${GHCR}:${TAG}"
+          done
+
+      - name: Create Chat UI manifest (GHCR) and mirror to Docker Hub
+        env:
+          SHA_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          retry() {
+            for attempt in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              echo "attempt ${attempt} failed: $* — retrying in $((attempt*10))s" >&2
+              sleep $((attempt*10))
+            done
+            echo "giving up after 4 attempts: $*" >&2
+            return 1
+          }
+          SHORT_SHA="${SHA_TAG:0:7}"
+          CHAT_DIGEST_AMD=$(cat /tmp/digests/chat/amd64)
+          CHAT_DIGEST_ARM=$(cat /tmp/digests/chat/arm64)
+          GHCR="ghcr.io/jay-githubs/thairag-chat"
+          HUB="jdevspecialist/thairag-chat"
+
+          for TAG in latest "${SHORT_SHA}"; do
+            retry docker buildx imagetools create \
+              --tag "${GHCR}:${TAG}" \
+              "${GHCR}@${CHAT_DIGEST_AMD}" \
+              "${GHCR}@${CHAT_DIGEST_ARM}"
             retry docker buildx imagetools create \
               --tag "${HUB}:${TAG}" \
               "${GHCR}:${TAG}"
