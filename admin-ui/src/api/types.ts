@@ -514,6 +514,40 @@ export interface UpdateSearchConfigRequest {
   rerank_top_k?: number;
 }
 
+// ── General (non-RAG) Chat Config ──────────────────────────────────
+export interface ImageGenerationConfigResponse {
+  enabled: boolean;
+  model: string;
+  base_url: string;
+}
+
+export interface GeneralChatConfigResponse {
+  enabled: boolean;
+  system_prompt: string;
+  /** Dedicated general-chat model. null = reuse the main chat LLM. */
+  llm: LlmProviderInfo | null;
+  image_generation: ImageGenerationConfigResponse;
+}
+
+export interface UpdateGeneralChatRequest {
+  enabled?: boolean;
+  system_prompt?: string;
+  llm?: {
+    kind?: string;
+    model?: string;
+    base_url?: string;
+    api_key?: string;
+    max_tokens?: number;
+  };
+  /** Drop the dedicated model and reuse the main chat LLM. */
+  clear_llm?: boolean;
+  image_generation?: {
+    enabled?: boolean;
+    model?: string;
+    base_url?: string;
+  };
+}
+
 // ── API Key Vault ──────────────────────────────────────────────────
 export interface VaultKeyInfo {
   id: string;

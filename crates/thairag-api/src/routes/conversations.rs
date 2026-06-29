@@ -66,9 +66,10 @@ pub struct ChatFeatures {
 
 /// GET /api/chat/features — feature flags for the chat client.
 pub async fn chat_features(State(state): State<AppState>) -> Json<ChatFeatures> {
+    let gc = crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store);
     Json(ChatFeatures {
-        general_chat_enabled: state.config.general_chat.enabled,
-        image_generation_enabled: state.config.general_chat.image_generation.enabled,
+        general_chat_enabled: gc.enabled,
+        image_generation_enabled: gc.image_generation.enabled,
     })
 }
 
@@ -139,8 +140,11 @@ pub async fn create_conversation(
     let user_id = current_user_id(&claims)?;
     let title = body.title.unwrap_or_default();
     // `general` is allowed only when general chat is enabled; anything else → `rag`.
+    let gc_enabled =
+        crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store)
+            .enabled;
     let mode = match body.mode.as_deref() {
-        Some("general") if state.config.general_chat.enabled => "general",
+        Some("general") if gc_enabled => "general",
         _ => "rag",
     };
     let conv = state.km_store.create_conversation(

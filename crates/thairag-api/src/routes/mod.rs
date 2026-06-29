@@ -235,6 +235,11 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/chat-pipeline",
             get(settings::get_chat_pipeline_config).put(settings::update_chat_pipeline_config),
         )
+        // Settings — general (non-RAG) chat
+        .route(
+            "/settings/general-chat",
+            get(settings::get_general_chat_config).put(settings::update_general_chat_config),
+        )
         // Settings — scoped settings
         .route("/settings/scope-info", get(settings::get_scope_info))
         .route("/settings/scoped", delete(settings::reset_scoped_setting))
