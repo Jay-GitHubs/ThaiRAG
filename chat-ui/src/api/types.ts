@@ -30,11 +30,16 @@ export interface ProviderInfo {
 }
 
 // ── Conversations & messages (mirror the backend store rows) ──────────
+/** Chat mode: 'rag' searches the knowledge base; 'general' is a plain assistant. */
+export type ChatMode = 'rag' | 'general';
+
 export interface Conversation {
   id: string;
   user_id: string;
   title: string;
   workspace_scope?: string | null;
+  /** 'rag' (default) or 'general' (non-RAG plain assistant). */
+  mode?: ChatMode;
   created_at: string;
   updated_at: string;
 }

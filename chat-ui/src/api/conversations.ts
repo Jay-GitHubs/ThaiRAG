@@ -21,10 +21,12 @@ export async function listWorkspaces(): Promise<WorkspaceOption[]> {
 export async function createConversation(
   title?: string,
   workspaceScope?: string | null,
+  mode?: 'rag' | 'general',
 ): Promise<Conversation> {
   const res = await client.post<Conversation>('/api/chat/conversations', {
     title: title ?? '',
     ...(workspaceScope ? { workspace_scope: workspaceScope } : {}),
+    ...(mode ? { mode } : {}),
   });
   return res.data;
 }

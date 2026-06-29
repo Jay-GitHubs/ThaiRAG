@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Drawer, Grid, Layout, Modal, Skeleton, Tag, message as antdMessage } from 'antd';
+import {
+  Button,
+  Drawer,
+  Grid,
+  Layout,
+  Modal,
+  Segmented,
+  Skeleton,
+  Tag,
+  message as antdMessage,
+} from 'antd';
 import {
   DatabaseOutlined,
   DownOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
   ReloadOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import {
   listConversations,
@@ -57,6 +68,9 @@ export function ChatPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   // Scope chosen for the *next* new conversation (null = all workspaces).
   const [newScope, setNewScope] = useState<string | null>(null);
+  // Mode chosen for the *next* new conversation: 'rag' (knowledge base) or
+  // 'general' (non-RAG plain assistant).
+  const [newMode, setNewMode] = useState<'rag' | 'general'>('rag');
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamStartRef = useRef(0);
@@ -247,16 +261,13 @@ export function ChatPage() {
     [activeId],
   );
 
-  const handleNew = useCallback(async () => {
-    try {
-      const conv = await createConversation(undefined, newScope);
-      setConversations((prev) => [conv, ...prev]);
-      setActiveId(conv.id);
-      setMessages([]);
-    } catch {
-      antdMessage.error('Failed to create conversation');
-    }
-  }, [newScope]);
+  // Start a fresh chat: clear the view and let the welcome screen's mode/scope
+  // pickers choose. The conversation is created lazily on the first message
+  // (handleSend), so toggling General/Knowledge-Base actually applies to it.
+  const handleNew = useCallback(() => {
+    setActiveId(null);
+    setMessages([]);
+  }, []);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -287,7 +298,11 @@ export function ChatPage() {
       let isFirstMessage = messages.length === 0;
       if (!convId) {
         try {
-          const conv = await createConversation(undefined, newScope);
+          const conv = await createConversation(
+            undefined,
+            newMode === 'general' ? null : newScope,
+            newMode,
+          );
           setConversations((prev) => [conv, ...prev]);
           setActiveId(conv.id);
           convId = conv.id;
@@ -344,7 +359,7 @@ export function ChatPage() {
           });
       }
     },
-    [activeId, messages.length, newScope, handleStreamEvent, updateLastAssistant],
+    [activeId, messages.length, newScope, newMode, handleStreamEvent, updateLastAssistant],
   );
 
   const handleRegenerate = useCallback(async () => {
@@ -448,10 +463,14 @@ export function ChatPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [handleNew, handleStop, sending]);
 
-  const suggestions = [
-    'สรุปขั้นตอนการขอสินเชื่อ',
-    'What documents do I need to apply?',
-  ];
+  // Effective mode: the active conversation's mode once created, else the choice
+  // for the next new chat. General mode = non-RAG (no corpus retrieval).
+  const chatMode: 'rag' | 'general' = activeConversation?.mode ?? newMode;
+  const isGeneral = chatMode === 'general';
+
+  const suggestions = isGeneral
+    ? ['Write a Python function to parse CSV', 'อธิบายเรื่อง machine learning แบบสั้น ๆ']
+    : ['สรุปขั้นตอนการขอสินเชื่อ', 'What documents do I need to apply?'];
 
   // Scope shown for the active conversation: its pin once created, else the
   // picker selection for the next new chat.
@@ -533,6 +552,7 @@ export function ChatPage() {
         )}
         {messages.length > 0 && (
           <div
+            data-testid="mode-bar"
             style={{
               borderBottom: '1px solid var(--line)',
               padding: '9px 20px',
@@ -543,14 +563,26 @@ export function ChatPage() {
               color: 'var(--text-muted)',
             }}
           >
-            <DatabaseOutlined />
-            <span>Searching</span>
-            <Tag
-              color={activeConversation?.workspace_scope ? 'green' : 'default'}
-              style={{ margin: 0 }}
-            >
-              {activeScopeName ?? 'All my workspaces'}
-            </Tag>
+            {isGeneral ? (
+              <>
+                <RobotOutlined />
+                <span>General chat</span>
+                <Tag color="default" style={{ margin: 0 }}>
+                  not using your documents
+                </Tag>
+              </>
+            ) : (
+              <>
+                <DatabaseOutlined />
+                <span>Searching</span>
+                <Tag
+                  color={activeConversation?.workspace_scope ? 'green' : 'default'}
+                  style={{ margin: 0 }}
+                >
+                  {activeScopeName ?? 'All my workspaces'}
+                </Tag>
+              </>
+            )}
           </div>
         )}
         <div
@@ -589,13 +621,30 @@ export function ChatPage() {
                   color: 'var(--text)',
                 }}
               >
-                What do you want to find?
+                {isGeneral ? 'How can I help?' : 'What do you want to find?'}
               </h1>
               <p style={{ color: 'var(--text-muted)', fontSize: 16, marginTop: 12 }}>
-                ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง
+                {isGeneral
+                  ? 'General assistant — answers from the model’s own knowledge, not your documents.'
+                  : 'ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง'}
               </p>
-              {workspaces.length > 0 && (
-                <div style={{ marginTop: 22 }}>
+
+              {/* Mode picker for the next new chat: Knowledge Base (RAG) vs General. */}
+              <div style={{ marginTop: 22 }}>
+                <Segmented
+                  data-testid="mode-segmented"
+                  value={newMode}
+                  onChange={(v) => setNewMode(v as 'rag' | 'general')}
+                  options={[
+                    { label: 'Knowledge base', value: 'rag', icon: <DatabaseOutlined /> },
+                    { label: 'General', value: 'general', icon: <RobotOutlined /> },
+                  ]}
+                />
+              </div>
+
+              {/* Scope picker only matters for RAG — general chat never searches the corpus. */}
+              {!isGeneral && workspaces.length > 0 && (
+                <div style={{ marginTop: 16 }}>
                   <div className="eyebrow" style={{ marginBottom: 8 }}>
                     Search in
                   </div>
