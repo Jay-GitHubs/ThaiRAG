@@ -158,6 +158,78 @@ fn linearized_to_markdown(linearized: &str) -> String {
     out
 }
 
+/// Re-render a row-linearized dense grid as self-describing rows: each data cell
+/// is prefixed with its column header (`header: value`), so a row carries its own
+/// header↔value bindings instead of relying on ordinal column position. Dense
+/// tables (esp. Thai tax tables) make small models miscount columns and read an
+/// adjacent row's value; header-anchoring removes that positional guess.
+///
+/// The first line is treated as the header. Returns `None` when anchoring can't
+/// help or would misfire: fewer than two data rows, or a header without at least
+/// two word-bearing cells (headerless / numeric-only first rows — a single-column
+/// list or a data-only grid gains nothing and would tag values with values).
+fn anchored_rows(linearized: &str) -> Option<String> {
+    let rows: Vec<Vec<&str>> = linearized
+        .lines()
+        .map(|l| l.split(" | ").map(|c| c.trim()).collect())
+        .collect();
+    // Need a header plus at least two data rows for adjacent-row bleed to exist.
+    if rows.len() < 3 {
+        return None;
+    }
+    let header = &rows[0];
+    // A real header row carries words (Thai or Latin), not just numbers/symbols.
+    // Unicode `is_alphabetic` covers Thai. Guards against anchoring a data-only
+    // grid whose first row is values.
+    let wordy = header
+        .iter()
+        .filter(|h| h.chars().any(|c| c.is_alphabetic()))
+        .count();
+    if wordy < 2 {
+        return None;
+    }
+    let mut out = String::new();
+    for (i, row) in rows[1..].iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let mut first = true;
+        for (c, cell) in row.iter().enumerate() {
+            if cell.is_empty() {
+                continue; // merge-fill / ragged gaps carry no value to bind
+            }
+            if !first {
+                out.push_str(" | ");
+            }
+            first = false;
+            match header.get(c) {
+                Some(h) if !h.is_empty() => {
+                    out.push_str(h);
+                    out.push_str(": ");
+                    out.push_str(cell);
+                }
+                // Cell beyond the header width (ragged colspan) — emit untagged
+                // rather than inventing a column name.
+                _ => out.push_str(cell),
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The LLM-facing payload for a reconstructed table: the dense markdown grid,
+/// followed by a header-anchored per-row block when the grid has a usable header.
+/// The grid preserves structure and merged-cell context (a row-lookup model can
+/// still see the whole table); the anchored rows give unambiguous header↔value
+/// bindings so the model needn't count columns to answer "value of row N".
+fn table_content(linearized: &str) -> String {
+    let md = linearized_to_markdown(linearized);
+    match anchored_rows(linearized) {
+        Some(rows) => format!("{md}\n\nRow values:\n{rows}"),
+        None => md,
+    }
+}
+
 /// Build one atomic chunk for a lattice-reconstructed table page. The chunk
 /// content is a dense markdown table (merged values filled across their span) —
 /// the LLM-facing form — while the row-linearized text is the embedding input so
@@ -180,7 +252,7 @@ fn lattice_table_chunk(
         chunk_id: ChunkId::new(),
         doc_id,
         workspace_id,
-        content: linearized_to_markdown(&linearized),
+        content: table_content(&linearized),
         chunk_index,
         embedding: None,
         metadata: Some(ChunkMetadata {
@@ -209,7 +281,7 @@ fn office_table_chunk(
         chunk_id: ChunkId::new(),
         doc_id,
         workspace_id,
-        content: linearized_to_markdown(&table.linearized),
+        content: table_content(&table.linearized),
         chunk_index,
         embedding: None,
         metadata: Some(ChunkMetadata {
@@ -1992,6 +2064,85 @@ mod tests {
         let lines: Vec<&str> = md.lines().collect();
         assert_eq!(lines[0], "| a\\|b | c |", "literal pipe escaped");
         assert_eq!(lines[2], "| d |  |", "short row padded to column count");
+    }
+
+    #[test]
+    fn anchored_rows_binds_header_to_each_value() {
+        // A dense Thai tax-style table: the model must not count columns to bind
+        // "ลำดับที่ 10" to its "อัตราภาษีร้อยละ" cell. Anchoring puts both on the
+        // same line, prefixed by the column header.
+        let lin = "ลำดับที่ | อัตราภาษีร้อยละ | กำหนดเวลานำส่ง\n\
+                   1 | 3.0 | ภายใน 7 วัน\n\
+                   2 | 5.0 | ภายใน 7 วัน\n\
+                   10 | 3.0 | สิ้นเดือน";
+        let out = anchored_rows(lin).expect("header + 3 data rows anchors");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "one anchored line per data row, no header line"
+        );
+        assert_eq!(
+            lines[0],
+            "ลำดับที่: 1 | อัตราภาษีร้อยละ: 3.0 | กำหนดเวลานำส่ง: ภายใน 7 วัน"
+        );
+        // Row 10's rate (3.0) is bound to its header ON THE SAME LINE — the exact
+        // adjacent-row-bleed miss the oracle surfaced (row 10 got row 2's 5.0).
+        assert_eq!(
+            lines[2],
+            "ลำดับที่: 10 | อัตราภาษีร้อยละ: 3.0 | กำหนดเวลานำส่ง: สิ้นเดือน"
+        );
+    }
+
+    #[test]
+    fn anchored_rows_skips_empty_cells_and_untags_ragged_overflow() {
+        // Middle cell empty (merge-fill gap) is dropped; a cell past the header
+        // width (ragged colspan) is emitted untagged rather than mis-named.
+        let lin = "Region | Sales\nNorth |  | extra\nSouth | 200";
+        let out = anchored_rows(lin).expect("wordy header + 2 data rows");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[0], "Region: North | extra",
+            "empty dropped, overflow untagged"
+        );
+        assert_eq!(lines[1], "Region: South | Sales: 200");
+    }
+
+    #[test]
+    fn anchored_rows_declines_when_it_cannot_help() {
+        // Too few data rows (no adjacent row to confuse with).
+        assert!(
+            anchored_rows("A | B\n1 | 2").is_none(),
+            "header + 1 data row"
+        );
+        // Headerless / numeric-only first row must not tag values with values.
+        assert!(
+            anchored_rows("1 | 2\n3 | 4\n5 | 6").is_none(),
+            "numeric first row is not a header"
+        );
+        // Single wordy header cell — a bare list gains nothing.
+        assert!(
+            anchored_rows("Name\nAlice\nBob").is_none(),
+            "one-column list has no columns to bind"
+        );
+    }
+
+    #[test]
+    fn table_content_appends_anchored_block_to_markdown() {
+        let lin = "ลำดับที่ | อัตรา\n1 | 3.0\n2 | 5.0";
+        let c = table_content(lin);
+        assert!(
+            c.contains("| --- |"),
+            "keeps the markdown grid for structure"
+        );
+        assert!(c.contains("Row values:"), "appends the anchored block");
+        assert!(
+            c.contains("ลำดับที่: 2 | อัตรา: 5.0"),
+            "anchored row present with header-tagged values"
+        );
+        // A table that can't be anchored stays pure markdown (no stray heading).
+        let plain = table_content("1 | 2\n3 | 4");
+        assert!(!plain.contains("Row values:"));
     }
 
     #[test]
