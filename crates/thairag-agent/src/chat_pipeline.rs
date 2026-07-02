@@ -103,7 +103,11 @@ pub(crate) fn insufficient_context_message(
     context: &CuratedContext,
     has_external_context: bool,
     min_vector_relevance: f32,
+    user_query: &str,
 ) -> Option<String> {
+    // Refusals are user-visible answers — speak the user's language. Detection
+    // runs on the query (there is no answer yet at guard time).
+    let thai = crate::confidence::detect_lang(user_query) == crate::confidence::Lang::Th;
     // When the client supplied its own context (e.g. an Open WebUI file
     // upload injects the retrieved file text as a system message), an empty
     // knowledge base is NOT a dead end — the answer LLM can work from that
@@ -114,10 +118,17 @@ pub(crate) fn insufficient_context_message(
     }
     if context.chunks.is_empty() {
         info!("Pipeline: no context, returning insufficient-info response");
+        // The Thai variant deliberately contains "ไม่เพียงพอ" so is_refusal()
+        // recognizes it, mirroring how the English one matches "enough information".
         return Some(
-            "I don't have enough information in the knowledge base to answer this question. \
-             Please try rephrasing your query or check if the relevant documents have been uploaded."
-                .to_string(),
+            if thai {
+                "ขออภัย ฉันมีข้อมูลไม่เพียงพอในฐานความรู้ที่จะตอบคำถามนี้ \
+                 กรุณาลองถามด้วยคำอื่น หรือตรวจสอบว่าได้อัปโหลดเอกสารที่เกี่ยวข้องแล้ว"
+            } else {
+                "I don't have enough information in the knowledge base to answer this question. \
+                 Please try rephrasing your query or check if the relevant documents have been uploaded."
+            }
+            .to_string(),
         );
     }
 
@@ -135,11 +146,7 @@ pub(crate) fn insufficient_context_message(
             best_score,
             "Pipeline: context too low quality, returning insufficient-info response"
         );
-        return Some(
-            "I found some documents but they don't appear to be relevant to your question. \
-             Could you rephrase your query or provide more details?"
-                .to_string(),
-        );
+        return Some(irrelevant_documents_message(thai));
     }
 
     // Absolute dense-relevance gate. The `best_score` check above is dead without
@@ -168,15 +175,24 @@ pub(crate) fn insufficient_context_message(
                 threshold = min_vector_relevance,
                 "Pipeline: best chunk below vector-relevance floor, returning insufficient-info response"
             );
-            return Some(
-                "I found some documents but they don't appear to be relevant to your question. \
-                 Could you rephrase your query or provide more details?"
-                    .to_string(),
-            );
+            return Some(irrelevant_documents_message(thai));
         }
     }
 
     None
+}
+
+/// The below-relevance-floor refusal, in the user's language. The Thai variant
+/// contains "ไม่พบข้อมูล" so `is_refusal()` recognizes it as a non-answer.
+fn irrelevant_documents_message(thai: bool) -> String {
+    if thai {
+        "ฉันพบเอกสารบางส่วนแต่ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามของคุณ \
+         กรุณาถามใหม่ด้วยคำอื่นหรือให้รายละเอียดเพิ่มเติม"
+    } else {
+        "I found some documents but they don't appear to be relevant to your question. \
+         Could you rephrase your query or provide more details?"
+    }
+    .to_string()
 }
 
 /// Per-request LLM call budget. Shared across pipeline stages to enforce
@@ -1143,9 +1159,12 @@ impl ChatPipeline {
                 // ── Layer-1 context guard (parity with the streaming path):
                 // refuse on empty/irrelevant retrieval instead of answering
                 // from general knowledge. ──
-                if let Some(msg) =
-                    self.context_insufficient_message(&context, has_external_context, &metadata)
-                {
+                if let Some(msg) = self.context_insufficient_message(
+                    &context,
+                    has_external_context,
+                    &metadata,
+                    user_query,
+                ) {
                     return Ok(LlmResponse {
                         content: msg,
                         usage: LlmUsage::default(),
@@ -1693,7 +1712,7 @@ impl ChatPipeline {
         // supplied no context of its own, refuse instead of letting the
         // generator answer from general knowledge. ──
         if let Some(msg) =
-            self.context_insufficient_message(&context, has_external_context, metadata)
+            self.context_insufficient_message(&context, has_external_context, metadata, user_query)
         {
             return Ok(LlmResponse {
                 content: msg,
@@ -2200,9 +2219,12 @@ impl ChatPipeline {
                 let context = self
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
-                if let Some(resp) =
-                    self.context_insufficient_response(&context, has_external_context, &metadata)
-                {
+                if let Some(resp) = self.context_insufficient_response(
+                    &context,
+                    has_external_context,
+                    &metadata,
+                    user_query,
+                ) {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
                         remaining_budget = budget.remaining(),
@@ -2328,9 +2350,12 @@ impl ChatPipeline {
                 let context = self
                     .maybe_live_retrieve(user_query, scope, context, &budget, &progress)
                     .await?;
-                if let Some(resp) =
-                    self.context_insufficient_response(&context, has_external_context, &metadata)
-                {
+                if let Some(resp) = self.context_insufficient_response(
+                    &context,
+                    has_external_context,
+                    &metadata,
+                    user_query,
+                ) {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
                         remaining_budget = budget.remaining(),
@@ -2452,17 +2477,26 @@ impl ChatPipeline {
         context: &CuratedContext,
         has_external_context: bool,
         metadata: &Option<MetadataCell>,
+        user_query: &str,
     ) -> Option<String> {
         let msg = insufficient_context_message(
             context,
             has_external_context,
             self.config.min_vector_relevance,
+            user_query,
         )?;
         if self.config.confidence_scoring_enabled {
+            let thai = crate::confidence::detect_lang(user_query) == crate::confidence::Lang::Th;
             Self::update_metadata(metadata, |m| {
                 m.confidence = None;
-                m.confidence_summary =
-                    Some("No relevant sources were found to answer this question".to_string());
+                m.confidence_summary = Some(
+                    if thai {
+                        "ไม่พบแหล่งข้อมูลที่เกี่ยวข้องสำหรับตอบคำถามนี้"
+                    } else {
+                        "No relevant sources were found to answer this question"
+                    }
+                    .to_string(),
+                );
                 m.confidence_factors = Vec::new();
             });
         }
@@ -2474,8 +2508,9 @@ impl ChatPipeline {
         context: &CuratedContext,
         has_external_context: bool,
         metadata: &Option<MetadataCell>,
+        user_query: &str,
     ) -> Option<LlmStreamResponse> {
-        self.context_insufficient_message(context, has_external_context, metadata)
+        self.context_insufficient_message(context, has_external_context, metadata, user_query)
             .map(|msg| LlmStreamResponse {
                 stream: Box::pin(tokio_stream::once(Ok(msg))),
                 usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
@@ -3262,9 +3297,9 @@ mod tests {
 
     #[test]
     fn empty_context_refuses_unless_client_supplied_context() {
-        assert!(insufficient_context_message(&ctx(&[]), false, 0.25).is_some());
+        assert!(insufficient_context_message(&ctx(&[]), false, 0.25, "test query").is_some());
         // OWUI-style injected file context suppresses the short-circuit.
-        assert!(insufficient_context_message(&ctx(&[]), true, 0.25).is_none());
+        assert!(insufficient_context_message(&ctx(&[]), true, 0.25, "test query").is_none());
     }
 
     #[test]
@@ -3272,27 +3307,65 @@ mod tests {
         // The post-RRF case with no reranker: relevance_score is 1.0 (top hit
         // normalized) but the absolute cosine is junk → must still refuse.
         assert!(
-            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.12, 0.08]), false, 0.25)
-                .is_some()
+            insufficient_context_message(
+                &ctx_vec(&[1.0, 0.5], &[0.12, 0.08]),
+                false,
+                0.25,
+                "test query"
+            )
+            .is_some()
         );
         // A genuinely relevant top hit (cosine above the floor) is answered.
         assert!(
-            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.55, 0.3]), false, 0.25)
-                .is_none()
+            insufficient_context_message(
+                &ctx_vec(&[1.0, 0.5], &[0.55, 0.3]),
+                false,
+                0.25,
+                "test query"
+            )
+            .is_none()
         );
         // Floor of 0.0 disables the vector gate (back to relevance-only behavior).
         assert!(
-            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[0.12, 0.08]), false, 0.0)
-                .is_none()
+            insufficient_context_message(
+                &ctx_vec(&[1.0, 0.5], &[0.12, 0.08]),
+                false,
+                0.0,
+                "test query"
+            )
+            .is_none()
         );
         // No cosine at all (lexical/image-only) → vector gate is skipped.
-        assert!(insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[]), false, 0.25).is_none());
+        assert!(
+            insufficient_context_message(&ctx_vec(&[1.0, 0.5], &[]), false, 0.25, "test query")
+                .is_none()
+        );
     }
 
     #[test]
     fn low_relevance_context_refuses() {
-        assert!(insufficient_context_message(&ctx(&[0.05, 0.1]), false, 0.25).is_some());
-        assert!(insufficient_context_message(&ctx(&[0.6, 0.8]), false, 0.25).is_none());
+        assert!(
+            insufficient_context_message(&ctx(&[0.05, 0.1]), false, 0.25, "test query").is_some()
+        );
+        assert!(
+            insufficient_context_message(&ctx(&[0.6, 0.8]), false, 0.25, "test query").is_none()
+        );
+    }
+
+    #[test]
+    fn thai_query_gets_thai_refusal_that_is_a_recognized_refusal() {
+        let msg = insufficient_context_message(&ctx(&[]), false, 0.25, "วิธีทำต้มยำกุ้ง").unwrap();
+        assert!(msg.contains("ไม่เพียงพอ"), "msg: {msg}");
+        assert!(crate::citation_parser::is_refusal(&msg));
+
+        let msg = insufficient_context_message(&ctx(&[0.05]), false, 0.25, "วิธีทำต้มยำกุ้ง").unwrap();
+        assert!(msg.contains("ไม่พบข้อมูล"), "msg: {msg}");
+        assert!(crate::citation_parser::is_refusal(&msg));
+
+        // English queries keep the English refusals (also refusal-recognized).
+        let msg = insufficient_context_message(&ctx(&[]), false, 0.25, "how to cook").unwrap();
+        assert!(msg.contains("knowledge base"), "msg: {msg}");
+        assert!(crate::citation_parser::is_refusal(&msg));
     }
     use thairag_core::types::ChatMessage;
 
