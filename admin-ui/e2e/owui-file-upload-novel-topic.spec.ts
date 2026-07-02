@@ -60,6 +60,9 @@ const REFUSAL_MARKERS = [
   "don’t have enough information in the knowledge base",
   "don't appear to be relevant to your question",
   "don’t appear to be relevant to your question",
+  // Thai variants — the guard localizes its refusals to the query language.
+  'ข้อมูลไม่เพียงพอในฐานความรู้',
+  'ไม่พบข้อมูลที่เกี่ยวข้องกับคำถาม',
 ];
 
 mkdirSync(SHOTS, { recursive: true });
