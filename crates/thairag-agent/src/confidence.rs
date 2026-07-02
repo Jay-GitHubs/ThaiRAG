@@ -28,6 +28,12 @@
 //!
 //! Each contributing signal is returned as a [`ConfidenceFactor`] so the UI can
 //! show the breakdown behind the number. No LLM call, no added latency.
+//!
+//! All user-facing strings (summary, factor labels/details, and the trailing
+//! "what this score means" explainer) are localized to the answer's language —
+//! Thai answers get Thai explanations. Detection is script-based on the answer
+//! text itself, so it needs no query-analysis plumbing and matches what the
+//! user is actually reading.
 
 use thairag_core::types::ConfidenceFactor;
 
@@ -43,6 +49,24 @@ pub struct ConfidenceAssessment {
     pub score: Option<u8>,
     pub summary: String,
     pub factors: Vec<ConfidenceFactor>,
+}
+
+/// Language for the user-facing strings, detected from the answer itself.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Lang {
+    En,
+    Th,
+}
+
+/// Thai wins when the answer has more Thai letters than Latin ones — answers
+/// over Thai corpora routinely mix scripts (numbers, product names, units).
+pub(crate) fn detect_lang(answer: &str) -> Lang {
+    let thai = answer
+        .chars()
+        .filter(|c| ('\u{0E00}'..='\u{0E7F}').contains(c))
+        .count();
+    let latin = answer.chars().filter(char::is_ascii_alphabetic).count();
+    if thai > latin { Lang::Th } else { Lang::En }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -201,15 +225,29 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
         return None;
     }
 
+    let lang = detect_lang(answer);
+
     // 1. Refusal: a non-answer isn't scored — surface a "No answer" state (no
     //    number), consistent with how the no-context gate marks a refusal.
     if is_refusal(answer) {
+        let (summary, label, detail) = match lang {
+            Lang::Th => (
+                "คำตอบระบุว่าไม่พบข้อมูลในแหล่งที่มา",
+                "ไม่มีคำตอบ",
+                "ปฏิเสธการตอบ / ไม่พบข้อมูลที่เกี่ยวข้องในแหล่งที่มาที่ค้นคืนได้",
+            ),
+            Lang::En => (
+                "The answer reports the information wasn't found in the sources",
+                "No answer",
+                "Declined / no relevant information in the retrieved sources",
+            ),
+        };
         return Some(ConfidenceAssessment {
             score: None,
-            summary: "The answer reports the information wasn't found in the sources".to_string(),
+            summary: summary.to_string(),
             factors: vec![ConfidenceFactor {
-                label: "No answer".to_string(),
-                detail: "Declined / no relevant information in the retrieved sources".to_string(),
+                label: label.to_string(),
+                detail: detail.to_string(),
             }],
         });
     }
@@ -246,8 +284,15 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
     // partial coverage, not a requirement for the top score.
     let mut score = 4.0 + coverage * 6.0;
     factors.push(ConfidenceFactor {
-        label: "Citation coverage".to_string(),
-        detail: format!("{cited_claims} of {claims} claims cite a source"),
+        label: match lang {
+            Lang::Th => "การอ้างอิงแหล่งที่มา",
+            Lang::En => "Citation coverage",
+        }
+        .to_string(),
+        detail: match lang {
+            Lang::Th => format!("{cited_claims} จาก {claims} ข้อความอ้างอิงแหล่งที่มา"),
+            Lang::En => format!("{cited_claims} of {claims} claims cite a source"),
+        },
     });
 
     if distinct_sources >= 2 {
@@ -255,34 +300,70 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
     }
     if !citations.is_empty() {
         factors.push(ConfidenceFactor {
-            label: "Corroboration".to_string(),
-            detail: format!(
-                "{distinct_sources} distinct {} cited",
-                if distinct_sources == 1 {
-                    "document"
-                } else {
-                    "documents"
-                }
-            ),
+            label: match lang {
+                Lang::Th => "เอกสารอ้างอิง",
+                Lang::En => "Corroboration",
+            }
+            .to_string(),
+            detail: match lang {
+                Lang::Th => format!("อ้างอิงเอกสาร {distinct_sources} ฉบับ"),
+                Lang::En => format!(
+                    "{distinct_sources} distinct {} cited",
+                    if distinct_sources == 1 {
+                        "document"
+                    } else {
+                        "documents"
+                    }
+                ),
+            },
         });
     }
 
     // 4. Retrieval — nothing retrieved means nothing to ground against; cap low.
+    let retrieval_label = match lang {
+        Lang::Th => "การค้นคืนข้อมูล",
+        Lang::En => "Retrieval",
+    };
     if context.chunks.is_empty() {
         score = score.min(2.0);
         factors.push(ConfidenceFactor {
-            label: "Retrieval".to_string(),
-            detail: "No supporting context was retrieved".to_string(),
+            label: retrieval_label.to_string(),
+            detail: match lang {
+                Lang::Th => "ไม่พบเนื้อหาสนับสนุนจากการค้นคืน".to_string(),
+                Lang::En => "No supporting context was retrieved".to_string(),
+            },
         });
     } else {
         factors.push(ConfidenceFactor {
-            label: "Retrieval".to_string(),
-            detail: format!("{} supporting chunks in context", context.chunks.len()),
+            label: retrieval_label.to_string(),
+            detail: match lang {
+                Lang::Th => format!("มีเนื้อหาสนับสนุน {} ส่วนในบริบท", context.chunks.len()),
+                Lang::En => format!("{} supporting chunks in context", context.chunks.len()),
+            },
         });
     }
 
+    // Trailing explainer so the number itself is understandable: what the
+    // scale measures (source grounding) and what it does NOT (correctness).
+    factors.push(ConfidenceFactor {
+        label: match lang {
+            Lang::Th => "ความหมายของคะแนน",
+            Lang::En => "About this score",
+        }
+        .to_string(),
+        detail: match lang {
+            Lang::Th => "คะแนน 1–10 วัดว่าคำตอบอ้างอิงแหล่งที่มาครบถ้วนเพียงใด (10 = ทุกข้อความมีแหล่งอ้างอิง, \
+                         4 = ไม่มีการอ้างอิง, 1–2 = ไม่พบข้อมูลสนับสนุน) ไม่ได้วัดความถูกต้องของเนื้อหา"
+                .to_string(),
+            Lang::En => "The 1–10 score measures how completely the answer cites its sources \
+                         (10 = every statement cited, 4 = no citations, 1–2 = nothing \
+                         retrieved) — not whether the content is factually correct"
+                .to_string(),
+        },
+    });
+
     let score = score.round().clamp(1.0, 10.0) as u8;
-    let summary = confidence_summary(score, cited_claims, claims, distinct_sources, context);
+    let summary = confidence_summary(lang, score, cited_claims, claims, distinct_sources, context);
 
     Some(ConfidenceAssessment {
         score: Some(score),
@@ -293,6 +374,7 @@ pub fn assess(answer: &str, context: &CuratedContext) -> Option<ConfidenceAssess
 
 /// Build the one-line rationale shown next to the score.
 fn confidence_summary(
+    lang: Lang,
     score: u8,
     cited_claims: usize,
     claims: usize,
@@ -300,24 +382,40 @@ fn confidence_summary(
     context: &CuratedContext,
 ) -> String {
     if context.chunks.is_empty() {
-        return "No supporting context was retrieved for this answer".to_string();
+        return match lang {
+            Lang::Th => "ไม่พบเนื้อหาสนับสนุนสำหรับคำตอบนี้",
+            Lang::En => "No supporting context was retrieved for this answer",
+        }
+        .to_string();
     }
     if cited_claims == 0 {
-        return "The answer cites no sources, so its claims couldn't be verified".to_string();
+        return match lang {
+            Lang::Th => "คำตอบไม่มีการอ้างอิงแหล่งที่มา จึงไม่สามารถตรวจสอบข้อความได้",
+            Lang::En => "The answer cites no sources, so its claims couldn't be verified",
+        }
+        .to_string();
     }
-    let band = if score >= 8 {
-        "Well grounded"
-    } else if score >= 5 {
-        "Partly grounded"
-    } else {
-        "Weakly grounded"
+    let band = match (lang, score) {
+        (Lang::Th, 8..) => "อ้างอิงแหล่งที่มาครบถ้วน",
+        (Lang::Th, 5..) => "อ้างอิงแหล่งที่มาบางส่วน",
+        (Lang::Th, _) => "อ้างอิงแหล่งที่มาน้อย",
+        (Lang::En, 8..) => "Well grounded",
+        (Lang::En, 5..) => "Partly grounded",
+        (Lang::En, _) => "Weakly grounded",
     };
-    let src = if distinct_sources == 1 {
-        "1 document".to_string()
-    } else {
-        format!("{distinct_sources} documents")
-    };
-    format!("{band}: {cited_claims} of {claims} claims cite a source across {src}")
+    match lang {
+        Lang::Th => format!(
+            "{band}: {cited_claims} จาก {claims} ข้อความอ้างอิงแหล่งที่มา จากเอกสาร {distinct_sources} ฉบับ"
+        ),
+        Lang::En => {
+            let src = if distinct_sources == 1 {
+                "1 document".to_string()
+            } else {
+                format!("{distinct_sources} documents")
+            };
+            format!("{band}: {cited_claims} of {claims} claims cite a source across {src}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +586,51 @@ mod tests {
     #[test]
     fn empty_answer_is_none() {
         assert!(assess("   ", &ctx(&[DocId::new()])).is_none());
+    }
+
+    #[test]
+    fn thai_answer_gets_thai_summary_factors_and_explainer() {
+        let a = assess("วงเงินกู้สูงสุด 100 ล้านบาท [1]", &ctx(&[DocId::new()])).unwrap();
+        assert!(a.summary.contains("อ้างอิงแหล่งที่มา"), "summary: {}", a.summary);
+        assert!(a.factors.iter().any(|f| f.label == "การอ้างอิงแหล่งที่มา"));
+        assert!(a.factors.iter().any(|f| f.label == "การค้นคืนข้อมูล"));
+        // The scale explainer rides along so the number is self-explanatory.
+        let about = a
+            .factors
+            .iter()
+            .find(|f| f.label == "ความหมายของคะแนน")
+            .expect("scale explainer present");
+        assert!(about.detail.contains("10 ="));
+    }
+
+    #[test]
+    fn english_answer_stays_english_with_explainer() {
+        let a = assess("Max loan is 100M [1].", &ctx(&[DocId::new()])).unwrap();
+        assert!(
+            a.summary.starts_with("Well grounded"),
+            "summary: {}",
+            a.summary
+        );
+        assert!(a.factors.iter().any(|f| f.label == "Citation coverage"));
+        assert!(a.factors.iter().any(|f| f.label == "About this score"));
+    }
+
+    #[test]
+    fn thai_refusal_is_localized() {
+        let a = assess("ไม่พบข้อมูลเกี่ยวกับเรื่องนี้ในเอกสาร", &ctx(&[DocId::new()])).unwrap();
+        assert_eq!(a.score, None);
+        assert_eq!(a.factors[0].label, "ไม่มีคำตอบ");
+        assert!(a.summary.contains("ไม่พบข้อมูล"));
+    }
+
+    #[test]
+    fn mixed_answer_mostly_thai_counts_as_thai() {
+        // Thai sentence with Latin product name + digits — Thai letters dominate.
+        let a = assess(
+            "แบตเตอรี่ของ Nimbus Z9 มีความจุ 5,000 mAh [1]",
+            &ctx(&[DocId::new()]),
+        )
+        .unwrap();
+        assert!(a.factors.iter().any(|f| f.label == "การอ้างอิงแหล่งที่มา"));
     }
 }

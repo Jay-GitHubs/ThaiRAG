@@ -474,6 +474,22 @@ function AnswerActions({
   // Status hues are theme-agnostic mid-tones (read on light + dark themes).
   const confColor =
     conf == null ? 'var(--text-muted)' : conf >= 7 ? '#369e62' : conf >= 4 ? '#d9962a' : '#d6453d';
+  // Follow the answer's language for the confidence chrome — the backend
+  // localizes the summary/factors the same way (script detection).
+  const isThai = /[\u0E00-\u0E7F]/.test(message.confidenceSummary ?? message.content);
+  const confL = isThai
+    ? {
+        title: 'ความเชื่อมั่นของคำตอบ',
+        chip: 'ความเชื่อมั่น',
+        noAnswer: 'ไม่มีคำตอบ',
+        fallback: 'คำตอบนี้อ้างอิงจากแหล่งที่มาที่ค้นคืนได้มากน้อยเพียงใด',
+      }
+    : {
+        title: 'Answer confidence',
+        chip: 'Confidence',
+        noAnswer: 'No answer',
+        fallback: 'How well this answer is grounded in the retrieved sources',
+      };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
       <Tooltip title={copied ? 'Copied' : 'Copy answer'}>
@@ -491,7 +507,7 @@ function AnswerActions({
         <Popover
           trigger="click"
           placement="top"
-          title="Answer confidence"
+          title={confL.title}
           content={
             <div style={{ fontSize: 12, lineHeight: 1.5, maxWidth: 260 }}>
               {message.confidenceSummary && (
@@ -505,8 +521,7 @@ function AnswerActions({
                   <span>{f.detail}</span>
                 </div>
               ))}
-              {!message.confidenceSummary && !message.confidenceFactors?.length &&
-                'How well this answer is grounded in the retrieved sources'}
+              {!message.confidenceSummary && !message.confidenceFactors?.length && confL.fallback}
             </div>
           }
         >
@@ -517,7 +532,7 @@ function AnswerActions({
             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}
           >
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: confColor }} />
-            Confidence {conf}/10
+            {confL.chip} {conf}/10
           </span>
         </Popover>
       )}
@@ -531,7 +546,7 @@ function AnswerActions({
             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', cursor: 'help' }}
           >
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-muted)' }} />
-            No answer
+            {confL.noAnswer}
           </span>
         </Tooltip>
       )}
