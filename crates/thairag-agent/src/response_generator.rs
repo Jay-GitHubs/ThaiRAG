@@ -189,7 +189,8 @@ impl ResponseGenerator {
              enough information to answer. Do NOT make up or guess information."
         } else {
             "Use [1], [2], etc. to cite which context chunks support your statements. \
-             Every factual claim MUST have a citation. If the context doesn't contain \
+             Every factual claim MUST have a citation — including each bullet or list \
+             item, and the sentence introducing a table. If the context doesn't contain \
              enough information to fully answer, say so honestly rather than guessing."
         };
 

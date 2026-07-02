@@ -101,14 +101,14 @@ pub fn is_refusal(answer: &str) -> bool {
 
 /// A parsed `[...]` marker group: its byte offset in the answer and the
 /// (range-expanded) chunk numbers it references.
-struct Marker {
-    offset: usize,
-    numbers: Vec<u32>,
+pub(crate) struct Marker {
+    pub(crate) offset: usize,
+    pub(crate) numbers: Vec<u32>,
 }
 
 /// Find every `[...]` group whose interior is only digits, spaces, commas
 /// and hyphens, and expand it to a list of referenced chunk numbers.
-fn scan_markers(answer: &str) -> Vec<Marker> {
+pub(crate) fn scan_markers(answer: &str) -> Vec<Marker> {
     let bytes = answer.as_bytes();
     let mut markers = Vec::new();
     let mut i = 0;
@@ -157,18 +157,61 @@ fn expand_numbers(interior: &str) -> Vec<u32> {
     out
 }
 
+/// True when the `.` at byte offset `i` terminates a sentence. Periods that
+/// are part of a token are not terminators — splitting on them shreds one
+/// claim into fragments (which both garbles the extracted claim text and
+/// inflates the claim count behind the confidence score):
+///
+/// - decimals: `3.5`, `1.25`
+/// - single-letter abbreviations (Thai and Latin): `พ.ศ.`, `ธ.ก.ส.`, `e.g.`, `U.S.`
+/// - ordered-list markers at the start of a line: `1. `, `12. `
+fn ends_sentence(answer: &str, i: usize) -> bool {
+    let prev = answer[..i].chars().next_back();
+    let next = answer[i + 1..].chars().next();
+    if prev.is_some_and(|c| c.is_ascii_digit()) && next.is_some_and(|c| c.is_ascii_digit()) {
+        return false; // decimal number
+    }
+    // The alphanumeric token immediately before the period.
+    let token_len: usize = answer[..i]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_alphanumeric())
+        .map(|c| c.len_utf8())
+        .sum();
+    let token = &answer[i - token_len..i];
+    let char_count = token.chars().count();
+    if char_count == 1 && token.chars().all(char::is_alphabetic) {
+        return false; // abbreviation letter: พ.ศ. / e.g.
+    }
+    if char_count >= 1 && token.chars().all(|c| c.is_ascii_digit()) {
+        // A number followed by `.` at the start of a line is a list marker.
+        let at_line_start = answer[..i - token_len]
+            .chars()
+            .rev()
+            .take_while(|&c| c != '\n')
+            .all(char::is_whitespace);
+        return !at_line_start;
+    }
+    true
+}
+
 /// Partition `answer` into contiguous claim spans (byte ranges).
 ///
-/// Splits on `.!?\n`, then absorbs any trailing whitespace and `[...]`
-/// markers into the claim they follow — so a marker written right after a
-/// full stop is attributed to the sentence it ends, not the next one.
-fn claim_spans(answer: &str) -> Vec<(usize, usize)> {
+/// Splits on `.!?\n` (periods only when [`ends_sentence`] says so), then
+/// absorbs any trailing whitespace and `[...]` markers into the claim they
+/// follow — so a marker written right after a full stop is attributed to the
+/// sentence it ends, not the next one.
+pub(crate) fn claim_spans(answer: &str) -> Vec<(usize, usize)> {
     let bytes = answer.as_bytes();
     let mut spans = Vec::new();
     let mut start = 0;
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
+        if c == b'.' && !ends_sentence(answer, i) {
+            i += 1;
+            continue;
+        }
         if matches!(c, b'.' | b'!' | b'?' | b'\n') {
             let mut end = i + 1;
             // Absorb trailing whitespace + bracket marker groups.
@@ -202,7 +245,7 @@ fn claim_spans(answer: &str) -> Vec<(usize, usize)> {
 }
 
 /// Trim a claim span and strip its inline `[...]` markers for display.
-fn clean_claim(raw: &str) -> String {
+pub(crate) fn clean_claim(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.char_indices().peekable();
     while let Some((idx, c)) = chars.next() {
@@ -334,6 +377,40 @@ mod tests {
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].marker, 1);
         assert!(c[0].claim.contains("ภาษี"));
+    }
+
+    #[test]
+    fn decimal_number_does_not_split_claim() {
+        let c = parse_citations("อัตราดอกเบี้ยคงที่ 3.5% ต่อปี [1]", &ctx(2));
+        assert_eq!(c.len(), 1);
+        assert!(
+            c[0].claim.contains("3.5"),
+            "claim kept intact: {}",
+            c[0].claim
+        );
+    }
+
+    #[test]
+    fn thai_abbreviation_does_not_split_claim() {
+        let c = parse_citations("โครงการเริ่มดำเนินการในปี พ.ศ. 2560 โดย ธ.ก.ส. [1]", &ctx(2));
+        assert_eq!(c.len(), 1);
+        assert!(c[0].claim.contains("พ.ศ. 2560"), "claim: {}", c[0].claim);
+    }
+
+    #[test]
+    fn ordered_list_marker_does_not_split_claim() {
+        let c = parse_citations("1. วงเงินกู้สูงสุด 100 ล้านบาท [1]\n2. ระยะเวลา 7 ปี [2]", &ctx(2));
+        assert_eq!(c.len(), 2);
+        assert!(c[0].claim.contains("วงเงินกู้"), "claim: {}", c[0].claim);
+        assert!(c[1].claim.contains("ระยะเวลา"), "claim: {}", c[1].claim);
+    }
+
+    #[test]
+    fn sentence_ending_in_number_still_splits() {
+        let c = parse_citations("North Q1 was 100. South Q2 was 200 [1].", &ctx(2));
+        assert_eq!(c.len(), 1);
+        assert!(c[0].claim.contains("South"), "claim: {}", c[0].claim);
+        assert!(!c[0].claim.contains("North"), "claim: {}", c[0].claim);
     }
 
     #[test]
