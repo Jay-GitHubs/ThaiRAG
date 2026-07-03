@@ -240,7 +240,87 @@ pub async fn set_message_feedback(
             "message not found in conversation".into(),
         )));
     }
+
+    // Feed the /v1 feedback/auto-tuning loop. The stream handler logs each
+    // first-party turn under response_id == the assistant MessageRow id, so
+    // the rating correlates with zero extra schema. The stored rows supply
+    // the rich context (query / answer / cited doc_ids) directly — no
+    // lineage lookup needed. Clearing (0) only resets the log correlation;
+    // the append-only feedback log keeps history, mirroring /v1 semantics.
+    if fb == 0 {
+        state.km_store.update_inference_log_feedback(&message_id, 0);
+    } else {
+        let rows = state.km_store.list_messages(&id);
+        let idx = rows.iter().position(|m| m.id == message_id);
+        let answer = idx.map(|i| rows[i].content.clone());
+        let query = idx.and_then(|i| {
+            rows[..i]
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.clone())
+        });
+        let doc_ids: Vec<String> = idx
+            .map(|i| {
+                serde_json::from_str::<Vec<serde_json::Value>>(&rows[i].citations)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|c| c["doc_id"].as_str().map(|d| d.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::routes::feedback::apply_feedback(
+            &state,
+            crate::routes::feedback::FeedbackRequest {
+                response_id: message_id.clone(),
+                thumbs_up: fb > 0,
+                comment: None,
+                query,
+                answer,
+                workspace_id: None,
+                doc_ids,
+                chunk_scores: Vec::new(),
+                chunk_ids: Vec::new(),
+            },
+            claims.sub.clone(),
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/chat/conversations/{id}/summarize — LLM summary of a stored
+/// conversation. Read-only: unlike the ephemeral-session compactor this NEVER
+/// rewrites history — durable messages are the user's record. Provider chain
+/// mirrors the session summarizer: memory_llm → chat llm → primary llm.
+pub async fn summarize_conversation(
+    State(state): State<AppState>,
+    claims: axum::Extension<AuthClaims>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_owned(&state, &claims, &id)?;
+    let rows = state.km_store.list_messages(&id);
+    if rows.is_empty() {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Nothing to summarize yet".into(),
+        )));
+    }
+    let messages = crate::chat_history::rows_to_chat_messages(&rows);
+
+    // memory_llm override builds its own client; otherwise reuse the bundle's
+    // already-constructed primary LLM (respects runtime provider swaps and
+    // keeps this endpoint testable with an injected mock).
+    let p = state.providers();
+    let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> =
+        if let Some(ref cfg) = p.chat_pipeline_config.memory_llm {
+            std::sync::Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+        } else {
+            p.chat_llm.clone()
+        };
+
+    let summary = thairag_agent::context_compactor::summarize_conversation(llm.as_ref(), &messages)
+        .await
+        .map_err(|e| ApiError(ThaiRagError::LlmProvider(e.to_string())))?;
+    Ok(Json(serde_json::json!({ "summary": summary })))
 }
 
 /// GET /api/chat/documents/{doc_id}/source — fetch a cited document's converted

@@ -1,12 +1,15 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n/LocaleProvider';
-import { Button, Input, Tag, Tooltip, message as antdMessage } from 'antd';
+import { Button, Input, Popover, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
   ArrowUpOutlined,
+  BookOutlined,
   PaperClipOutlined,
   FileTextOutlined,
   BorderOutlined,
 } from '@ant-design/icons';
+import { listPromptTemplates } from '../api/prompts';
+import type { PromptTemplate } from '../api/prompts';
 import type { Attachment } from '../api/types';
 
 const MAX_FILES = 5;
@@ -50,6 +53,13 @@ export function MessageComposer({
   onStop?: () => void;
 }) {
   const { t } = useI18n();
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Load once; an empty list (none published, or no /api/km access) simply
+  // keeps the picker hidden.
+  useEffect(() => {
+    listPromptTemplates().then(setTemplates);
+  }, []);
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -169,6 +179,51 @@ export function MessageComposer({
             disabled={disabled}
           />
         </Tooltip>
+        {templates.length > 0 && (
+          <Popover
+            trigger="click"
+            open={templatesOpen}
+            onOpenChange={setTemplatesOpen}
+            placement="topLeft"
+            title={t('promptTemplates')}
+            content={
+              <div style={{ maxHeight: 280, overflowY: 'auto', maxWidth: 320 }}>
+                {templates.map((tpl) => (
+                  <div
+                    key={tpl.id}
+                    data-testid="prompt-template-option"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setValue(tpl.content);
+                      setTemplatesOpen(false);
+                    }}
+                    style={{ padding: '7px 8px', borderRadius: 8, cursor: 'pointer' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <div style={{ fontSize: 13.5, fontWeight: 500 }}>{tpl.name}</div>
+                    {tpl.description && (
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {tpl.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            }
+          >
+            <Tooltip title={t('promptTemplates')}>
+              <Button
+                type="text"
+                aria-label={t('promptTemplates')}
+                data-testid="prompt-templates"
+                icon={<BookOutlined />}
+                disabled={disabled}
+              />
+            </Tooltip>
+          </Popover>
+        )}
         <Input.TextArea
           data-testid="composer-input"
           value={value}
