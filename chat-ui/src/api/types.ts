@@ -60,6 +60,8 @@ export interface MessageRow {
   citations: string;
   images: string;
   token_stats: string;
+  /** JSON array of `{name, mime, size}` for uploads on a user turn. */
+  attachments: string;
   created_at: string;
   feedback: number;
 }
@@ -133,6 +135,15 @@ export function parseCitations(json: string): Citation[] {
 export function parseImages(json: string): ImageRef[] {
   try {
     return JSON.parse(json) as ImageRef[];
+  } catch {
+    return [];
+  }
+}
+
+/** Parse a persisted attachments JSON array down to the display names. */
+export function parseAttachmentNames(json: string | undefined): string[] {
+  try {
+    return (JSON.parse(json ?? '[]') as { name: string }[]).map((a) => a.name);
   } catch {
     return [];
   }

@@ -27,6 +27,9 @@ export interface UiMessage {
   /** Names of files attached to a user turn (display only). */
   attachments?: string[];
   streaming?: boolean;
+  /** The stream failed before completing — the turn was not saved. The page
+   *  offers a Retry (re-send) instead of Regenerate for this state. */
+  error?: boolean;
   /** Thumbs rating on an assistant turn: 1 up, -1 down, 0/undefined none. */
   feedback?: number;
   /** Friendly label for the current pipeline stage, shown while the answer is
