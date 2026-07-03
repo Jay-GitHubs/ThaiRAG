@@ -47,12 +47,21 @@ test('scanned-doc answer renders inline source images (Phase 3)', async ({ page 
   test.setTimeout(150_000);
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();
+  // Dedicated single-doc workspace (scanned_gazette_2486.pdf, vision-OCR'd
+  // with [IMAGE:...] page linkage) — retrieval deterministically hits the
+  // image-bearing chunks. In the shared KMs workspace this test was flaky:
+  // the vague query rarely retrieved the one image-linked document.
   await page.locator('.ant-select-selector').first().click();
   await page
     .locator('.ant-select-item-option')
-    .filter({ hasText: /^KMs$/ })
+    .filter({ hasText: /^E2E-Scanned$/ })
     .click();
-  await page.getByPlaceholder(COMPOSER).fill('สรุปสาระสำคัญของเอกสารนี้');
+  // The query reuses the gazette's own vocabulary (ราชกิจจานุเบกษา เล่ม 60,
+  // พ.ศ. 2486, สภาวิจัย) so the dense cosine clears the relevance floor every
+  // run — a generic "summarize this" sometimes fell below it and drew a refusal.
+  await page
+    .getByPlaceholder(COMPOSER)
+    .fill('ราชกิจจานุเบกษา เล่ม 60 พ.ศ. 2486 เรื่องการจัดตั้งสภาวิจัย กล่าวถึงอะไร');
   await page.getByRole('button', { name: 'Send' }).click();
   await waitForAnswer(page);
   // The cited page render shows in the Sources strip (page-image linkage).
