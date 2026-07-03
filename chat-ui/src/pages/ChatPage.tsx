@@ -8,11 +8,13 @@ import {
   Segmented,
   Skeleton,
   Tag,
+  Tooltip,
   message as antdMessage,
 } from 'antd';
 import {
   DatabaseOutlined,
   DownOutlined,
+  FileTextOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
   PictureOutlined,
@@ -29,6 +31,7 @@ import {
   listMessages,
   renameConversation,
   setConversationPinned,
+  summarizeConversation,
   setMessageFeedback,
   streamMessage,
 } from '../api/conversations';
@@ -339,6 +342,20 @@ export function ChatPage() {
     },
     [t],
   );
+
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
+  const handleSummarize = useCallback(async () => {
+    if (!activeId || summarizing) return;
+    setSummarizing(true);
+    try {
+      setSummary(await summarizeConversation(activeId));
+    } catch {
+      antdMessage.error(t('errSummarize'));
+    } finally {
+      setSummarizing(false);
+    }
+  }, [activeId, summarizing, t]);
 
   const handleSend = useCallback(
     async (text: string, attachments: Attachment[] = []) => {
@@ -713,6 +730,20 @@ export function ChatPage() {
                 </Tag>
               </>
             )}
+            {activeId && (
+              <Tooltip title={t('summarize')}>
+                <Button
+                  size="small"
+                  type="text"
+                  loading={summarizing}
+                  aria-label={t('summarize')}
+                  data-testid="summarize-conversation"
+                  icon={<FileTextOutlined />}
+                  onClick={handleSummarize}
+                  style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}
+                />
+              </Tooltip>
+            )}
           </div>
         )}
         <div
@@ -901,6 +932,17 @@ export function ChatPage() {
         </div>
       </Layout.Content>
       <SourceDrawer citation={sourceCitation} onClose={() => setSourceCitation(null)} />
+      <Modal
+        open={summary != null}
+        onCancel={() => setSummary(null)}
+        footer={null}
+        title={t('conversationSummary')}
+        width={520}
+      >
+        <div data-testid="summary-text" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+          {summary}
+        </div>
+      </Modal>
       <Modal
         open={showShortcuts}
         onCancel={() => setShowShortcuts(false)}
