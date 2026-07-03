@@ -2003,6 +2003,7 @@ pub async fn generate_conversation_image(
         &[],
         std::slice::from_ref(&image),
         &crate::chat_history::PersistedTokenStats::default(),
+        &[],
     )?;
     Ok(Json(row))
 }
@@ -2169,6 +2170,20 @@ pub async fn stream_conversation_message(
         }
         _ => state.session_store.get_attachments(&attach_sid).await,
     };
+    // Metadata for the uploads on THIS turn, persisted with the user message so
+    // the UI keeps showing the chips after a reload. Session-inherited
+    // attachments are context only — their chips belong to the earlier turn.
+    let persisted_attachments: Vec<crate::chat_history::PersistedAttachment> = req
+        .attachments
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|a| crate::chat_history::PersistedAttachment {
+            name: a.name.clone(),
+            mime: a.mime_type.clone(),
+            size: a.data.len() * 3 / 4, // decoded size from base64 length
+        })
+        .collect();
 
     // ── Memories / personal memory / searchable scopes (reuse /v1 setup) ──
     let memories = load_memories(&state, Some(uid));
@@ -2464,6 +2479,7 @@ pub async fn stream_conversation_message(
                 &persisted_citations,
                 &persisted_images,
                 &token_stats,
+                &persisted_attachments,
             )
         };
         let message_id = match persist_result {

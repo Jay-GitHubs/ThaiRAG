@@ -17,7 +17,8 @@ test('send a message, stream an answer, and persist it across reload', async ({ 
 
   // The assistant turn streams in. Generation can be slow on a cold model, so
   // the signal that the stream finished is the composer re-enabling.
-  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 90_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeDisabled({ timeout: 20_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
 
   const assistant = page.getByTestId('msg-assistant').last();
   await expect(assistant).toBeVisible();

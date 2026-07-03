@@ -377,6 +377,10 @@ pub struct MessageRow {
     pub citations: String,
     pub images: String,
     pub token_stats: String,
+    /// JSON array of attachment metadata (`[{name, mime, size}]`) for user
+    /// messages that carried uploads — content is session-scoped and not
+    /// stored; this metadata lets the UI keep showing the chips after reload.
+    pub attachments: String,
     pub created_at: String,
     /// User feedback on an assistant message: 1 = thumbs up, -1 = thumbs down,
     /// 0 = none. Always 0 for user messages.
@@ -1160,6 +1164,7 @@ pub trait KmStoreTrait: Send + Sync {
     /// Delete a conversation and all its messages (cascade).
     fn delete_conversation(&self, conversation_id: &str) -> Result<()>;
     /// Append a message and bump the parent conversation's `updated_at`.
+    #[allow(clippy::too_many_arguments)]
     fn append_message(
         &self,
         conversation_id: &str,
@@ -1168,6 +1173,7 @@ pub trait KmStoreTrait: Send + Sync {
         citations: &str,
         images: &str,
         token_stats: &str,
+        attachments: &str,
     ) -> Result<MessageRow>;
     /// List a conversation's messages in chronological order.
     fn list_messages(&self, conversation_id: &str) -> Vec<MessageRow>;

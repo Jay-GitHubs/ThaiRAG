@@ -32,6 +32,7 @@ test('grounded answer shows a confidence score with an explainable breakdown', a
 
   // The stream finished when the composer re-enables; confidence rides the done
   // event, so it's present once the answer renders.
+  await expect(page.getByPlaceholder(COMPOSER)).toBeDisabled({ timeout: 20_000 });
   await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
   await expect(page.getByTestId('confidence')).toHaveCount(1, { timeout: 30_000 });
 
@@ -72,6 +73,7 @@ test('out-of-domain query refuses with a No-answer marker (not a confidence scor
     .fill('วิธีทำต้มยำกุ้งที่อร่อยต้องทำอย่างไร');
   await page.getByRole('button', { name: 'Send' }).click();
 
+  await expect(page.getByPlaceholder(COMPOSER)).toBeDisabled({ timeout: 20_000 });
   await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
   await expect(page.getByTestId('no-answer')).toHaveCount(1, { timeout: 30_000 });
   expect(await page.getByTestId('confidence').count()).toBe(0);

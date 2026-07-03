@@ -21,7 +21,8 @@ test('general mode answers without retrieving the corpus (no sources)', async ({
 
   await page.getByPlaceholder(COMPOSER).fill('Write a one-line Python function that adds two numbers.');
   await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 180_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeDisabled({ timeout: 20_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
 
   // The header clearly states it isn't using the user's documents.
   await expect(page.getByTestId('mode-bar')).toContainText('not using your documents');

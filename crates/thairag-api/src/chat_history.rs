@@ -117,10 +117,22 @@ pub fn load_history(
     Ok(rows_to_chat_messages(&rows))
 }
 
+/// Metadata for a user upload persisted with its message. The file content is
+/// session-scoped (used as answer context, never stored in the KB); only this
+/// metadata survives, so the UI can keep showing the attachment chips after a
+/// reload.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedAttachment {
+    pub name: String,
+    pub mime: String,
+    pub size: usize,
+}
+
 /// Persist one completed turn: the user's prompt and the assistant's reply
 /// (with its citations and token stats). Bumps the conversation's `updated_at`
 /// via the underlying store. Ownership MUST already have been verified by the
 /// caller (e.g. via [`load_history`]). Returns the stored assistant row.
+#[allow(clippy::too_many_arguments)]
 pub fn persist_turn(
     store: &Arc<dyn KmStoreTrait>,
     conversation_id: &str,
@@ -129,8 +141,18 @@ pub fn persist_turn(
     citations: &[PersistedCitation],
     images: &[PersistedImage],
     token_stats: &PersistedTokenStats,
+    attachments: &[PersistedAttachment],
 ) -> Result<MessageRow> {
-    store.append_message(conversation_id, "user", user_content, "[]", "[]", "{}")?;
+    let attachments_json = serde_json::to_string(attachments).unwrap_or_else(|_| "[]".to_string());
+    store.append_message(
+        conversation_id,
+        "user",
+        user_content,
+        "[]",
+        "[]",
+        "{}",
+        &attachments_json,
+    )?;
     persist_assistant(
         store,
         conversation_id,
@@ -161,6 +183,7 @@ pub fn persist_assistant(
         &citations_json,
         &images_json,
         &token_json,
+        "[]",
     )
 }
 
@@ -181,10 +204,10 @@ mod tests {
         let store = store();
         let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         store
-            .append_message(&conv.id, "user", "q1", "[]", "[]", "{}")
+            .append_message(&conv.id, "user", "q1", "[]", "[]", "{}", "[]")
             .unwrap();
         store
-            .append_message(&conv.id, "assistant", "a1", "[]", "[]", "{}")
+            .append_message(&conv.id, "assistant", "a1", "[]", "[]", "{}", "[]")
             .unwrap();
 
         let msgs = load_history(&store, &conv.id, ALICE, DEFAULT_HISTORY_LIMIT).unwrap();
@@ -202,7 +225,7 @@ mod tests {
         let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
         for i in 0..5 {
             store
-                .append_message(&conv.id, "user", &format!("m{i}"), "[]", "[]", "{}")
+                .append_message(&conv.id, "user", &format!("m{i}"), "[]", "[]", "{}", "[]")
                 .unwrap();
         }
         let msgs = load_history(&store, &conv.id, ALICE, 2).unwrap();
@@ -253,7 +276,14 @@ mod tests {
         }];
 
         let assistant = persist_turn(
-            &store, &conv.id, "how?", "do X", &citations, &images, &stats,
+            &store,
+            &conv.id,
+            "how?",
+            "do X",
+            &citations,
+            &images,
+            &stats,
+            &[],
         )
         .unwrap();
         assert_eq!(assistant.role, "assistant");

@@ -5,9 +5,14 @@ import { API_BASE, login, TEST_EMAIL, TEST_PASSWORD } from './helpers';
 // live stack. Streaming tests depend on a working chat model on the deployment.
 const COMPOSER = 'Ask anything about your documents…';
 
-/** Wait for a streamed answer to finish (the composer re-enables). */
+/** Wait for a streamed answer to finish. The composer disables while the turn
+ *  streams and re-enables when it's done — wait for BOTH transitions. Checking
+ *  only "enabled" raced: polled straight after clicking Send it passed before
+ *  the composer had disabled, so follow-up assertions ran against a turn that
+ *  was still streaming. */
 async function waitForAnswer(page: import('@playwright/test').Page) {
-  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 120_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeDisabled({ timeout: 20_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
 }
 
 test('login page offers SSO providers (G1)', async ({ page }) => {

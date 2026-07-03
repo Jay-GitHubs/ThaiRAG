@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test';
 // default; run with `npm run test:e2e`.
 export default defineConfig({
   testDir: './e2e',
-  timeout: 60_000,
+  timeout: 300_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,

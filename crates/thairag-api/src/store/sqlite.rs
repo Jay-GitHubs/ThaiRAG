@@ -53,6 +53,7 @@ impl SqliteKmStore {
             "ALTER TABLE documents ADD COLUMN processing_timeline TEXT",
             "ALTER TABLE document_chunks ADD COLUMN metadata TEXT",
             "ALTER TABLE messages ADD COLUMN feedback INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'rag'",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
@@ -3476,14 +3477,15 @@ impl KmStoreTrait for SqliteKmStore {
         citations: &str,
         images: &str,
         token_stats: &str,
+        attachments: &str,
     ) -> Result<super::MessageRow> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
         let now = ts(&chrono::Utc::now());
         conn.execute(
-            "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, conversation_id, role, content, citations, images, token_stats, now],
+            "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, attachments, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, conversation_id, role, content, citations, images, token_stats, attachments, now],
         )
         .map_err(|e| ThaiRagError::Database(format!("Failed to append message: {e}")))?;
         conn.execute(
@@ -3499,6 +3501,7 @@ impl KmStoreTrait for SqliteKmStore {
             citations: citations.to_string(),
             images: images.to_string(),
             token_stats: token_stats.to_string(),
+            attachments: attachments.to_string(),
             created_at: now,
             feedback: 0,
         })
@@ -3508,7 +3511,7 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at, feedback
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, attachments, created_at, feedback
                  FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
             )
             .unwrap();
@@ -3521,8 +3524,9 @@ impl KmStoreTrait for SqliteKmStore {
                 citations: row.get(4)?,
                 images: row.get(5)?,
                 token_stats: row.get(6)?,
-                created_at: row.get(7)?,
-                feedback: row.get(8)?,
+                attachments: row.get(7)?,
+                created_at: row.get(8)?,
+                feedback: row.get(9)?,
             })
         })
         .unwrap()
@@ -5623,7 +5627,7 @@ mod tests {
 
         // Append messages; list is chronological.
         store
-            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}")
+            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}", "[]")
             .unwrap();
         store
             .append_message(
@@ -5633,6 +5637,7 @@ mod tests {
                 "[{\"doc_id\":\"d1\"}]",
                 "[]",
                 "{\"prompt_tokens\":5}",
+                "[]",
             )
             .unwrap();
         let msgs = store.list_messages(&c1.id);

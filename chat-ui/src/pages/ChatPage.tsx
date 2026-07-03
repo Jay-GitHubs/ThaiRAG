@@ -31,7 +31,7 @@ import {
   setMessageFeedback,
   streamMessage,
 } from '../api/conversations';
-import { parseCitations, parseImages } from '../api/types';
+import { parseAttachmentNames, parseCitations, parseImages } from '../api/types';
 import type {
   Attachment,
   ChatFeatures,
@@ -174,6 +174,7 @@ export function ChatPage() {
             content: r.content,
             citations: parseCitations(r.citations),
             images: parseImages(r.images),
+            attachments: parseAttachmentNames(r.attachments),
             feedback: r.feedback,
           })),
         );
@@ -252,12 +253,22 @@ export function ChatPage() {
           break;
         case 'error':
           antdMessage.error(evt.message);
-          updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined }));
+          updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
           break;
       }
     },
     [updateLastAssistant],
   );
+
+  // The last streaming action, kept so a failed stream can be retried. A failed
+  // plain send was never persisted (the backend saves the turn at stream end),
+  // so its retry re-sends; failed regenerate/edit re-run themselves (their
+  // original rows are still intact — deletion is deferred until persist).
+  const lastActionRef = useRef<{
+    kind: 'send' | 'regenerate' | 'edit';
+    text: string;
+    attachments: Attachment[];
+  } | null>(null);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -375,6 +386,7 @@ export function ChatPage() {
         { role: 'assistant', content: '', citations: [], images: [], streaming: true },
       ]);
       setSending(true);
+      lastActionRef.current = { kind: 'send', text, attachments };
       const controller = new AbortController();
       abortRef.current = controller;
       streamingConvRef.current = convId;
@@ -386,8 +398,10 @@ export function ChatPage() {
         // A user-pressed Stop aborts the fetch — keep the partial answer, no toast.
         if (!controller.signal.aborted) {
           antdMessage.error(e instanceof Error ? e.message : 'Streaming failed');
+          updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
+        } else {
+          updateLastAssistant((m) => ({ ...m, streaming: false }));
         }
-        updateLastAssistant((m) => ({ ...m, streaming: false }));
       } finally {
         abortRef.current = null;
         streamingConvRef.current = null;
@@ -432,6 +446,7 @@ export function ChatPage() {
       return next;
     });
     setSending(true);
+    lastActionRef.current = { kind: 'regenerate', text: '', attachments: [] };
     const controller = new AbortController();
     abortRef.current = controller;
     streamingConvRef.current = activeId;
@@ -441,8 +456,10 @@ export function ChatPage() {
     } catch (e) {
       if (!controller.signal.aborted) {
         antdMessage.error(e instanceof Error ? e.message : 'Regeneration failed');
+        updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
+      } else {
+        updateLastAssistant((m) => ({ ...m, streaming: false }));
       }
-      updateLastAssistant((m) => ({ ...m, streaming: false }));
     } finally {
       abortRef.current = null;
       streamingConvRef.current = null;
@@ -467,6 +484,7 @@ export function ChatPage() {
         return next;
       });
       setSending(true);
+      lastActionRef.current = { kind: 'edit', text: edited, attachments: [] };
       const controller = new AbortController();
       abortRef.current = controller;
       streamingConvRef.current = activeId;
@@ -476,8 +494,10 @@ export function ChatPage() {
       } catch (e) {
         if (!controller.signal.aborted) {
           antdMessage.error(e instanceof Error ? e.message : 'Edit failed');
+          updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
+        } else {
+          updateLastAssistant((m) => ({ ...m, streaming: false }));
         }
-        updateLastAssistant((m) => ({ ...m, streaming: false }));
       } finally {
         abortRef.current = null;
         streamingConvRef.current = null;
@@ -486,6 +506,29 @@ export function ChatPage() {
     },
     [activeId, sending, handleStreamEvent, updateLastAssistant],
   );
+
+  // Retry a failed stream. Dispatches on what failed: regenerate/edit re-run
+  // themselves (their original rows survive a failed attempt), while a plain
+  // send re-sends after dropping the optimistic pair (it was never persisted).
+  const handleRetry = useCallback(() => {
+    const last = lastActionRef.current;
+    if (!last || sending) return;
+    if (last.kind === 'regenerate') {
+      handleRegenerate();
+      return;
+    }
+    if (last.kind === 'edit') {
+      handleEdit(last.text);
+      return;
+    }
+    setMessages((prev) => {
+      const next = prev.slice();
+      if (next.length > 0 && next[next.length - 1].role === 'assistant') next.pop();
+      if (next.length > 0 && next[next.length - 1].role === 'user') next.pop();
+      return next;
+    });
+    handleSend(last.text, last.attachments);
+  }, [sending, handleRegenerate, handleEdit, handleSend]);
 
   // Index of the last user turn — the only one offered an edit affordance (and
   // only while idle, since editing re-runs the conversation tail).
@@ -784,13 +827,38 @@ export function ChatPage() {
                   onEdit={handleEdit}
                 />
               ))}
-              {!sending && messages[messages.length - 1]?.role === 'assistant' && (
-                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
-                  <Button size="small" icon={<ReloadOutlined />} onClick={handleRegenerate}>
-                    Regenerate
-                  </Button>
-                </div>
-              )}
+              {!sending &&
+                messages[messages.length - 1]?.role === 'assistant' &&
+                (messages[messages.length - 1]?.error ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      gap: 10,
+                      marginTop: 4,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      The answer was interrupted
+                    </span>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<ReloadOutlined />}
+                      onClick={handleRetry}
+                      data-testid="retry-answer"
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+                    <Button size="small" icon={<ReloadOutlined />} onClick={handleRegenerate}>
+                      Regenerate
+                    </Button>
+                  </div>
+                ))}
               <div ref={bottomRef} />
             </div>
           )}

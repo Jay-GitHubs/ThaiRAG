@@ -3526,13 +3526,14 @@ impl KmStoreTrait for PostgresKmStore {
         citations: &str,
         images: &str,
         token_stats: &str,
+        attachments: &str,
     ) -> Result<super::MessageRow> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         block_on(async {
             sqlx::query(
-                "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO messages (id, conversation_id, role, content, citations, images, token_stats, attachments, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(&id)
             .bind(conversation_id)
@@ -3541,6 +3542,7 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(citations)
             .bind(images)
             .bind(token_stats)
+            .bind(attachments)
             .bind(now)
             .execute(&self.pool)
             .await?;
@@ -3559,6 +3561,7 @@ impl KmStoreTrait for PostgresKmStore {
             citations: citations.to_string(),
             images: images.to_string(),
             token_stats: token_stats.to_string(),
+            attachments: attachments.to_string(),
             created_at: now.to_rfc3339(),
             feedback: 0,
         })
@@ -3567,7 +3570,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn list_messages(&self, conversation_id: &str) -> Vec<super::MessageRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, conversation_id, role, content, citations, images, token_stats, created_at, feedback
+                "SELECT id, conversation_id, role, content, citations, images, token_stats, attachments, created_at, feedback
                  FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
             )
             .bind(conversation_id)
@@ -3586,6 +3589,7 @@ impl KmStoreTrait for PostgresKmStore {
                 citations: row.get("citations"),
                 images: row.get("images"),
                 token_stats: row.get("token_stats"),
+                attachments: row.get("attachments"),
                 created_at: created_at.to_rfc3339(),
                 feedback: row.get("feedback"),
             }
