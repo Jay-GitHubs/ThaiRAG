@@ -2072,6 +2072,7 @@ impl KmStoreTrait for MemoryKmStore {
         citations: &str,
         images: &str,
         token_stats: &str,
+        attachments: &str,
     ) -> Result<super::MessageRow> {
         let now = Utc::now().to_rfc3339();
         let row = super::MessageRow {
@@ -2082,6 +2083,7 @@ impl KmStoreTrait for MemoryKmStore {
             citations: citations.to_string(),
             images: images.to_string(),
             token_stats: token_stats.to_string(),
+            attachments: attachments.to_string(),
             created_at: now.clone(),
             feedback: 0,
         };
@@ -3412,10 +3414,10 @@ mod tests {
         assert_eq!(store.get_conversation(&c1.id).unwrap().user_id, alice);
 
         store
-            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}")
+            .append_message(&c1.id, "user", "hi", "[]", "[]", "{}", "[]")
             .unwrap();
         store
-            .append_message(&c1.id, "assistant", "hello", "[]", "[]", "{}")
+            .append_message(&c1.id, "assistant", "hello", "[]", "[]", "{}", "[]")
             .unwrap();
         let msgs = store.list_messages(&c1.id);
         assert_eq!(msgs.len(), 2);
