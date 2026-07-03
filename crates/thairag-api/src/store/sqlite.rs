@@ -55,6 +55,7 @@ impl SqliteKmStore {
             "ALTER TABLE messages ADD COLUMN feedback INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'rag'",
+            "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = conn.execute_batch(stmt); // ignore "duplicate column" errors
         }
@@ -1626,6 +1627,20 @@ impl KmStoreTrait for SqliteKmStore {
             .map_err(|e| ThaiRagError::Internal(format!("SQLite delete user: {e}")))?;
         if affected == 0 {
             return Err(ThaiRagError::NotFound(format!("User {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_user_password(&self, user_id: UserId, password_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+                params![password_hash, user_id.0.to_string()],
+            )
+            .map_err(|e| ThaiRagError::Database(format!("Failed to update password: {e}")))?;
+        if n == 0 {
+            return Err(ThaiRagError::NotFound("User not found".into()));
         }
         Ok(())
     }
@@ -3384,6 +3399,7 @@ impl KmStoreTrait for SqliteKmStore {
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
             mode: mode.to_string(),
+            pinned: false,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -3393,8 +3409,8 @@ impl KmStoreTrait for SqliteKmStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
-                 FROM conversations WHERE user_id = ?1 ORDER BY updated_at DESC",
+                "SELECT id, user_id, title, workspace_scope, mode, pinned, created_at, updated_at
+                 FROM conversations WHERE user_id = ?1 ORDER BY pinned DESC, updated_at DESC",
             )
             .unwrap();
         stmt.query_map(params![user_id], |row| {
@@ -3404,8 +3420,9 @@ impl KmStoreTrait for SqliteKmStore {
                 title: row.get(2)?,
                 workspace_scope: row.get(3)?,
                 mode: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                pinned: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .unwrap()
@@ -3416,7 +3433,7 @@ impl KmStoreTrait for SqliteKmStore {
     fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
+            "SELECT id, user_id, title, workspace_scope, mode, pinned, created_at, updated_at
              FROM conversations WHERE id = ?1",
             params![conversation_id],
             |row| {
@@ -3426,12 +3443,23 @@ impl KmStoreTrait for SqliteKmStore {
                     title: row.get(2)?,
                     workspace_scope: row.get(3)?,
                     mode: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    pinned: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
                 })
             },
         )
         .ok()
+    }
+
+    fn set_conversation_pinned(&self, conversation_id: &str, pinned: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET pinned = ?1 WHERE id = ?2",
+            params![pinned, conversation_id],
+        )
+        .map_err(|e| ThaiRagError::Database(format!("Failed to set pinned: {e}")))?;
+        Ok(())
     }
 
     fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {

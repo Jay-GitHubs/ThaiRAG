@@ -55,6 +55,11 @@ export async function renameConversation(id: string, title: string): Promise<Con
   return res.data;
 }
 
+export async function setConversationPinned(id: string, pinned: boolean): Promise<Conversation> {
+  const res = await client.patch<Conversation>(`/api/chat/conversations/${id}`, { pinned });
+  return res.data;
+}
+
 export async function deleteConversation(id: string): Promise<void> {
   await client.delete(`/api/chat/conversations/${id}`);
 }

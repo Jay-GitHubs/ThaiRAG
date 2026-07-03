@@ -2,11 +2,16 @@ import { Button, Input, Popconfirm, Tooltip } from 'antd';
 import {
   PlusOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
+  PushpinOutlined,
+  PushpinFilled,
   SearchOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
+import { message as antdMessage } from 'antd';
 import { useMemo, useState } from 'react';
 import type { Conversation } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
@@ -15,10 +20,13 @@ import { ThemePicker } from './ThemePicker';
 import { useI18n } from '../i18n/LocaleProvider';
 import type { MessageKey } from '../i18n/LocaleProvider';
 import { LocaleSwitcher } from '../i18n/LocaleSwitcher';
+import { SettingsModal } from './SettingsModal';
+import { exportConversationMarkdown } from '../utils/exportConversation';
 
 // Bucket a conversation by how recently it was updated, for sidebar grouping.
 // Buckets are catalog keys so the group headers follow the UI locale.
 const GROUP_ORDER: MessageKey[] = [
+  'groupPinned',
   'groupToday',
   'groupYesterday',
   'groupPrev7',
@@ -44,6 +52,7 @@ export function ConversationSidebar({
   onNew,
   onDelete,
   onRename,
+  onTogglePin,
   onCollapse,
 }: {
   conversations: Conversation[];
@@ -52,6 +61,7 @@ export function ConversationSidebar({
   onNew: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onTogglePin: (id: string, pinned: boolean) => void;
   /** Desktop only: collapse the rail. Omitted on mobile (the Drawer closes instead). */
   onCollapse?: () => void;
 }) {
@@ -61,6 +71,7 @@ export function ConversationSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [query, setQuery] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Filter by title, then group by recency (preserving the backend's
   // updated_at-desc order within each group).
@@ -71,7 +82,7 @@ export function ConversationSidebar({
       : conversations;
     const map = new Map<MessageKey, Conversation[]>();
     for (const c of filtered) {
-      const k = bucketKey(c.updated_at || c.created_at);
+      const k: MessageKey = c.pinned ? 'groupPinned' : bucketKey(c.updated_at || c.created_at);
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(c);
     }
@@ -144,6 +155,37 @@ export function ConversationSidebar({
         )}
         {(hovered === c.id || active) && editingId !== c.id && (
           <span style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+            <Tooltip title={c.pinned ? t('unpin') : t('pin')}>
+              {c.pinned ? (
+                <PushpinFilled
+                  data-testid="pin-toggle"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTogglePin(c.id, false);
+                  }}
+                  style={{ color: 'var(--celadon)', fontSize: 13 }}
+                />
+              ) : (
+                <PushpinOutlined
+                  data-testid="pin-toggle"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTogglePin(c.id, true);
+                  }}
+                  style={{ color: 'var(--ink-icon)', fontSize: 13 }}
+                />
+              )}
+            </Tooltip>
+            <Tooltip title={t('exportConversation')}>
+              <DownloadOutlined
+                data-testid="export-conversation"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  exportConversationMarkdown(c).catch(() => antdMessage.error(t('errExport')));
+                }}
+                style={{ color: 'var(--ink-icon)', fontSize: 13 }}
+              />
+            </Tooltip>
             <Tooltip title={t('rename')}>
               <EditOutlined
                 onClick={(e) => {
@@ -277,6 +319,15 @@ export function ConversationSidebar({
           )}
         </div>
         <div style={{ display: 'flex', flexShrink: 0 }}>
+          <Tooltip title={t('settings')}>
+            <Button
+              type="text"
+              aria-label={t('settings')}
+              data-testid="settings-button"
+              icon={<SettingOutlined style={{ color: 'var(--ink-icon)' }} />}
+              onClick={() => setSettingsOpen(true)}
+            />
+          </Tooltip>
           <LocaleSwitcher />
           <ThemePicker />
           <Tooltip title={t('signOut')}>
@@ -289,6 +340,7 @@ export function ConversationSidebar({
           </Tooltip>
         </div>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
