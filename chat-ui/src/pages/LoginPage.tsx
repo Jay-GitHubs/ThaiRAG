@@ -5,8 +5,10 @@ import { useAuth } from '../auth/AuthContext';
 import { listProviders } from '../api/auth';
 import type { ProviderInfo } from '../api/types';
 import { BrandMark } from '../components/BrandMark';
+import { useI18n } from '../i18n/LocaleProvider';
 
 export function LoginPage() {
+  const { t } = useI18n();
   const { login, loginWithToken, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -26,7 +28,7 @@ export function LoginPage() {
         window.history.replaceState(null, '', '/login');
         navigate('/', { replace: true });
       } catch {
-        message.error('Failed to complete SSO sign-in.');
+        message.error(t('ssoFailed'));
       }
     }
   }, [loginWithToken, navigate]);
@@ -50,7 +52,7 @@ export function LoginPage() {
       await login(values.email, values.password);
       navigate('/', { replace: true });
     } catch {
-      message.error('Those credentials did not match. Try again.');
+      message.error(t('badCredentials'));
     } finally {
       setLoading(false);
     }
@@ -100,16 +102,16 @@ export function LoginPage() {
               margin: 0,
             }}
           >
-            Ask your documents.
+            {t('heroTitle')}
             <br />
-            <span style={{ color: 'var(--celadon)' }}>Answers with sources.</span>
+            <span style={{ color: 'var(--celadon)' }}>{t('answersWithSources')}</span>
           </h1>
           <p style={{ color: 'var(--ink-dim)', fontSize: 16, lineHeight: 1.7, marginTop: 18 }}>
-            ถามเป็นภาษาไทยหรืออังกฤษ แล้วได้คำตอบพร้อมหน้าเอกสารต้นทาง — ไม่ต้องเปิดหาเอง.
+            {t('heroSubtitle')}
           </p>
         </div>
         <div className="eyebrow" style={{ color: 'var(--ink-dim)' }}>
-          Grounded in your knowledge base
+          {t('heroEyebrow')}
         </div>
       </aside>
 
@@ -128,36 +130,36 @@ export function LoginPage() {
       >
         <div style={{ marginBottom: 28 }}>
           <div className="eyebrow" style={{ marginBottom: 8 }}>
-            Welcome back
+            {t('welcomeBack')}
           </div>
           <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 26, margin: 0 }}>
-            Sign in to chat
+            {t('signInToChat')}
           </h2>
         </div>
         <Form layout="vertical" onFinish={onFinish} requiredMark={false} size="large">
           <Form.Item
-            label="Email"
+            label={t('email')}
             name="email"
-            rules={[{ required: true, message: 'Email is required' }]}
+            rules={[{ required: true, message: t('emailRequired') }]}
           >
             <Input type="email" autoComplete="username" placeholder="you@company.co.th" />
           </Form.Item>
           <Form.Item
-            label="Password"
+            label={t('password')}
             name="password"
-            rules={[{ required: true, message: 'Password is required' }]}
+            rules={[{ required: true, message: t('passwordRequired') }]}
           >
-            <Input.Password autoComplete="current-password" placeholder="Your password" />
+            <Input.Password autoComplete="current-password" placeholder={t('passwordPlaceholder')} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loading} style={{ marginTop: 4 }}>
-            Sign in
+            {t('signIn')}
           </Button>
         </Form>
 
         {providers.length > 0 && (
           <>
             <Divider plain style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              or
+              {t('orDivider')}
             </Divider>
             {providers.map((p) => (
               <Button
@@ -167,7 +169,7 @@ export function LoginPage() {
                 style={{ marginBottom: 8 }}
                 onClick={() => startSso(p)}
               >
-                Continue with {p.name}
+                {t('continueWith', { name: p.name })}
               </Button>
             ))}
           </>

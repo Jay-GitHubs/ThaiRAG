@@ -1,7 +1,11 @@
 import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import { useI18n } from '../i18n/LocaleProvider';
 // The code surface (--code-bg) is a dark slate in every theme, so the dark
 // syntax palette reads well across all of them.
 import 'highlight.js/styles/github-dark.css';
@@ -17,6 +21,22 @@ import {
   LikeOutlined,
 } from '@ant-design/icons';
 import type { Citation, ConfidenceFactor, ImageRef } from '../api/types';
+
+/** LLMs commonly emit TeX with \\(..\\) / \\[..\\] delimiters, which remark-math
+ *  doesn't parse — normalize them to $ / $$ before rendering. Fenced and inline
+ *  code segments are passed through untouched so regex-looking code survives. */
+function normalizeMathDelimiters(md: string): string {
+  return md
+    .split(/(```[\s\S]*?```|`[^`]*`)/g)
+    .map((seg, i) =>
+      i % 2 === 1
+        ? seg
+        : seg
+            .replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => `$$${m}$$`)
+            .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => `$${m}$`),
+    )
+    .join('');
+}
 
 export interface UiMessage {
   id?: string;
@@ -49,6 +69,7 @@ export interface UiMessage {
 
 /** A fenced code block with a copy button (markdown renderer override). */
 function CodeBlock({ children, ...props }: { children?: React.ReactNode }) {
+  const { t } = useI18n();
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
   const copy = () => {
@@ -77,7 +98,7 @@ function CodeBlock({ children, ...props }: { children?: React.ReactNode }) {
           color: 'var(--code-text)',
         }}
       >
-        {copied ? 'Copied' : 'Copy'}
+        {copied ? t('copied') : t('copy')}
       </button>
       <pre ref={preRef} {...props}>
         {children}
@@ -115,6 +136,7 @@ function UserMessage({
   editable?: boolean;
   onEdit?: (text: string) => void;
 }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [hovered, setHovered] = useState(false);
@@ -208,7 +230,7 @@ function UserMessage({
           )}
         </Tooltip>
         {editable && (
-          <Tooltip title="Edit & resend">
+          <Tooltip title={t('editAndResend')}>
             <EditOutlined
               data-testid="edit-message"
               onClick={begin}
@@ -260,6 +282,7 @@ function Sources({
   images: ImageRef[];
   onSourceClick?: (c: Citation) => void;
 }) {
+  const { t } = useI18n();
   if (citations.length === 0 && images.length === 0) return null;
   return (
     <div
@@ -270,7 +293,7 @@ function Sources({
       }}
     >
       <div className="eyebrow" style={{ marginBottom: 10 }}>
-        Sources
+        {t('sources')}
       </div>
 
       {images.length > 0 && (
@@ -289,7 +312,7 @@ function Sources({
               >
                 <Image
                   src={img.url}
-                  alt={img.page ? `source page ${img.page}` : 'source image'}
+                  alt={img.page ? t('sourcePage', { page: img.page }) : t('source')}
                   style={{ maxHeight: 150, borderRadius: 4, display: 'block' }}
                 />
                 {img.page && (
@@ -400,6 +423,7 @@ function FeedbackBar({
   message: UiMessage;
   onFeedback: (messageId: string, value: number) => void;
 }) {
+  const { t } = useI18n();
   if (!message.id || message.streaming) return null;
   const rating = message.feedback ?? 0;
   const toggle = (value: number) => onFeedback(message.id!, rating === value ? 0 : value);
@@ -410,35 +434,35 @@ function FeedbackBar({
   });
   return (
     <div style={{ display: 'flex', gap: 14 }}>
-      <Tooltip title="Good answer">
+      <Tooltip title={t('goodAnswer')}>
         {rating === 1 ? (
           <LikeFilled
             data-testid="fb-up"
-            aria-label="Remove positive feedback"
+            aria-label={t('removePositiveFeedback')}
             onClick={() => toggle(1)}
             style={iconStyle(true)}
           />
         ) : (
           <LikeOutlined
             data-testid="fb-up"
-            aria-label="Good answer"
+            aria-label={t('goodAnswer')}
             onClick={() => toggle(1)}
             style={iconStyle(false)}
           />
         )}
       </Tooltip>
-      <Tooltip title="Bad answer">
+      <Tooltip title={t('badAnswer')}>
         {rating === -1 ? (
           <DislikeFilled
             data-testid="fb-down"
-            aria-label="Remove negative feedback"
+            aria-label={t('removeNegativeFeedback')}
             onClick={() => toggle(-1)}
             style={iconStyle(true)}
           />
         ) : (
           <DislikeOutlined
             data-testid="fb-down"
-            aria-label="Bad answer"
+            aria-label={t('badAnswer')}
             onClick={() => toggle(-1)}
             style={iconStyle(false)}
           />
@@ -456,11 +480,12 @@ function AnswerActions({
   message: UiMessage;
   onFeedback?: (messageId: string, value: number) => void;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard.writeText(message.content).then(() => {
       setCopied(true);
-      antdMessage.success('Answer copied');
+      antdMessage.success(t('answerCopied'));
       setTimeout(() => setCopied(false), 1500);
     });
   };
@@ -495,7 +520,7 @@ function AnswerActions({
       };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 12 }}>
-      <Tooltip title={copied ? 'Copied' : 'Copy answer'}>
+      <Tooltip title={copied ? t('copied') : t('copyAnswer')}>
         {copied ? (
           <CheckOutlined data-testid="copy-answer" style={{ ...icon, color: 'var(--celadon-deep)' }} />
         ) : (
@@ -604,11 +629,11 @@ function AssistantMessage({
         )}
         <div className="md-body">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeHighlight, [rehypeKatex, { strict: false }]]}
             components={{ pre: CodeBlock }}
           >
-            {message.content}
+            {normalizeMathDelimiters(message.content)}
           </ReactMarkdown>
           {message.streaming &&
             (message.content.length === 0 ? (

@@ -4,6 +4,7 @@ import { getDocumentSource } from '../api/conversations';
 import type { Citation, DocumentSource } from '../api/types';
 import { PdfViewer } from './PdfViewer';
 import { RichTextView } from './RichTextView';
+import { useI18n } from '../i18n/LocaleProvider';
 
 export function SourceDrawer({
   citation,
@@ -12,6 +13,7 @@ export function SourceDrawer({
   citation: Citation | null;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [doc, setDoc] = useState<DocumentSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +33,7 @@ export function SourceDrawer({
         setDoc(d);
         setView(d.mime_type === 'application/pdf' ? 'pdf' : 'text');
       })
-      .catch(() => !cancelled && setError('Could not load this source.'))
+      .catch(() => !cancelled && setError(t('sourceLoadError')))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
@@ -41,7 +43,7 @@ export function SourceDrawer({
   const isPdf = doc?.mime_type === 'application/pdf';
 
   const prov = [
-    citation?.section ? `Section ${citation.section}` : null,
+    citation?.section ? t('sectionLabel', { section: citation.section }) : null,
     citation?.page ? `p.${citation.page}` : null,
   ]
     .filter(Boolean)
@@ -51,7 +53,7 @@ export function SourceDrawer({
     <Drawer
       open={!!citation}
       onClose={onClose}
-      title={doc?.title ?? citation?.title ?? 'Source'}
+      title={doc?.title ?? citation?.title ?? t('source')}
       width={screens.md ? 600 : '100%'}
       styles={{ body: { padding: '16px 20px' } }}
     >
@@ -76,7 +78,7 @@ export function SourceDrawer({
                 color: 'var(--celadon-deep)',
               }}
             >
-              Cited from {prov}
+              {t('citedFrom', { prov })}
             </div>
           )}
           {isPdf && (
@@ -84,8 +86,8 @@ export function SourceDrawer({
               value={view}
               onChange={(v) => setView(v as 'pdf' | 'text')}
               options={[
-                { label: 'Document', value: 'pdf' },
-                { label: 'Text', value: 'text' },
+                { label: t('document'), value: 'pdf' },
+                { label: t('textView'), value: 'text' },
               ]}
               style={{ marginBottom: 14 }}
             />
