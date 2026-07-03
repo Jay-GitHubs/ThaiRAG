@@ -39,8 +39,13 @@ pub struct CreateConversationRequest {
 }
 
 #[derive(Deserialize)]
-pub struct RenameConversationRequest {
-    pub title: String,
+pub struct UpdateConversationRequest {
+    /// New title (rename). Empty/whitespace titles are rejected.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Pin (true) / unpin (false) the conversation in the sidebar.
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -167,19 +172,29 @@ pub async fn get_conversation(
 }
 
 /// PATCH /api/chat/conversations/{id} — rename a conversation (owner only).
-pub async fn rename_conversation(
+pub async fn update_conversation(
     State(state): State<AppState>,
     claims: axum::Extension<AuthClaims>,
     Path(id): Path<String>,
-    AppJson(body): AppJson<RenameConversationRequest>,
+    AppJson(body): AppJson<UpdateConversationRequest>,
 ) -> Result<Json<ConversationRow>, ApiError> {
     require_owned(&state, &claims, &id)?;
-    if body.title.trim().is_empty() {
+    if body.title.is_none() && body.pinned.is_none() {
         return Err(ApiError(ThaiRagError::Validation(
-            "Title cannot be empty".into(),
+            "Nothing to update: provide title and/or pinned".into(),
         )));
     }
-    state.km_store.rename_conversation(&id, &body.title)?;
+    if let Some(title) = &body.title {
+        if title.trim().is_empty() {
+            return Err(ApiError(ThaiRagError::Validation(
+                "Title cannot be empty".into(),
+            )));
+        }
+        state.km_store.rename_conversation(&id, title)?;
+    }
+    if let Some(pinned) = body.pinned {
+        state.km_store.set_conversation_pinned(&id, pinned)?;
+    }
     let conv = state
         .km_store
         .get_conversation(&id)

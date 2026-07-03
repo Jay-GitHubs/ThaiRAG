@@ -134,6 +134,11 @@ impl PostgresKmStore {
         )
         .execute(&pool)
         .await;
+        let _ = sqlx::query(
+            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        .execute(&pool)
+        .await;
 
         // Guardrails columns on inference_logs (PR1).
         for stmt in [
@@ -1571,6 +1576,22 @@ impl KmStoreTrait for PostgresKmStore {
         .map_err(|e| ThaiRagError::Internal(format!("Postgres delete user: {e}")))?;
         if result.rows_affected() == 0 {
             return Err(ThaiRagError::NotFound(format!("User {id} not found")));
+        }
+        Ok(())
+    }
+
+    fn update_user_password(&self, user_id: UserId, password_hash: &str) -> Result<()> {
+        let n = block_on(async {
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                .bind(password_hash)
+                .bind(user_id.0)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to update password: {e}")))?
+        .rows_affected();
+        if n == 0 {
+            return Err(ThaiRagError::NotFound("User not found".into()));
         }
         Ok(())
     }
@@ -3422,6 +3443,7 @@ impl KmStoreTrait for PostgresKmStore {
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
             mode: mode.to_string(),
+            pinned: false,
             created_at: now.to_rfc3339(),
             updated_at: now.to_rfc3339(),
         })
@@ -3430,8 +3452,8 @@ impl KmStoreTrait for PostgresKmStore {
     fn list_conversations(&self, user_id: &str) -> Vec<super::ConversationRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
-                 FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC",
+                "SELECT id, user_id, title, workspace_scope, mode, pinned, created_at, updated_at
+                 FROM conversations WHERE user_id = $1 ORDER BY pinned DESC, updated_at DESC",
             )
             .bind(user_id)
             .fetch_all(&self.pool)
@@ -3448,6 +3470,7 @@ impl KmStoreTrait for PostgresKmStore {
                 title: row.get("title"),
                 workspace_scope: row.get("workspace_scope"),
                 mode: row.get("mode"),
+                pinned: row.get("pinned"),
                 created_at: created_at.to_rfc3339(),
                 updated_at: updated_at.to_rfc3339(),
             }
@@ -3458,7 +3481,7 @@ impl KmStoreTrait for PostgresKmStore {
     fn get_conversation(&self, conversation_id: &str) -> Option<super::ConversationRow> {
         block_on(async {
             sqlx::query(
-                "SELECT id, user_id, title, workspace_scope, mode, created_at, updated_at
+                "SELECT id, user_id, title, workspace_scope, mode, pinned, created_at, updated_at
                  FROM conversations WHERE id = $1",
             )
             .bind(conversation_id)
@@ -3476,10 +3499,23 @@ impl KmStoreTrait for PostgresKmStore {
                 title: row.get("title"),
                 workspace_scope: row.get("workspace_scope"),
                 mode: row.get("mode"),
+                pinned: row.get("pinned"),
                 created_at: created_at.to_rfc3339(),
                 updated_at: updated_at.to_rfc3339(),
             }
         })
+    }
+
+    fn set_conversation_pinned(&self, conversation_id: &str, pinned: bool) -> Result<()> {
+        block_on(async {
+            sqlx::query("UPDATE conversations SET pinned = $1 WHERE id = $2")
+                .bind(pinned)
+                .bind(conversation_id)
+                .execute(&self.pool)
+                .await
+        })
+        .map_err(|e| ThaiRagError::Database(format!("Failed to set pinned: {e}")))?;
+        Ok(())
     }
 
     fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {

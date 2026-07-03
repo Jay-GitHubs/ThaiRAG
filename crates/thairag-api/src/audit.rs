@@ -42,6 +42,7 @@ pub enum AuditAction {
     FactoryReset,
     ApiKeyCreated,
     ApiKeyRevoked,
+    PasswordChanged,
 }
 
 impl std::fmt::Display for AuditAction {

@@ -905,6 +905,17 @@ impl KmStoreTrait for MemoryKmStore {
         }
     }
 
+    fn update_user_password(&self, user_id: UserId, password_hash: &str) -> Result<()> {
+        let mut users = self.users.write().unwrap();
+        match users.get_mut(&user_id) {
+            Some(record) => {
+                record.password_hash = password_hash.to_string();
+                Ok(())
+            }
+            None => Err(ThaiRagError::NotFound("User not found".into())),
+        }
+    }
+
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord> {
         let email_lower = email.to_lowercase();
         let id = self
@@ -2002,6 +2013,7 @@ impl KmStoreTrait for MemoryKmStore {
             title: title.to_string(),
             workspace_scope: workspace_scope.map(|s| s.to_string()),
             mode: mode.to_string(),
+            pinned: false,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -2018,7 +2030,11 @@ impl KmStoreTrait for MemoryKmStore {
             .filter(|c| c.user_id == user_id)
             .cloned()
             .collect();
-        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        rows.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
         rows
     }
 
@@ -2029,6 +2045,17 @@ impl KmStoreTrait for MemoryKmStore {
             .iter()
             .find(|c| c.id == conversation_id)
             .cloned()
+    }
+
+    fn set_conversation_pinned(&self, conversation_id: &str, pinned: bool) -> Result<()> {
+        let mut convs = self.conversations.write().unwrap();
+        match convs.iter_mut().find(|c| c.id == conversation_id) {
+            Some(c) => {
+                c.pinned = pinned;
+                Ok(())
+            }
+            None => Err(ThaiRagError::NotFound("Conversation not found".into())),
+        }
     }
 
     fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()> {

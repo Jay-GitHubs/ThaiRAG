@@ -21,3 +21,10 @@ export async function register(data: RegisterRequest): Promise<User> {
   const res = await client.post<User>('/api/auth/register', data);
   return res.data;
 }
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await client.post('/api/auth/change-password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}
