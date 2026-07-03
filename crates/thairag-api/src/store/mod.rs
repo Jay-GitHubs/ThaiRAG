@@ -361,6 +361,8 @@ pub struct ConversationRow {
     /// Chat mode: `rag` (knowledge-base retrieval) or `general` (non-RAG plain
     /// assistant). Set at creation; drives whether the RAG pipeline runs.
     pub mode: String,
+    /// Pinned conversations sort above the recency groups in the sidebar.
+    pub pinned: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -990,6 +992,8 @@ pub trait KmStoreTrait: Send + Sync {
     ) -> Result<User>;
     fn delete_user(&self, id: UserId) -> Result<()>;
     fn get_user_by_email(&self, email: &str) -> Result<UserRecord>;
+    /// Replace a user's password hash (self-service password change).
+    fn update_user_password(&self, user_id: UserId, password_hash: &str) -> Result<()>;
     fn get_user(&self, id: UserId) -> Result<User>;
     fn list_users(&self) -> Vec<User>;
     fn set_user_disabled(&self, id: UserId, disabled: bool) -> Result<User>;
@@ -1161,6 +1165,9 @@ pub trait KmStoreTrait: Send + Sync {
     fn get_conversation(&self, conversation_id: &str) -> Option<ConversationRow>;
     /// Rename a conversation and bump its `updated_at`.
     fn rename_conversation(&self, conversation_id: &str, title: &str) -> Result<()>;
+    /// Pin/unpin a conversation. Does NOT bump `updated_at` — pinning is
+    /// organization, not activity, and must not reshuffle recency groups.
+    fn set_conversation_pinned(&self, conversation_id: &str, pinned: bool) -> Result<()>;
     /// Delete a conversation and all its messages (cascade).
     fn delete_conversation(&self, conversation_id: &str) -> Result<()>;
     /// Append a message and bump the parent conversation's `updated_at`.

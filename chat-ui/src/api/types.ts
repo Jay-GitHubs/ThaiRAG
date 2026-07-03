@@ -4,6 +4,8 @@ export interface User {
   email: string;
   name: string;
   role: string;
+  /** 'local' for native accounts; an IdP name for SSO-provisioned ones. */
+  auth_provider?: string;
 }
 
 export interface LoginRequest {
@@ -46,6 +48,8 @@ export interface Conversation {
   workspace_scope?: string | null;
   /** 'rag' (default) or 'general' (non-RAG plain assistant). */
   mode?: ChatMode;
+  /** Pinned conversations sort above the recency groups in the sidebar. */
+  pinned?: boolean;
   created_at: string;
   updated_at: string;
 }

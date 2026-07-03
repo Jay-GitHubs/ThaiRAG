@@ -44,6 +44,104 @@ pub struct LoginResponse {
     pub csrf_token: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// Enforce the configured password policy (shared by register + change-password).
+fn validate_password_policy(state: &AppState, password: &str) -> Result<(), ApiError> {
+    let min_len = state.config.auth.password_min_length;
+    if password.len() < min_len {
+        return Err(ApiError(ThaiRagError::Validation(format!(
+            "Password must be at least {min_len} characters"
+        ))));
+    }
+    let has_upper = password.chars().any(|c| c.is_uppercase());
+    let has_lower = password.chars().any(|c| c.is_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    if !has_upper || !has_lower || !has_digit {
+        return Err(ApiError(ThaiRagError::Validation(
+            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
+        )));
+    }
+    Ok(())
+}
+
+/// POST /api/auth/change-password — self-service password change for the
+/// signed-in user. Verifies the current password first; SSO-provisioned
+/// accounts (non-`local` auth_provider) are rejected — their credentials live
+/// at the IdP.
+pub async fn change_password(
+    State(state): State<AppState>,
+    axum::Extension(claims): axum::Extension<thairag_auth::AuthClaims>,
+    AppJson(body): AppJson<ChangePasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    let user_id = claims
+        .sub
+        .parse::<uuid::Uuid>()
+        .map(thairag_core::types::UserId)
+        .map_err(|_| ApiError(ThaiRagError::Auth("A signed-in user is required".into())))?;
+
+    let user = state.km_store.get_user(user_id)?;
+    if user.auth_provider != "local" {
+        return Err(ApiError(ThaiRagError::Validation(
+            "This account signs in through an identity provider — change the password there".into(),
+        )));
+    }
+
+    // Verify the current password against the stored hash.
+    let record = state.km_store.get_user_by_email(&user.email)?;
+    let parsed_hash = PasswordHash::new(&record.password_hash).map_err(|e| {
+        ApiError(ThaiRagError::Internal(format!(
+            "Password hash parse error: {e}"
+        )))
+    })?;
+    if Argon2::default()
+        .verify_password(body.current_password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        audit_log(
+            &state.km_store,
+            &claims.sub,
+            AuditAction::PasswordChanged,
+            &user.email,
+            false,
+            Some("current password mismatch"),
+        );
+        // Validation (400), NOT Auth (401): the session is valid — only the
+        // payload is wrong. A 401 here would trip the client's global
+        // session-expired interceptor and log the user out mid-form.
+        return Err(ApiError(ThaiRagError::Validation(
+            "Current password is incorrect".into(),
+        )));
+    }
+
+    validate_password_policy(&state, &body.new_password)?;
+
+    let salt = SaltString::generate(&mut OsRng);
+    let new_hash = Argon2::default()
+        .hash_password(body.new_password.as_bytes(), &salt)
+        .map_err(|e| {
+            ApiError(ThaiRagError::Internal(format!(
+                "Password hashing failed: {e}"
+            )))
+        })?
+        .to_string();
+    state.km_store.update_user_password(user_id, &new_hash)?;
+
+    audit_log(
+        &state.km_store,
+        &claims.sub,
+        AuditAction::PasswordChanged,
+        &user.email,
+        true,
+        None,
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn register(
     State(state): State<AppState>,
     AppJson(body): AppJson<RegisterRequest>,
@@ -54,21 +152,7 @@ pub async fn register(
         )));
     }
 
-    // Password policy enforcement
-    let min_len = state.config.auth.password_min_length;
-    if body.password.len() < min_len {
-        return Err(ApiError(ThaiRagError::Validation(format!(
-            "Password must be at least {min_len} characters"
-        ))));
-    }
-    let has_upper = body.password.chars().any(|c| c.is_uppercase());
-    let has_lower = body.password.chars().any(|c| c.is_lowercase());
-    let has_digit = body.password.chars().any(|c| c.is_ascii_digit());
-    if !has_upper || !has_lower || !has_digit {
-        return Err(ApiError(ThaiRagError::Validation(
-            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
-        )));
-    }
+    validate_password_policy(&state, &body.password)?;
 
     let salt = SaltString::generate(&mut OsRng);
     let password_hash = Argon2::default()

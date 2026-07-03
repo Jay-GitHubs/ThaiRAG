@@ -3645,3 +3645,141 @@ async fn inline_images_setting_is_admin_toggleable() {
     );
     assert_eq!(eff.inline_images_max, 9);
 }
+
+// ── Batch C: conversation pinning + self-service password change ─────
+
+#[tokio::test]
+async fn conversation_pin_persists_and_sorts_first() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "pin@test.com", "Pin", "Pass1234").await;
+    let older = create_conversation_id(&app, &token).await;
+    let newer = create_conversation_id(&app, &token).await;
+
+    // Unpinned: newest first.
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/conversations", &token))
+        .await
+        .unwrap();
+    let list = body_json(resp.into_body()).await;
+    assert_eq!(list.as_array().unwrap()[0]["id"], serde_json::json!(newer));
+
+    // Pin the older one → it sorts first and the flag round-trips.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PATCH",
+            &format!("/api/chat/conversations/{older}"),
+            serde_json::json!({"pinned": true}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let conv = body_json(resp.into_body()).await;
+    assert_eq!(conv["pinned"], serde_json::json!(true));
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth("/api/chat/conversations", &token))
+        .await
+        .unwrap();
+    let list = body_json(resp.into_body()).await;
+    assert_eq!(list.as_array().unwrap()[0]["id"], serde_json::json!(older));
+
+    // Unpin restores recency order; a rename-only PATCH still works.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PATCH",
+            &format!("/api/chat/conversations/{older}"),
+            serde_json::json!({"pinned": false, "title": "renamed"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let conv = body_json(resp.into_body()).await;
+    assert_eq!(conv["pinned"], serde_json::json!(false));
+    assert_eq!(conv["title"], serde_json::json!("renamed"));
+
+    // Empty PATCH body is a validation error.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PATCH",
+            &format!("/api/chat/conversations/{older}"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn change_password_verifies_current_and_enforces_policy() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "pw@test.com", "Pw", "Pass1234").await;
+
+    // Wrong current password → 400 (validation), NOT 401 — a 401 would trip
+    // the frontend's global session-expired interceptor and log the user out.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/auth/change-password",
+            serde_json::json!({"current_password": "Wrong123", "new_password": "NewPass123"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Weak new password → policy rejection.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/auth/change-password",
+            serde_json::json!({"current_password": "Pass1234", "new_password": "short"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Valid change → 204; old password stops working, new one logs in.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/auth/change-password",
+            serde_json::json!({"current_password": "Pass1234", "new_password": "NewPass123"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            serde_json::json!({"email": "pw@test.com", "password": "Pass1234"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            serde_json::json!({"email": "pw@test.com", "password": "NewPass123"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}

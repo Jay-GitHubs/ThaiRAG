@@ -743,6 +743,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
 
     let protected = Router::new()
         .nest("/api/km", km_routes)
+        .route("/api/auth/change-password", post(auth::change_password))
         .route(
             "/api/auth/api-keys",
             get(api_keys::list_api_keys).post(api_keys::create_api_key),
@@ -774,7 +775,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route(
             "/api/chat/conversations/{id}",
             get(conversations::get_conversation)
-                .patch(conversations::rename_conversation)
+                .patch(conversations::update_conversation)
                 .delete(conversations::delete_conversation),
         )
         .route("/api/chat/features", get(conversations::chat_features))

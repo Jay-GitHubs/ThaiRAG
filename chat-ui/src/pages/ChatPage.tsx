@@ -28,6 +28,7 @@ import {
   getChatFeatures,
   listMessages,
   renameConversation,
+  setConversationPinned,
   setMessageFeedback,
   streamMessage,
 } from '../api/conversations';
@@ -327,6 +328,18 @@ export function ChatPage() {
     }
   }, [t]);
 
+  const handleTogglePin = useCallback(
+    async (id: string, pinned: boolean) => {
+      try {
+        const updated = await setConversationPinned(id, pinned);
+        setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      } catch {
+        antdMessage.error(t('errUpdateConversation'));
+      }
+    },
+    [t],
+  );
+
   const handleSend = useCallback(
     async (text: string, attachments: Attachment[] = []) => {
       // Ensure a conversation exists (lazily create one on first message).
@@ -608,6 +621,7 @@ export function ChatPage() {
       }}
       onDelete={handleDelete}
       onRename={handleRename}
+      onTogglePin={handleTogglePin}
       onCollapse={isMobile ? undefined : toggleSidebar}
     />
   );
