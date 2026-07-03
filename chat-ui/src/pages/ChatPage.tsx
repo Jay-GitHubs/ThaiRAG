@@ -32,6 +32,8 @@ import {
   streamMessage,
 } from '../api/conversations';
 import { parseAttachmentNames, parseCitations, parseImages } from '../api/types';
+import { useI18n } from '../i18n/LocaleProvider';
+import type { MessageKey } from '../i18n/LocaleProvider';
 import type {
   Attachment,
   ChatFeatures,
@@ -50,27 +52,26 @@ import { SourceDrawer } from '../components/SourceDrawer';
 // Friendly labels for the backend's pipeline stage names (the `progress` SSE
 // event), so the "preparing answer" state reads in plain language. Unknown
 // stages fall back to a humanized version of the raw name.
-const STAGE_LABELS: Record<string, string> = {
-  query_analyzer: 'Understanding your question',
-  self_rag_gate: 'Deciding what to look up',
-  pipeline_orchestrator: 'Planning the answer',
-  retrieval: 'Searching your documents',
-  search: 'Searching your documents',
-  context_curator: 'Reading the most relevant parts',
-  output_guardrails: 'Reviewing the answer',
+const STAGE_KEYS: Record<string, MessageKey> = {
+  query_analyzer: 'stageQueryAnalyzer',
+  self_rag_gate: 'stageSelfRagGate',
+  pipeline_orchestrator: 'stageOrchestrator',
+  retrieval: 'stageRetrieval',
+  search: 'stageRetrieval',
+  context_curator: 'stageContextCurator',
+  output_guardrails: 'stageOutputGuardrails',
 };
 
-function stageLabel(stage: string): string {
-  return (
-    STAGE_LABELS[stage] ??
-    `${stage.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())}…`
-  );
+function stageLabel(stage: string, t: (k: MessageKey) => string): string {
+  const key = STAGE_KEYS[stage];
+  return key ? t(key) : `${stage.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())}…`;
 }
 
 // Label the platform modifier key for the shortcuts help.
 const MOD = /mac|iphone|ipad/i.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 export function ChatPage() {
+  const { t } = useI18n();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -127,7 +128,7 @@ export function ChatPage() {
         setConversations(list);
         if (list.length > 0) setActiveId(list[0].id);
       })
-      .catch(() => antdMessage.error('Failed to load conversations'));
+      .catch(() => antdMessage.error(t('errLoadConversations')));
     listWorkspaces()
       .then(setWorkspaces)
       .catch(() => {
@@ -142,8 +143,8 @@ export function ChatPage() {
 
   const wsName = useMemo(() => {
     const m = new Map(workspaces.map((w) => [w.id, w.name]));
-    return (id?: string | null) => (id ? (m.get(id) ?? 'Workspace') : null);
-  }, [workspaces]);
+    return (id?: string | null) => (id ? (m.get(id) ?? t('workspace')) : null);
+  }, [workspaces, t]);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -180,7 +181,7 @@ export function ChatPage() {
         );
       })
       .catch(() => {
-        if (!cancelled) antdMessage.error('Failed to load messages');
+        if (!cancelled) antdMessage.error(t('errLoadMessages'));
       })
       .finally(() => {
         if (!cancelled) setLoadingMsgs(false);
@@ -227,7 +228,7 @@ export function ChatPage() {
         case 'progress':
           // Show what the pipeline is doing while the answer is being prepared,
           // so slow retrieval (e.g. an all-workspaces search) doesn't look frozen.
-          updateLastAssistant((m) => ({ ...m, progress: stageLabel(evt.stage) }));
+          updateLastAssistant((m) => ({ ...m, progress: stageLabel(evt.stage, t) }));
           break;
         case 'token':
           updateLastAssistant((m) => ({ ...m, content: m.content + evt.text, progress: undefined }));
@@ -257,7 +258,7 @@ export function ChatPage() {
           break;
       }
     },
-    [updateLastAssistant],
+    [updateLastAssistant, t],
   );
 
   // The last streaming action, kept so a failed stream can be retried. A failed
@@ -287,13 +288,13 @@ export function ChatPage() {
         }),
       );
       setMessageFeedback(activeId, messageId, value).catch(() => {
-        antdMessage.error('Failed to save feedback');
+        antdMessage.error(t('errSaveFeedback'));
         setMessages((prev) =>
           prev.map((m) => (m.id === messageId ? { ...m, feedback: prevValue } : m)),
         );
       });
     },
-    [activeId],
+    [activeId, t],
   );
 
   // Start a fresh chat: clear the view and let the welcome screen's mode/scope
@@ -311,10 +312,10 @@ export function ChatPage() {
         setConversations((prev) => prev.filter((c) => c.id !== id));
         if (id === activeId) setActiveId(null);
       } catch {
-        antdMessage.error('Failed to delete conversation');
+        antdMessage.error(t('errDeleteConversation'));
       }
     },
-    [activeId],
+    [activeId, t],
   );
 
   const handleRename = useCallback(async (id: string, title: string) => {
@@ -322,9 +323,9 @@ export function ChatPage() {
       const updated = await renameConversation(id, title);
       setConversations((prev) => prev.map((c) => (c.id === id ? updated : c)));
     } catch {
-      antdMessage.error('Failed to rename conversation');
+      antdMessage.error(t('errRenameConversation'));
     }
-  }, []);
+  }, [t]);
 
   const handleSend = useCallback(
     async (text: string, attachments: Attachment[] = []) => {
@@ -343,7 +344,7 @@ export function ChatPage() {
           convId = conv.id;
           isFirstMessage = true;
         } catch {
-          antdMessage.error('Failed to start conversation');
+          antdMessage.error(t('errStartConversation'));
           return;
         }
       }
@@ -366,7 +367,7 @@ export function ChatPage() {
             images: parseImages(row.images),
           }));
         } catch (e) {
-          antdMessage.error(e instanceof Error ? e.message : 'Image generation failed');
+          antdMessage.error(e instanceof Error ? e.message : t('errImageGeneration'));
           updateLastAssistant((m) => ({ ...m, streaming: false }));
         } finally {
           setSending(false);
@@ -397,7 +398,7 @@ export function ChatPage() {
       } catch (e) {
         // A user-pressed Stop aborts the fetch — keep the partial answer, no toast.
         if (!controller.signal.aborted) {
-          antdMessage.error(e instanceof Error ? e.message : 'Streaming failed');
+          antdMessage.error(e instanceof Error ? e.message : t('errStreaming'));
           updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
         } else {
           updateLastAssistant((m) => ({ ...m, streaming: false }));
@@ -432,6 +433,7 @@ export function ChatPage() {
       features.image_generation_enabled,
       handleStreamEvent,
       updateLastAssistant,
+      t,
     ],
   );
 
@@ -455,7 +457,7 @@ export function ChatPage() {
       await streamMessage(activeId, '', handleStreamEvent, controller.signal, undefined, true);
     } catch (e) {
       if (!controller.signal.aborted) {
-        antdMessage.error(e instanceof Error ? e.message : 'Regeneration failed');
+        antdMessage.error(e instanceof Error ? e.message : t('errRegenerate'));
         updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
       } else {
         updateLastAssistant((m) => ({ ...m, streaming: false }));
@@ -493,7 +495,7 @@ export function ChatPage() {
         await streamMessage(activeId, edited, handleStreamEvent, controller.signal, undefined, false, true);
       } catch (e) {
         if (!controller.signal.aborted) {
-          antdMessage.error(e instanceof Error ? e.message : 'Edit failed');
+          antdMessage.error(e instanceof Error ? e.message : t('errEdit'));
           updateLastAssistant((m) => ({ ...m, streaming: false, progress: undefined, error: true }));
         } else {
           updateLastAssistant((m) => ({ ...m, streaming: false }));
@@ -504,7 +506,7 @@ export function ChatPage() {
         setSending(false);
       }
     },
-    [activeId, sending, handleStreamEvent, updateLastAssistant],
+    [activeId, sending, handleStreamEvent, updateLastAssistant, t],
   );
 
   // Retry a failed stream. Dispatches on what failed: regenerate/edit re-run
@@ -583,8 +585,8 @@ export function ChatPage() {
   }, [features.general_chat_enabled]);
 
   const suggestions = isGeneral
-    ? ['Write a Python function to parse CSV', 'อธิบายเรื่อง machine learning แบบสั้น ๆ']
-    : ['สรุปขั้นตอนการขอสินเชื่อ', 'What documents do I need to apply?'];
+    ? [t('suggestionGeneral1'), t('suggestionGeneral2')]
+    : [t('suggestionRag1'), t('suggestionRag2')];
 
   // Scope shown for the active conversation: its pin once created, else the
   // picker selection for the next new chat.
@@ -656,7 +658,7 @@ export function ChatPage() {
           >
             <Button
               type="text"
-              aria-label={isMobile ? 'Open menu' : 'Show sidebar'}
+              aria-label={isMobile ? t('openMenu') : t('showSidebar')}
               data-testid={isMobile ? 'mobile-menu' : 'sidebar-expand'}
               icon={isMobile ? <MenuOutlined /> : <MenuUnfoldOutlined />}
               onClick={() => (isMobile ? setDrawerOpen(true) : toggleSidebar())}
@@ -680,20 +682,20 @@ export function ChatPage() {
             {isGeneral ? (
               <>
                 <RobotOutlined />
-                <span>General chat</span>
+                <span>{t('generalChat')}</span>
                 <Tag color="default" style={{ margin: 0 }}>
-                  not using your documents
+                  {t('notUsingDocuments')}
                 </Tag>
               </>
             ) : (
               <>
                 <DatabaseOutlined />
-                <span>Searching</span>
+                <span>{t('searchingLabel')}</span>
                 <Tag
                   color={activeConversation?.workspace_scope ? 'green' : 'default'}
                   style={{ margin: 0 }}
                 >
-                  {activeScopeName ?? 'All my workspaces'}
+                  {activeScopeName ?? t('allMyWorkspaces')}
                 </Tag>
               </>
             )}
@@ -735,12 +737,10 @@ export function ChatPage() {
                   color: 'var(--text)',
                 }}
               >
-                {isGeneral ? 'How can I help?' : 'What do you want to find?'}
+                {isGeneral ? t('welcomeGeneralTitle') : t('welcomeRagTitle')}
               </h1>
               <p style={{ color: 'var(--text-muted)', fontSize: 16, marginTop: 12 }}>
-                {isGeneral
-                  ? 'General assistant — answers from the model’s own knowledge, not your documents.'
-                  : 'ถามจากคลังเอกสารของคุณ แล้วได้คำตอบพร้อมหน้าต้นทาง'}
+                {isGeneral ? t('welcomeGeneralSubtitle') : t('welcomeRagSubtitle')}
               </p>
 
               {/* Mode picker for the next new chat: Knowledge Base (RAG) vs General.
@@ -753,8 +753,8 @@ export function ChatPage() {
                     value={newMode}
                     onChange={(v) => setNewMode(v as 'rag' | 'general')}
                     options={[
-                      { label: 'Knowledge base', value: 'rag', icon: <DatabaseOutlined /> },
-                      { label: 'General', value: 'general', icon: <RobotOutlined /> },
+                      { label: t('knowledgeBase'), value: 'rag', icon: <DatabaseOutlined /> },
+                      { label: t('general'), value: 'general', icon: <RobotOutlined /> },
                     ]}
                   />
                 </div>
@@ -769,8 +769,8 @@ export function ChatPage() {
                     value={imageMode ? 'image' : 'text'}
                     onChange={(v) => setImageMode(v === 'image')}
                     options={[
-                      { label: 'Text', value: 'text', icon: <RobotOutlined /> },
-                      { label: 'Image', value: 'image', icon: <PictureOutlined /> },
+                      { label: t('textMode'), value: 'text', icon: <RobotOutlined /> },
+                      { label: t('imageMode'), value: 'image', icon: <PictureOutlined /> },
                     ]}
                   />
                 </div>
@@ -840,7 +840,7 @@ export function ChatPage() {
                     }}
                   >
                     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                      The answer was interrupted
+                      {t('answerInterrupted')}
                     </span>
                     <Button
                       size="small"
@@ -849,13 +849,13 @@ export function ChatPage() {
                       onClick={handleRetry}
                       data-testid="retry-answer"
                     >
-                      Retry
+                      {t('retry')}
                     </Button>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
                     <Button size="small" icon={<ReloadOutlined />} onClick={handleRegenerate}>
-                      Regenerate
+                      {t('regenerate')}
                     </Button>
                   </div>
                 ))}
@@ -869,7 +869,7 @@ export function ChatPage() {
             icon={<DownOutlined />}
             onClick={scrollToBottom}
             data-testid="scroll-to-bottom"
-            aria-label="Scroll to latest"
+            aria-label={t('scrollToLatest')}
             style={{
               position: 'absolute',
               bottom: 88,
@@ -891,16 +891,16 @@ export function ChatPage() {
         open={showShortcuts}
         onCancel={() => setShowShortcuts(false)}
         footer={null}
-        title="Keyboard shortcuts"
+        title={t('keyboardShortcuts')}
         width={400}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 4 }}>
           {[
-            { keys: `${MOD} + Shift + O`, label: 'New chat' },
-            { keys: '/', label: 'Focus the message box' },
-            { keys: 'Enter', label: 'Send · Shift + Enter for a new line' },
-            { keys: 'Esc', label: 'Stop a streaming answer' },
-            { keys: '?', label: 'Show this help' },
+            { keys: `${MOD} + Shift + O`, label: t('shortcutNewChat') },
+            { keys: '/', label: t('shortcutFocusComposer') },
+            { keys: 'Enter', label: t('shortcutSend') },
+            { keys: 'Esc', label: t('shortcutStop') },
+            { keys: '?', label: t('shortcutHelp') },
           ].map((s) => (
             <div
               key={s.label}

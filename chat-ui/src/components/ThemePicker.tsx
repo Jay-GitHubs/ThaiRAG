@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useI18n } from '../i18n/LocaleProvider';
 import { Button, Popover, Tooltip } from 'antd';
 import { BgColorsOutlined, CheckOutlined } from '@ant-design/icons';
 import { useTheme, type ThemeDef } from '../theme/ThemeProvider';
@@ -6,6 +7,7 @@ import { useTheme, type ThemeDef } from '../theme/ThemeProvider';
 /** Sidebar control to pick one of the app's themes. A popover of two-color
  *  swatches grouped Light / Dark, with the active theme checked. */
 export function ThemePicker() {
+  const { t } = useI18n();
   const { themeId, themes, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
 
@@ -87,10 +89,10 @@ export function ThemePicker() {
       onOpenChange={setOpen}
       placement="topRight"
     >
-      <Tooltip title="Theme">
+      <Tooltip title={t('theme')}>
         <Button
           type="text"
-          aria-label="Choose theme"
+          aria-label={t('chooseTheme')}
           data-testid="theme-picker"
           icon={<BgColorsOutlined style={{ color: 'var(--ink-icon)' }} />}
         />

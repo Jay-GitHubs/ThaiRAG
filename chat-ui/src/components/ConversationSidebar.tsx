@@ -12,19 +12,29 @@ import type { Conversation } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { BrandMark } from './BrandMark';
 import { ThemePicker } from './ThemePicker';
+import { useI18n } from '../i18n/LocaleProvider';
+import type { MessageKey } from '../i18n/LocaleProvider';
+import { LocaleSwitcher } from '../i18n/LocaleSwitcher';
 
 // Bucket a conversation by how recently it was updated, for sidebar grouping.
-const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 days', 'Previous 30 days', 'Older'];
-function bucketLabel(iso: string): string {
+// Buckets are catalog keys so the group headers follow the UI locale.
+const GROUP_ORDER: MessageKey[] = [
+  'groupToday',
+  'groupYesterday',
+  'groupPrev7',
+  'groupPrev30',
+  'groupOlder',
+];
+function bucketKey(iso: string): MessageKey {
   const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 'Older';
+  if (Number.isNaN(d.getTime())) return 'groupOlder';
   const diff = Math.round((startOf(new Date()) - startOf(d)) / 86_400_000);
-  if (diff <= 0) return 'Today';
-  if (diff === 1) return 'Yesterday';
-  if (diff <= 7) return 'Previous 7 days';
-  if (diff <= 30) return 'Previous 30 days';
-  return 'Older';
+  if (diff <= 0) return 'groupToday';
+  if (diff === 1) return 'groupYesterday';
+  if (diff <= 7) return 'groupPrev7';
+  if (diff <= 30) return 'groupPrev30';
+  return 'groupOlder';
 }
 
 export function ConversationSidebar({
@@ -46,6 +56,7 @@ export function ConversationSidebar({
   onCollapse?: () => void;
 }) {
   const { user, logout } = useAuth();
+  const { t } = useI18n();
   const [hovered, setHovered] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -58,9 +69,9 @@ export function ConversationSidebar({
     const filtered = q
       ? conversations.filter((c) => (c.title || '').toLowerCase().includes(q))
       : conversations;
-    const map = new Map<string, Conversation[]>();
+    const map = new Map<MessageKey, Conversation[]>();
     for (const c of filtered) {
-      const k = bucketLabel(c.updated_at || c.created_at);
+      const k = bucketKey(c.updated_at || c.created_at);
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(c);
     }
@@ -128,12 +139,12 @@ export function ConversationSidebar({
               fontSize: 14,
             }}
           >
-            {c.title || 'Untitled'}
+            {c.title || t('untitled')}
           </span>
         )}
         {(hovered === c.id || active) && editingId !== c.id && (
           <span style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
-            <Tooltip title="Rename">
+            <Tooltip title={t('rename')}>
               <EditOutlined
                 onClick={(e) => {
                   e.stopPropagation();
@@ -143,8 +154,8 @@ export function ConversationSidebar({
               />
             </Tooltip>
             <Popconfirm
-              title="Delete this conversation?"
-              okText="Delete"
+              title={t('deleteConfirm')}
+              okText={t('delete')}
               okButtonProps={{ danger: true }}
               onConfirm={(e) => {
                 e?.stopPropagation();
@@ -183,10 +194,10 @@ export function ConversationSidebar({
       >
         <BrandMark tone="light" size={24} />
         {onCollapse && (
-          <Tooltip title="Collapse sidebar">
+          <Tooltip title={t('collapseSidebar')}>
             <Button
               type="text"
-              aria-label="Collapse sidebar"
+              aria-label={t('collapseSidebar')}
               data-testid="sidebar-collapse"
               icon={<MenuFoldOutlined style={{ color: 'var(--ink-icon)' }} />}
               onClick={onCollapse}
@@ -196,9 +207,9 @@ export function ConversationSidebar({
       </div>
 
       <div style={{ padding: '4px 12px 12px' }}>
-        <Tooltip title="New chat — press ? for all shortcuts">
+        <Tooltip title={t('newChatTooltip')}>
           <Button type="primary" icon={<PlusOutlined />} block onClick={onNew}>
-            New chat
+            {t('newChat')}
           </Button>
         </Tooltip>
       </div>
@@ -208,7 +219,7 @@ export function ConversationSidebar({
           size="small"
           allowClear
           prefix={<SearchOutlined style={{ color: 'var(--ink-dim)' }} />}
-          placeholder="Search conversations"
+          placeholder={t('searchConversations')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           data-testid="conversation-search"
@@ -218,11 +229,11 @@ export function ConversationSidebar({
       <div className="thin-scroll" style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
         {conversations.length === 0 ? (
           <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '8px 10px' }}>
-            No conversations yet. Start one above.
+            {t('noConversations')}
           </div>
         ) : groups.length === 0 ? (
           <div style={{ color: 'var(--ink-dim)', fontSize: 13, padding: '8px 10px' }}>
-            No conversations match your search.
+            {t('noSearchMatches')}
           </div>
         ) : (
           groups.map((g) => (
@@ -231,7 +242,7 @@ export function ConversationSidebar({
                 className="eyebrow"
                 style={{ padding: '10px 10px 4px', color: 'var(--ink-dim)' }}
               >
-                {g.label}
+                {t(g.label)}
               </div>
               {g.items.map(renderRow)}
             </div>
@@ -259,18 +270,19 @@ export function ConversationSidebar({
               textOverflow: 'ellipsis',
             }}
           >
-            {user?.name ?? user?.email ?? 'Signed in'}
+            {user?.name ?? user?.email ?? ''}
           </div>
           {user?.email && (
             <div style={{ fontSize: 11, color: 'var(--ink-dim)' }}>{user.email}</div>
           )}
         </div>
         <div style={{ display: 'flex', flexShrink: 0 }}>
+          <LocaleSwitcher />
           <ThemePicker />
-          <Tooltip title="Sign out">
+          <Tooltip title={t('signOut')}>
             <Button
               type="text"
-              aria-label="Sign out"
+              aria-label={t('signOut')}
               icon={<LogoutOutlined style={{ color: 'var(--ink-icon)' }} />}
               onClick={logout}
             />
