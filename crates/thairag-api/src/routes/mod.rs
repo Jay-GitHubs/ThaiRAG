@@ -788,6 +788,10 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             post(chat::generate_conversation_image),
         )
         .route(
+            "/api/chat/conversations/{id}/summarize",
+            post(conversations::summarize_conversation),
+        )
+        .route(
             "/api/chat/conversations/{id}/messages/{message_id}/feedback",
             post(conversations::set_message_feedback),
         )

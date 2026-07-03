@@ -109,6 +109,10 @@ pub struct ProviderBundle {
     pub reranker: Arc<dyn Reranker>,
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub personal_memory_manager: Option<Arc<PersonalMemoryManager>>,
+    /// The primary chat LLM, already constructed (profile-resolved, retrying).
+    /// For one-off LLM calls outside the pipeline (e.g. conversation
+    /// summarize) — reuse this instead of re-creating a provider from config.
+    pub chat_llm: Arc<dyn LlmProvider>,
 }
 
 /// Fluent builder for [`ProviderBundle`].
@@ -1047,6 +1051,7 @@ impl ProviderBundle {
             reranker,
             context_compactor,
             personal_memory_manager,
+            chat_llm: llm,
         }
     }
 }

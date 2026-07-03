@@ -2275,6 +2275,17 @@ pub async fn stream_conversation_message(
     let is_regenerate = req.regenerate;
     let conv_id = conversation_id.clone();
 
+    // Captured for the end-of-stream inference-log write (first-party turns
+    // land in the same inference_logs the /v1 path writes).
+    let log_user_id = user_id_str.clone();
+    let (log_llm_kind, log_llm_model) = resolve_llm_info(&state.providers());
+    let log_workspace_id = state
+        .km_store
+        .get_conversation(&conversation_id)
+        .and_then(|c| c.workspace_scope);
+    let log_settings_scope = format!("{settings_scope:?}");
+    let log_start = std::time::Instant::now();
+
     let sse_stream = async_stream::stream! {
         // 1) Drain progress events until the pipeline task resolves.
         let mut pipeline_handle = pipeline_handle;
@@ -2493,6 +2504,61 @@ pub async fn stream_conversation_message(
                 String::new()
             }
         };
+
+        // ── Inference logging ────────────────────────────────────────
+        // First-party turns land in the same inference_logs the /v1 path
+        // writes, keyed by response_id == the assistant MessageRow id. That
+        // single convention is what lets the conversations feedback endpoint
+        // correlate thumbs into the auto-tuning loop with no extra schema.
+        if !message_id.is_empty() {
+            let entry = crate::store::InferenceLogEntry {
+                id: Uuid::new_v4().to_string(),
+                timestamp: Utc::now().to_rfc3339(),
+                user_id: Some(log_user_id.clone()),
+                workspace_id: log_workspace_id.clone(),
+                org_id: None,
+                dept_id: None,
+                session_id: Some(conv_id.clone()),
+                response_id: message_id.clone(),
+                query_text: content.chars().take(2000).collect(),
+                detected_language: footer_meta.language.clone(),
+                intent: footer_meta.intent.clone(),
+                complexity: footer_meta.complexity.clone(),
+                llm_kind: log_llm_kind.clone(),
+                llm_model: log_llm_model.clone(),
+                settings_scope: log_settings_scope.clone(),
+                prompt_tokens: llm_usage.prompt_tokens,
+                completion_tokens: llm_usage.completion_tokens,
+                estimated_context_tokens: footer_meta.estimated_context_tokens.unwrap_or(0),
+                total_ms: log_start.elapsed().as_millis() as u64,
+                search_ms: footer_meta.search_ms,
+                generation_ms: footer_meta.generation_ms,
+                chunks_retrieved: footer_meta.chunks_retrieved,
+                avg_chunk_score: footer_meta.avg_chunk_score,
+                self_rag_decision: footer_meta.self_rag_decision.clone(),
+                self_rag_confidence: footer_meta.self_rag_confidence,
+                quality_guard_pass: footer_meta.quality_guard_pass,
+                relevance_score: footer_meta.relevance_score,
+                hallucination_score: footer_meta.hallucination_score,
+                completeness_score: footer_meta.completeness_score,
+                pipeline_route: footer_meta.pipeline_route.clone(),
+                agents_used: "[]".into(),
+                status: "success".into(),
+                error_message: None,
+                response_length: accumulated.len() as u32,
+                feedback_score: None,
+                input_guardrails_pass: footer_meta.input_guardrails_pass,
+                output_guardrails_pass: footer_meta.output_guardrails_pass,
+                guardrail_violation_codes: footer_meta
+                    .guardrail_violations
+                    .iter()
+                    .map(|v| v.code.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            };
+            let km = state.km_store.clone();
+            tokio::task::spawn_blocking(move || km.insert_inference_log(&entry));
+        }
 
         // 6) Terminal success.
         let done = serde_json::json!({

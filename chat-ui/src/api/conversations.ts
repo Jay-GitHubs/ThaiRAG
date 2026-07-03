@@ -60,6 +60,11 @@ export async function setConversationPinned(id: string, pinned: boolean): Promis
   return res.data;
 }
 
+export async function summarizeConversation(id: string): Promise<string> {
+  const res = await client.post<{ summary: string }>(`/api/chat/conversations/${id}/summarize`, {});
+  return res.data.summary;
+}
+
 export async function deleteConversation(id: string): Promise<void> {
   await client.delete(`/api/chat/conversations/${id}`);
 }

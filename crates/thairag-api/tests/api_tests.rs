@@ -275,6 +275,7 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         reranker,
         context_compactor: None,
         personal_memory_manager: None,
+        chat_llm: Arc::new(MockLlm),
     };
 
     AppState::from_parts(
@@ -1777,6 +1778,7 @@ fn build_streaming_test_app() -> Router {
         reranker,
         context_compactor: None,
         personal_memory_manager: None,
+        chat_llm: Arc::new(MockLlm),
     };
 
     let state = AppState::from_parts(
@@ -3782,4 +3784,175 @@ async fn change_password_verifies_current_and_enforces_policy() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// ── Batch D: first-party inference logging + feedback loop + summarize ──
+
+#[tokio::test]
+async fn chat_turn_logs_inference_and_feedback_correlates() {
+    let app = build_app(true);
+    // First registered user is super_admin → may read /api/km inference logs.
+    let token = register_and_get_token(&app, "loop@test.com", "Loop", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // Complete a turn (drain the SSE body so the stream persists + logs).
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "what is the policy?"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    // The log insert is spawned; yield so it lands.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let msgs = body_json(resp.into_body()).await;
+    let assistant_id = msgs.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The turn wrote an inference log keyed by the assistant message id.
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/settings/inference-logs?response_id={assistant_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let logs = body_json(resp.into_body()).await;
+    let arr = logs["entries"].as_array().unwrap().clone();
+    assert_eq!(arr.len(), 1, "one log for the turn: {logs}");
+    assert_eq!(arr[0]["response_id"], serde_json::json!(assistant_id));
+    assert_eq!(
+        arr[0]["query_text"],
+        serde_json::json!("what is the policy?")
+    );
+    assert!(arr[0]["feedback_score"].is_null());
+
+    // Thumbs-up correlates into the log AND the feedback log blob.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages/{assistant_id}/feedback"),
+            serde_json::json!({"feedback": 1}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/settings/inference-logs?response_id={assistant_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let logs = body_json(resp.into_body()).await;
+    let arr = logs["entries"].as_array().unwrap().clone();
+    assert_eq!(arr[0]["feedback_score"], serde_json::json!(1));
+
+    // Clearing resets the correlation.
+    let _ = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages/{assistant_id}/feedback"),
+            serde_json::json!({"feedback": 0}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(get_request_auth(
+            &format!("/api/km/settings/inference-logs?response_id={assistant_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let logs = body_json(resp.into_body()).await;
+    let arr = logs["entries"].as_array().unwrap().clone();
+    assert_eq!(arr[0]["feedback_score"], serde_json::json!(0));
+}
+
+#[tokio::test]
+async fn conversation_summarize_owner_checked_and_returns_summary() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "sum@test.com", "Sum", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // Empty conversation → validation error.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/summarize"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // With a turn, MockLlm produces a summary.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            serde_json::json!({"content": "hello"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let _ = resp.into_body().collect().await.unwrap().to_bytes();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/summarize"),
+            serde_json::json!({}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp.into_body()).await;
+    assert!(!json["summary"].as_str().unwrap_or("").is_empty());
+
+    // Another user cannot summarize it.
+    let other = register_and_get_token(&app, "sum2@test.com", "Sum2", "Pass1234").await;
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/summarize"),
+            serde_json::json!({}),
+            &other,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::NOT_FOUND,
+        "got {}",
+        resp.status()
+    );
 }
