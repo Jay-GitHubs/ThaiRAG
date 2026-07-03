@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ConfigProvider, theme as antdTheme } from 'antd';
+import enUS from 'antd/locale/en_US';
+import thTH from 'antd/locale/th_TH';
+import { useI18n } from '../i18n/LocaleProvider';
 
 export type ThemeId =
   | 'celadon'
@@ -253,6 +256,9 @@ export const useTheme = () => useContext(ThemeContext);
  *  documentElement (`data-theme`) so the index.css variables switch, and feeds
  *  the matching tokens to antd so its components stay in sync. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  // LocaleProvider wraps ThemeProvider (see main.tsx), so antd's built-in
+  // strings (Popconfirm buttons, image preview, …) follow the UI locale too.
+  const { locale } = useI18n();
   const [themeId, setThemeId] = useState<ThemeId>(initialTheme);
   const theme = BY_ID.get(themeId) ?? THEMES[0];
 
@@ -273,6 +279,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return (
     <ThemeContext.Provider value={value}>
       <ConfigProvider
+        locale={locale === 'th' ? thTH : enUS}
         theme={{
           algorithm: theme.dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: { fontFamily: FONT_STACK, borderRadius: 10, ...theme.antd },

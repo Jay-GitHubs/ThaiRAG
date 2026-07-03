@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useI18n } from '../i18n/LocaleProvider';
 import { Button, Input, Tag, Tooltip, message as antdMessage } from 'antd';
 import {
   ArrowUpOutlined,
@@ -48,6 +49,7 @@ export function MessageComposer({
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop?: () => void;
 }) {
+  const { t } = useI18n();
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -66,19 +68,21 @@ export function MessageComposer({
   const addFiles = async (picked: File[]) => {
     if (picked.length === 0) return;
     if (files.length + picked.length > MAX_FILES) {
-      antdMessage.warning(`Up to ${MAX_FILES} files per message.`);
+      antdMessage.warning(t('tooManyFiles', { max: MAX_FILES }));
       return;
     }
     const tooBig = picked.find((f) => f.size > MAX_BYTES);
     if (tooBig) {
-      antdMessage.warning(`"${tooBig.name}" is ${humanSize(tooBig.size)} — over the 10 MB limit.`);
+      antdMessage.warning(
+        t('fileTooLarge', { name: tooBig.name, size: humanSize(tooBig.size), max: '10 MB' }),
+      );
       return;
     }
     try {
       const next = await Promise.all(picked.map(readAsAttachment));
       setFiles((prev) => [...prev, ...next]);
     } catch {
-      antdMessage.error('Could not read that file.');
+      antdMessage.error(t('fileReadError'));
     }
   };
 
@@ -156,10 +160,10 @@ export function MessageComposer({
           style={{ display: 'none' }}
           onChange={(e) => onPick(e.target.files)}
         />
-        <Tooltip title="Attach files">
+        <Tooltip title={t('attachFiles')}>
           <Button
             type="text"
-            aria-label="Attach"
+            aria-label={t('attach')}
             icon={<PaperClipOutlined />}
             onClick={() => inputRef.current?.click()}
             disabled={disabled}
@@ -170,7 +174,7 @@ export function MessageComposer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onPaste={onPaste}
-          placeholder="Ask anything about your documents…"
+          placeholder={t('composerPlaceholder')}
           variant="borderless"
           autoSize={{ minRows: 1, maxRows: 7 }}
           onPressEnter={(e) => {
@@ -183,11 +187,11 @@ export function MessageComposer({
           style={{ padding: '5px 0', fontSize: 15.5, resize: 'none' }}
         />
         {disabled && onStop ? (
-          <Tooltip title="Stop">
+          <Tooltip title={t('stop')}>
             <Button
               type="primary"
               shape="circle"
-              aria-label="Stop"
+              aria-label={t('stop')}
               icon={<BorderOutlined />}
               onClick={onStop}
             />
@@ -196,7 +200,7 @@ export function MessageComposer({
           <Button
             type="primary"
             shape="circle"
-            aria-label="Send"
+            aria-label={t('send')}
             icon={<ArrowUpOutlined />}
             onClick={submit}
             loading={disabled}
@@ -205,7 +209,7 @@ export function MessageComposer({
         )}
       </div>
       <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
-        {dragging ? 'Drop files to attach' : 'Enter to send · Shift + Enter for a new line · drop or paste files'}
+        {dragging ? t('dropFilesToAttach') : t('composerHint')}
       </div>
     </div>
   );
