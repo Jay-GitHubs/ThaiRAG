@@ -209,6 +209,14 @@ const MAX_LISTED_TITLES: usize = 10;
 /// "Which document do you mean?" — lists what IS available, turning the old
 /// dead-end refusal into a one-step next action.
 pub fn clarify_message(thai: bool, titles: &[String]) -> String {
+    // The same file ingested into several workspaces is several documents but
+    // ONE choice to the user — dedupe the display list, order preserved.
+    let mut seen = std::collections::HashSet::new();
+    let titles: Vec<String> = titles
+        .iter()
+        .filter(|t| seen.insert(t.as_str().to_owned()))
+        .cloned()
+        .collect();
     let shown = &titles[..titles.len().min(MAX_LISTED_TITLES)];
     let list = shown
         .iter()
@@ -423,6 +431,18 @@ mod tests {
         let msg = clarify_message(false, &titles);
         assert!(msg.contains("Doc 9") && !msg.contains("Doc 10\n"), "{msg}");
         assert!(msg.contains("15 more"), "{msg}");
+    }
+
+    #[test]
+    fn clarify_dedupes_same_title_across_workspaces() {
+        let titles: Vec<String> = ["gazette.pdf", "gazette.pdf", "survey.pdf", "gazette.pdf"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let msg = clarify_message(false, &titles);
+        // Once as a list bullet (the example line at the end also names it).
+        assert_eq!(msg.matches("- gazette.pdf").count(), 1, "{msg}");
+        assert!(msg.contains("survey.pdf"));
     }
 
     #[test]

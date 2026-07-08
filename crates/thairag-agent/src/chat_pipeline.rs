@@ -2689,13 +2689,20 @@ impl ChatPipeline {
             return msg;
         }
         let catalog = catalog_fn(&scope.workspace_ids);
-        if catalog.is_empty() || catalog.len() > MAX_HINT_TITLES {
+        // Same file in several workspaces = one choice to the user.
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = catalog
+            .iter()
+            .map(|e| e.title.as_str())
+            .filter(|t| seen.insert(*t))
+            .collect();
+        if unique.is_empty() || unique.len() > MAX_HINT_TITLES {
             return msg;
         }
         let thai = crate::confidence::detect_lang(user_query) == crate::confidence::Lang::Th;
-        let titles = catalog
+        let titles = unique
             .iter()
-            .map(|e| format!("- {}", e.title))
+            .map(|t| format!("- {t}"))
             .collect::<Vec<_>>()
             .join("\n");
         if thai {
