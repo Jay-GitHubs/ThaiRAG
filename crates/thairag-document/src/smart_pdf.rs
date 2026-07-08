@@ -84,6 +84,14 @@ pub struct SmartPdfConfig {
     /// degrade to text-only.
     pub max_vision_pages: usize,
     /// Vision-first OCR for every page (higher fidelity, higher cost).
+    /// Fidelity-gated table rescue: when the whole-document fidelity check
+    /// flags "review" and the doc has mechanically-reconstructed table pages,
+    /// re-transcribe those pages with the vision model and keep whichever
+    /// version scores better. Only fires for born-digital PDFs (scanned pages
+    /// have no text-layer ground truth, so fidelity is "unverifiable" there).
+    pub table_rescue_enabled: bool,
+    /// Cap on pages re-transcribed per rescued document (cost guard).
+    pub table_rescue_max_pages: usize,
     pub high_quality: bool,
     /// Apply sharpen/contrast enhancement before OCR (helps Thai diacritics).
     pub enhance: bool,
@@ -106,6 +114,8 @@ impl Default for SmartPdfConfig {
             min_image_size: 100,
             max_images_per_page: 5,
             max_vision_pages: 100,
+            table_rescue_enabled: true,
+            table_rescue_max_pages: 8,
             high_quality: false,
             enhance: false,
             vision_concurrency: 2,
@@ -818,6 +828,59 @@ fn rp(ex: &PageExtract, markdown: String) -> RenderedPage {
         table_linearized: ex.table.as_ref().map(|l| l.linearized.clone()),
         table_pages: ex.table_pages.clone(),
     }
+}
+
+/// Fidelity-gated table rescue: render the given (1-indexed) pages and have
+/// the vision model re-transcribe each with the table-extraction prompt.
+/// Returns `(page_num, transcription)` for pages that transcribed cleanly;
+/// failed pages are simply omitted. Pure attempt — the CALLER decides adoption
+/// by re-scoring document fidelity (keep-if-better), so a hallucinating model
+/// can never make the document worse under the same metric that flagged it.
+pub async fn rescue_table_pages(
+    pdf: &[u8],
+    page_nums: &[usize],
+    llm: &dyn LlmProvider,
+    lang: crate::semantic_prompts::Language,
+    cfg: &SmartPdfConfig,
+) -> Vec<(usize, String)> {
+    // Render synchronously (pdfium is !Send), then transcribe async.
+    let pdf_owned = pdf.to_vec();
+    let pages: Vec<usize> = page_nums.to_vec();
+    let dpi = cfg.image_dpi;
+    let renders = tokio::task::spawn_blocking(move || {
+        let engine = match crate::pdfium_engine::PdfEngine::new() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "table rescue: pdfium unavailable");
+                return Vec::new();
+            }
+        };
+        pages
+            .iter()
+            .filter_map(|&pn| {
+                engine
+                    .render_page_png(&pdf_owned, pn - 1, dpi, false)
+                    .map_err(
+                        |e| tracing::warn!(page = pn, error = %e, "table rescue: render failed"),
+                    )
+                    .ok()
+                    .map(|img| (pn, img.png_bytes))
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+
+    let prompt = crate::semantic_prompts::get_prompts(lang).table_extraction;
+    let mut out = Vec::new();
+    for (pn, png) in renders {
+        match describe(llm, &png, prompt, PAGE_VISION_TOKENS, cfg.max_image_edge).await {
+            Ok(text) if !text.trim().is_empty() => out.push((pn, text)),
+            Ok(_) => tracing::warn!(page = pn, "table rescue: empty transcription"),
+            Err(e) => tracing::warn!(page = pn, error = %e, "table rescue: transcription failed"),
+        }
+    }
+    out
 }
 
 async fn describe(

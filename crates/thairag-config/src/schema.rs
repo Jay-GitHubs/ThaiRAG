@@ -544,6 +544,15 @@ pub struct DocumentConfig {
     /// model. Higher = sharper OCR, larger images, more cost.
     #[serde(default = "default_pdf_image_dpi")]
     pub pdf_image_dpi: u32,
+    /// Fidelity-gated table rescue: when conversion fidelity flags "review" on
+    /// a born-digital PDF with mechanically-reconstructed tables, re-transcribe
+    /// those pages with the vision model and keep whichever version scores
+    /// better (never-worse by construction).
+    #[serde(default = "default_true")]
+    pub pdf_table_rescue_enabled: bool,
+    /// Cap on pages re-transcribed per rescued document (cost guard).
+    #[serde(default = "default_pdf_table_rescue_max_pages")]
+    pub pdf_table_rescue_max_pages: usize,
     /// Longest-edge pixel cap for *any* image sent to the vision model —
     /// embedded document images (DOCX/XLSX/HTML), direct image uploads, and
     /// rasterized PDF pages. Larger images are downscaled (aspect preserved,
@@ -597,6 +606,10 @@ fn default_pdf_min_chars_per_page() -> usize {
 
 fn default_pdf_max_vision_pages() -> usize {
     100
+}
+
+fn default_pdf_table_rescue_max_pages() -> usize {
+    8
 }
 
 fn default_pdf_image_dpi() -> u32 {
@@ -2217,6 +2230,8 @@ mod tests {
                 pdf_min_chars_per_page: default_pdf_min_chars_per_page(),
                 pdf_max_vision_pages: default_pdf_max_vision_pages(),
                 pdf_image_dpi: default_pdf_image_dpi(),
+                pdf_table_rescue_enabled: true,
+                pdf_table_rescue_max_pages: 8,
                 max_image_edge: default_max_image_edge(),
                 pdf_page_as_image_threshold: default_pdf_page_as_image_threshold(),
                 pdf_min_image_size: default_pdf_min_image_size(),
