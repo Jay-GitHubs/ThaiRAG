@@ -4,7 +4,14 @@ import { login, navigateTo } from './helpers';
 // Headed e2e for the factory reset. Runs a GLOBAL CONTENT reset (keeps users +
 // structure, so the authenticated session stays valid) through the admin UI:
 // Settings → Vector Database → Danger Zone → Factory Reset.
-// NOTE: this is destructive against the live stack's knowledge-base content.
+// DESTRUCTIVE: wipes every workspace's documents, chunks, vectors and the BM25
+// index on the target stack. It must never run as part of a default full-suite
+// pass — opt in explicitly with E2E_FACTORY_RESET=1 against a disposable stack.
+test.skip(
+  process.env.E2E_FACTORY_RESET !== '1',
+  'destructive against live KM content; set E2E_FACTORY_RESET=1 to opt in',
+);
+
 test('factory reset (global content) runs from the admin UI', async ({ page }) => {
   test.setTimeout(120_000);
   await login(page);
