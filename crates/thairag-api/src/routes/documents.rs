@@ -1212,6 +1212,8 @@ fn build_document_preview(
             high_quality: doc.pdf_high_quality,
             enhance: doc.pdf_image_enhance,
             vision_concurrency: doc.pdf_vision_concurrency,
+            table_rescue_enabled: doc.pdf_table_rescue_enabled,
+            table_rescue_max_pages: doc.pdf_table_rescue_max_pages,
         };
         if let Ok(pages) = thairag_document::smart_pdf::extract_pages(bytes, &cfg) {
             for ex in &pages {

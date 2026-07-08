@@ -531,7 +531,11 @@ impl DocumentPipeline {
         high_quality: bool,
         enhance: bool,
         vision_concurrency: usize,
+        table_rescue_enabled: bool,
+        table_rescue_max_pages: usize,
     ) -> Self {
+        self.smart_pdf.table_rescue_enabled = table_rescue_enabled;
+        self.smart_pdf.table_rescue_max_pages = table_rescue_max_pages;
         self.smart_pdf.image_dpi = image_dpi;
         self.smart_pdf.max_image_edge = max_image_edge;
         self.smart_pdf.page_as_image_threshold = page_as_image_threshold;
@@ -1125,7 +1129,7 @@ impl DocumentPipeline {
 
         // Phase 2 (async): deterministic OCR / vision per page + assemble. OCR
         // pages are preferred when an OCR provider is configured (default-off).
-        let doc = crate::smart_pdf::render_to_document(
+        let mut doc = crate::smart_pdf::render_to_document(
             "",
             extracts,
             effective_vision_llm.as_deref(),
@@ -1169,6 +1173,95 @@ impl DocumentPipeline {
                 .flatten(),
             pages_vision_skipped: doc.pages_vision_skipped as i64,
         };
+
+        // ── Fidelity-gated table rescue ─────────────────────────────────
+        // The deterministic lattice can mis-assemble a complex table while
+        // still passing its geometric acceptance gate (over-segmented columns
+        // → misaligned colspans → values detached from their entries). The
+        // fidelity check catches that as dropped/fabricated numbers. When it
+        // flags "review" and the doc has mechanically-reconstructed table
+        // pages, re-transcribe those pages with the vision model and keep
+        // whichever version scores BETTER under the same metric — so a
+        // hallucinating model can never make the document worse, which is the
+        // reason the mechanical path refuses a blind vision fallback.
+        let mut fidelity: Option<thairag_core::models::ConversionFidelity> = None;
+        let mut rescued_pages = 0usize;
+        {
+            let raw_owned = raw.to_vec();
+            let md = doc.markdown.clone();
+            if let Ok(fid) = tokio::task::spawn_blocking(move || {
+                crate::conversion_fidelity::assess(&raw_owned, PDF_MIME, &md)
+            })
+            .await
+            {
+                let table_pages: Vec<usize> = doc
+                    .pages
+                    .iter()
+                    .filter(|p| p.table_html.is_some())
+                    .map(|p| p.page_num)
+                    .take(cfg.table_rescue_max_pages)
+                    .collect();
+                if cfg.table_rescue_enabled
+                    && fid.status == "review"
+                    && !table_pages.is_empty()
+                    && let Some(llm) = effective_vision_llm.as_deref()
+                {
+                    info!(
+                        %doc_id,
+                        score = fid.score,
+                        pages = ?table_pages,
+                        "Fidelity flagged review on table pages — attempting vision rescue"
+                    );
+                    let lang = crate::semantic_prompts::Language::detect(&doc.markdown);
+                    let replacements =
+                        crate::smart_pdf::rescue_table_pages(raw, &table_pages, llm, lang, &cfg)
+                            .await;
+                    if !replacements.is_empty() {
+                        let mut cand_pages = doc.pages.clone();
+                        for (pn, body) in &replacements {
+                            if let Some(p) = cand_pages.iter_mut().find(|p| p.page_num == *pn) {
+                                p.markdown = body.clone();
+                                p.table_html = None;
+                                p.table_linearized = None;
+                            }
+                        }
+                        let cand_md =
+                            crate::semantic::assemble_document_markdown("", cand_pages.clone());
+                        let raw_owned = raw.to_vec();
+                        let cand_md_clone = cand_md.clone();
+                        if let Ok(cand_fid) = tokio::task::spawn_blocking(move || {
+                            crate::conversion_fidelity::assess(&raw_owned, PDF_MIME, &cand_md_clone)
+                        })
+                        .await
+                        {
+                            if cand_fid.score > fid.score {
+                                info!(
+                                    %doc_id,
+                                    old_score = fid.score,
+                                    new_score = cand_fid.score,
+                                    pages = replacements.len(),
+                                    "Table rescue adopted — vision transcription scores higher"
+                                );
+                                rescued_pages = replacements.len();
+                                doc.pages = cand_pages;
+                                doc.markdown = cand_md;
+                                fidelity = Some(cand_fid);
+                            } else {
+                                info!(
+                                    %doc_id,
+                                    mechanical = fid.score,
+                                    vision = cand_fid.score,
+                                    "Table rescue rejected — keeping mechanical extraction"
+                                );
+                            }
+                        }
+                    }
+                }
+                if fidelity.is_none() {
+                    fidelity = Some(fid);
+                }
+            }
+        }
 
         // Chunk the assembled markdown. With the AI agent pipeline enabled, run
         // the intelligence layer (analyzer → smart chunker → enricher) over the
@@ -1322,6 +1415,27 @@ impl DocumentPipeline {
             };
             (chunks, Some(prov))
         };
+        // Attach the (possibly rescue-improved) fidelity verdict here so the
+        // generic post-hoc assessment in process_to_document skips — it would
+        // otherwise re-score without knowing a rescue happened. A rescue also
+        // gets an agent record so the admin provenance view shows it.
+        let provenance = provenance.map(|mut prov| {
+            prov.fidelity = fidelity.clone();
+            if rescued_pages > 0 {
+                prov.path.push_str(" + table-rescue");
+                prov.agents.push(thairag_core::models::AgentRun {
+                    agent: "table-rescue".into(),
+                    model: effective_vision_llm
+                        .as_ref()
+                        .map(|l| l.model_name().to_string()),
+                    status: "applied".into(),
+                    note: Some(format!(
+                        "{rescued_pages} table page(s) re-transcribed; adopted by fidelity score"
+                    )),
+                });
+            }
+            prov
+        });
         Ok(ProcessedDocument {
             chunks,
             images: doc.images,
