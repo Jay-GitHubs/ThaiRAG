@@ -992,6 +992,17 @@ pub struct ChatPipelineConfig {
     #[serde(default = "default_adaptive_min_samples")]
     pub adaptive_min_samples: u32,
 
+    // ── Feature: Document operations (pre-retrieval) ──
+    /// When on, requests that are document-level operations rather than
+    /// content questions ("สรุปเอกสารนี้ให้หน่อย", "summarize this document") are
+    /// recognized BEFORE retrieval and answered from the stored document text:
+    /// single-doc scopes summarize directly, multi-doc scopes ask which
+    /// document (listing titles). Chunk retrieval structurally cannot serve
+    /// these queries — they share no vocabulary with content chunks, so
+    /// without this they dead-end in the low-relevance refusal.
+    #[serde(default = "default_true_val")]
+    pub doc_ops_enabled: bool,
+
     // ── Feature: Agentic document selection ──
     /// When on, an LLM stage reads the workspace's document catalogue (titles)
     /// and scopes retrieval to the document(s) the query is about — the fix for
@@ -1483,6 +1494,8 @@ impl Default for ChatPipelineConfig {
             adaptive_threshold_enabled: false,
             feedback_decay_days: default_feedback_decay_days(),
             adaptive_min_samples: default_adaptive_min_samples(),
+            // Document operations (pre-retrieval)
+            doc_ops_enabled: true,
             // Agentic document selection
             doc_selection_enabled: false,
             doc_selection_max_catalog: default_doc_selection_max_catalog(),

@@ -3068,6 +3068,8 @@ pub struct ChatPipelineConfigResponse {
     pub adaptive_threshold_enabled: bool,
     pub feedback_decay_days: u32,
     pub adaptive_min_samples: u32,
+    // Document operations (pre-retrieval summarize)
+    pub doc_ops_enabled: bool,
     // Agentic doc-selection
     pub doc_selection_enabled: bool,
     pub doc_selection_max_catalog: usize,
@@ -3219,6 +3221,8 @@ pub struct UpdateChatPipelineRequest {
     pub adaptive_threshold_enabled: Option<bool>,
     pub feedback_decay_days: Option<u32>,
     pub adaptive_min_samples: Option<u32>,
+    // Document operations (pre-retrieval summarize)
+    pub doc_ops_enabled: Option<bool>,
     // Agentic doc-selection
     pub doc_selection_enabled: Option<bool>,
     pub doc_selection_max_catalog: Option<usize>,
@@ -3502,6 +3506,9 @@ where
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.adaptive_min_samples),
         // Self-RAG
+        doc_ops_enabled: s("chat_pipeline.doc_ops_enabled")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cp.doc_ops_enabled),
         doc_selection_enabled: s("chat_pipeline.doc_selection_enabled")
             .and_then(|v| v.parse().ok())
             .unwrap_or(cp.doc_selection_enabled),
@@ -3791,6 +3798,7 @@ fn build_chat_pipeline_response_from_config(
         adaptive_threshold_enabled: eff.adaptive_threshold_enabled,
         feedback_decay_days: eff.feedback_decay_days,
         adaptive_min_samples: eff.adaptive_min_samples,
+        doc_ops_enabled: eff.doc_ops_enabled,
         doc_selection_enabled: eff.doc_selection_enabled,
         doc_selection_max_catalog: eff.doc_selection_max_catalog,
         retrieval_mode: eff.retrieval_mode,
@@ -3992,6 +4000,8 @@ pub async fn update_chat_pipeline_config(
     );
     persist_num!(feedback_decay_days, "chat_pipeline.feedback_decay_days");
     persist_num!(adaptive_min_samples, "chat_pipeline.adaptive_min_samples");
+    // Document operations (pre-retrieval summarize)
+    persist_bool!(doc_ops_enabled, "chat_pipeline.doc_ops_enabled");
     // Agentic doc-selection
     persist_bool!(doc_selection_enabled, "chat_pipeline.doc_selection_enabled");
     persist_num!(
