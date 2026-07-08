@@ -268,7 +268,7 @@ fn thai_chars_per_token() -> f32 {
     THAI_CHARS_PER_TOKEN_MILLI.load(Ordering::Relaxed) as f32 / 1000.0
 }
 
-fn estimate_tokens(text: &str) -> usize {
+pub(crate) fn estimate_tokens(text: &str) -> usize {
     let mut thai_chars = 0usize;
     let mut other_chars = 0usize;
     for c in text.chars() {
