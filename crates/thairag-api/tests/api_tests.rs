@@ -3960,3 +3960,78 @@ async fn conversation_summarize_owner_checked_and_returns_summary() {
         resp.status()
     );
 }
+
+// ── Test-query deadlock regression ──────────────────────────────────
+
+/// Regression: the non-stream test-query response literal took FOUR separate
+/// `metadata_cell.lock()`s inside one expression. MutexGuard temporaries live
+/// to the end of the whole statement, so the second lock() self-deadlocked and
+/// the handler never responded (pipeline completed; response never sent).
+/// This drives the real handler end-to-end and fails fast on any hang.
+#[tokio::test]
+async fn test_query_responds_and_does_not_deadlock() {
+    let app = build_app(true);
+    let token = register_and_get_token(&app, "tq@test.com", "TQ", "Password1").await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/orgs",
+            serde_json::json!({ "name": "TQ Org" }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let org_id = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts"),
+            serde_json::json!({ "name": "TQ Dept" }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let dept_id = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/km/orgs/{org_id}/depts/{dept_id}/workspaces"),
+            serde_json::json!({ "name": "TQ WS" }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let ws_id = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let fut = app.clone().oneshot(json_request_auth(
+        "POST",
+        &format!("/api/km/workspaces/{ws_id}/test-query"),
+        serde_json::json!({ "query": "ทดสอบ" }),
+        &token,
+    ));
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(30), fut)
+        .await
+        .expect("test-query must respond — hang means the metadata-mutex deadlock is back")
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["answer"], "mock response");
+}
