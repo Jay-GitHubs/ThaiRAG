@@ -510,6 +510,14 @@ pub async fn test_query(
         embedding_model: p.providers_config.embedding.model.clone(),
     };
 
+    // ONE lock, taken before the response literal. Multiple
+    // `metadata_cell.lock()` calls inside a single expression self-deadlock:
+    // each MutexGuard temporary lives to the end of the whole statement, so
+    // the second lock() waits forever on the first (std::sync::Mutex is not
+    // reentrant). This hung every non-stream test-query since the second
+    // field was added — the handler parked here and no response was ever
+    // sent, while the pipeline itself completed normally.
+    let final_meta = metadata_cell.lock().unwrap().clone();
     Ok(Json(TestQueryResponse {
         response_id,
         query: req.query,
@@ -528,10 +536,10 @@ pub async fn test_query(
         },
         provider_info,
         pipeline_stages,
-        citations: metadata_cell.lock().unwrap().citations.clone(),
-        confidence: metadata_cell.lock().unwrap().confidence,
-        confidence_summary: metadata_cell.lock().unwrap().confidence_summary.clone(),
-        confidence_factors: metadata_cell.lock().unwrap().confidence_factors.clone(),
+        citations: final_meta.citations.clone(),
+        confidence: final_meta.confidence,
+        confidence_summary: final_meta.confidence_summary.clone(),
+        confidence_factors: final_meta.confidence_factors.clone(),
     }))
 }
 
