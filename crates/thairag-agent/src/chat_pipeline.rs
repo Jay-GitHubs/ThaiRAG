@@ -62,6 +62,13 @@ pub type DocCatalogResolver = Arc<
         + Sync,
 >;
 
+/// Closure that loads a document's full stored (converted) text — chunk
+/// contents joined in order. Powers the pre-retrieval document-operations
+/// path (`doc_ops`): a "summarize this document" request answers from the
+/// whole document instead of chunk retrieval. `None` disables summarize
+/// (clarify/no-docs answers still work off the catalogue alone).
+pub type DocContentResolver = Arc<dyn Fn(DocId) -> Option<String> + Send + Sync>;
+
 /// PR-δ: upper bound on source images hydrated into a single answer-LLM request.
 /// Vision blobs are large (base64 page renders) — cap to bound payload/latency.
 const MAX_VISION_IMAGES_PER_ANSWER: usize = 4;
@@ -295,6 +302,9 @@ pub struct ChatPipeline {
     /// numbers, section title) survives to the answer surface.
     metadata_resolver: Option<MetadataResolver>,
     doc_catalog_resolver: Option<DocCatalogResolver>,
+    /// Full-document text loader for the pre-retrieval doc-ops path (see
+    /// [`DocContentResolver`]).
+    doc_content_resolver: Option<DocContentResolver>,
     /// Reasoning-based ("PageIndex") retriever. When set, the `Vectorless`
     /// retrieval mode navigates document trees with an LLM instead of BM25;
     /// absent (or yielding nothing) it falls back to lexical search.
@@ -378,6 +388,7 @@ impl ChatPipeline {
             guardrail_metrics: None,
             metadata_resolver: None,
             doc_catalog_resolver: None,
+            doc_content_resolver: None,
             reasoning_retriever: None,
         }
     }
@@ -409,6 +420,14 @@ impl ChatPipeline {
     /// Builder: install the workspace document-catalogue resolver that powers
     /// agentic doc-selection. Without it (or with `doc_selection_enabled` off)
     /// the stage is skipped and retrieval is unscoped.
+    /// Install the full-document text loader for the doc-ops path. Without it
+    /// (or with `doc_ops_enabled` off) summarize requests fall through to the
+    /// ordinary retrieval pipeline.
+    pub fn with_doc_content_resolver(mut self, resolver: DocContentResolver) -> Self {
+        self.doc_content_resolver = Some(resolver);
+        self
+    }
+
     pub fn with_doc_catalog_resolver(mut self, resolver: DocCatalogResolver) -> Self {
         self.doc_catalog_resolver = Some(resolver);
         self
@@ -911,6 +930,53 @@ impl ChatPipeline {
         let messages = &full_messages;
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
+        // ── Document operations (pre-retrieval, no LLM cost to detect) ──
+        if let Some(op) = self.plan_doc_op(user_query, scope, has_external_context) {
+            match op {
+                crate::doc_ops::DocOpOutcome::Answer(text) => {
+                    info!("Pipeline: doc-op direct answer (clarify / no documents)");
+                    Self::update_metadata(&metadata, |m| {
+                        m.pipeline_route = Some("doc_op_clarify".into());
+                    });
+                    return Ok(LlmResponse {
+                        content: text,
+                        usage: LlmUsage::default(),
+                    });
+                }
+                crate::doc_ops::DocOpOutcome::Summarize { doc_id, title } => {
+                    if let Some(msgs) = self.doc_summary_messages(doc_id, &title, user_query) {
+                        info!(%doc_id, "Pipeline: doc-op summarize from stored document text");
+                        self.emit_progress(
+                            &progress,
+                            "response_generator",
+                            StageStatus::Started,
+                            None,
+                        );
+                        let t2 = Instant::now();
+                        budget.try_spend();
+                        let response = self.main_llm.generate(&msgs, None).await?;
+                        let gen_ms = t2.elapsed().as_millis() as u64;
+                        self.emit_progress(
+                            &progress,
+                            "response_generator",
+                            StageStatus::Done,
+                            Some(gen_ms),
+                        );
+                        Self::update_metadata(&metadata, |m| {
+                            m.pipeline_route = Some("doc_summary".into());
+                            m.generation_ms = Some(gen_ms);
+                        });
+                        info!(
+                            total_ms = pipeline_start.elapsed().as_millis() as u64,
+                            "Pipeline: complete (doc summary)"
+                        );
+                        return Ok(self.apply_output_guardrails(response, &progress, &metadata));
+                    }
+                    // Stored text unavailable → ordinary pipeline below.
+                }
+            }
+        }
+
         // ── Agent 1: Query Analyzer + Self-RAG gate (concurrent) ──
         self.emit_progress(&progress, "query_analyzer", StageStatus::Started, None);
         self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
@@ -1164,6 +1230,7 @@ impl ChatPipeline {
                     has_external_context,
                     &metadata,
                     user_query,
+                    scope,
                 ) {
                     return Ok(LlmResponse {
                         content: msg,
@@ -1711,9 +1778,13 @@ impl ChatPipeline {
         // their chance — if there is still nothing relevant and the client
         // supplied no context of its own, refuse instead of letting the
         // generator answer from general knowledge. ──
-        if let Some(msg) =
-            self.context_insufficient_message(&context, has_external_context, metadata, user_query)
-        {
+        if let Some(msg) = self.context_insufficient_message(
+            &context,
+            has_external_context,
+            metadata,
+            user_query,
+            scope,
+        ) {
             return Ok(LlmResponse {
                 content: msg,
                 usage: LlmUsage::default(),
@@ -1995,6 +2066,45 @@ impl ChatPipeline {
 
         let user_query = messages.last().map(|m| m.content.as_str()).unwrap_or("");
 
+        // ── Document operations (pre-retrieval, no LLM cost to detect) ──
+        if let Some(op) = self.plan_doc_op(user_query, scope, has_external_context) {
+            match op {
+                crate::doc_ops::DocOpOutcome::Answer(text) => {
+                    info!("Pipeline(stream): doc-op direct answer (clarify / no documents)");
+                    Self::update_metadata(&metadata, |m| {
+                        m.pipeline_route = Some("doc_op_clarify".into());
+                    });
+                    return Ok(Self::refusal_stream(text));
+                }
+                crate::doc_ops::DocOpOutcome::Summarize { doc_id, title } => {
+                    if let Some(msgs) = self.doc_summary_messages(doc_id, &title, user_query) {
+                        info!(%doc_id, "Pipeline(stream): doc-op summarize from stored document text");
+                        self.emit_progress(
+                            &progress,
+                            "response_generator",
+                            StageStatus::Started,
+                            None,
+                        );
+                        budget.try_spend();
+                        Self::update_metadata(&metadata, |m| {
+                            m.pipeline_route = Some("doc_summary".into());
+                        });
+                        info!(
+                            total_ms = pipeline_start.elapsed().as_millis() as u64,
+                            "Pipeline: complete (doc summary, streaming)"
+                        );
+                        let stream = self.main_llm.generate_stream(&msgs, None).await?;
+                        return Ok(self.wrap_stream_with_output_guardrails(
+                            stream,
+                            progress.clone(),
+                            metadata.clone(),
+                        ));
+                    }
+                    // Stored text unavailable → ordinary pipeline below.
+                }
+            }
+        }
+
         // ── Agent 1: Query Analyzer + Self-RAG gate (concurrent) ──
         self.emit_progress(&progress, "query_analyzer", StageStatus::Started, None);
         self.emit_progress(&progress, "self_rag_gate", StageStatus::Started, None);
@@ -2224,6 +2334,7 @@ impl ChatPipeline {
                     has_external_context,
                     &metadata,
                     user_query,
+                    scope,
                 ) {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
@@ -2355,6 +2466,7 @@ impl ChatPipeline {
                     has_external_context,
                     &metadata,
                     user_query,
+                    scope,
                 ) {
                     info!(
                         total_ms = pipeline_start.elapsed().as_millis() as u64,
@@ -2463,6 +2575,63 @@ impl ChatPipeline {
         }
     }
 
+    /// Pre-retrieval document-operations gate shared by the streaming and
+    /// non-streaming paths. Recognizes document-level requests ("สรุปเอกสารนี้")
+    /// that chunk retrieval structurally cannot serve (the query shares no
+    /// vocabulary with content chunks) and resolves their target document.
+    /// `None` → not a doc op, continue the ordinary pipeline.
+    fn plan_doc_op(
+        &self,
+        user_query: &str,
+        scope: &AccessScope,
+        has_external_context: bool,
+    ) -> Option<crate::doc_ops::DocOpOutcome> {
+        // Client-supplied context (e.g. a file-upload chat) means "this
+        // document" is the client's document, not a KB one — stay out.
+        if !self.config.doc_ops_enabled || has_external_context {
+            return None;
+        }
+        // Unscoped requests (API-key / unrestricted) carry no workspace list
+        // to catalogue — leave them to ordinary retrieval rather than
+        // wrongly claiming "no documents".
+        if scope.workspace_ids.is_empty() {
+            return None;
+        }
+        let catalog_fn = self.doc_catalog_resolver.as_ref()?;
+        let catalog = catalog_fn(&scope.workspace_ids);
+        let outcome =
+            crate::doc_ops::resolve(user_query, &catalog, self.config.doc_selection_max_catalog)?;
+        // Summarize needs the content loader; without one, fall through.
+        if matches!(outcome, crate::doc_ops::DocOpOutcome::Summarize { .. })
+            && self.doc_content_resolver.is_none()
+        {
+            return None;
+        }
+        Some(outcome)
+    }
+
+    /// Build the summarize prompt for a resolved target from the stored
+    /// document text. `None` when the text is missing or empty — the caller
+    /// falls through to ordinary retrieval instead of failing the request.
+    fn doc_summary_messages(
+        &self,
+        doc_id: DocId,
+        title: &str,
+        user_query: &str,
+    ) -> Option<Vec<ChatMessage>> {
+        let content = self.doc_content_resolver.as_ref()?(doc_id)?;
+        if content.trim().is_empty() {
+            return None;
+        }
+        let token_budget = self.config.max_context_tokens.max(FULL_DOC_CONTEXT_TOKENS);
+        Some(crate::doc_ops::build_summarize_messages(
+            title,
+            &content,
+            user_query,
+            token_budget,
+        ))
+    }
+
     /// Layer 1: Pre-stream context guard.
     /// See [`insufficient_context_message`] — method wrapper for call-site
     /// symmetry with the other pipeline stages. When the guard fires it marks
@@ -2478,6 +2647,7 @@ impl ChatPipeline {
         has_external_context: bool,
         metadata: &Option<MetadataCell>,
         user_query: &str,
+        scope: &AccessScope,
     ) -> Option<String> {
         let msg = insufficient_context_message(
             context,
@@ -2485,6 +2655,10 @@ impl ChatPipeline {
             self.config.min_vector_relevance,
             user_query,
         )?;
+        // Turn the dead-end refusal into a next step: list what IS available
+        // (small scopes only), so "rephrase your question" comes with the
+        // titles the user can actually ask about — or summarize.
+        let msg = self.append_available_docs(msg, user_query, scope);
         if self.config.confidence_scoring_enabled {
             let thai = crate::confidence::detect_lang(user_query) == crate::confidence::Lang::Th;
             Self::update_metadata(metadata, |m| {
@@ -2503,18 +2677,66 @@ impl ChatPipeline {
         Some(msg)
     }
 
+    /// Hint appended to low-relevance refusals: what documents exist in the
+    /// user's scope. Only for small scopes — a hundred-doc listing helps
+    /// nobody. Appended AFTER the refusal text so `is_refusal()` markers stay.
+    fn append_available_docs(&self, msg: String, user_query: &str, scope: &AccessScope) -> String {
+        const MAX_HINT_TITLES: usize = 5;
+        let Some(ref catalog_fn) = self.doc_catalog_resolver else {
+            return msg;
+        };
+        if scope.workspace_ids.is_empty() {
+            return msg;
+        }
+        let catalog = catalog_fn(&scope.workspace_ids);
+        // Same file in several workspaces = one choice to the user.
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = catalog
+            .iter()
+            .map(|e| e.title.as_str())
+            .filter(|t| seen.insert(*t))
+            .collect();
+        if unique.is_empty() || unique.len() > MAX_HINT_TITLES {
+            return msg;
+        }
+        let thai = crate::confidence::detect_lang(user_query) == crate::confidence::Lang::Th;
+        let titles = unique
+            .iter()
+            .map(|t| format!("- {t}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if thai {
+            format!(
+                "{msg}\n\nเอกสารที่มีอยู่ในระบบ:\n{titles}\n\
+                 ลองถามเกี่ยวกับเนื้อหาในเอกสารเหล่านี้ หรือพิมพ์ \"สรุปเอกสาร <ชื่อเอกสาร>\""
+            )
+        } else {
+            format!(
+                "{msg}\n\nAvailable documents:\n{titles}\n\
+                 Try asking about their content, or type \"summarize <document name>\""
+            )
+        }
+    }
+
     fn context_insufficient_response(
         &self,
         context: &CuratedContext,
         has_external_context: bool,
         metadata: &Option<MetadataCell>,
         user_query: &str,
+        scope: &AccessScope,
     ) -> Option<LlmStreamResponse> {
-        self.context_insufficient_message(context, has_external_context, metadata, user_query)
-            .map(|msg| LlmStreamResponse {
-                stream: Box::pin(tokio_stream::once(Ok(msg))),
-                usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
-            })
+        self.context_insufficient_message(
+            context,
+            has_external_context,
+            metadata,
+            user_query,
+            scope,
+        )
+        .map(|msg| LlmStreamResponse {
+            stream: Box::pin(tokio_stream::once(Ok(msg))),
+            usage: Arc::new(Mutex::new(Some(LlmUsage::default()))),
+        })
     }
 
     /// Layer 3: Post-stream quality check.

@@ -845,6 +845,27 @@ impl ProviderBundle {
                     }) as thairag_agent::chat_pipeline::DocCatalogResolver
                 });
 
+            // Doc-ops (pre-retrieval summarize): load a document's full stored
+            // converted text — chunk contents joined in ingestion order.
+            let doc_content_resolver: Option<thairag_agent::chat_pipeline::DocContentResolver> =
+                km_store.as_ref().map(|store| {
+                    let store = Arc::clone(store);
+                    Arc::new(move |doc_id: thairag_core::types::DocId| {
+                        let mut chunks = store.load_chunks_by_doc(doc_id);
+                        if chunks.is_empty() {
+                            return None;
+                        }
+                        chunks.sort_by_key(|c| c.chunk_index);
+                        Some(
+                            chunks
+                                .iter()
+                                .map(|c| c.content.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n\n"),
+                        )
+                    }) as thairag_agent::chat_pipeline::DocContentResolver
+                });
+
             // PR-δ multimodal retrieval: resolve a chunk's image_blob_id to the
             // stored image bytes (base64) for the answer LLM's vision input. The
             // pipeline only invokes this when the answer LLM supports_vision().
@@ -995,6 +1016,10 @@ impl ProviderBundle {
             };
             let pipeline = match doc_catalog_resolver {
                 Some(resolver) => pipeline.with_doc_catalog_resolver(resolver),
+                None => pipeline,
+            };
+            let pipeline = match doc_content_resolver {
+                Some(resolver) => pipeline.with_doc_content_resolver(resolver),
                 None => pipeline,
             };
             let pipeline = match reasoning_retriever {
