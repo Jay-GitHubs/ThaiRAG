@@ -35,7 +35,8 @@ async function waitForReady(
   wsId: string,
   docId: string,
   sinceUpdatedAt?: string,
-  timeoutMs = 120_000,
+  // Gateway-era AI preprocessing takes minutes per pass (measured).
+  timeoutMs = 900_000,
 ): Promise<DocState> {
   const headers = { Authorization: `Bearer ${token}` };
   const deadline = Date.now() + timeoutMs;
@@ -134,7 +135,8 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
   });
 
   test('raising per-workspace max_chunk_size collapses a prose doc to one chunk', async ({ page }) => {
-    test.setTimeout(300_000);
+    // Two full processing passes (upload + reprocess) over the gateway.
+    test.setTimeout(1_800_000);
 
     // ── 1. Upload the long prose document through the UI ───────────────────
     await login(page);
@@ -156,7 +158,9 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     await modal.locator('input[type="file"]').setInputFiles(PROSE_PATH);
     await modal.getByRole('button', { name: 'Upload' }).click();
     // Upload now keeps the modal open as a live processing tracker; dismiss it.
-    await page.getByRole('button', { name: 'Done' }).click();
+    // 'Done' renders once the upload POST returns — which itself can take
+    // >10s when the ingestion queue is busy.
+    await page.getByRole('button', { name: 'Done' }).click({ timeout: 120_000 });
     await expect(modal).not.toBeVisible({ timeout: 15_000 });
 
     // Find the freshly-uploaded doc id via API (title defaults to filename).
@@ -185,6 +189,9 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
 
     const scopeSelect = page.locator('.ant-select').filter({ hasText: /Global/ });
     await scopeSelect.click();
+    // Type-to-filter: the dropdown virtualizes with many orgs, so off-screen
+    // options aren't in the DOM until the search narrows the list.
+    await page.keyboard.type(orgName);
     await page.getByText(`Org: ${orgName}`).click();
     await expect(page.locator('.ant-tag').filter({ hasText: 'Organization' })).toBeVisible();
 
@@ -225,9 +232,12 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
 
     const docRow = page.locator('tr', { hasText: 'long_prose' });
     await expect(docRow).toBeVisible({ timeout: 5000 });
-    // Reprocess is an icon-only button (ReloadOutlined) wrapped in a Popconfirm.
+    // Reprocess is an icon-only button (ReloadOutlined) that now opens the
+    // Reprocess-with-options modal (the old Popconfirm flow was replaced).
     await docRow.locator('button:has(.anticon-reload)').click();
-    await page.locator('.ant-popconfirm').getByRole('button', { name: 'OK' }).click();
+    const reprocessModal = page.locator('.ant-modal').filter({ hasText: 'Reprocess —' });
+    await expect(reprocessModal).toBeVisible({ timeout: 10_000 });
+    await reprocessModal.getByRole('button', { name: 'Reprocess', exact: true }).click();
     // Confirm the reprocess actually fired before we poll for the result.
     await expect(page.getByText('Reprocessing started')).toBeVisible({ timeout: 5000 });
 
