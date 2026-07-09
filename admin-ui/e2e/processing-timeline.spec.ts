@@ -24,7 +24,8 @@ async function waitForDoc(
   token: string,
   wsId: string,
   docId: string,
-  timeoutMs = 240_000,
+  // Even a 2KB text doc runs 4 gateway LLM stages; minutes under load.
+  timeoutMs = 600_000,
 ) {
   const headers = { Authorization: `Bearer ${token}` };
   const deadline = Date.now() + timeoutMs;
@@ -101,7 +102,7 @@ test.describe('Processing timeline (AI preprocessing)', () => {
   });
 
   test('upload shows live per-stage tracker and records stage timings', async ({ page }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(900_000);
 
     await login(page);
     await navigateTo(page, 'Documents');
@@ -181,7 +182,7 @@ test.describe('Processing timeline (AI preprocessing)', () => {
     await tracker.screenshot({ path: 'e2e/screenshots/processing-timeline-ai-live.png' });
 
     // ── Tracker reaches a terminal "Ready" state in the UI ───────────────────
-    await expect(tracker.getByText('Ready')).toBeVisible({ timeout: 240_000 });
+    await expect(tracker.getByText('Ready')).toBeVisible({ timeout: 600_000 });
     // Provenance summary (the processing path) is shown on completion.
     await expect(tracker.getByText('Path:')).toBeVisible();
 

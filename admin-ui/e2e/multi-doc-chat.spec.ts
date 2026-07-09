@@ -26,7 +26,9 @@ const STRESS_REASON =
 
 test.describe('Multi-Document Chat (504 stress test)', () => {
   // Increase timeout for this entire suite — document processing + LLM can be slow
-  test.setTimeout(600_000); // 10 minutes
+  // Three docs × gateway-era AI preprocessing (measured minutes per doc,
+  // not seconds) — the old 10-minute budget failed routinely.
+  test.setTimeout(1_800_000); // 30 minutes
 
   const suffix = Date.now();
   const orgName = `StressOrg-${suffix}`;
@@ -46,7 +48,7 @@ test.describe('Multi-Document Chat (504 stress test)', () => {
   ];
 
   test.beforeAll(async ({ request }, testInfo) => {
-    testInfo.setTimeout(600_000); // 10 min for uploading + processing 3 large docs
+    testInfo.setTimeout(1_800_000); // 30 min: upload + AI preprocessing of 3 docs over the gateway
     // Login via API
     const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
       data: { email: TEST_EMAIL, password: TEST_PASSWORD },
