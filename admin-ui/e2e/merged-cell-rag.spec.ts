@@ -32,7 +32,9 @@ async function waitForReady(
   token: string,
   wsId: string,
   docId: string,
-  timeoutMs = 180_000,
+  // Gateway-era AI preprocessing: the 10-page withholding PDF measured ~7
+  // minutes for a full pass (2026-07-08) — budget well above that.
+  timeoutMs = 900_000,
 ): Promise<number> {
   const headers = { Authorization: `Bearer ${token}` };
   const deadline = Date.now() + timeoutMs;
@@ -115,7 +117,7 @@ test.describe('Merged-cell table is answerable through RAG (dense grid)', () => 
   });
 
   test('answer carries merged-cell values (form + deadline)', async ({ page }) => {
-    test.setTimeout(360_000);
+    test.setTimeout(1_500_000);
 
     await login(page);
     await navigateTo(page, 'Documents');
