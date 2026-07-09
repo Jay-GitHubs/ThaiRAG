@@ -933,6 +933,7 @@ impl DocumentPipeline {
             return Err(self.empty_extraction_error(mime_type));
         }
 
+        crate::table_chunk_fix::fix_table_chunks(&mut chunks);
         let prov = ProcessingProvenance {
             path,
             agents,
@@ -1436,6 +1437,8 @@ impl DocumentPipeline {
             }
             prov
         });
+        let mut chunks = chunks;
+        crate::table_chunk_fix::fix_table_chunks(&mut chunks);
         Ok(ProcessedDocument {
             chunks,
             images: doc.images,

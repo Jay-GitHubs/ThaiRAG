@@ -13,6 +13,7 @@ pub mod region_router;
 pub mod semantic;
 pub mod semantic_prompts;
 pub mod smart_pdf;
+pub mod table_chunk_fix;
 pub mod table_extractor;
 pub mod table_lattice;
 pub mod table_stream;
