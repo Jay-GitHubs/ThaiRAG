@@ -168,11 +168,15 @@ def cmd_build(args):
 
 
 # ── run ──────────────────────────────────────────────────────────────────────
+THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+
+
 def canon(t: str) -> str:
     """Whitespace-free, lowercased, with numbers canonicalised so a correct
-    answer phrased differently still matches: drop thousands separators
-    (1,500→1500) and trailing zeros (15.0→15, 10.00→10)."""
-    t = norm(t)
+    answer phrased differently still matches: Thai numerals mapped to Arabic
+    (๒๔๘๔→2484 — gazette-era references use them, models answer either way),
+    drop thousands separators (1,500→1500) and trailing zeros (15.0→15)."""
+    t = norm(t).translate(THAI_DIGITS)
     t = re.sub(r"(?<=\d),(?=\d)", "", t)
     t = re.sub(r"(\d)\.0+(?!\d)", r"\1", t)
     return t
