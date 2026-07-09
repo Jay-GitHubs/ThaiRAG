@@ -32,6 +32,16 @@ const BOUNDARY_COVER_FRAC: f32 = 0.5;
 /// Adjacent boundaries closer than this (points) are merged — collapses doubled
 /// borders that survive the snap step as separate hairline columns/rows.
 const MIN_CELL_GAP: f32 = 6.0;
+
+/// A boundary kept by union coverage must ALSO be anchored by one long
+/// contiguous segment of at least this fraction of the table extent. Real cell
+/// borders are drawn long (full or half height); comb/writing-box columns —
+/// stacks of short per-band segments whose UNION passes the coverage gate —
+/// are not (observed live on the RD ภ.ง.ด. forms: 17pt-pitched combs, longest
+/// segment 28% of table height, union 57%). Demoted candidates are not lost:
+/// they take the text-aware rescue path, which a comb fails (empty boxes have
+/// no text to separate) and a genuinely segmented border passes.
+const MAX_SEG_FRAC: f32 = 0.3;
 /// Glyphs on the same text line whose horizontal gap is at most this many
 /// median glyph widths apart coalesce into one text run. Tuned so intra-word
 /// (and intra-phrase Thai) gaps merge while genuine column gutters do not.
@@ -143,10 +153,30 @@ fn union_covers(spans: &mut [(f32, f32)], lo: f32, hi: f32) -> bool {
 /// ([`rescue_boundary`]) instead of silently collapsing their cells.
 fn boundary_split(lines: &[Line], extent: f32) -> (Vec<f32>, Vec<f32>) {
     let candidates = cluster(lines.iter().map(|l| l.pos).collect());
-    let (kept, dropped) = candidates.into_iter().partition(|&p| {
+    // Phase 1: union-coverage gate (as before).
+    let (covered, mut dropped): (Vec<f32>, Vec<f32>) = candidates.into_iter().partition(|&p| {
         let mut spans = spans_at(lines, p);
         extent > 0.0 && union_len(&mut spans) / extent >= BOUNDARY_COVER_FRAC
     });
+    // Phase 2: INTERNAL coverage-passing candidates must also be anchored by
+    // one long segment (see MAX_SEG_FRAC) — combs pass the union gate but are
+    // stacks of shorts. The extremes are exempt: they are the table's outer
+    // frame (often drawn segmented), and the text-aware rescue can never
+    // re-admit an edge (it only splits *internal* cells), so demoting one
+    // would silently truncate the grid.
+    let lo = covered.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = covered.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let (kept, demoted): (Vec<f32>, Vec<f32>) = covered.into_iter().partition(|&p| {
+        if p == lo || p == hi {
+            return true;
+        }
+        let longest = spans_at(lines, p)
+            .iter()
+            .map(|(a, b)| b - a)
+            .fold(0.0f32, f32::max);
+        longest / extent >= MAX_SEG_FRAC
+    });
+    dropped.extend(demoted);
     (kept, dropped)
 }
 
@@ -881,6 +911,51 @@ mod tests {
             "underline must not become a row border, got {}x{}",
             t.n_rows,
             t.n_cols
+        );
+    }
+
+    /// Comb/writing-box columns (RD ภ.ง.ด. forms): stacks of short segments
+    /// whose UNION passes the coverage gate but which are not cell borders.
+    /// The long-segment anchor must demote them (and text rescue must not
+    /// re-admit empty combs), while segmented table EDGES stay structural.
+    #[test]
+    fn comb_columns_are_demoted_but_segmented_edges_survive() {
+        let mut lines = vec![
+            // Frame + one real internal border, full height (0..100).
+            vline(0.0, 0.0, 100.0),
+            vline(50.0, 0.0, 100.0),
+            hline(0.0, 0.0, 120.0),
+            hline(50.0, 0.0, 120.0),
+            hline(100.0, 0.0, 120.0),
+            // Right EDGE drawn as two short segments (28% each, union 56%).
+            vline(120.0, 0.0, 28.0),
+            vline(120.0, 60.0, 88.0),
+        ];
+        // Comb stack at x=70..110 every 10pt: three short bands each, union
+        // ≈ 60% of height but longest segment only 25%.
+        for x in [70.0, 80.0, 90.0, 100.0, 110.0] {
+            lines.push(vline(x, 0.0, 25.0));
+            lines.push(vline(x, 40.0, 60.0));
+            lines.push(vline(x, 75.0, 90.0));
+        }
+        // Text in the two real cells of each row band; combs' boxes are empty.
+        let chars: Vec<PositionedChar> = vec![
+            ch('a', 20.0, 75.0),
+            ch('b', 60.0, 75.0),
+            ch('c', 20.0, 25.0),
+            ch('d', 60.0, 25.0),
+        ];
+        let t = reconstruct(&chars, &lines, &[]).expect("table");
+        assert_eq!(
+            t.n_cols, 2,
+            "combs must not become columns (cols={} xs={:?})",
+            t.n_cols, t.col_xs
+        );
+        // The segmented right edge remains the outer boundary.
+        assert!(
+            (t.col_xs.last().unwrap() - 120.0).abs() <= SNAP,
+            "segmented edge must survive: {:?}",
+            t.col_xs
         );
     }
 
