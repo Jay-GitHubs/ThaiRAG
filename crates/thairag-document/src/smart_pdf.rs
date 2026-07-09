@@ -901,10 +901,55 @@ async fn describe(
         max_image_edge,
     )
     .await
+    .map(|t| sanitize_vision_text(&t))
+}
+
+/// Deterministic hygiene for vision-model transcriptions before they become
+/// document content. Observed live (rescued rd_tp4 corpus): the model wraps
+/// tables in markdown code fences and appends sign-off chatter ("หวังว่าข้อมูลนี้
+/// จะช่วย…") — both then survive chunking as junk chunks that dilute retrieval.
+/// A scanned/rendered page never legitimately contains markdown fences, so
+/// fence lines are dropped outright; trailing assistant sign-off lines are
+/// trimmed by prefix match (conservative: suffix of the text only).
+pub(crate) fn sanitize_vision_text(text: &str) -> String {
+    const SIGNOFF_PREFIXES: &[&str] = &[
+        "หวังว่า",
+        "หากมีข้อสงสัย",
+        "หากต้องการ",
+        "ขอให้",
+        "I hope this",
+        "Let me know",
+        "Feel free to",
+    ];
+    let mut lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("```"))
+        .collect();
+    while let Some(last) = lines.last() {
+        let t = last.trim();
+        if t.is_empty() || SIGNOFF_PREFIXES.iter().any(|s| t.starts_with(s)) {
+            lines.pop();
+        } else {
+            break;
+        }
+    }
+    lines.join("\n").trim().to_string()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sanitize_strips_fences_and_signoff_but_keeps_content() {
+        let raw = "```markdown\n| ลำดับ | อัตรา |\n|---|---|\n| 10 | 3.0 |\n```\n\nหวังว่าข้อมูลนี้จะช่วยในการทำงานของคุณ";
+        let out = super::sanitize_vision_text(raw);
+        assert!(out.contains("| 10 | 3.0 |"), "{out}");
+        assert!(!out.contains("```"), "{out}");
+        assert!(!out.contains("หวังว่า"), "{out}");
+        // Sign-off prefixes only trim the SUFFIX — same phrase mid-document stays.
+        let mid = "หวังว่าจะได้รับการพิจารณา\nข้อความจริงของเอกสาร";
+        assert_eq!(super::sanitize_vision_text(mid), mid);
+    }
+
     use super::*;
     use thairag_core::traits::LlmProvider;
     use thairag_core::types::{ChatMessage, LlmResponse, VisionMessage};
