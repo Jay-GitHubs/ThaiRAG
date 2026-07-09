@@ -4,7 +4,14 @@ import { test, expect } from '@playwright/test';
 import { TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
 
 // Specs run as ESM (no __dirname); resolve fixtures from cwd (the admin-ui dir).
-const FIXTURE_PDF = path.resolve(process.cwd(), '../tests/fixtures/thai-real/tfac_gazette.pdf');
+// Fixture choice is load-bearing: the 47-page tfac_gazette took 19 MINUTES to
+// ingest on the all-gateway stack (measured 2026-07-09) and blew every budget.
+// The 2-page scanned gazette exercises the same provenance path (scanned →
+// OCR/vision engines recorded) in a few minutes.
+const FIXTURE_PDF = path.resolve(
+  process.cwd(),
+  '../tests/fixtures/thai-real/scanned_gazette_2486.pdf',
+);
 
 // After processing, a document's provenance records WHICH extraction engines ran
 // (deterministic OCR vs vision LLM) — so an operator can see, per document and
@@ -36,7 +43,9 @@ test.describe('OCR provenance visibility', () => {
   });
 
   test('High-Quality reprocess records OCR/vision engine usage in provenance', async ({ request }) => {
-    test.setTimeout(180_000);
+    // Two full processing passes (ingest + HQ reprocess) with AI
+    // preprocessing over the gateway — minutes each, not seconds.
+    test.setTimeout(1_500_000);
     const headers = { Authorization: `Bearer ${token}` };
     test.skip(!fs.existsSync(FIXTURE_PDF), 'Thai fixture PDF not present');
 
@@ -51,10 +60,10 @@ test.describe('OCR provenance visibility', () => {
     });
     const docId = (await up.json()).doc_id;
     const waitReady = async () => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 120; i++) {
         const d = await (await request.get(`${API_BASE}/api/km/workspaces/${wsId}/documents/${docId}`, { headers })).json();
         if (d.status === 'ready' || d.status === 'failed') return d;
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((r) => setTimeout(r, 5000));
       }
       throw new Error('document did not finish processing');
     };

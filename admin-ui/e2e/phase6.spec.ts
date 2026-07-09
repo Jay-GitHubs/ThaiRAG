@@ -290,8 +290,11 @@ test.describe('Prompt Marketplace page', () => {
   });
 
   test('shows Prompt Marketplace heading', async ({ page }) => {
-    // The page renders an h2 heading with translated title
-    await expect(page.locator('h2')).toBeVisible({ timeout: 8_000 });
+    // The redesign renders page titles as eyebrow + antd Title level 4 — match
+    // by role+name so the heading level can change without breaking the spec.
+    await expect(
+      page.getByRole('heading', { name: 'Prompt Marketplace' }),
+    ).toBeVisible({ timeout: 8_000 });
   });
 
   test('shows Create button', async ({ page }) => {
