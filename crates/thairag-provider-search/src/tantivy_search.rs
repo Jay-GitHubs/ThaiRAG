@@ -72,57 +72,82 @@ fn register_thai_tokenizer(index: &Index) {
 impl TantivySearch {
     pub fn new(index_path: &str) -> Self {
         let (schema, fields) = build_schema();
+        let is_disk = !index_path.is_empty() && index_path != "test";
 
-        // Try disk-based index first, fall back to RAM
-        let index = if !index_path.is_empty() && index_path != "test" {
-            let dir = Path::new(index_path);
-            if dir.exists() && dir.join("meta.json").exists() {
-                // Open existing disk index
-                match Index::open_in_dir(dir) {
-                    Ok(idx) => {
-                        info!(index_path, "Opened existing Tantivy index from disk");
-                        idx
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            index_path,
-                            error = %e,
-                            "Failed to open Tantivy index, recreating"
-                        );
-                        let _ = std::fs::remove_dir_all(dir);
-                        std::fs::create_dir_all(dir)
-                            .expect("Failed to create Tantivy index directory");
-                        let mmap_dir =
-                            MmapDirectory::open(dir).expect("Failed to open MmapDirectory");
-                        let idx = Index::create(mmap_dir, schema, IndexSettings::default())
-                            .expect("Failed to create Tantivy index");
-                        info!(
-                            index_path,
-                            "Created new Tantivy index on disk (after recovery)"
-                        );
-                        idx
-                    }
-                }
+        // BM25 is DERIVED data — rebuildable from stored chunks via the
+        // reindex endpoint. A hard kill mid-commit can leave meta.json
+        // referencing segment files that were never fsynced; then open,
+        // writer, or READER creation fails at startup. Panicking there
+        // crash-loops the whole API (observed live: restart during ingestion
+        // → missing .term file → Exited(101) loop). So: prove the index
+        // usable end-to-end, and on any failure wipe the directory and start
+        // empty instead of refusing to boot.
+        let built = Self::try_build(index_path, is_disk, &schema, false).or_else(|e| {
+            if is_disk {
+                tracing::warn!(
+                    index_path,
+                    error = %e,
+                    "Tantivy index unusable (crash-corrupted?) — recreating empty; \
+                     run a workspace reindex to restore BM25"
+                );
+                Self::try_build(index_path, is_disk, &schema, true)
             } else {
-                // Create new disk index
-                std::fs::create_dir_all(dir).expect("Failed to create Tantivy index directory");
-                let mmap_dir = MmapDirectory::open(dir).expect("Failed to open MmapDirectory");
-                let idx = Index::create(mmap_dir, schema, IndexSettings::default())
-                    .expect("Failed to create Tantivy index");
-                info!(index_path, "Created new Tantivy index on disk");
+                Err(e)
+            }
+        });
+        let (index, writer, reader) =
+            built.expect("Failed to initialize Tantivy index even after recreating it");
+
+        Self {
+            _index_path: index_path.to_string(),
+            index,
+            writer: Mutex::new(writer),
+            reader,
+            fields,
+        }
+    }
+
+    /// Open-or-create the index and prove it usable by building the writer
+    /// AND reader (both can fail on a crash-corrupted directory even when
+    /// `meta.json` opens fine). `recreate` wipes the directory first — the
+    /// recovery path.
+    fn try_build(
+        index_path: &str,
+        is_disk: bool,
+        schema: &Schema,
+        recreate: bool,
+    ) -> std::result::Result<(Index, IndexWriter, IndexReader), String> {
+        let index = if is_disk {
+            let dir = Path::new(index_path);
+            if recreate {
+                std::fs::remove_dir_all(dir).map_err(|e| format!("wipe index dir: {e}"))?;
+            }
+            if dir.join("meta.json").exists() {
+                let idx = Index::open_in_dir(dir).map_err(|e| format!("open existing: {e}"))?;
+                info!(index_path, "Opened existing Tantivy index from disk");
+                idx
+            } else {
+                std::fs::create_dir_all(dir).map_err(|e| format!("create index dir: {e}"))?;
+                let mmap_dir = MmapDirectory::open(dir).map_err(|e| format!("mmap dir: {e}"))?;
+                let idx = Index::create(mmap_dir, schema.clone(), IndexSettings::default())
+                    .map_err(|e| format!("create index: {e}"))?;
+                info!(
+                    index_path,
+                    recreated = recreate,
+                    "Created new Tantivy index on disk"
+                );
                 idx
             }
         } else {
             // Test mode: use RAM
-            let idx = Index::create_in_ram(schema);
             info!(index_path, "Created Tantivy index in RAM (test mode)");
-            idx
+            Index::create_in_ram(schema.clone())
         };
 
         register_thai_tokenizer(&index);
 
         // Clear stale lock file from previous crash/restart (single-writer assumption)
-        if !index_path.is_empty() && index_path != "test" {
+        if is_disk {
             let lock_file = Path::new(index_path).join(".tantivy-writer.lock");
             if lock_file.exists() {
                 info!(index_path, "Removing stale Tantivy writer lock file");
@@ -132,21 +157,15 @@ impl TantivySearch {
 
         let writer = index
             .writer(50_000_000) // 50 MB heap
-            .expect("Failed to create Tantivy IndexWriter");
+            .map_err(|e| format!("writer: {e}"))?;
 
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()
-            .expect("Failed to create Tantivy IndexReader");
+            .map_err(|e: tantivy::TantivyError| format!("reader: {e}"))?;
 
-        Self {
-            _index_path: index_path.to_string(),
-            index,
-            writer: Mutex::new(writer),
-            reader,
-            fields,
-        }
+        Ok((index, writer, reader))
     }
 
     /// Returns the number of documents currently in the index.
@@ -409,5 +428,40 @@ mod tests {
             !results.is_empty(),
             "English search should still work with Thai tokenizer"
         );
+    }
+    /// A hard kill mid-commit leaves meta.json referencing segment files that
+    /// were never written. Startup must recover to an empty index (BM25 is
+    /// derived data) instead of panicking into a crash-loop — the exact live
+    /// failure: missing `.term` file → reader creation failed → Exited(101).
+    #[tokio::test]
+    async fn crash_corrupted_index_recovers_instead_of_panicking() {
+        let dir = std::env::temp_dir().join(format!("tantivy-recovery-{}", Uuid::new_v4()));
+        let path = dir.to_str().unwrap().to_string();
+
+        // Seed a valid on-disk index with one committed document.
+        {
+            let search = TantivySearch::new(&path);
+            search.index(&[make_chunk("seed content")]).await.unwrap();
+            assert_eq!(search.doc_count(), 1);
+        }
+
+        // Corruption mode 1 (the live one): delete a segment file that
+        // meta.json still references.
+        let seg = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().is_some_and(|x| x == "term"))
+            .expect("committed index must have a .term segment file");
+        std::fs::remove_file(seg.path()).unwrap();
+        let search = TantivySearch::new(&path); // must not panic
+        assert_eq!(search.doc_count(), 0, "recovered index starts empty");
+        drop(search);
+
+        // Corruption mode 2: unparseable meta.json.
+        std::fs::write(dir.join("meta.json"), "{ not json").unwrap();
+        let search = TantivySearch::new(&path); // must not panic
+        assert_eq!(search.doc_count(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

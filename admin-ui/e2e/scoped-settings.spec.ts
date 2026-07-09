@@ -67,6 +67,9 @@ test.describe('Scoped Settings', () => {
     const scopeSelect = page.locator('.ant-select').filter({ hasText: /Global/ });
     await scopeSelect.click();
     await page.waitForTimeout(500);
+    // Type-to-filter: the dropdown virtualizes with many orgs, so off-screen
+    // options aren't in the DOM until the search narrows the list.
+    await page.keyboard.type(orgName);
     await page.getByText(`Org: ${orgName}`).click();
     await page.waitForTimeout(500);
 
@@ -96,6 +99,9 @@ test.describe('Scoped Settings', () => {
     const scopeSelect = page.locator('.ant-select').filter({ hasText: /Global/ });
     await scopeSelect.click();
     await page.waitForTimeout(500);
+    // Type-to-filter: the dropdown virtualizes with many orgs, so off-screen
+    // options aren't in the DOM until the search narrows the list.
+    await page.keyboard.type(orgName);
     await page.getByText(`Org: ${orgName}`).click();
     await page.waitForTimeout(1000);
 
@@ -132,6 +138,7 @@ test.describe('Scoped Settings', () => {
     const scopeSelectGlobal = page.locator('.ant-select').filter({ hasText: /Org/ });
     await scopeSelectGlobal.click();
     await page.waitForTimeout(500);
+    await page.keyboard.type('Global');
     await page.getByText('Global (Default)').click();
     await page.waitForTimeout(1000);
 
@@ -230,6 +237,9 @@ test.describe('Scoped Settings', () => {
     const scopeSelect = page.locator('.ant-select').filter({ hasText: /Global/ });
     await scopeSelect.click();
     await page.waitForTimeout(500);
+    // Type-to-filter: the dropdown virtualizes with many orgs, so off-screen
+    // options aren't in the DOM until the search narrows the list.
+    await page.keyboard.type(orgName);
     await page.getByText(`Org: ${orgName}`).click();
     await page.waitForTimeout(500);
 

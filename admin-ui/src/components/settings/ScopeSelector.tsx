@@ -36,8 +36,11 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
   );
   const workspaces = wsData?.data ?? [];
 
-  // Build flat options list: Global, then each org, dept, workspace
-  const options: { label: React.ReactNode; value: string }[] = [
+  // Build flat options list: Global, then each org, dept, workspace.
+  // `search` is the plain-text form of the label: with many orgs the antd
+  // dropdown virtualizes and only typing can reach off-screen entries
+  // (including "Global (Default)" itself).
+  const options: { label: React.ReactNode; value: string; search: string }[] = [
     {
       label: (
         <Space>
@@ -46,6 +49,7 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
         </Space>
       ),
       value: 'global:',
+      search: 'Global (Default)',
     },
   ];
 
@@ -58,6 +62,7 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
         </Space>
       ),
       value: `org:${org.id}`,
+      search: `Org: ${org.name}`,
     });
   }
 
@@ -72,6 +77,7 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
           </Space>
         ),
         value: `dept:${dept.id}`,
+        search: `Dept: ${dept.name}`,
       });
     }
   }
@@ -86,6 +92,7 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
           </Space>
         ),
         value: `workspace:${ws.id}`,
+        search: `Workspace: ${ws.name}`,
       });
     }
   }
@@ -112,6 +119,10 @@ export function ScopeSelector({ value, onChange }: ScopeSelectorProps) {
         onChange={handleChange}
         style={{ minWidth: 250 }}
         options={options}
+        showSearch
+        filterOption={(input, option) =>
+          (option?.search ?? '').toLowerCase().includes(input.toLowerCase())
+        }
       />
       <Tag color={scopeColor}>{scopeLabel}</Tag>
       {value && (
