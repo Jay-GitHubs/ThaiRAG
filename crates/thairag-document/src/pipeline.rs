@@ -323,6 +323,15 @@ pub struct ChunkOverrides {
     pub min_chars_per_page: Option<usize>,
 }
 
+/// Table-rescue adoption MARGIN, not epsilon: fidelity is token recall and
+/// blind to structural quality, so a nondeterministic vision candidate
+/// near-ties the mechanical score on every reprocess (observed live: 0.631 /
+/// 0.655 / 0.659 around mechanical 0.646) and a bare `>` comparison coin-flips
+/// the corpus between passes. Vision must be MEANINGFULLY better to displace a
+/// deterministic reconstruction; genuine rescues (garbled text layers score
+/// far lower mechanically) clear this easily.
+pub const RESCUE_ADOPT_MARGIN: f32 = 0.05;
+
 impl DocumentPipeline {
     /// Resolve the effective `(max_chunk_size, chunk_overlap)` for this ingest,
     /// preferring per-workspace overrides over the pipeline's built-in values.
@@ -1235,7 +1244,7 @@ impl DocumentPipeline {
                         })
                         .await
                         {
-                            if cand_fid.score > fid.score {
+                            if cand_fid.score > fid.score + RESCUE_ADOPT_MARGIN {
                                 info!(
                                     %doc_id,
                                     old_score = fid.score,
@@ -1252,7 +1261,8 @@ impl DocumentPipeline {
                                     %doc_id,
                                     mechanical = fid.score,
                                     vision = cand_fid.score,
-                                    "Table rescue rejected — keeping mechanical extraction"
+                                    margin = RESCUE_ADOPT_MARGIN,
+                                    "Table rescue rejected — vision does not beat mechanical by the adoption margin"
                                 );
                             }
                         }
