@@ -42,8 +42,15 @@ const MIN_SCORE: f32 = 0.30;
 const TIE_MARGIN: f32 = 1e-4;
 
 /// Alphanumeric (incl. Thai) tokens of length ≥ `min_len`, lowercased.
+/// Thai combining marks (above/below vowels, tone marks — Unicode Mn, NOT
+/// alphanumeric) must stay inside tokens: splitting on them fragments "ที่จ่าย"
+/// into junk like "ที" that substring-matches almost any Thai query and
+/// produces false near-ties between documents.
 fn tokens(s: &str, min_len: usize) -> Vec<String> {
-    s.split(|c: char| !c.is_alphanumeric())
+    fn in_token(c: char) -> bool {
+        c.is_alphanumeric() || ('\u{0E31}'..='\u{0E4E}').contains(&c)
+    }
+    s.split(|c: char| !in_token(c))
         .filter(|w| w.chars().count() >= min_len)
         .map(|w| w.to_lowercase())
         .collect()
@@ -120,6 +127,27 @@ pub fn select_docs(query: &str, catalog: &[CatalogEntry], max_catalog: usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Thai combining marks must not fragment tokens: "ที่จ่าย" splitting into
+    /// "ที" made doc B substring-match ANY query containing "ที่…" and tie the
+    /// scores — the selector then picked both docs and resolution failed.
+    #[test]
+    fn thai_combining_marks_do_not_fragment_tokens() {
+        let cat = vec![
+            entry("a.pdf", &["เรื่อง: สำรวจภาวะการทำงานของประชากร"]),
+            entry("b.pdf", &["เรื่อง: ภาษีหัก ณ ที่จ่าย"]),
+        ];
+        let picked = select_docs(
+            "ปีที่เผยแพร่ของเอกสาร สำรวจภาวะการทำงานของประชากร คือ พ.ศ. ใด",
+            &cat,
+            30,
+        );
+        assert_eq!(
+            picked,
+            vec![cat[0].doc_id],
+            "must pick exactly the named doc"
+        );
+    }
 
     fn entry(title: &str, facets: &[&str]) -> CatalogEntry {
         CatalogEntry {

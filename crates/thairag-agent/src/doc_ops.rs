@@ -47,6 +47,22 @@ const OP_MARKERS: &[&str] = &[
     "overview",
     "tl;dr",
     "tldr",
+    // Document-METADATA questions (publication year, author, publisher…):
+    // the answers live in front matter — token-sparse lines buried in
+    // contact-info chunks that chunk retrieval ranks poorly (measured: the
+    // NSO publication-year chunk never reached top-5). The summarize path's
+    // head-truncated full-doc context keeps front matter by construction.
+    "ปีที่เผยแพร่",
+    "ปีที่พิมพ์",
+    "จัดทำโดย",
+    "ผู้จัดทำ",
+    "ผู้แต่ง",
+    "ผู้เผยแพร่",
+    "จัดพิมพ์",
+    "publisher",
+    "published",
+    "author",
+    "isbn",
 ];
 
 /// Tokens that a *bare* document operation is allowed to consist of: the
@@ -111,6 +127,21 @@ const STRIP_PHRASES: &[&str] = &[
     "อะไร",
     "เกี่ยวกับ",
     "คือ",
+    // metadata-question filler
+    "ปีที่เผยแพร่",
+    "ปีที่พิมพ์",
+    "จัดทำโดย",
+    "ผู้จัดทำ",
+    "ผู้แต่ง",
+    "ผู้เผยแพร่",
+    "จัดพิมพ์",
+    "เมื่อไหร่",
+    "เมื่อใด",
+    "พ.ศ",
+    "ของ",
+    "ใด",
+    "ใคร",
+    "ปี",
     // politeness / filler (English)
     "please",
     "kindly",
@@ -366,6 +397,35 @@ mod tests {
             "อัตราภาษีร้อยละของ ภ.ง.ด.53 คือเท่าใด", // plain content question
         ] {
             assert!(!is_bare_doc_op(q), "should not be bare: {q}");
+        }
+    }
+
+    #[test]
+    fn metadata_questions_are_doc_ops() {
+        // Named doc via facets → answered from front matter even when the
+        // query carries the metadata term (not "bare").
+        let cat = [
+            entry(
+                "nso_employment_survey.pdf",
+                &["เรื่อง: สำรวจภาวะการทำงานของประชากร"],
+            ),
+            entry("rd_tp4_table.pdf", &["เรื่อง: ภาษีหัก ณ ที่จ่าย"]),
+        ];
+        // NOTE: the doc name must be token-delimited (spaces) — doc_selector
+        // matches exact tokens and unsegmented Thai is one long token.
+        match resolve(
+            "ปีที่เผยแพร่ของเอกสาร สำรวจภาวะการทำงานของประชากร คือ พ.ศ. ใด",
+            &cat,
+            30,
+        ) {
+            Some(DocOpOutcome::Summarize { doc_id, .. }) => assert_eq!(doc_id, cat[0].doc_id),
+            _ => panic!("named metadata question must resolve to the doc"),
+        }
+        // Bare metadata question in a multi-doc scope → clarify, not a wrong guess.
+        match resolve("ปีที่เผยแพร่ของเอกสารนี้คือ พ.ศ. ใด", &cat, 30)
+        {
+            Some(DocOpOutcome::Answer(msg)) => assert!(msg.contains("ฉบับไหน"), "{msg}"),
+            _ => panic!("bare metadata question must clarify"),
         }
     }
 
