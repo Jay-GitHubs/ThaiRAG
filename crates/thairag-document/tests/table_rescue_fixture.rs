@@ -139,3 +139,33 @@ fn keep_if_better_rejects_hallucinated_transcription() {
         mech.score
     );
 }
+
+#[test]
+fn near_tie_candidate_does_not_displace_mechanical() {
+    if !thairag_document::pdfium_engine::is_available() {
+        eprintln!("pdfium not available — skipping");
+        return;
+    }
+    let cfg = SmartPdfConfig::default();
+    let (mech_md, _) = mechanical_markdown(&cfg);
+    let raw = std::fs::read(FIXTURE).unwrap();
+    let mech = thairag_document::conversion_fidelity::assess(&raw, "application/pdf", &mech_md);
+
+    // A trivially-perturbed variant of the mechanical text scores a near-tie
+    // (this is what nondeterministic vision candidates do on every reprocess).
+    // The adoption rule requires beating mechanical by RESCUE_ADOPT_MARGIN —
+    // a near-tie must NOT displace the deterministic reconstruction, or the
+    // corpus coin-flips between passes.
+    let near_tie = format!("{mech_md}\nหมายเหตุ");
+    let cand = thairag_document::conversion_fidelity::assess(&raw, "application/pdf", &near_tie);
+    assert!(
+        (cand.score - mech.score).abs() < thairag_document::pipeline::RESCUE_ADOPT_MARGIN,
+        "perturbation should be a near-tie (mech={} cand={})",
+        mech.score,
+        cand.score
+    );
+    assert!(
+        cand.score <= mech.score + thairag_document::pipeline::RESCUE_ADOPT_MARGIN,
+        "near-tie must fail the adoption margin"
+    );
+}
