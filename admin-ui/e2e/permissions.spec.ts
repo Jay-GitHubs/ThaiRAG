@@ -37,6 +37,8 @@ test.describe('Permissions', () => {
 
     // Select organization
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
 
     // Wait for PermissionMatrix to load

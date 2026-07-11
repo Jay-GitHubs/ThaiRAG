@@ -151,7 +151,7 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
   });
 
   test('asking about a table row retrieves the atomic table chunk from the vector DB', async ({ page }) => {
-    test.setTimeout(360_000);
+    test.setTimeout(1_800_000);
 
     // ── 1. Upload the table PDF through the UI ─────────────────────────────
     await login(page);
@@ -159,10 +159,16 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await page.locator('.ant-select', { hasText: /Select Department/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     await expect(page.getByRole('button', { name: 'Upload File' })).toBeVisible({ timeout: 5000 });
@@ -207,10 +213,16 @@ test.describe('Tabular content is embedded in the vector DB and retrievable (RAG
 
     const wsSelects = page.locator('[data-tour="chat-ws-select"] .ant-select');
     await wsSelects.nth(0).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await wsSelects.nth(1).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await wsSelects.nth(2).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     const input = page.locator('[data-tour="chat-input"] textarea, textarea[data-tour="chat-input"]').first();

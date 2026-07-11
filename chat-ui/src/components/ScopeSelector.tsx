@@ -28,6 +28,8 @@ export function ScopeSelector({
       size={size}
       style={{ minWidth: 230 }}
       suffixIcon={<DatabaseOutlined />}
+      showSearch
+      optionFilterProp="label"
       options={[
         { value: 'all', label: 'All my workspaces' },
         ...workspaces.map((w) => ({ value: w.id, label: w.name })),

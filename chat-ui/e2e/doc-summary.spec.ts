@@ -12,8 +12,10 @@ const COMPOSER = 'Ask anything about your documents…';
 async function pickScope(page: Page, label: string) {
   // The scope selector is an antd Select showing the current scope label.
   await page.getByText('All my workspaces', { exact: true }).click();
+  // Type-to-filter: the dropdown virtualizes once many workspaces exist.
+  await page.keyboard.type(label);
   await page
-    .locator('.ant-select-dropdown')
+    .locator('.ant-select-dropdown:visible')
     .getByText(label, { exact: true })
     .click();
 }
@@ -28,9 +30,9 @@ async function send(page: Page, prompt: string) {
   await expect(page.getByTestId('msg-user').filter({ hasText: prompt })).toBeVisible();
 }
 
-async function waitForAnswer(page: Page): Promise<string> {
+async function waitForAnswer(page: Page, timeout = 200_000): Promise<string> {
   // Stream end = composer re-enables (same signal as chat-smoke).
-  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
+  await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout });
   const assistant = page.getByTestId('msg-assistant').last();
   await expect(assistant).toBeVisible();
   await expect
@@ -77,14 +79,15 @@ test('bare summarize in a multi-doc scope asks which document, listing titles', 
 test('content questions still route through ordinary RAG (no doc-op hijack)', async ({
   page,
 }) => {
-  test.setTimeout(240_000);
+  // Full-RAG generation can queue behind bulk-lane ingestion in-suite.
+  test.setTimeout(600_000);
   await login(page);
   await newChat(page);
   await pickScope(page, 'Table-Eval');
 
   // Carries an op token ("สรุป") but real content terms — must NOT clarify.
   await send(page, 'สรุปอัตราภาษีร้อยละของ ภ.ง.ด.53 ให้หน่อย');
-  const answer = await waitForAnswer(page);
+  const answer = await waitForAnswer(page, 400_000);
 
   expect(answer).not.toContain('ฉบับไหน');
 });
