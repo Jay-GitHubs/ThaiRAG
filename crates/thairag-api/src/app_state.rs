@@ -298,17 +298,22 @@ impl ProviderBundle {
 
         // Resolve per-agent LLM providers with fallback chain:
         //   agent-specific config → shared preprocessing LLM → main chat LLM
+        // Bulk-lane wrapped (exactly once per handle — see Throttled docs):
+        // ingestion fan-out must queue instead of saturating the gateway's
+        // slot pool and starving interactive chat traffic.
         let shared_preprocessing_llm: Arc<dyn LlmProvider> =
-            if let Some(ref cfg) = doc.ai_preprocessing.llm {
-                let resolved = if let Some(v) = vault {
-                    resolve_profile(cfg, km_store.as_ref().map(|s| s.as_ref()), v)
+            Arc::new(thairag_core::backpressure::Throttled(
+                if let Some(ref cfg) = doc.ai_preprocessing.llm {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, km_store.as_ref().map(|s| s.as_ref()), v)
+                    } else {
+                        cfg.clone()
+                    };
+                    Arc::from(create_llm_provider(&resolved))
                 } else {
-                    cfg.clone()
-                };
-                Arc::from(create_llm_provider(&resolved))
-            } else {
-                Arc::clone(&llm)
-            };
+                    Arc::clone(&llm)
+                },
+            ));
 
         let store_ref = km_store.as_ref().map(|s| s.as_ref());
         let resolve_agent_llm =
@@ -319,8 +324,11 @@ impl ProviderBundle {
                     } else {
                         cfg.clone()
                     };
-                    Arc::from(create_llm_provider(&resolved))
+                    Arc::new(thairag_core::backpressure::Throttled(Arc::from(
+                        create_llm_provider(&resolved),
+                    )))
                 } else {
+                    // shared_preprocessing_llm is already bulk-wrapped.
                     Arc::clone(&shared_preprocessing_llm)
                 }
             };
@@ -387,28 +395,32 @@ impl ProviderBundle {
             // 3+, GPT-4o). Falls back to the primary LLM when unset — which only
             // works if the primary model is itself vision-capable; pipeline.rs
             // fails loud with a structured EmptyExtraction reason if it isn't.
-            let vision_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = providers.doc_vision_llm {
-                let resolved = if let Some(v) = vault {
-                    resolve_profile(cfg, store_ref, v)
+            // Bulk-lane wrapped: page OCR / table rescue / image description
+            // are pure ingestion fan-out.
+            let vision_llm: Arc<dyn LlmProvider> = Arc::new(thairag_core::backpressure::Throttled(
+                if let Some(ref cfg) = providers.doc_vision_llm {
+                    let resolved = if let Some(v) = vault {
+                        resolve_profile(cfg, store_ref, v)
+                    } else {
+                        cfg.clone()
+                    };
+                    if !cfg.model.is_empty() {
+                        tracing::info!(
+                            kind = ?resolved.kind,
+                            model = %resolved.model,
+                            "Using dedicated vision LLM for document pipeline"
+                        );
+                    }
+                    Arc::from(create_llm_provider(&resolved))
                 } else {
-                    cfg.clone()
-                };
-                if !cfg.model.is_empty() {
                     tracing::info!(
-                        kind = ?resolved.kind,
-                        model = %resolved.model,
-                        "Using dedicated vision LLM for document pipeline"
-                    );
-                }
-                Arc::from(create_llm_provider(&resolved))
-            } else {
-                tracing::info!(
-                    "No `providers.doc_vision_llm` configured — falling back to primary LLM for \
+                        "No `providers.doc_vision_llm` configured — falling back to primary LLM for \
                          PDF OCR / image description. This only works when the primary model is \
                          itself vision-capable."
-                );
-                Arc::clone(&llm)
-            };
+                    );
+                    Arc::clone(&llm)
+                },
+            ));
             let pipeline =
                 pipeline.with_image_description(vision_llm, doc.image_description_enabled);
 
