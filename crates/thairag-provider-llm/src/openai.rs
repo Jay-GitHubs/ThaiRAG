@@ -123,6 +123,85 @@ impl LlmProvider for OpenAiLlmProvider {
         Ok(LlmResponse { content, usage })
     }
 
+    /// Schema-enforced generation via OpenAI `response_format: json_schema`
+    /// (supported by vLLM and most OpenAI-compatible gateways). Without this
+    /// override the trait DEFAULT silently ignores the schema and every
+    /// "schema-enforced" agent (tree builder, chunk enricher, context curator)
+    /// runs prompt-only JSON on gateway deployments — observed live: PageIndex
+    /// tree builds returning unparseable/empty structures. Gateways that
+    /// reject `response_format` (HTTP 4xx) fall back to plain generation once,
+    /// loudly, so behavior degrades to the status quo rather than failing.
+    #[instrument(skip(self, messages, json_schema), fields(model = %self.model))]
+    async fn generate_structured(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: Option<u32>,
+        json_schema: &serde_json::Value,
+    ) -> Result<LlmResponse> {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "strict": true,
+                    "schema": json_schema,
+                },
+            },
+        });
+        if let Some(max) = max_tokens {
+            body["max_tokens"] = serde_json::json!(max);
+        }
+
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = crate::retry::send_with_retry(
+            || {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+            },
+            "openai.generate_structured",
+        )
+        .await
+        .map_err(|e| ThaiRagError::LlmProvider(format!("OpenAI request failed: {e}")))?;
+
+        let status = resp.status();
+        if status.is_client_error() {
+            // Gateway doesn't support response_format — degrade to prompt-only
+            // JSON (the pre-override behavior), but say so.
+            let error_body = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                %status,
+                error = %error_body.chars().take(200).collect::<String>(),
+                "gateway rejected response_format json_schema — falling back to prompt-only JSON"
+            );
+            return self.generate(messages, max_tokens).await;
+        }
+        if !status.is_success() {
+            let error_body = resp.text().await.unwrap_or_default();
+            return Err(ThaiRagError::LlmProvider(format!(
+                "OpenAI returned HTTP {status}: {error_body}"
+            )));
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            ThaiRagError::LlmProvider(format!("Failed to parse OpenAI response: {e}"))
+        })?;
+        let content = json["choices"][0]["message"]["content"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| {
+                ThaiRagError::LlmProvider("Missing content in OpenAI response".into())
+            })?;
+        let usage = LlmUsage {
+            prompt_tokens: json["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+            completion_tokens: json["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+        };
+        Ok(LlmResponse { content, usage })
+    }
+
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
     async fn generate_stream(
         &self,
