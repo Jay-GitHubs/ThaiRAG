@@ -83,10 +83,16 @@ test.describe('Borderless table rendering (whitespace-stream PDF)', () => {
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await page.locator('.ant-select', { hasText: /Select Department/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     await page.getByRole('button', { name: 'Upload File' }).click();

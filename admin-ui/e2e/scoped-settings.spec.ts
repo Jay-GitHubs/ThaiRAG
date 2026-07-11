@@ -54,6 +54,9 @@ test.describe('Scoped Settings', () => {
     await scopeSelect.click();
     await page.waitForTimeout(500);
 
+    // Type-to-filter: the dropdown virtualizes once many orgs exist, so the
+    // option isn't in the DOM until the search narrows the list.
+    await page.keyboard.type(orgName);
     // Should show org option in the dropdown
     await expect(page.getByText(`Org: ${orgName}`)).toBeVisible();
   });
@@ -262,6 +265,8 @@ test.describe('Scoped Settings', () => {
     const scopeSelect2 = page.locator('.ant-select').filter({ hasText: /Global/ });
     await scopeSelect2.click();
     await page.waitForTimeout(500);
+    // Type-to-filter: the dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(orgName);
     await page.getByText(`Org: ${orgName}`).click();
     await page.waitForTimeout(500);
 
