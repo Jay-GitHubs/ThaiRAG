@@ -272,9 +272,11 @@ async fn extract_facets(p: &crate::app_state::ProviderBundle, text: &str) -> Vec
     if text.trim().len() < 200 {
         return Vec::new();
     }
-    let llm: std::sync::Arc<dyn LlmProvider> = std::sync::Arc::from(
-        thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
-    );
+    // Bulk lane: facet extraction is ingestion-side work.
+    let llm: std::sync::Arc<dyn LlmProvider> =
+        std::sync::Arc::new(thairag_core::backpressure::Throttled(std::sync::Arc::from(
+            thairag_provider_llm::create_llm_provider(&p.providers_config.llm),
+        )));
     let schema = serde_json::json!({
         "type": "object",
         "properties": {
@@ -665,8 +667,11 @@ async fn process_document_inner_impl(
         let chunk_texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
         info!(%doc_id, "Spawning knowledge graph extraction on ingest");
         tokio::spawn(async move {
+            // Bulk lane: knowledge-graph extraction is ingestion-side work.
             let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> =
-                std::sync::Arc::from(thairag_provider_llm::create_llm_provider(&llm_cfg));
+                std::sync::Arc::new(thairag_core::backpressure::Throttled(std::sync::Arc::from(
+                    thairag_provider_llm::create_llm_provider(&llm_cfg),
+                )));
             let (entities, relations) = crate::knowledge_graph::extract_and_persist_graph(
                 &km_store,
                 &llm,
@@ -1872,7 +1877,10 @@ fn reasoning_tree_provider(
         .clone()
         .unwrap_or_else(|| p.providers_config.llm.clone());
     cfg.temperature = Some(0.0);
-    std::sync::Arc::from(thairag_provider_llm::create_llm_provider(&cfg))
+    // Bulk lane: PageIndex tree building is ingestion-side batch work.
+    std::sync::Arc::new(thairag_core::backpressure::Throttled(std::sync::Arc::from(
+        thairag_provider_llm::create_llm_provider(&cfg),
+    )))
 }
 
 /// Backfill reasoning-based ("PageIndex") trees for every Ready document in a
