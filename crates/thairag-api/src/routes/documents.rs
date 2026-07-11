@@ -460,7 +460,9 @@ async fn process_document_inner_impl(
     // markdown. Image ids are already embedded in chunks + markdown.
     if let Some(markdown) = processed.markdown.as_ref() {
         // Clear any prior blobs (covers reprocess) before re-saving.
-        let _ = state.km_store.delete_image_blobs_for_doc(doc_id);
+        if let Err(e) = state.km_store.delete_image_blobs_for_doc(doc_id) {
+            tracing::warn!(doc_id = %doc_id, error = %e, "delete_image_blobs_for_doc failed — stale rows may remain");
+        }
         let mut saved_images = 0i32;
         for blob in &processed.images {
             let record = crate::store::ImageBlobRecord {
@@ -1359,7 +1361,9 @@ pub async fn delete_document(
     let perm = resolve_doc_perm(&claims, &state, workspace_id)?;
     require_doc(&perm, Role::can_delete, "delete document")?;
     let doc_id = DocId(doc_id);
-    let _ = state.km_store.delete_chunks_by_doc(doc_id);
+    if let Err(e) = state.km_store.delete_chunks_by_doc(doc_id) {
+        tracing::warn!(doc_id = %doc_id, error = %e, "delete_chunks_by_doc failed — stale rows may remain");
+    }
     state.km_store.delete_document(doc_id)?;
     if let Err(e) = state.providers().search_engine.delete_doc(doc_id).await {
         tracing::warn!(%doc_id, error = %e, "Vector delete failed — Qdrant may retain orphaned vectors");
@@ -1689,11 +1693,15 @@ pub async fn reprocess_document(
         .search_engine
         .delete_doc(doc_id_typed)
         .await;
-    let _ = state.km_store.delete_chunks_by_doc(doc_id_typed);
+    if let Err(e) = state.km_store.delete_chunks_by_doc(doc_id_typed) {
+        tracing::warn!(doc_id = %doc_id_typed, error = %e, "delete_chunks_by_doc failed — stale rows may remain");
+    }
     // Drop the stale PageIndex tree: it described the old chunks/pages. It is
     // rebuilt on this re-ingest when reasoning_build_on_ingest is on, or via the
     // build-trees backfill otherwise.
-    let _ = state.km_store.delete_document_tree(doc_id_typed);
+    if let Err(e) = state.km_store.delete_document_tree(doc_id_typed) {
+        tracing::warn!(doc_id = %doc_id_typed, error = %e, "delete_document_tree failed — stale rows may remain");
+    }
 
     // Mark as processing
     let _ = state
@@ -2076,9 +2084,13 @@ pub async fn reprocess_all_documents(
                 .with_label_values(&["reprocess"])
                 .inc();
         }
-        let _ = state.km_store.delete_chunks_by_doc(doc_id);
+        if let Err(e) = state.km_store.delete_chunks_by_doc(doc_id) {
+            tracing::warn!(doc_id = %doc_id, error = %e, "delete_chunks_by_doc failed — stale rows may remain");
+        }
         // Drop the stale PageIndex tree (rebuilt on re-ingest if enabled).
-        let _ = state.km_store.delete_document_tree(doc_id);
+        if let Err(e) = state.km_store.delete_document_tree(doc_id) {
+            tracing::warn!(doc_id = %doc_id, error = %e, "delete_document_tree failed — stale rows may remain");
+        }
 
         // Mark as processing
         let _ = state
@@ -3099,9 +3111,13 @@ async fn refresh_document_from_source(state: AppState, doc: Document) {
             .with_label_values(&["refresh"])
             .inc();
     }
-    let _ = state.km_store.delete_chunks_by_doc(doc_id);
+    if let Err(e) = state.km_store.delete_chunks_by_doc(doc_id) {
+        tracing::warn!(doc_id = %doc_id, error = %e, "delete_chunks_by_doc failed — stale rows may remain");
+    }
     // Drop the stale PageIndex tree (rebuilt on re-ingest if enabled).
-    let _ = state.km_store.delete_document_tree(doc_id);
+    if let Err(e) = state.km_store.delete_document_tree(doc_id) {
+        tracing::warn!(doc_id = %doc_id, error = %e, "delete_document_tree failed — stale rows may remain");
+    }
 
     // Mark as processing
     let _ = state
