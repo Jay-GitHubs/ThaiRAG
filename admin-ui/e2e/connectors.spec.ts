@@ -111,17 +111,19 @@ test.describe('MCP Connectors', () => {
     await createModal.getByPlaceholder('e.g. My Confluence').fill('Test Connector');
     await createModal.getByPlaceholder('Optional description').fill('E2E test');
 
-    // Cascading workspace selectors
-    await createModal.locator('.ant-select').filter({ hasText: /Select organization/i }).click();
-    await page.locator('.ant-select-dropdown').getByTitle(orgName).click();
-    await page.waitForTimeout(500);
-
-    await createModal.locator('.ant-select').filter({ hasText: /Select department/i }).click();
-    await page.locator('.ant-select-dropdown').getByTitle(deptName).click();
-    await page.waitForTimeout(500);
-
-    await createModal.locator('.ant-select').filter({ hasText: /Select workspace/i }).click();
-    await page.locator('.ant-select-dropdown').getByTitle(wsName).click();
+    // Cascading workspace selectors. Type-to-filter via each select's OWN
+    // search input (keyboard.type is focus-ambiguous inside a modal), and pin
+    // the dropdown to :visible — antd keeps closed dropdowns in the DOM.
+    const pick = async (ph: RegExp, name: string) => {
+      const sel = createModal.locator('.ant-select').filter({ hasText: ph });
+      await sel.click();
+      await sel.locator('input').fill(String(name).slice(0, 18));
+      await page.locator('.ant-select-dropdown:visible').getByTitle(name).click();
+      await page.waitForTimeout(500);
+    };
+    await pick(/Select organization/i, orgName);
+    await pick(/Select department/i, deptName);
+    await pick(/Select workspace/i, wsName);
     await page.waitForTimeout(300);
 
     await createModal.getByPlaceholder('e.g. npx').fill('echo');

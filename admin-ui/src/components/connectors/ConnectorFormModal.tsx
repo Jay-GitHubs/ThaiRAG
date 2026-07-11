@@ -99,6 +99,8 @@ export function ConnectorFormModal({
             <Form.Item label="Organization" required>
               <Select
                 placeholder="Select organization"
+                showSearch
+                optionFilterProp="label"
                 value={orgId}
                 onChange={(v) => {
                   setOrgId(v);
@@ -115,6 +117,8 @@ export function ConnectorFormModal({
             <Form.Item label="Department" required>
               <Select
                 placeholder="Select department"
+                showSearch
+                optionFilterProp="label"
                 disabled={!orgId}
                 value={deptId}
                 onChange={(v) => {
@@ -135,13 +139,13 @@ export function ConnectorFormModal({
             >
               <Select
                 placeholder="Select workspace"
+                showSearch
+                optionFilterProp="label"
                 disabled={!deptId}
                 options={(workspaces.data?.data ?? []).map((ws) => ({
                   label: ws.name,
                   value: ws.id,
                 }))}
-                showSearch
-                optionFilterProp="label"
               />
             </Form.Item>
           </>

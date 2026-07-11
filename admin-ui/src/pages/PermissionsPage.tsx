@@ -26,6 +26,8 @@ export function PermissionsPage() {
       <Space style={{ marginBottom: 16 }} data-tour="perm-scope">
         <Select
           placeholder="Select Organization"
+            showSearch
+            optionFilterProp="label"
           style={{ width: 300 }}
           value={orgId}
           onChange={setOrgId}

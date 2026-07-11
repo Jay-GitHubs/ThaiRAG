@@ -144,10 +144,16 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await page.locator('.ant-select', { hasText: /Select Department/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     await expect(page.getByRole('button', { name: 'Upload File' })).toBeVisible({ timeout: 5000 });
@@ -224,10 +230,16 @@ test.describe('Per-scope chunk size (Tier 1)', () => {
     // ── 4. Reprocess and verify the prose is now a single chunk ────────────
     await navigateTo(page, 'Documents');
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await page.locator('.ant-select', { hasText: /Select Department/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     const docRow = page.locator('tr', { hasText: 'long_prose' });

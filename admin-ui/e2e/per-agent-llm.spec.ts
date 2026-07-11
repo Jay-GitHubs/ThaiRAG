@@ -81,6 +81,8 @@ test.describe('Per-Agent LLM Bug Verification', () => {
     await page.getByTitle(DEPT, { exact: true }).click();
 
     await page.locator('.ant-select').filter({ hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(WS, { exact: true }).slice(0, 18));
     await page.getByTitle(WS, { exact: true }).click();
 
     // Wait for the input area to appear (it only shows after workspace is selected)

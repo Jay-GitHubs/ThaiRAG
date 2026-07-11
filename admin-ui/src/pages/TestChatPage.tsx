@@ -432,6 +432,8 @@ export function TestChatPage() {
       <Space style={{ marginBottom: 16 }} wrap data-tour="chat-ws-select">
         <Select
           placeholder="Select Organization"
+            showSearch
+            optionFilterProp="label"
           style={{ width: 200 }}
           value={orgId}
           onChange={(v) => {
@@ -445,6 +447,8 @@ export function TestChatPage() {
         />
         <Select
           placeholder="Select Department"
+            showSearch
+            optionFilterProp="label"
           style={{ width: 200 }}
           value={deptId}
           onChange={(v) => {
@@ -458,6 +462,8 @@ export function TestChatPage() {
         />
         <Select
           placeholder="Select Workspace"
+            showSearch
+            optionFilterProp="label"
           style={{ width: 200 }}
           value={wsId}
           onChange={(v) => {

@@ -25,7 +25,7 @@ async function waitForDoc(
   wsId: string,
   docId: string,
   // Even a 2KB text doc runs 4 gateway LLM stages; minutes under load.
-  timeoutMs = 600_000,
+  timeoutMs = 1_200_000,
 ) {
   const headers = { Authorization: `Bearer ${token}` };
   const deadline = Date.now() + timeoutMs;
@@ -102,17 +102,23 @@ test.describe('Processing timeline (AI preprocessing)', () => {
   });
 
   test('upload shows live per-stage tracker and records stage timings', async ({ page }) => {
-    test.setTimeout(900_000);
+    test.setTimeout(1_800_000);
 
     await login(page);
     await navigateTo(page, 'Documents');
     await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible();
 
     await page.locator('.ant-select', { hasText: /Select Organization/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(orgName).slice(0, 18));
     await page.getByTitle(orgName).click();
     await page.locator('.ant-select', { hasText: /Select Department/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(deptName).slice(0, 18));
     await page.getByTitle(deptName).click();
     await page.locator('.ant-select', { hasText: /Select Workspace/i }).click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(wsName).slice(0, 18));
     await page.getByTitle(wsName).click();
 
     await expect(page.getByRole('button', { name: 'Upload File' })).toBeVisible({ timeout: 5000 });
@@ -182,7 +188,9 @@ test.describe('Processing timeline (AI preprocessing)', () => {
     await tracker.screenshot({ path: 'e2e/screenshots/processing-timeline-ai-live.png' });
 
     // ── Tracker reaches a terminal "Ready" state in the UI ───────────────────
-    await expect(tracker.getByText('Ready')).toBeVisible({ timeout: 600_000 });
+    // Bulk-lane backpressure serializes each doc's pipeline calls — in-suite
+    // ingestion walls run ~2x the quiet-stack time.
+    await expect(tracker.getByText('Ready')).toBeVisible({ timeout: 1_200_000 });
     // Provenance summary (the processing path) is shown on completion.
     await expect(tracker.getByText('Path:')).toBeVisible();
 

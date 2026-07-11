@@ -34,6 +34,8 @@ export function DocumentsPage() {
         <span data-tour="doc-org-select">
           <Select
             placeholder={t('documents.selectOrg')}
+            showSearch
+            optionFilterProp="label"
             style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
             value={orgId}
             onChange={(v) => {
@@ -48,6 +50,8 @@ export function DocumentsPage() {
         <span data-tour="doc-dept-select">
           <Select
             placeholder={t('documents.selectDept')}
+            showSearch
+            optionFilterProp="label"
             style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
             value={deptId}
             onChange={(v) => {
@@ -62,6 +66,8 @@ export function DocumentsPage() {
         <span data-tour="doc-ws-select">
           <Select
             placeholder={t('documents.selectWorkspace')}
+            showSearch
+            optionFilterProp="label"
             style={{ width: '100%', maxWidth: 200, minWidth: 140 }}
             value={wsId}
             onChange={setWsId}

@@ -215,16 +215,22 @@ test.describe('Pipeline Stages Debug', () => {
     // Select org/dept/workspace
     const orgSelect = page.locator('.ant-select').nth(0);
     await orgSelect.click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(`PipelineOrg-${suffix}`).slice(0, 18));
     await page.getByTitle(`PipelineOrg-${suffix}`).click();
     await page.waitForTimeout(500);
 
     const deptSelect = page.locator('.ant-select').nth(1);
     await deptSelect.click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(`PipelineDept-${suffix}`).slice(0, 18));
     await page.getByTitle(`PipelineDept-${suffix}`).click();
     await page.waitForTimeout(500);
 
     const wsSelect = page.locator('.ant-select').nth(2);
     await wsSelect.click();
+    // Type-to-filter: dropdown virtualizes once many orgs exist.
+    await page.keyboard.type(String(`PipelineWS-${suffix}`).slice(0, 18));
     await page.getByTitle(`PipelineWS-${suffix}`).click();
     await page.waitForTimeout(500);
 

@@ -32,6 +32,23 @@ test.describe('Agent LLM Advanced Sampling (temperature + max tokens)', () => {
       temperature: cfg.llm?.temperature,
     };
     console.log(`Snapshot: mode=${orig.llm_mode} model=${orig.model} temp=${orig.temperature}`);
+    // Full-suite runs can reach this spec after another spec mutated the
+    // shared LLM config (cross-spec state). Self-seed a model instead of
+    // failing on ordering: fall back to the global provider's model.
+    if (!orig.model) {
+      const prov = await (
+        await request.get(`${API_BASE}/api/km/settings/providers`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      ).json();
+      orig.kind = prov.llm?.kind;
+      orig.model = prov.llm?.model;
+      await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, {
+        data: { llm: { kind: orig.kind, model: orig.model } },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      console.log(`Seeded shared LLM from provider config: ${orig.model}`);
+    }
     expect(orig.model, 'shared LLM needs a model for this test').toBeTruthy();
   });
 
