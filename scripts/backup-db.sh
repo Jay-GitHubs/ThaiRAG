@@ -129,6 +129,31 @@ else
     info "No old backups to remove (${#backup_files[@]}/${MAX_BACKUPS})"
 fi
 
+# ── Qdrant snapshot ──────────────────────────────────────────────────────
+# Postgres alone is not a full restore: vectors live in Qdrant, and a DB-only
+# restore leaves them drifted (lived failure, 2026-07-08 — recovery required a
+# manual per-workspace reindex). Snapshot the collection alongside the dump.
+# Restore path: reindex-from-chunks remains the canonical recovery (cheap,
+# deterministic); the snapshot is belt-and-braces for large corpora.
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+QDRANT_COLLECTION="${QDRANT_COLLECTION:-thairag_chunks}"
+if curl -sf -m 5 "${QDRANT_URL}/collections/${QDRANT_COLLECTION}" >/dev/null 2>&1; then
+    SNAP_NAME=$(curl -sf -m 120 -X POST         "${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots"         | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+    if [ -n "$SNAP_NAME" ]; then
+        if curl -sf -m 600             "${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots/${SNAP_NAME}"             -o "$BACKUP_DIR/${TIMESTAMP}-qdrant.snapshot"; then
+            success "Qdrant snapshot: ${TIMESTAMP}-qdrant.snapshot"
+            # Delete the server-side copy; keep only the exported file.
+            curl -sf -m 30 -X DELETE                 "${QDRANT_URL}/collections/${QDRANT_COLLECTION}/snapshots/${SNAP_NAME}"                 >/dev/null 2>&1 || true
+        else
+            warn "Qdrant snapshot download failed — DB backup is still valid; vectors recoverable via reindex"
+        fi
+    else
+        warn "Qdrant snapshot creation failed — DB backup is still valid; vectors recoverable via reindex"
+    fi
+else
+    warn "Qdrant not reachable at ${QDRANT_URL} — skipping vector snapshot"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}Backup complete!${NC}"
