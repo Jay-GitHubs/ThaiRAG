@@ -661,6 +661,7 @@ data: [DONE]
 
 For complete endpoint documentation including the following, see [API_REFERENCE.md](API_REFERENCE.md):
 
+- **First-party chat** — `/api/chat/conversations` (durable conversations, SSE streaming `{"type":"token"}` events, integer thumbs feedback, cited-source viewer) — the API behind chat-ui :8082
 - **API v2** — `/v2/chat/completions`, `/v2/search`, `/v2/models` with metadata and sources
 - **WebSocket** — `/ws/chat` for real-time bidirectional chat
 - **API Keys** — `/api/auth/api-keys` for key management

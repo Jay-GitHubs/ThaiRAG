@@ -400,6 +400,22 @@ Budget: typical 4 KB text chunk × `text-embedding-3-large` ≈ $0.0001 per chun
 
 The Backup & Restore admin page exports the whole system as a ZIP with a manifest. **Backup before any Docker rebuild** — the volume recreation defaults bite hard.
 
+**Automation** (`scripts/backup-db.sh`): dumps Postgres (full `.sql.gz` +
+per-table JSON), **exports a Qdrant snapshot**, and rotates old backups.
+Run it from cron (e.g. daily 03:30, logging to `backups/cron.log`) and add a
+self-verify line that greps for the day's backup — verify the log after the
+FIRST scheduled fire (macOS cron may need a one-time disk-access approval).
+**Restore drill** (do it once before you need it): restore the latest dump
+into a scratch database (`CREATE DATABASE thairag_restore_drill`, pipe the
+gunzipped dump in), compare table and row counts against live, then drop the
+scratch DB. Qdrant recovery: the snapshot is belt-and-braces — reindexing
+from `document_chunks` remains the canonical path.
+
+**Deploy-time setting operators miss**: `chat_pipeline.citation_base_url`
+must be a browser-reachable public URL (env/config + restart, NOT the
+hot-reload settings API) or citation links in chat answers break — see the
+launch runbook preflight.
+
 ### 3.6 CLIP visual search (image→image and text→image retrieval)
 
 A **default-off**, additive retrieval feature that finds documents by what their images *look like*, not just by the caption text the vision LLM wrote at ingest. It rides local **FastEmbed CLIP ViT-B-32** (512-dim, no API cost) and supports two query modes:
@@ -801,6 +817,13 @@ PDPA constraint: audit logs hold **what code fired**, never the matched substrin
 Inference logs (the per-chat-request log table) include full prompts and completions. They are **subject to data-minimization rules** — set a retention window (30 days is typical) and configure the **Inference Logs → Purge** action accordingly.
 
 ### 5.5 Alerts worth setting on Prometheus
+
+Two of these ship pre-provisioned in the compose stack
+(`grafana/provisioning/alerting/thairag-alerts.yaml`: sustained 5xx rate >
+0.1 req/s for 5 min, p90 request duration > 15 s for 10 min). They evaluate
+out of the box but deliver nowhere until you add a contact point (Grafana →
+Alerting → Contact points → SMTP or webhook). Edit the YAML, not the UI —
+UI edits are lost when the container is recreated.
 
 | Metric | Alert condition | Why |
 |---|---|---|

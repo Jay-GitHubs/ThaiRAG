@@ -163,7 +163,7 @@ docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -
 ### Option 2: Local Development
 
 ```bash
-# Prerequisites: Rust 1.88+, Node.js 20+
+# Prerequisites: Rust 1.95+ (edition 2024), Node.js 22 — matching CI
 
 # 1. Start the API server
 THAIRAG_TIER=free cargo run -p thairag-api
@@ -201,8 +201,13 @@ Select a tier via `THAIRAG_TIER` environment variable:
 | Tier | LLM | Embeddings | Vector DB | Reranker | Backends |
 |------|-----|-----------|-----------|----------|----------|
 | **free** | Ollama (llama3.2) | FastEmbed (BGE) | In-Memory | Passthrough | In-memory |
-| **standard** | Claude Sonnet | OpenAI (small) | Qdrant | Cohere v3.0 | Redis |
-| **premium** | Claude Sonnet | OpenAI (large) | Qdrant | Cohere v3.5 | Redis |
+| **standard** | Claude Sonnet 4 (`claude-sonnet-4-20250514`) | OpenAI (small) | Qdrant | Cohere `rerank-v3.0` | Redis |
+| **premium** | Claude Sonnet 4 (`claude-sonnet-4-20250514`) | OpenAI (large) | Qdrant | Cohere `rerank-v3.5` | Redis |
+
+Tiers are config *defaults*. Production deployments commonly run **all-gateway**
+instead: every provider pointed at one OpenAI-compatible endpoint (LLM +
+embedding + vision on the same host) — see the Deployment Guide's
+all-gateway section.
 
 ### Key Environment Variables
 
@@ -363,6 +368,7 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 | [API Reference](docs/API_REFERENCE.md) | All endpoints with request/response schemas |
 | [Integration Guide](docs/INTEGRATION_GUIDE.md) | OpenAI-compatible clients, OIDC/SSO, external systems |
 | [Scaling Guide](docs/scaling.md) | Horizontal scaling with Redis, load balancing |
+| [Launch Runbook](docs/LAUNCH_RUNBOOK.md) | Production cutover: preflight checklist, smoke gauntlet, rollback |
 | [Python SDK](sdks/python/README.md) | Typed `httpx` client — installation, quickstart, API reference |
 | [TypeScript SDK](sdks/typescript/README.md) | Typed `fetch` client — installation, quickstart, API reference |
 | [CLI Reference](crates/thairag-cli/README.md) | `trag` command reference — health, config, backup, deploy |
@@ -370,14 +376,17 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete endpoint documen
 ## Testing
 
 ```bash
-# Backend tests (334 tests)
+# Backend tests (600+ #[test] fns across the workspace)
 cargo test
 
 # Admin UI type check
 cd admin-ui && npx tsc --noEmit
 
-# Playwright e2e tests (178 tests)
+# Playwright e2e — admin UI (~230 tests, headed, live stack)
 cd admin-ui && npx playwright test
+
+# Playwright e2e — chat UI (~40 tests, headed, live stack)
+cd chat-ui && npx playwright test
 
 # Load tests (requires k6)
 cd tests/load && k6 run k6-smoke.js
