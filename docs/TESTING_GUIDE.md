@@ -22,7 +22,7 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 12. [Error Handling](#12-error-handling)
 13. [Observability](#13-observability)
 14. [Admin UI](#14-admin-ui) — includes Settings page, IdP management, user enhancements, role-based sidebar
-15. [Automated Testing](#15-automated-testing) — backend tests (334), Playwright e2e (178), infrastructure skip patterns, rate-limiting, load testing, search quality regression, security test coverage
+15. [Automated Testing](#15-automated-testing) — backend tests (600+), Playwright e2e (~232 admin-ui + ~41 chat-ui), infrastructure skip patterns, rate-limiting, load testing, search quality regression, security test coverage
 16. [OWASP LLM Top 10 Security](#16-owasp-llm-top-10-security) — prompt injection defense, error sanitization, input validation, CSRF, audit log
 17. [Smoke Testing](#17-smoke-testing) — end-to-end smoke test script
 18. [Context Compaction & Personal Memory](#18-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
@@ -2491,7 +2491,14 @@ npx playwright test --reporter=list
 npx playwright show-report
 ```
 
-**Current test count:** 178 e2e tests (1 setup + 177 specs). Of these, 168 pass and 10 are skipped (infrastructure-dependent tests that auto-skip when Qdrant or LLM is unavailable).
+**Current test count (2026-07-12):** ~232 admin-ui e2e tests across 51 spec
+files, plus ~41 chat-ui e2e tests across 13 spec files (run separately:
+`cd chat-ui && npx playwright test`). Latest full certification: admin-ui 215
+passed / 2 environmental (the ingestion-gated table family — pass in
+isolation) / 15 designed skips, chat-ui 42/42, with the settings fingerprint
+byte-identical across the whole run. Skips are by design: infrastructure
+auto-skips, `E2E_FACTORY_RESET=1`-gated factory reset, and the
+`RUN_OLLAMA_BENCH=1`-gated Ollama bench trio.
 
 #### Complete Test File Inventory
 
@@ -2523,6 +2530,19 @@ npx playwright show-report
 | `pipeline-stages.spec.ts` | 4 | Pipeline stage visibility in SSE streaming responses and correct rendering in test chat UI |
 
 > **Note:** Config snapshots are tested as part of the settings e2e tests (snapshot create, restore, and delete flows are covered in the existing settings test suite).
+
+> **Rule for settings-mutating specs (PR #345/#346):** any spec that saves
+> GLOBAL settings must bracket itself with the shared helpers in
+> `admin-ui/e2e/helpers.ts` — `snapshotSettings()` in `beforeAll`,
+> `restoreSettingsSnapshot()` in `afterAll`. They use the server-side config
+> snapshot API, which copies every raw settings row (api keys included —
+> unreadable via GET, so spec-side capture/restore is provably lossy) and
+> restores exactly, even when a test fails mid-flight. Destructive request
+> shapes (`clear_*` / `remove_*` flags) must be asserted via `page.route`
+> interception, never sent to the real backend — the vision-llm spec wiped
+> production's `doc_vision_llm` on every suite run until this rule. After any
+> settings-heavy work, verify `GET /api/km/settings/providers` still shows
+> `doc_vision_llm` set (silent-vision-degradation failure mode).
 
 #### Phase 6 Test Coverage
 
@@ -3718,7 +3738,11 @@ To confirm which tests were skipped vs. passed:
 npx playwright test --reporter=list 2>&1 | grep -E '(skipped|passed|failed)'
 ```
 
-**Current results:** 178 total e2e tests. 168 passed, 10 skipped (infrastructure-dependent). Zero unexpected failures.
+**Current results (2026-07-12 certification):** admin-ui 215 passed, 15
+designed skips, 2 environmental failures that pass in isolation (ingestion-
+gated table specs under gateway contention); chat-ui 42/42 passed. Settings
+fingerprint (chat-pipeline + document + providers) byte-identical before vs
+after the full run — the suite provably leaves no config drift.
 
 **Pass criteria:** All non-infrastructure tests pass. Infrastructure-dependent tests either pass (when services are available) or are marked as skipped (when services are absent). Zero unexpected failures.
 

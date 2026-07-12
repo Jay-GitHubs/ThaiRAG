@@ -1,6 +1,6 @@
 # Streaming output guardrails: real prevention design
 
-**Status:** Accepted — all four open questions resolved 2026-05-14. PR-1 of the phasing is now scoped and unblocked.
+**Status:** ✅ SHIPPED — implemented in `crates/thairag-agent/src/guardrails/streaming.rs` (sliding-window hold-back, inline `[REDACTED]`, split-pattern detection; `streaming_window_chars` default 256) with `guardrail_streaming_redactions_total` metrics. Live in production. Original design record below, accepted 2026-05-14.
 
 **Owner:** TBD
 **Last updated:** 2026-05-14

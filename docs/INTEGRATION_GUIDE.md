@@ -39,7 +39,7 @@ A deploy-wide static key can also be set via `THAIRAG__AUTH__API_KEYS`
 (comma-separated). The compose stack wires this from `THAIRAG_API_KEY` in `.env`:
 
 ```bash
-THAIRAG_API_KEY=sk-your-custom-key
+THAIRAG_API_KEY=trag_your-custom-key
 ```
 
 ### Permission Scope of API-Key Requests

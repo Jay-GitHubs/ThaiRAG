@@ -241,6 +241,18 @@ Submit feedback for a chat response. **Auth required.**
 
 ---
 
+## Citation Viewer (public)
+
+### `GET /v1/citation/{doc_id}?token=<jwt>`
+
+Renders a cited document's title + converted text as HTML for browser
+clicks on citation links. No auth header needed: the `token` query param is a
+short-lived (24 h), single-document JWT minted by the chat backend
+(`JwtService::encode_citation`) and embedded in citation URLs when
+`chat_pipeline.citation_base_url` is configured (deploy-time env; must be a
+browser-reachable public URL). Without the setting, citations fall back to the
+opaque `thairag:///doc/{id}` scheme.
+
 ## Knowledge Management
 
 All KM routes are under `/api/km` and require authentication.
@@ -436,6 +448,43 @@ Returns the verdict (Pass / Sanitize / Block / Regenerate) for each stage plus t
 
 ---
 
+## First-Party Chat (conversations)
+
+The API behind the first-party chat-ui (`:8082`): durable conversations with
+SSE streaming. All routes require auth.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/chat/workspaces` | Workspaces visible to the current user (scope selector) |
+| GET | `/api/chat/features` | Feature flags for the UI (general chat mode, image generation) |
+| GET | `/api/chat/conversations` | List the caller's conversations |
+| POST | `/api/chat/conversations` | Create — body `{"title": …, "workspace_scope": "<ws-uuid>"}` (note: the scope field is `workspace_scope`, **not** `workspace_id`) |
+| GET | `/api/chat/conversations/{id}` | Fetch one conversation |
+| PATCH | `/api/chat/conversations/{id}` | Rename / pin |
+| DELETE | `/api/chat/conversations/{id}` | Delete |
+| GET | `/api/chat/conversations/{id}/messages` | List messages |
+| POST | `/api/chat/conversations/{id}/messages` | Send + stream the answer (SSE, shapes below) |
+| POST | `/api/chat/conversations/{id}/messages/{message_id}/feedback` | Thumbs rating — body `{"feedback": 1 \| -1 \| 0}` (integer; correlates to `inference_logs.response_id == message_id`) |
+| POST | `/api/chat/conversations/{id}/summarize` | Summarize the conversation |
+| POST | `/api/chat/conversations/{id}/images` | Generate images (capability-gated) |
+| GET | `/api/chat/documents/{doc_id}/source` | Cited document text for the inline source viewer |
+| GET | `/api/chat/documents/{doc_id}/original` | Original file download |
+| GET | `/api/chat/media/{image_id}` | Serve an extracted/generated image (public) |
+
+**SSE stream shapes** (`POST …/messages`):
+
+```
+data: {"type":"progress","stage":"search","status":"done","duration_ms":135}
+data: {"type":"token","text":"เอกสาร"}
+data: {"type":"done","message_id":"<uuid>","usage":{"prompt_tokens":…,"completion_tokens":…},…}
+```
+
+Each turn is also written to `inference_logs` with
+`response_id == message_id`, so feedback and telemetry correlate with no
+extra schema.
+
+---
+
 ## Documents
 
 ### `GET /api/km/workspaces/{workspace_id}/documents`
@@ -577,6 +626,21 @@ Accepts an **optional** JSON body to override the processing decision for this r
 ```
 
 ---
+
+## Document Maintenance (workspace-wide)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/km/workspaces/{ws}/documents/reprocess-all` | Batch reprocess every document (destructive for vision-OCR corpora — output is nondeterministic; restore from backup is the only exact recovery) |
+| POST | `/api/km/workspaces/{ws}/documents/reindex` | Rebuild BM25 + vector indices from stored chunks |
+| POST | `/api/km/workspaces/{ws}/documents/extract-facets` | Extract corpus facets/metadata (background job) |
+| POST | `/api/km/workspaces/{ws}/documents/build-trees` | Build PageIndex trees for vectorless retrieval (background job; poll `/jobs/{id}`) |
+| GET | `/api/km/workspaces/{ws}/documents/{doc_id}/images` | List images extracted from a document |
+| GET | `/api/km/workspaces/{ws}/documents/{doc_id}/images/{img_id}` | Fetch one extracted image |
+
+Also: `POST /api/km/settings/factory-reset` (super admin) wipes content
+(scoped or global; Postgres + Qdrant + BM25 together), and
+`POST /api/auth/change-password` changes the current user's password.
 
 ## Test Query
 

@@ -4,6 +4,15 @@ End-to-end review of the document processing path: upload → conversion → chu
 
 **25 findings: 4 Critical, 9 High, 7 Medium, 6 Low.** All findings cite `file:line` against `main` at `f376310`. Verify against current code before acting on long-lived items.
 
+> **Status re-check (2026-07-12):** spot-verified — **C1 still open**
+> (`documents.rs` ingest spawn has no panic guard) and **H2 still open**
+> (`thairag-document/src/thai_chunker.rs:158` compares `chars().count()`
+> against byte `len()`, so the Thai clause-split threshold misfires ~3× —
+> behavior-affecting; fix needs its own measured PR since it shifts chunking).
+> Much of the surrounding pipeline was rebuilt since (region router #219–#235,
+> table campaign #331–#336, backpressure #338), so several other findings are
+> superseded — re-verify each before acting.
+
 Out of scope (already addressed): the three PRs above; the operational issue that `image_description_enabled` defaults to `false`; per-workspace ingestion config (acknowledged deferred).
 
 ---

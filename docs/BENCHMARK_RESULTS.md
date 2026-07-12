@@ -1,5 +1,17 @@
 # Benchmark Results — Chat Pipeline Configurations
 
+> **Scope & date:** configuration micro-benchmark (~2026-06-01: one fixture,
+> one chunk, 12 questions) measuring chat-pipeline *config sensitivity* on
+> local Ollama models. It is **not** a production-corpus benchmark. Current
+> production-corpus numbers (2026-07, all-gateway deployment, clean_eval
+> harness): born-digital Thai tables **100%** (isolated scope, 10-run),
+> prose/non-table **98–100%**, scanned-twin corpora **92.9%** (PaddleOCR
+> tier), shared near-clone scope caps ~75% vs **87.5%** single-product-scope
+> (see CLAUDE.md near-clone guidance). Retrieval modes (2026-07-12): vector
+> 95.7–98% vs vectorless 97.1% tables / 88.0% prose. Doc-selection flag
+> (`doc_selection_enabled`) A/B: **zero lift, zero harm** at these ceilings
+> (tables 97.1/97.1, prose 100/100) — stays default-off.
+
 This document reports a controlled benchmark of ThaiRAG chat-pipeline configurations,
 measuring **answer correctness** and **latency** across models, pipeline modes, and
 optional agent features. The goal is an evidence base for the recommendations in

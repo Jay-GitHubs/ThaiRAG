@@ -1,5 +1,11 @@
 # ThaiRAG first-party Chat UI — implementation roadmap
 
+> ✅ **COMPLETE (2026-06-27).** All phases shipped: chat-ui is the production
+> frontend (`:8082`), all parity gaps closed (#245–#263), the legacy client
+> decommissioned in #260, attachments/persistence hardened through #319, and
+> four UX batches shipped (#277–#280). Preserved as the implementation record;
+> nothing below is pending.
+
 Goal: a focused, ChatGPT-like end-user chat frontend built on the ThaiRAG
 backend/core, replacing the legacy third-party chat client. That client ran in
 parallel until a parity gate passed, then was decommissioned (Phase 7).
