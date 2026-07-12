@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Button,
   Drawer,
@@ -76,6 +77,13 @@ const MOD = /mac|iphone|ipad/i.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 export function ChatPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
+  // Parsed once at mount: deep-linked conversation id from /c/{id}. After
+  // mount the activeId→URL sync effect owns the path, so no reactive
+  // dependency on location is needed (and it would refire the list effect).
+  const urlConversationId = useRef(
+    window.location.pathname.match(/^\/c\/([0-9a-fA-F-]{36})$/)?.[1] ?? null,
+  ).current;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -130,7 +138,14 @@ export function ChatPage() {
     listConversations()
       .then((list) => {
         setConversations(list);
-        if (list.length > 0) setActiveId(list[0].id);
+        // Deep link (/c/{id}) wins; otherwise restore the most recent
+        // conversation, as before. An unknown id falls back too (the URL is
+        // normalized by the activeId→URL sync effect below).
+        const fromUrl = urlConversationId && list.some((c) => c.id === urlConversationId)
+          ? urlConversationId
+          : null;
+        if (fromUrl) setActiveId(fromUrl);
+        else if (list.length > 0) setActiveId(list[0].id);
       })
       .catch(() => antdMessage.error(t('errLoadConversations')));
     listWorkspaces()
@@ -151,6 +166,15 @@ export function ChatPage() {
   }, [workspaces, t]);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
+
+  // Keep the URL in lockstep with the open conversation so refresh restores
+  // it and conversations are deep-linkable (/c/{id}). `replace` avoids
+  // flooding history with every selection; back/forward still work across
+  // real page entries.
+  useEffect(() => {
+    const want = activeId ? `/c/${activeId}` : '/';
+    if (window.location.pathname !== want) navigate(want, { replace: true });
+  }, [activeId, navigate]);
 
   // Load messages when the active conversation changes. Switching aborts any
   // in-flight stream (so its tokens can't bleed into the new conversation) and

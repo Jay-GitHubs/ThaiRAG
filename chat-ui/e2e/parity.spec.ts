@@ -15,11 +15,37 @@ async function waitForAnswer(page: import('@playwright/test').Page) {
   await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
 }
 
-test('login page offers SSO providers (G1)', async ({ page }) => {
-  await page.goto('/login');
-  await expect(page.getByRole('button', { name: /Continue with/ }).first()).toBeVisible({
-    timeout: 15_000,
+test('login page offers SSO providers (G1)', async ({ page, request }) => {
+  // Self-seed: this test used to depend on whatever enabled IdP happened to
+  // exist — for months that was a LEAKED test provider from a failed
+  // auth-providers run, purged in the 2026-07-13 cleanup. Create (and always
+  // delete) our own enabled provider so the assertion owns its fixture.
+  const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+    data: { email: TEST_EMAIL, password: TEST_PASSWORD },
   });
+  const { token } = await loginRes.json();
+  const headers = { Authorization: `Bearer ${token}` };
+  const created = await (
+    await request.post(`${API_BASE}/api/km/settings/identity-providers`, {
+      headers,
+      data: {
+        name: `G1 SSO probe - ${Date.now()}`,
+        provider_type: 'oidc',
+        enabled: true,
+        config: { issuer_url: 'https://sso.example.com/realms/g1', client_id: 'g1-probe' },
+      },
+    })
+  ).json();
+  try {
+    await page.goto('/login');
+    await expect(page.getByRole('button', { name: /Continue with/ }).first()).toBeVisible({
+      timeout: 15_000,
+    });
+  } finally {
+    await request.delete(`${API_BASE}/api/km/settings/identity-providers/${created.id}`, {
+      headers,
+    });
+  }
 });
 
 test('scoped chat streams an answer with source citations (scope + citations)', async ({ page }) => {
