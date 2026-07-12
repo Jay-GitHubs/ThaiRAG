@@ -73,12 +73,26 @@ MODELS, not hosts).
    `providers.doc_vision_llm` is a **persisted setting** (Settings →
    Providers), not env: update its base_url there after restart.
 5. `docker compose restart thairag`.
-6. Smoke gauntlet (all must pass before opening traffic):
-   - `GET /health?deep=true`
+6. Smoke gauntlet (all must pass before opening traffic; dry-run rehearsed
+   against the gateway 2026-07-12 — expected shapes below are as-observed):
+   - `GET /health?deep=true` — every probe `ok`; `redis: not_configured` is
+     normal when redis is not enabled, don't fail on it
    - one `test-query` content question (expect an answer with citations)
-   - one doc-ops question: `สรุปเอกสารนี้ให้หน่อย` in a single-doc scope
-   - one document upload → `ready`, provenance shows expected engines
-   - `python3 scripts/bench/clean_eval.py run --set scripts/bench/table_set.json --ws <TableOnly-ws> --runs 1` → expect 7/7
+   - one doc-ops question: `สรุปเอกสารนี้ให้หน่อย` in a single-doc scope.
+     First-party SSE events are `{"type":"token","text":…}` (+ `progress`
+     and a final `done` carrying `message_id`/`usage`) if scripting this.
+   - one document upload → `ready`. Multipart endpoint is
+     `POST /api/km/workspaces/{ws}/documents/upload` (the sibling
+     `…/documents` POST is JSON-body ingest and 400s on multipart).
+     Use a throwaway org/dept/ws and delete the org afterwards (cascades).
+   - `python3 scripts/bench/clean_eval.py run --set scripts/bench/table_set.json --ws <TableOnly-ws> --runs 1`
+     → expect ≥6/7. A single 6/7 is within measured gateway temp-0
+     nondeterminism (3 of 10 baseline runs score 6/7); re-run once and
+     investigate only if it stays below 7/7 twice, or below 6/7 ever.
+   - verify `GET /api/km/settings/providers` still shows `doc_vision_llm`
+     set — the 2026-07-12 dry-run found it silently reverted to unset
+     (the measured silent-vision-degradation failure mode); it is a
+     persisted setting and can be restored hot via the same endpoint.
 7. Re-tune the bulk lane: on OWNED slots, raise
    `THAIRAG_INGEST_MAX_CONCURRENT` from 2 → 4 (vLLM continuous batching
    tolerates more; re-measure chat latency before going higher).
