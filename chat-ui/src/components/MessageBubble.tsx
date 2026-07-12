@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -25,6 +25,25 @@ import type { Citation, ConfidenceFactor, ImageRef } from '../api/types';
 /** LLMs commonly emit TeX with \\(..\\) / \\[..\\] delimiters, which remark-math
  *  doesn't parse — normalize them to $ / $$ before rendering. Fenced and inline
  *  code segments are passed through untouched so regex-looking code survives. */
+/** Elapsed-seconds counter shown next to the pipeline stage while waiting
+ *  for the first token. On slow gateways time-to-first-token can exceed 30s;
+ *  a visibly advancing count tells the user the request is alive rather than
+ *  hung. Mounts with the pre-token placeholder, so 0s = send time. */
+function ElapsedTimer() {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (seconds < 3) return null; // don't flash a counter on fast answers
+  return (
+    <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.75 }} data-testid="elapsed-timer">
+      {seconds}s
+    </span>
+  );
+}
+
 function normalizeMathDelimiters(md: string): string {
   return md
     .split(/(```[\s\S]*?```|`[^`]*`)/g)
@@ -649,6 +668,7 @@ function AssistantMessage({
               >
                 <Spin size="small" />
                 <span>{message.progress ?? 'Working…'}</span>
+                <ElapsedTimer />
               </div>
             ) : (
               <span className="caret" />

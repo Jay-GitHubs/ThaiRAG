@@ -35,12 +35,36 @@ export function DashboardPage() {
 
   const isHealthy = health.data?.status === 'ok';
 
-  // Auto-start welcome tour on first visit
+  // Auto-start welcome tour on first visit — but only once the tour targets
+  // are actually laid out. Starting on a bare timer raced async data loads:
+  // antd's Tour mask insets the spotlight by a few px, so a target measured
+  // at zero size produces negative <rect> dimensions (console errors) and a
+  // misplaced spotlight. Note: antd also emits one benign negative-<rect>
+  // console error on the mask's FIRST frame even with correctly-sized
+  // targets (library-internal, self-corrects next frame) — that one is
+  // cosmetic and not worth an antd upgrade to silence.
   useEffect(() => {
-    if (isFirstVisit()) {
-      const timer = setTimeout(() => tour.start(), 500);
-      return () => clearTimeout(timer);
-    }
+    if (!isFirstVisit()) return;
+    let cancelled = false;
+    let attempts = 0;
+    const ready = () =>
+      ['sidebar', 'stats-row', 'health-card'].every((id) => {
+        const el = document.querySelector(`[data-tour="${id}"]`);
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 10 && r.height > 10;
+      });
+    const tick = () => {
+      if (cancelled) return;
+      if (ready()) tour.start();
+      else if (attempts++ < 20) setTimeout(tick, 300);
+      // Give up silently after ~6s — the guides drawer still offers the tour.
+    };
+    const timer = setTimeout(tick, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
