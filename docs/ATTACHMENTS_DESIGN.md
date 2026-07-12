@@ -1,6 +1,6 @@
 # Per-request attachments: design
 
-**Status:** Accepted — four scoping decisions locked in 2026-05-15. PR-1 (backend) and PR-2 (admin UI) are unblocked; vision OCR / citations / per-tenant quotas remain as future PRs.
+**Status:** ✅ SHIPPED — backend + UI merged; attachment persistence hardened in chat-ui PR #319 (2026-07-03). Still future: attachment citations (§3.4) and per-tenant quotas. Original design record below, locked 2026-05-15.
 
 **Owner:** TBD
 **Last updated:** 2026-05-15

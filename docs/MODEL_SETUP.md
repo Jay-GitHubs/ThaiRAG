@@ -3,6 +3,12 @@
 Bench-backed model choices for running ThaiRAG on local open-source models
 (Ollama), and the exact configuration to reproduce them on a new machine.
 
+> **Scope note (2026-07):** this guide covers the local-Ollama flavor. The
+> production deployment now runs all-gateway (one OpenAI-compatible endpoint:
+> `qwen3.6-27b-fast` chat / `qwen2.5-vl-7b` vision / `embed-qwen3`) — see
+> DEPLOYMENT_GUIDE → "Production Deployment (All-Gateway)". Model picks below
+> remain valid for single-GPU local setups.
+
 Measured 2026-06-11 with `scripts/bench/run_matrix.py` (12 bilingual questions
 against the prohibited-business table fixture; LLM-judge = `qwen3.6:35b` @
 temp 0; results in `scripts/bench/results-model-selection.json`).

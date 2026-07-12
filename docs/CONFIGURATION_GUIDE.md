@@ -27,6 +27,11 @@ Pipeline**, or via `PUT /api/km/settings/chat-pipeline`. Changes hot-reload (no 
 
 ## Recommended configurations
 
+> **Scope:** the model picks below are for **local development / free tier**
+> (Ollama on one GPU). Production deployments typically run the all-gateway
+> flavor (one OpenAI-compatible endpoint for chat/vision/embedding) — see
+> DEPLOYMENT_GUIDE → "Production Deployment (All-Gateway)".
+
 ### Balanced (recommended default)
 
 Best correctness-per-second for most deployments.
@@ -269,6 +274,30 @@ The sidecar publishes port `8086`. Use the **internal** compose hostname
 (`http://paddleocr:8086`) in `ocr_sidecar_url`, since ThaiRAG reaches it container-to-container.
 
 ---
+
+## Retrieval modes (`chat_pipeline.retrieval_mode`)
+
+Per-scope switch, hot-reloadable:
+
+- **`vector`** (default) — hybrid dense + BM25 with RRF fusion and reranking.
+  Keep this: it is ≥ vectorless on every corpus measured, faster, cheaper.
+- **`vectorless`** — reasoning-based PageIndex: an LLM navigates per-document
+  trees and feeds whole sections to the answer model; BM25 is only the
+  no-tree fallback. Measured 2026-07-12 (all-gateway): **parity on table
+  corpora** (97.1% vs 95.7%), **~10 pts behind on prose** (88.0% vs 98.0% —
+  metadata/needle questions that section summaries don't surface). Its real
+  role: a fallback for embedding-free scopes (e.g. right after an embedder
+  switch wiped vectors, before re-ingest completes). Requires PageIndex trees
+  (`POST /api/km/workspaces/{ws}/documents/build-trees` or
+  `reasoning_build_on_ingest`); on OpenAI-compatible gateways tree building
+  needs `response_format: json_schema` support.
+
+Related flag: `chat_pipeline.doc_selection_enabled` (default off) — a
+deterministic doc-selector + full-doc-context path. A/B-measured 2026-07-12 at
+**zero lift and zero harm** on diverse scopes already at their accuracy
+ceiling (tables 97.1/97.1, prose 100/100), and it adds a selector LLM call per
+query. Leave it off; it also does not help shared near-clone scopes (measured
+separately — see CLAUDE.md's near-clone deployment guidance).
 
 ## Grounding / hallucination
 

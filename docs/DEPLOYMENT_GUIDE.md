@@ -79,7 +79,8 @@ POSTGRES_DB=thairag
 POSTGRES_USER=thairag
 POSTGRES_PASSWORD=your-secure-password
 
-# ThaiRAG
+# ThaiRAG — tier for local/dev (`free`) or hosted providers (`standard`).
+# Production commonly uses the all-gateway flavor instead (next section).
 THAIRAG_TIER=standard
 THAIRAG__AUTH__ENABLED=true
 THAIRAG__AUTH__JWT_SECRET=your-jwt-secret-min-32-chars
@@ -271,8 +272,8 @@ Without these settings, nginx buffers the SSE stream and the frontend will not r
 ## Local Development
 
 ### Prerequisites
-- Rust 1.88+ (edition 2024)
-- Node.js 20+ with npm
+- Rust 1.95+ (edition 2024; CI pins 1.95)
+- Node.js 22 with npm (matching CI)
 - Optional: PostgreSQL 16, Qdrant, Ollama
 
 ### Backend
@@ -566,6 +567,30 @@ This means switching embedding models is a safe operation -- no manual Qdrant ad
 
 ---
 
+## Production Deployment (All-Gateway)
+
+The recommended production flavor points every provider at ONE
+OpenAI-compatible inference endpoint (self-hosted vLLM or a gateway) instead
+of mixing hosted APIs:
+
+```bash
+THAIRAG__PROVIDERS__LLM__KIND=open_ai_compatible
+THAIRAG__PROVIDERS__LLM__BASE_URL=https://<your-gateway>/v1     # chat model, e.g. qwen3.6-27b-fast
+THAIRAG__PROVIDERS__LLM__API_KEY=<gateway key>
+THAIRAG__PROVIDERS__EMBEDDING__KIND=openai
+THAIRAG__PROVIDERS__EMBEDDING__BASE_URL=https://<your-gateway>/v1  # e.g. embed-qwen3
+THAIRAG__PROVIDERS__RERANKER__KIND=passthrough                  # no OpenAI-compatible reranker exists
+```
+
+Also set `providers.doc_vision_llm` (Settings → Providers, persisted) to a
+vision model on the same gateway (e.g. `qwen2.5-vl-7b` with
+`supports_vision: true`) — without it ALL vision ingestion silently degrades.
+Gateway gotchas: transient 502/503/504 are retried with backoff by both LLM
+and embedding providers; switching the embedding model wipes and re-indexes
+vectors; PageIndex tree building requires the gateway to support
+`response_format: json_schema` (most vLLM builds do). Full cutover procedure:
+[LAUNCH_RUNBOOK.md](LAUNCH_RUNBOOK.md).
+
 ## Production Checklist
 
 - [ ] Set `THAIRAG__AUTH__ENABLED=true`
@@ -587,7 +612,17 @@ This means switching embedding models is a safe operation -- no manual Qdrant ad
 - [ ] Set up Grafana dashboards for monitoring
 - [ ] Configure OpenTelemetry if using distributed tracing
 - [ ] Enable knowledge graph extraction if needed
-- [ ] Configure backup schedule
+- [ ] Configure backup schedule (`scripts/backup-db.sh` — dumps Postgres AND
+      exports a Qdrant snapshot; run it from cron and verify the log after the
+      first scheduled fire)
+- [ ] Set `chat_pipeline.citation_base_url` to a browser-reachable public URL
+      (deploy-time env, not hot-reload — citation links break if it points at
+      an internal container name)
+- [ ] Review the provisioned Grafana alert rules
+      (`grafana/provisioning/alerting/thairag-alerts.yaml`: 5xx rate, p90
+      latency) and add a contact point (SMTP/webhook) so alerts deliver
+- [ ] Walk the smoke gauntlet in [LAUNCH_RUNBOOK.md](LAUNCH_RUNBOOK.md) §3
+      before opening traffic
 
 ---
 
