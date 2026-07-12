@@ -88,7 +88,7 @@ export function QuickStartCard() {
         }
 
         // Check users
-        const usersRes = await client.get('/api/admin/users').catch(() => null);
+        const usersRes = await client.get('/api/km/users').catch(() => null);
         const users = usersRes?.data?.items || usersRes?.data || [];
         const hasMultipleUsers = users.length > 1;
 
