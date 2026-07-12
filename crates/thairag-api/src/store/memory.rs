@@ -1692,14 +1692,19 @@ impl KmStoreTrait for MemoryKmStore {
         let search_count = entries.iter().filter(|e| e.search_ms.is_some()).count() as f64;
         let sum_gen_ms: u64 = entries.iter().filter_map(|e| e.generation_ms).sum();
         let gen_count = entries.iter().filter(|e| e.generation_ms.is_some()).count() as f64;
+        // Per-row best available relevance signal: the LLM-judged score when
+        // the quality guard ran, else the retrieval chunk score (mirrors the
+        // SQL stores' clamped COALESCE(relevance_score, avg_chunk_score)).
+        // Clamped to [0,1]: lexical-fallback rows store raw BM25 scores (up to
+        // ~72 observed) that would otherwise swamp the normalized cosine rows.
         let sum_relevance: f64 = entries
             .iter()
-            .filter_map(|e| e.relevance_score)
-            .map(|s| s as f64)
+            .filter_map(|e| e.relevance_score.or(e.avg_chunk_score))
+            .map(|s| (s as f64).min(1.0))
             .sum();
         let relevance_count = entries
             .iter()
-            .filter(|e| e.relevance_score.is_some())
+            .filter(|e| e.relevance_score.or(e.avg_chunk_score).is_some())
             .count() as f64;
         let total_prompt: u64 = entries.iter().map(|e| e.prompt_tokens as u64).sum();
         let total_completion: u64 = entries.iter().map(|e| e.completion_tokens as u64).sum();

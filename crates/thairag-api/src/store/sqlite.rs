@@ -3039,7 +3039,7 @@ impl KmStoreTrait for SqliteKmStore {
                 COALESCE(AVG(total_ms), 0),
                 COALESCE(AVG(search_ms), 0),
                 COALESCE(AVG(generation_ms), 0),
-                COALESCE(AVG(relevance_score), 0),
+                COALESCE(AVG(MIN(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0),
                 COALESCE(SUM(prompt_tokens), 0),
                 COALESCE(SUM(completion_tokens), 0),
                 COALESCE(SUM(CASE WHEN status = 'success' THEN 1.0 ELSE 0.0 END) / NULLIF(COUNT(*), 0), 0),
@@ -3079,7 +3079,7 @@ impl KmStoreTrait for SqliteKmStore {
         // By model
         let model_sql = format!(
             "SELECT llm_model, COUNT(*), COALESCE(AVG(total_ms), 0),
-                    COALESCE(AVG(relevance_score), 0),
+                    COALESCE(AVG(MIN(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0),
                     COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
              FROM inference_logs {where_clause}
              GROUP BY llm_model ORDER BY COUNT(*) DESC"
