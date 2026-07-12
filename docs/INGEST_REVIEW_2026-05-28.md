@@ -4,14 +4,20 @@ End-to-end review of the document processing path: upload → conversion → chu
 
 **25 findings: 4 Critical, 9 High, 7 Medium, 6 Low.** All findings cite `file:line` against `main` at `f376310`. Verify against current code before acting on long-lived items.
 
-> **Status re-check (2026-07-12):** spot-verified — **C1 still open**
-> (`documents.rs` ingest spawn has no panic guard) and **H2 still open**
-> (`thairag-document/src/thai_chunker.rs:158` compares `chars().count()`
-> against byte `len()`, so the Thai clause-split threshold misfires ~3× —
-> behavior-affecting; fix needs its own measured PR since it shifts chunking).
-> Much of the surrounding pipeline was rebuilt since (region router #219–#235,
-> table campaign #331–#336, backpressure #338), so several other findings are
-> superseded — re-verify each before acting.
+> **Status re-check (2026-07-13, corrects the 2026-07-12 note):**
+> - **C1: FIXED same-day** — PR #74 (`process_document_inner` panic guard:
+>   child-task spawn + `is_panic()` join handling marks the doc Failed with
+>   `panic_during_ingest:`, with a regression test pinning the tokio
+>   semantics) plus PR #75 (startup reconciliation for docs caught in
+>   `Processing`). The earlier "still open" claim looked at the outer job
+>   spawn without noticing the guarded inner entry point.
+> - **H2: FIXED** — PR #350 (2026-07-12): the Thai clause-split guard
+>   compared chars to BYTES; fixed and bench-verified (chunk delta measured,
+>   accuracy parity 97.1/97.1).
+> - Much of the surrounding pipeline was rebuilt since (region router
+>   #219–#235, table campaign #331–#336, backpressure #338), so remaining
+>   findings are likely superseded — re-verify each against current code
+>   before acting.
 
 Out of scope (already addressed): the three PRs above; the operational issue that `image_description_enabled` defaults to `false`; per-workspace ingestion config (acknowledged deferred).
 
