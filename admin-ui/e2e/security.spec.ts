@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { API_BASE, login } from './helpers';
+import { API_BASE, login, TEST_EMAIL, TEST_PASSWORD } from './helpers';
 
 test.describe('Security Headers', () => {
   test('API responses include OWASP security headers', async ({ request }) => {
@@ -64,6 +64,30 @@ test.describe('Password Policy', () => {
 });
 
 test.describe('Brute-force Protection', () => {
+  test.afterAll(async ({ request }) => {
+    // Failure-proof sweep: every run registers a fresh bruteforce-*@sec.test
+    // account and (pre-sweep) never deleted it — 29 had accumulated by the
+    // 2026-07-13 UX audit, drowning the real users in User Management.
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    });
+    if (!loginRes.ok()) return;
+    const { token } = await loginRes.json();
+    const headers = { Authorization: `Bearer ${token}` };
+    const usersRes = await request.get(`${API_BASE}/api/km/users`, { headers });
+    if (!usersRes.ok()) return;
+    const body = await usersRes.json();
+    const users = (Array.isArray(body) ? body : (body.data ?? [])) as Array<{
+      id: string;
+      email?: string;
+    }>;
+    for (const u of users) {
+      if (/^bruteforce-\d+@sec\.test$/.test(u.email ?? '')) {
+        await request.delete(`${API_BASE}/api/km/users/${u.id}`, { headers });
+      }
+    }
+  });
+
   test('account locks after repeated failed logins', async ({ request }) => {
     const email = `bruteforce-${Date.now()}@sec.test`;
 

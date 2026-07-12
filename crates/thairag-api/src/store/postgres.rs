@@ -3020,7 +3020,7 @@ impl KmStoreTrait for PostgresKmStore {
                 COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_total_ms,
                 COALESCE(AVG(search_ms), 0)::FLOAT8 AS avg_search_ms,
                 COALESCE(AVG(generation_ms), 0)::FLOAT8 AS avg_generation_ms,
-                COALESCE(AVG(relevance_score), 0)::FLOAT8 AS avg_relevance_score,
+                COALESCE(AVG(LEAST(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0)::FLOAT8 AS avg_relevance_score,
                 COALESCE(SUM(prompt_tokens), 0)::BIGINT AS total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0)::BIGINT AS total_completion_tokens,
                 CASE WHEN COUNT(*) > 0
@@ -3077,7 +3077,7 @@ impl KmStoreTrait for PostgresKmStore {
             "SELECT llm_model,
                     COUNT(*)::BIGINT AS count,
                     COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_ms,
-                    COALESCE(AVG(relevance_score), 0)::FLOAT8 AS avg_quality,
+                    COALESCE(AVG(LEAST(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0)::FLOAT8 AS avg_quality,
                     COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)::BIGINT AS total_tokens
              FROM inference_logs {where_clause}
              GROUP BY llm_model ORDER BY count DESC"

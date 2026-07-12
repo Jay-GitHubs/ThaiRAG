@@ -229,7 +229,7 @@ function DashboardTab() {
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic
-              title={<Tooltip title="Average relevance score from quality guard"><span>Avg Relevance <QuestionCircleOutlined /></span></Tooltip>}
+              title={<Tooltip title="Per request: LLM-judged relevance when the quality guard ran, otherwise the average retrieved-chunk score"><span>Avg Relevance <QuestionCircleOutlined /></span></Tooltip>}
               value={stats.avg_relevance_score.toFixed(3)}
               valueStyle={{ color: scoreColor(stats.avg_relevance_score) }}
               prefix={<ExperimentOutlined />}
