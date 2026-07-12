@@ -1,4 +1,30 @@
 services:
+  # ── Nightly backup sidecar ───────────────────────────────────────────
+  # Scheduled INSIDE the stack because macOS TCC blocks host cron's access
+  # to /Volumes even with a granted Full Disk Access entry (lived failure,
+  # 2026-07-13). Docker's daemon already has authorized volume access, so
+  # this survives macOS updates. `docker exec thairag-backup-1 bash
+  # /backup-loop.sh once` runs an immediate backup for testing.
+  backup:
+    build:
+      context: .
+      dockerfile: ops/backup.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - qdrant
+    environment:
+      TZ: ${TZ:-Asia/Bangkok}
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_AT: "03:30"
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-thairag_chunks}
+    volumes:
+      - ./backups:/backups
+
   # ── PostgreSQL ───────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine

@@ -400,11 +400,19 @@ Budget: typical 4 KB text chunk × `text-embedding-3-large` ≈ $0.0001 per chun
 
 The Backup & Restore admin page exports the whole system as a ZIP with a manifest. **Backup before any Docker rebuild** — the volume recreation defaults bite hard.
 
-**Automation** (`scripts/backup-db.sh`): dumps Postgres (full `.sql.gz` +
-per-table JSON), **exports a Qdrant snapshot**, and rotates old backups.
-Run it from cron (e.g. daily 03:30, logging to `backups/cron.log`) and add a
-self-verify line that greps for the day's backup — verify the log after the
-FIRST scheduled fire (macOS cron may need a one-time disk-access approval).
+**Automation**: the compose stack ships a `backup` sidecar (built from
+`ops/backup.Dockerfile`, running `scripts/docker-backup-loop.sh`) that fires
+daily at 03:30 container-local time: full `.sql.gz` dump + per-table JSON +
+Qdrant snapshot + rotation (keep 10, snapshots rotated too), appending a
+`BACKUP-VERIFY OK/FAIL` line to `backups/cron.log`. Verify any morning with
+`grep BACKUP-VERIFY backups/cron.log`; trigger a manual run with
+`docker exec thairag-backup-1 bash /backup-loop.sh once`.
+It is scheduled INSIDE the stack deliberately: on macOS hosts, TCC blocks
+cron's access to external volumes even after granting Full Disk Access and
+restarting the daemon (lived failure, 2026-07-13) — the Docker daemon's
+existing volume authorization is immune to that and to macOS updates.
+`scripts/backup-db.sh` remains for manual/pre-rebuild host-side backups
+(and cron-scheduling it is fine on Linux hosts).
 **Restore drill** (do it once before you need it): restore the latest dump
 into a scratch database (`CREATE DATABASE thairag_restore_drill`, pipe the
 gunzipped dump in), compare table and row counts against live, then drop the
