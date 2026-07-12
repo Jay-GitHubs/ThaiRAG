@@ -155,7 +155,9 @@ impl ThaiAwareChunker {
                     segments.push(trimmed);
                 }
                 current.clear();
-            } else if is_clause_boundary && current.trim().chars().count() > token.trim().len() {
+            } else if is_clause_boundary
+                && current.trim().chars().count() > token.trim().chars().count()
+            {
                 // Split before the conjunction: put the conjunction back
                 let before = current[..current.len() - token.len()].trim().to_string();
                 if !before.is_empty() {
@@ -425,6 +427,35 @@ mod tests {
         let chunks = chunker.chunk(text, 1000, 0);
         // Should still produce chunks (may or may not split depending on size)
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn clause_split_fires_for_short_clauses() {
+        // Regression (INGEST_REVIEW H2): the split-before-conjunction guard
+        // compared current CHAR count against the conjunction's BYTE length
+        // (3x chars for Thai), so a short clause before "และ" never split.
+        // "กินและนอน" → clause before the conjunction is "กิน" (3 chars);
+        // guard must compare chars-to-chars for the split to fire.
+        let chunker = ThaiAwareChunker::new();
+        let segments = chunker.segment_sentences("กินและนอน");
+        assert!(
+            segments.len() >= 2,
+            "short clause before และ must split: {segments:?}"
+        );
+        assert_eq!(segments[0], "กิน", "clause text kept before the conjunction");
+        assert!(
+            segments[1].starts_with("และ"),
+            "conjunction starts the next segment: {segments:?}"
+        );
+    }
+
+    #[test]
+    fn clause_split_skipped_when_only_conjunction() {
+        // A line STARTING with the conjunction has nothing before it to
+        // split off — the guard must not produce an empty leading segment.
+        let chunker = ThaiAwareChunker::new();
+        let segments = chunker.segment_sentences("และนอน");
+        assert_eq!(segments.len(), 1, "nothing to split: {segments:?}");
     }
 
     #[test]
