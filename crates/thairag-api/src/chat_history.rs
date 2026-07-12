@@ -163,6 +163,29 @@ pub fn persist_turn(
     )
 }
 
+/// Persist only the user's message, before generation starts. Used by the
+/// streaming path so an interrupted stream (client refresh/disconnect — the
+/// SSE generator is dropped and never reaches its end-of-stream persistence)
+/// can no longer lose the question: the user row is already durable, and the
+/// existing regenerate path can replay it. Returns the stored user row.
+pub fn persist_user(
+    store: &Arc<dyn KmStoreTrait>,
+    conversation_id: &str,
+    user_content: &str,
+    attachments: &[PersistedAttachment],
+) -> Result<MessageRow> {
+    let attachments_json = serde_json::to_string(attachments).unwrap_or_else(|_| "[]".to_string());
+    store.append_message(
+        conversation_id,
+        "user",
+        user_content,
+        "[]",
+        "[]",
+        "{}",
+        &attachments_json,
+    )
+}
+
 /// Persist only an assistant message (no user turn). Used by regenerate, where
 /// the user turn already exists and only the answer is being replaced.
 pub fn persist_assistant(
@@ -198,6 +221,46 @@ mod tests {
 
     const ALICE: &str = "11111111-1111-1111-1111-111111111111";
     const BOB: &str = "22222222-2222-2222-2222-222222222222";
+
+    #[test]
+    fn persist_user_then_assistant_equals_persist_turn() {
+        // The streaming path pre-persists the user row (so a mid-stream
+        // disconnect can't lose the question) and appends the assistant row
+        // at stream end. The stored rows must be indistinguishable from the
+        // one-shot persist_turn path.
+        let store = store();
+        let conv = store.create_conversation(ALICE, "T", None, "rag").unwrap();
+        let att = vec![PersistedAttachment {
+            name: "a.txt".into(),
+            mime: "text/plain".into(),
+            size: 3,
+        }];
+        let user_row = persist_user(&store, &conv.id, "q", &att).unwrap();
+        assert_eq!(user_row.role, "user");
+        // The question is durable even if the assistant never lands.
+        let rows = store.list_messages(&conv.id);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].attachments.contains("a.txt"));
+
+        persist_assistant(
+            &store,
+            &conv.id,
+            "ans",
+            &[],
+            &[],
+            &PersistedTokenStats {
+                prompt_tokens: 1,
+                completion_tokens: 2,
+            },
+        )
+        .unwrap();
+        let rows = store.list_messages(&conv.id);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0].role.as_str(), rows[1].role.as_str()),
+            ("user", "assistant")
+        );
+    }
 
     #[test]
     fn load_history_owner_returns_chronological() {
