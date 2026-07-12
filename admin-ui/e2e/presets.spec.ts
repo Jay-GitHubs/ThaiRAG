@@ -1,7 +1,36 @@
 import { test, expect } from '@playwright/test';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  snapshotSettings,
+  restoreSettingsSnapshot,
+} from './helpers';
 
 test.describe('Quick Setup Presets', () => {
+  // Applying presets is inherently destructive: it rewrites chat-pipeline,
+  // document-processing AND provider settings for real (the last test used to
+  // leave the deployment on thai-doc-basic after every suite run). Bracket the
+  // whole spec with a server-side settings snapshot so the exact prior state —
+  // api keys included — comes back regardless of which preset ran last or
+  // whether a test failed mid-way.
+  let snapId: string;
+  let apiToken: string;
+
+  test.beforeAll(async ({ request }) => {
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    });
+    apiToken = (await loginRes.json()).token;
+    snapId = await snapshotSettings(request, apiToken, 'e2e-presets-baseline');
+  });
+
+  test.afterAll(async ({ request }) => {
+    await restoreSettingsSnapshot(request, apiToken, snapId);
+  });
+
   test.beforeEach(async ({ page }) => {
     await login(page);
     await navigateTo(page, 'Settings');

@@ -59,6 +59,59 @@ export async function pinSharedModel(
   return prev;
 }
 
+/**
+ * Server-side settings snapshot/restore bracket for specs that mutate GLOBAL
+ * settings (presets, document-processing toggles, pipeline-card saves…).
+ * The snapshot captures every raw settings row server-side — including api
+ * keys, which are never readable via GET — so restore is exact where any
+ * spec-side capture/PUT restore would be lossy. Take the snapshot in
+ * beforeAll, restore in afterAll (runs on failure too).
+ */
+export async function snapshotSettings(
+  request: APIRequestContext,
+  token: string,
+  name: string,
+): Promise<string> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const resp = await request.post(`${API_BASE}/api/km/settings/snapshots`, {
+    data: { name },
+    headers,
+  });
+  expect(resp.ok()).toBeTruthy();
+  return (await resp.json()).id as string;
+}
+
+/**
+ * Restore (and consume) a settings snapshot. The restore endpoint clears all
+ * settings rows and rewrites them from the snapshot — which also removes the
+ * snapshot row itself, so only the index entry needs best-effort cleanup.
+ * If the embedding fingerprint changed mid-spec the endpoint answers with a
+ * warning instead of restoring; retry preserving the current embedding so a
+ * restore can never wipe the vector store.
+ */
+export async function restoreSettingsSnapshot(
+  request: APIRequestContext,
+  token: string,
+  id: string,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const resp = await request.post(`${API_BASE}/api/km/settings/snapshots/${id}/restore`, {
+    headers,
+  });
+  expect(resp.ok()).toBeTruthy();
+  const body = await resp.json();
+  if (body.status === 'warning') {
+    const retry = await request.post(
+      `${API_BASE}/api/km/settings/snapshots/${id}/restore?skip_embedding=true`,
+      { headers },
+    );
+    expect(retry.ok()).toBeTruthy();
+  }
+  await request
+    .delete(`${API_BASE}/api/km/settings/snapshots/${id}`, { headers })
+    .catch(() => {});
+}
+
 /** Suppress guided tours and quick start from auto-starting during tests. */
 export async function suppressTours(page: Page) {
   await page.addInitScript(() => {
