@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE, GOOD_CHAT_MODEL } from './helpers';
+import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE, GOOD_CHAT_MODEL , snapshotSettings, restoreSettingsSnapshot } from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -163,9 +163,7 @@ benchDescribe('Chat pipeline speed benchmark (model + mode sweep)', () => {
   let deptId: string;
   let wsId: string;
   let docId: string;
-  let originalAiEnabled = false;
-  let originalSharedModel = M_35B;
-  let originalMode = 'shared';
+  let snapId: string;
 
   test.beforeAll(async ({ request }) => {
     const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
@@ -178,39 +176,24 @@ benchDescribe('Chat pipeline speed benchmark (model + mode sweep)', () => {
     deptId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts`, { data: { name: deptName }, headers })).json()).id;
     wsId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}/workspaces`, { data: { name: wsName }, headers })).json()).id;
 
-    // Snapshot original mode so afterAll can restore it. Restore the model to a
-    // known-pulled one (not the ambient value): the bench loads oversized models
-    // and the ambient model may itself be a leaked/unpulled model from an earlier
-    // spec — leaving a good model avoids cascading 404s in later specs.
-    const cp = await (await request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
-    originalSharedModel = GOOD_CHAT_MODEL;
-    originalMode = cp.llm_mode ?? 'shared';
+    // Exact server-side settings snapshot (replaces the old hand-built restore
+    // which hardcoded kind Ollama and wiped pre-existing per-agent overrides).
+    snapId = await snapshotSettings(request, token, 'e2e-chat-speed-bench-baseline');
 
     // Disable AI preprocessing for fast deterministic ingest; raise chunk size so
-    // the table is one atomic chunk. Restored in afterAll.
-    const docCfg = await (await request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
-    originalAiEnabled = docCfg.ai_preprocessing.enabled;
+    // the table is one atomic chunk. Snapshot-restored in afterAll.
     await request.put(`${API_BASE}/api/km/settings/document`, { data: { ai_preprocessing: { enabled: false } }, headers });
     await request.put(`${API_BASE}/api/km/settings/document?scope_type=org&scope_id=${orgId}`, { data: { max_chunk_size: 8000 }, headers });
   });
 
   test.afterAll(async ({ request }) => {
     const headers = { Authorization: `Bearer ${token}` };
-    // Restore original chat pipeline (shared mode, original model, agents on, no per-agent overrides).
-    await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, {
-      data: {
-        llm_mode: originalMode,
-        llm: OLLAMA(originalSharedModel),
-        ...REMOVE_ALL_AGENT_LLMS,
-        ...ENABLE_ALL_AGENTS,
-      },
-      headers,
-    });
-    await request.delete(`${API_BASE}/api/km/settings/scoped?scope_type=org&scope_id=${orgId}`, { headers });
+    // Snapshot restore rewrites ALL settings rows exactly (chat-pipeline,
+    // document, and it clears the org-scoped override created above).
+    await restoreSettingsSnapshot(request, token, snapId);
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}/workspaces/${wsId}`, { headers });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}`, { headers });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}`, { headers });
-    await request.put(`${API_BASE}/api/km/settings/document`, { data: { ai_preprocessing: { enabled: originalAiEnabled } }, headers });
   });
 
   test('sweep models + modes and measure latency vs correctness', async ({ page }) => {
