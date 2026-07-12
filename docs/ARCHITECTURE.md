@@ -55,6 +55,14 @@ Foundation crate with zero external service dependencies.
 - **Traits**: `LlmProvider`, `EmbeddingProvider`, `VectorStore`, `SearchEngine`, `Reranker`, `SessionStoreTrait`, `EmbeddingCache`, `JobQueue`, `DocumentPlugin`, `SearchPlugin`, `ChunkPlugin`, `VectorStoreExport`, `SearchPluginEngine` (lets retrieval-side code apply enabled SearchPlugins without depending on the API crate's concrete registry), `GuardrailMetricsRecorder` (lets the streaming output guardrail record Prometheus counters without depending on the API crate's `MetricsState`) — all async trait-based
 - **Error types**: `ThaiRagError` enum covering validation, auth, not-found, provider errors
 - **Permission model**: `AccessScope` with workspace-level scoping
+- **Bulk-lane backpressure** (`backpressure.rs`): `Throttled` wraps any
+  `Arc<dyn LlmProvider>` behind a process-global semaphore sized by
+  `THAIRAG_INGEST_MAX_CONCURRENT` (default 2). Only *bulk* work is wrapped —
+  ingestion LLM fan-out (enrichment/curation), doc-vision OCR, facet/KG
+  extraction, PageIndex tree building — never interactive chat, so a heavy
+  ingest queues instead of starving user queries (a global cap was measured to
+  head-of-line-block chat and was rejected). Raise toward 4 on owned GPU slots
+  where continuous batching absorbs concurrency (launch runbook §3).
 
 ### thairag-config
 Layered configuration via the `config` crate:
@@ -91,6 +99,17 @@ Each provider crate implements one or more trait from `thairag-core`:
 | `thairag-provider-redis` | `SessionStoreTrait`, `EmbeddingCache`, `JobQueue` | Redis (via `redis::aio::ConnectionManager`) |
 
 All providers are instantiated via factory functions based on config, enabling runtime provider selection.
+
+**Structured outputs** (`LlmProvider::generate_structured`): callers pass a JSON
+schema the reply must satisfy. Ollama enforces it via the native `format` field;
+the OpenAI-compatible provider sends
+`response_format: {type: "json_schema", strict: true}` (supported by vLLM and
+most gateways), falling back once to plain generation with a warning on HTTP 4xx.
+The default trait impl ignores the schema — a provider without an override gives
+prompt-only JSON, which is exactly the failure that silently broke PageIndex
+tree builds on gateway deployments until the OpenAI override landed. Schema
+consumers: chunk enricher, context curator (schema path), PageIndex tree
+builder.
 
 ### thairag-provider-redis
 Redis implementations for horizontal scaling:
@@ -130,6 +149,30 @@ ToUnicode CMap, the `เรืĻอง` class of bug) is routed to OCR (`Corrupt
 than trusting the corrupt text. The **golden rule** is encoded in `RegionClass::tier`:
 no region whose content comes from native structured extraction is ever sent to
 OCR/vision — notably a deterministic table is never OCR'd.
+
+#### Deterministic table extraction & vision rescue
+
+Tables get a three-tier treatment of their own, all under the golden rule above:
+
+- **Lattice reconstruction** (`table_lattice.rs`) — for ruled tables, rebuilds
+  the grid from PDF line geometry. Column boundaries need a long-segment anchor;
+  dense short-segment "comb"/writing-box artifacts are demoted (max segment
+  fraction gate) so Thai forms don't shred into phantom columns.
+- **Stream reconstruction** (`table_stream.rs`) — for borderless tables, infers
+  columns from text-run alignment.
+- **Chunk hygiene** (`table_chunk_fix.rs`) — post-chunking pass: drops junk
+  fragments, carries header rows into continuation chunks, and prefixes rows
+  with index lines so sibling chunks stay retrievable by row.
+- **Fidelity-gated vision rescue** (`smart_pdf.rs` + `conversion_fidelity.rs`) —
+  when fidelity assessment flags a mechanically-reconstructed table for review,
+  the pages are re-transcribed by the vision model and each candidate is scored;
+  the vision version is adopted only if it beats the mechanical one by
+  `RESCUE_ADOPT_MARGIN` (0.05), making rescue never-worse by construction.
+  Vision output is sanitized (`sanitize_vision_text`) before scoring.
+
+This pipeline took the born-digital Thai table benchmark from 40% to 100%
+(PRs #331–#336); `conversion_fidelity::assess` provides the numeric scores used
+by both the rescue decision and provenance.
 
 #### Deterministic OCR tier (`ocr.rs`)
 
@@ -175,6 +218,20 @@ Hybrid search engine:
 ### thairag-agent
 RAG orchestrator with multi-agent pipeline:
 - **Intent classification** — Determines if a query needs retrieval or is a direct question
+- **Document operations** (`doc_ops.rs`) — Pre-retrieval detection of
+  document-LEVEL requests ("สรุปเอกสารนี้ให้หน่อย", metadata questions like
+  publication date/volume). These share no vocabulary with content chunks, so
+  retrieval structurally can't serve them; instead single-doc scopes answer
+  from the stored converted text (summarize / front-matter), and multi-doc
+  scopes ask which document, listing titles. Gated by
+  `chat_pipeline.doc_ops_enabled` (default on).
+- **Retrieval modes** (`chat_pipeline.retrieval_mode`, per scope) — `vector`
+  (default: hybrid dense+BM25+RRF+rerank) or `vectorless`
+  (`reasoning_retriever.rs`: an LLM navigates per-document PageIndex trees
+  built by `thairag-document::tree_builder`, feeding whole selected sections
+  intact; BM25 is only the no-tree fallback). Measured 2026-07-12: parity with
+  vector on table corpora, ~10 pts behind on prose needle questions — see
+  CLAUDE.md "Retrieval modes" for operator guidance.
 - **Pipeline processing** — Search → Context assembly → LLM generation
 - **Chat pipeline** — Configurable multi-agent pipeline with system prompt, guardrails, and pre/post processors
 - **LLM mode** — Three modes for assigning LLMs to pipeline agents:
