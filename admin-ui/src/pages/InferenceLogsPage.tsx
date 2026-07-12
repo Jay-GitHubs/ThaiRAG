@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import client from '../api/client';
 import type { ReactNode } from 'react';
 import {
   Typography,
@@ -169,6 +170,24 @@ export default function InferenceLogsPage() {
 
 function DashboardTab() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  // Workspace id → display name for the activity table. The analytics rows
+  // only carry ids; raw UUIDs are unreadable for operators. Falls back to a
+  // shortened id for workspaces outside the caller's visibility.
+  const [wsNames, setWsNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    client
+      .get('/api/chat/workspaces')
+      .then((res) => {
+        const list = (Array.isArray(res.data) ? res.data : (res.data?.data ?? [])) as Array<{
+          id: string;
+          name?: string;
+        }>;
+        setWsNames(new Map(list.map((w) => [w.id, w.name ?? w.id])));
+      })
+      .catch(() => {
+        /* names stay empty — table falls back to shortened ids */
+      });
+  }, []);
 
   const filter = useMemo(() => {
     const f: Partial<InferenceLogFilter> = {};
@@ -293,7 +312,16 @@ function DashboardTab() {
             pagination={false}
             size="small"
             columns={[
-              { title: 'Workspace ID', dataIndex: 'workspace_id', ellipsis: true },
+              {
+                title: 'Workspace',
+                dataIndex: 'workspace_id',
+                ellipsis: true,
+                render: (id: string) => (
+                  <Tooltip title={id}>
+                    <span>{wsNames.get(id) ?? `${id.slice(0, 8)}…`}</span>
+                  </Tooltip>
+                ),
+              },
               { title: 'Requests', dataIndex: 'count', sorter: (a: { count: number }, b: { count: number }) => a.count - b.count },
               { title: 'Avg Latency (ms)', dataIndex: 'avg_ms', render: (v: number) => v.toFixed(0) },
               { title: 'Total Tokens', dataIndex: 'total_tokens', render: (v: number) => formatTokenCount(v) },
