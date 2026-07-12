@@ -96,9 +96,19 @@ def sweep(s, ws: str, questions: list, runs: int) -> dict:
         run_means.append(sum(scores) / len(scores) if scores else 0.0)
         print(f"[compare]   run {run + 1}/{runs}: mean={run_means[-1]:.3f}", file=sys.stderr)
     scored = len(questions) - len(transient)
+    per_q_mean = [
+        None if i in transient else round(per_q[i] / runs, 3) for i in range(len(questions))
+    ]
+    for i, m in enumerate(per_q_mean):
+        if m is not None and m < 0.999:
+            print(
+                f"[compare]   q{i:02d} mean={m:.2f}  {questions[i]['question'][:60]}",
+                file=sys.stderr,
+            )
     return {
         "mean": sum(run_means) / len(run_means) if run_means else 0.0,
         "run_means": run_means,
+        "per_q_mean": per_q_mean,
         "scored": scored,
         "transient": len(transient),
     }
