@@ -1,0 +1,80 @@
+# ThaiRAG launch-runbook §4 alert rules (file-provisioned — survives container
+# recreation; edit here, not in the UI).
+#
+# Delivery: rules route to Grafana's default notification policy. Until an SMTP
+# or webhook contact point is configured (Alerting → Contact points), firing
+# alerts are visible on the Alerting page and the bell icon but are not
+# delivered anywhere external.
+#
+# The datasource UID is the auto-assigned UID of the provisioned Prometheus
+# datasource in the grafana-data volume. If the volume is ever recreated, the
+# UID changes — re-read it via GET /api/datasources and update here.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: thairag-slo
+    folder: ThaiRAG
+    interval: 1m
+    rules:
+      - uid: thairag-5xx-rate
+        title: High 5xx rate
+        condition: C
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: >-
+            ThaiRAG is returning server errors: more than 0.1 req/s of 5xx
+            responses sustained for 5 minutes. Check `docker logs
+            thairag-thairag-1` and the gateway (llm.jay-tech-ai.com) health.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: sum(rate(http_requests_total{status=~"5.."}[5m]))
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.1] }
+        noDataState: OK
+        execErrState: Error
+
+      - uid: thairag-p90-latency
+        title: Request p90 latency high
+        condition: C
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: >-
+            p90 request duration has been above 15s for 10 minutes (streaming
+            chat included, so sustained breaches mean the gateway or backend is
+            saturated, not one slow chat). Compare with the bulk-lane setting
+            THAIRAG_INGEST_MAX_CONCURRENT and gateway latency before scaling.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: PBFA97CFB590B2093
+            model:
+              expr: >-
+                histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [15] }
+        noDataState: OK
+        execErrState: Error
