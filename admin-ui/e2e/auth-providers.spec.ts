@@ -15,6 +15,28 @@ test.describe('Identity Provider API CRUD', () => {
     token = data.token;
   });
 
+  test.afterAll(async ({ request }) => {
+    // Failure-proof sweep: the per-test cleanups above run AFTER assertions,
+    // so a mid-test failure used to leak its provider — 16 timestamped test
+    // IdPs (two of them ENABLED, i.e. visible as SSO buttons on the real
+    // login page) had accumulated by the 2026-07-13 UX audit. Delete
+    // anything matching the test naming pattern regardless of how the tests
+    // ended.
+    const headers = { Authorization: `Bearer ${token}` };
+    const listRes = await request.get(`${API_BASE}/api/km/settings/identity-providers`, {
+      headers,
+    });
+    if (!listRes.ok()) return;
+    const providers = (await listRes.json()) as Array<{ id: string; name?: string }>;
+    for (const p of providers) {
+      if (/^(E2E|Public|Disabled) OIDC - \d+$/.test(p.name ?? '')) {
+        await request.delete(`${API_BASE}/api/km/settings/identity-providers/${p.id}`, {
+          headers,
+        });
+      }
+    }
+  });
+
   test('create OIDC provider returns 201 with provider data', async ({ request }) => {
     const headers = { Authorization: `Bearer ${token}` };
 

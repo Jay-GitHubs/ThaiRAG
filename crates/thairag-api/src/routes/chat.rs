@@ -2185,6 +2185,28 @@ pub async fn stream_conversation_message(
         })
         .collect();
 
+    // Persist the user's message NOW for a normal send (edit/regenerate keep
+    // their deferred-swap semantics — their originals are already protected).
+    // End-of-stream persistence lives inside the SSE generator, which a client
+    // refresh/disconnect drops before it runs; without this the whole turn
+    // (question + partial answer) silently vanished. With the user row durable
+    // up front, an interrupted turn reloads as a question the existing
+    // regenerate path can replay.
+    let user_pre_persisted = !req.edit && !req.regenerate;
+    if user_pre_persisted {
+        crate::chat_history::persist_user(
+            &state.km_store,
+            &conversation_id,
+            &content,
+            &persisted_attachments,
+        )
+        .map_err(|e| {
+            ApiError(ThaiRagError::Internal(format!(
+                "failed to save message: {e}"
+            )))
+        })?;
+    }
+
     // ── Memories / personal memory / searchable scopes (reuse /v1 setup) ──
     let memories = load_memories(&state, Some(uid));
     let personal_memories = retrieve_personal_memories(&state, Some(uid), &full_messages).await;
@@ -2472,7 +2494,10 @@ pub async fn stream_conversation_message(
                 tracing::warn!(error = %e, old_id, "failed to delete replaced message");
             }
         }
-        let persist_result = if is_regenerate {
+        let persist_result = if is_regenerate || user_pre_persisted {
+            // Normal sends pre-persisted the user row before streaming began;
+            // regenerate never re-writes it. Either way only the assistant
+            // reply lands here.
             crate::chat_history::persist_assistant(
                 &state.km_store,
                 &conv_id,
@@ -2482,6 +2507,8 @@ pub async fn stream_conversation_message(
                 &token_stats,
             )
         } else {
+            // Edit-and-resend: the deferred swap above just removed the old
+            // pair; persist the edited prompt and its new answer together.
             crate::chat_history::persist_turn(
                 &state.km_store,
                 &conv_id,
