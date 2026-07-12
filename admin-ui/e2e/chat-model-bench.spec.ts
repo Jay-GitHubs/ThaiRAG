@@ -1,7 +1,16 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { login, navigateTo, TEST_EMAIL, TEST_PASSWORD, API_BASE, GOOD_CHAT_MODEL } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  GOOD_CHAT_MODEL,
+  snapshotSettings,
+  restoreSettingsSnapshot,
+} from './helpers';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -87,9 +96,7 @@ benchDescribe('Chat model speed sweep (lean shared, latest Thai models)', () => 
 
   let token: string;
   let orgId: string, deptId: string, wsId: string, docId: string;
-  let originalAiEnabled = false;
-  // Full snapshot of the live chat-pipeline config to restore afterward.
-  let snap: Record<string, unknown> = {};
+  let snapId: string;
 
   test.beforeAll(async ({ request }) => {
     token = (await (await request.post(`${API_BASE}/api/auth/login`, { data: { email: TEST_EMAIL, password: TEST_PASSWORD } })).json()).token;
@@ -98,36 +105,23 @@ benchDescribe('Chat model speed sweep (lean shared, latest Thai models)', () => 
     deptId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts`, { data: { name: deptName }, headers })).json()).id;
     wsId = (await (await request.post(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}/workspaces`, { data: { name: wsName }, headers })).json()).id;
 
-    const cp = await (await request.get(`${API_BASE}/api/km/settings/chat-pipeline`, { headers })).json();
-    snap = {
-      llm_mode: cp.llm_mode,
-      // Restore to a known-pulled model, not the ambient one — the bench loads
-      // oversized models, and the ambient value may itself be a leaked/unpulled
-      // model from an earlier spec. Leaving a good model avoids cascading 404s.
-      llm: OLLAMA(GOOD_CHAT_MODEL),
-      query_analyzer_enabled: cp.query_analyzer_enabled,
-      query_rewriter_enabled: cp.query_rewriter_enabled,
-      context_curator_enabled: cp.context_curator_enabled,
-      quality_guard_enabled: cp.quality_guard_enabled,
-      language_adapter_enabled: cp.language_adapter_enabled,
-      orchestrator_enabled: cp.orchestrator_enabled,
-      ...REMOVE_ALL_AGENT_LLMS,
-    };
+    // Exact server-side settings snapshot: the old hand-built restore
+    // hardcoded kind Ollama + wiped any pre-existing per-agent LLM overrides
+    // (unreadable api keys made a spec-side copy impossible to get right).
+    snapId = await snapshotSettings(request, token, 'e2e-chat-model-bench-baseline');
 
-    const docCfg = await (await request.get(`${API_BASE}/api/km/settings/document`, { headers })).json();
-    originalAiEnabled = docCfg.ai_preprocessing.enabled;
     await request.put(`${API_BASE}/api/km/settings/document`, { data: { ai_preprocessing: { enabled: false } }, headers });
     await request.put(`${API_BASE}/api/km/settings/document?scope_type=org&scope_id=${orgId}`, { data: { max_chunk_size: 8000 }, headers });
   });
 
   test.afterAll(async ({ request }) => {
     const headers = { Authorization: `Bearer ${token}` };
-    await request.put(`${API_BASE}/api/km/settings/chat-pipeline`, { data: snap, headers });
-    await request.delete(`${API_BASE}/api/km/settings/scoped?scope_type=org&scope_id=${orgId}`, { headers });
+    // Snapshot restore rewrites ALL settings rows exactly (chat-pipeline,
+    // document, and it clears the org-scoped override created above).
+    await restoreSettingsSnapshot(request, token, snapId);
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}/workspaces/${wsId}`, { headers });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}/depts/${deptId}`, { headers });
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}`, { headers });
-    await request.put(`${API_BASE}/api/km/settings/document`, { data: { ai_preprocessing: { enabled: originalAiEnabled } }, headers });
   });
 
   test('find the fastest lean-shared model that still answers correctly', async ({ page }) => {

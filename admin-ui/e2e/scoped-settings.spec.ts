@@ -27,8 +27,14 @@ test.describe('Scoped Settings', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    // Cleanup: delete the org
     const headers = { Authorization: `Bearer ${token}` };
+    // Explicitly drop any scoped override left by a failed test before the
+    // org itself goes — don't rely on the delete cascade for settings rows.
+    await request.delete(
+      `${API_BASE}/api/km/settings/scoped?scope_type=org&scope_id=${orgId}`,
+      { headers },
+    );
+    // Cleanup: delete the org
     await request.delete(`${API_BASE}/api/km/orgs/${orgId}`, { headers });
   });
 

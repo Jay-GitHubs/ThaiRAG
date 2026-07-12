@@ -1,7 +1,34 @@
 import { test, expect } from '@playwright/test';
-import { login, navigateTo } from './helpers';
+import {
+  login,
+  navigateTo,
+  TEST_EMAIL,
+  TEST_PASSWORD,
+  API_BASE,
+  snapshotSettings,
+  restoreSettingsSnapshot,
+} from './helpers';
 
 test.describe('Document Processing Tab', () => {
+  // Several tests below toggle GLOBAL document-processing settings
+  // (ai_preprocessing / enricher / orchestrator) and save for real. Bracket
+  // with a server-side settings snapshot so whatever state the last test left
+  // behind is rolled back exactly, even on failure.
+  let snapId: string;
+  let apiToken: string;
+
+  test.beforeAll(async ({ request }) => {
+    const loginRes = await request.post(`${API_BASE}/api/auth/login`, {
+      data: { email: TEST_EMAIL, password: TEST_PASSWORD },
+    });
+    apiToken = (await loginRes.json()).token;
+    snapId = await snapshotSettings(request, apiToken, 'e2e-document-processing-baseline');
+  });
+
+  test.afterAll(async ({ request }) => {
+    await restoreSettingsSnapshot(request, apiToken, snapId);
+  });
+
   test.beforeEach(async ({ page }) => {
     await login(page);
     await navigateTo(page, 'Settings');
