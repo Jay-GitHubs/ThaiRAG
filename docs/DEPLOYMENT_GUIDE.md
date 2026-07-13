@@ -612,9 +612,11 @@ vectors; PageIndex tree building requires the gateway to support
 - [ ] Set up Grafana dashboards for monitoring
 - [ ] Configure OpenTelemetry if using distributed tracing
 - [ ] Enable knowledge graph extraction if needed
-- [ ] Configure backup schedule (`scripts/backup-db.sh` — dumps Postgres AND
-      exports a Qdrant snapshot; run it from cron and verify the log after the
-      first scheduled fire)
+- [ ] Nightly backup sidecar up (compose `backup` service fires 03:30:
+      Postgres dump + Qdrant snapshot + rotation, `BACKUP-VERIFY` line in
+      `backups/cron.log`). Scheduled inside Docker because macOS TCC blocks
+      host cron on external volumes; on Linux hosts, cron-ing
+      `scripts/backup-db.sh` also works
 - [ ] Set `chat_pipeline.citation_base_url` to a browser-reachable public URL
       (deploy-time env, not hot-reload — citation links break if it points at
       an internal container name)
