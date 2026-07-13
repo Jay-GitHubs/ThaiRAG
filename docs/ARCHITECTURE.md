@@ -267,6 +267,14 @@ Axum HTTP server with:
 - **Plugin registry**: Loads `DocumentPlugin`, `SearchPlugin`, and `ChunkPlugin` implementations at startup, persists enable-state to the KV store (`plugins.enabled` setting), and implements the `SearchPluginEngine` trait so the chat pipeline's retrieval calls fire SearchPlugin pre/post hooks too. Built-ins: `metadata-strip` (DocumentPlugin), `query-expansion` (SearchPlugin), `summary-chunk` (ChunkPlugin)
 - **Embedding cache**: Optional in-process or Redis-backed cache keyed by content hash, reducing redundant embedding API calls
 - **`ProviderBundleBuilder`**: Fluent builder for the `ProviderBundle` (the hot-swappable provider state), replacing the previous ten-argument constructor. Required inputs go to `new()`; optional pieces (`km_store`, `vault`, `embedding_cache`, `plugin_engine`, `guardrail_metrics`) are set via `with_*` methods. Used by the main constructor, scoped-pipeline rebuilds, dynamic provider reloads, and the vector-migration switch path.
+- **Detached chat generation** (`generation.rs`): first-party answers run
+  as independent tasks publishing into a `GenerationHub` (per-conversation
+  replay buffer + broadcast); the SSE response merely subscribes. Disconnects
+  (refresh, conversation switch, tab close) can no longer lose an answer —
+  generation completes and persists regardless, `GET /api/chat/conversations/{id}/stream`
+  reattaches mid-answer (replay + follow), and `POST …/cancel` stops
+  cooperatively while persisting the partial. One generation per conversation;
+  the per-user concurrency slot is held for the generation's lifetime.
 - **Metrics**: Prometheus counters/histograms for HTTP requests, LLM tokens, active sessions, MCP sync stats, and `guardrail_streaming_redactions_total{code, stage}` for the streaming output guardrail. `MetricsState` implements `thairag_core::traits::GuardrailMetricsRecorder` so the agent crate can record without depending on `thairag-api`.
 
 ### thairag-cli

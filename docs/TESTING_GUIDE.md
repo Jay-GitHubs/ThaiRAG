@@ -22,7 +22,7 @@ This guide provides step-by-step test scenarios for verifying every feature of t
 12. [Error Handling](#12-error-handling)
 13. [Observability](#13-observability)
 14. [Admin UI](#14-admin-ui) — includes Settings page, IdP management, user enhancements, role-based sidebar
-15. [Automated Testing](#15-automated-testing) — backend tests (600+), Playwright e2e (~232 admin-ui + ~41 chat-ui), infrastructure skip patterns, rate-limiting, load testing, search quality regression, security test coverage
+15. [Automated Testing](#15-automated-testing) — backend tests (600+), Playwright e2e (~232 admin-ui + ~44 chat-ui), infrastructure skip patterns, rate-limiting, load testing, search quality regression, security test coverage
 16. [OWASP LLM Top 10 Security](#16-owasp-llm-top-10-security) — prompt injection defense, error sanitization, input validation, CSRF, audit log
 17. [Smoke Testing](#17-smoke-testing) — end-to-end smoke test script
 18. [Context Compaction & Personal Memory](#18-context-compaction--personal-memory) — auto-summarization, per-user memory, Docker testing
@@ -2492,7 +2492,7 @@ npx playwright show-report
 ```
 
 **Current test count (2026-07-12):** ~232 admin-ui e2e tests across 51 spec
-files, plus ~41 chat-ui e2e tests across 13 spec files (run separately:
+files, plus ~44 chat-ui e2e tests across 11 spec files (run separately:
 `cd chat-ui && npx playwright test`). Latest full certification: admin-ui 215
 passed / 2 environmental (the ingestion-gated table family — pass in
 isolation) / 15 designed skips, chat-ui 42/42, with the settings fingerprint
