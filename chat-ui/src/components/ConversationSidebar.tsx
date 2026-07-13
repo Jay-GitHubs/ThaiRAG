@@ -1,4 +1,4 @@
-import { Button, Input, Popconfirm, Tooltip } from 'antd';
+import { Button, Input, Popconfirm, Tooltip , Spin } from 'antd';
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -54,6 +54,7 @@ export function ConversationSidebar({
   onRename,
   onTogglePin,
   onCollapse,
+  busyIds,
 }: {
   conversations: Conversation[];
   activeId: string | null;
@@ -64,6 +65,9 @@ export function ConversationSidebar({
   onTogglePin: (id: string, pinned: boolean) => void;
   /** Desktop only: collapse the rail. Omitted on mobile (the Drawer closes instead). */
   onCollapse?: () => void;
+  /** Conversations with an answer still generating (possibly in the
+   *  background) — rendered with a busy dot so users can find them. */
+  busyIds?: Set<string>;
 }) {
   const { user, logout } = useAuth();
   const { t } = useI18n();
@@ -127,6 +131,9 @@ export function ConversationSidebar({
           transition: 'background 0.12s',
         }}
       >
+        {busyIds?.has(c.id) && (
+          <Spin size="small" data-testid="conv-busy" style={{ flexShrink: 0 }} />
+        )}
         {editingId === c.id ? (
           <Input
             size="small"
