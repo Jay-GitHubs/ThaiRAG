@@ -109,7 +109,7 @@ MODELS, not hosts).
       4 to start on owned)
 - [ ] `max_message_length` — consider capping to ~6,000 chars to hold the
       12.5k-token request ceiling hard (32,000 permits a 21k-token message)
-- [ ] DB backup cron in place (`scripts/backup-db.sh`); restore drill done once
+- [ ] Nightly backup sidecar running (compose `backup` service — 03:30, TCC-proof; verify `grep BACKUP-VERIFY backups/cron.log`); restore drill done once
 - [ ] Prometheus/Grafana dashboards reachable; alert on 5xx rate + request
       duration p90
 - [ ] E2E: both suites exit 0 against the staged environment

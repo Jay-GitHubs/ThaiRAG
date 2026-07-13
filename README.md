@@ -385,7 +385,7 @@ cd admin-ui && npx tsc --noEmit
 # Playwright e2e — admin UI (~230 tests, headed, live stack)
 cd admin-ui && npx playwright test
 
-# Playwright e2e — chat UI (~40 tests, headed, live stack)
+# Playwright e2e — chat UI (~45 tests, headed, live stack)
 cd chat-ui && npx playwright test
 
 # Load tests (requires k6)
