@@ -2038,7 +2038,7 @@ pub async fn stream_conversation_message(
     let user_id_str = claims.sub.clone();
 
     // ── Per-user concurrency + token-bucket rate limiting ──
-    let _request_guard = state
+    let request_guard = state
         .user_request_limiter
         .try_acquire(&claims.sub)
         .map_err(|()| {
@@ -2185,6 +2185,20 @@ pub async fn stream_conversation_message(
         })
         .collect();
 
+    // One generation at a time per conversation: a second send while an
+    // answer is still streaming would interleave two writers into the same
+    // history. 409-style rejection tells the client to wait (or cancel).
+    let generation = state
+        .generation_hub
+        .begin(&conversation_id)
+        .ok_or_else(|| {
+            ApiError(ThaiRagError::Validation(
+                "An answer is already being generated in this conversation. \
+                 Wait for it to finish or stop it first."
+                    .into(),
+            ))
+        })?;
+
     // Persist the user's message NOW for a normal send (edit/regenerate keep
     // their deferred-swap semantics — their originals are already protected).
     // End-of-stream persistence lives inside the SSE generator, which a client
@@ -2308,130 +2322,153 @@ pub async fn stream_conversation_message(
     let log_settings_scope = format!("{settings_scope:?}");
     let log_start = std::time::Instant::now();
 
-    let sse_stream = async_stream::stream! {
-        // 1) Drain progress events until the pipeline task resolves.
-        let mut pipeline_handle = pipeline_handle;
-        let pipeline_result;
-        loop {
-            tokio::select! {
-                evt = progress_rx.recv() => {
-                    if let Some(progress) = evt {
-                        let data = serde_json::json!({
-                            "type": "progress",
-                            "stage": progress.stage,
-                            "status": format!("{:?}", progress.status),
-                        });
-                        yield Ok::<_, std::convert::Infallible>(
-                            Event::default().data(data.to_string())
-                        );
+    // ── Detached generation ─────────────────────────────────────────
+    // Everything below runs to completion (and persists) regardless of
+    // whether any SSE subscriber is still connected: the task publishes its
+    // payloads into the GenerationHub; the HTTP response merely follows.
+    let gen_task = generation.clone();
+    let hub_for_finish = state.generation_hub.clone();
+    let conv_for_finish = conversation_id.clone();
+    let gen_for_finish = generation.clone();
+    tokio::spawn(async move {
+        // Hold the per-user concurrency slot for the LIFETIME OF GENERATION,
+        // not of the HTTP request.
+        let _request_guard = request_guard;
+        let generation = gen_task;
+        let body = async {
+            // 1) Drain progress events until the pipeline task resolves.
+            let mut pipeline_handle = pipeline_handle;
+            let pipeline_result;
+            loop {
+                tokio::select! {
+                    evt = progress_rx.recv() => {
+                        if let Some(progress) = evt {
+                            let data = serde_json::json!({
+                                "type": "progress",
+                                "stage": progress.stage,
+                                "status": format!("{:?}", progress.status),
+                            });
+                            generation.publish(data.to_string()).await;
+                        }
+                    }
+                    result = &mut pipeline_handle => {
+                        while let Ok(evt) = progress_rx.try_recv() {
+                            let data = serde_json::json!({
+                                "type": "progress",
+                                "stage": evt.stage,
+                                "status": format!("{:?}", evt.status),
+                            });
+                            generation.publish(data.to_string()).await;
+                        }
+                        pipeline_result = match result {
+                            Ok(r) => r,
+                            Err(e) => Err(ThaiRagError::LlmProvider(
+                                format!("Pipeline task panicked: {e}")
+                            )),
+                        };
+                        break;
                     }
                 }
-                result = &mut pipeline_handle => {
-                    while let Ok(evt) = progress_rx.try_recv() {
-                        let data = serde_json::json!({
-                            "type": "progress",
-                            "stage": evt.stage,
-                            "status": format!("{:?}", evt.status),
-                        });
-                        yield Ok::<_, std::convert::Infallible>(
-                            Event::default().data(data.to_string())
-                        );
-                    }
-                    pipeline_result = match result {
-                        Ok(r) => r,
-                        Err(e) => Err(ThaiRagError::LlmProvider(
-                            format!("Pipeline task panicked: {e}")
-                        )),
-                    };
-                    break;
-                }
             }
-        }
 
-        let LlmStreamResponse { stream: token_stream, usage: usage_cell } = match pipeline_result {
-            Ok(resp) => resp,
-            Err(e) => {
-                let data = serde_json::json!({"type":"error","message": e.to_string()});
-                yield Ok(Event::default().data(data.to_string()));
-                yield Ok(Event::default().data("[DONE]"));
-                return;
-            }
-        };
-
-        // 2) Token events.
-        let mut accumulated = String::new();
-        let mut token_stream = std::pin::pin!(token_stream);
-        let mut stream_failed = false;
-        while let Some(result) = token_stream.next().await {
-            match result {
-                Ok(token) => {
-                    accumulated.push_str(&token);
-                    let data = serde_json::json!({"type":"token","text": token});
-                    yield Ok(Event::default().data(data.to_string()));
-                }
+            let LlmStreamResponse {
+                stream: token_stream,
+                usage: usage_cell,
+            } = match pipeline_result {
+                Ok(resp) => resp,
                 Err(e) => {
                     let data = serde_json::json!({"type":"error","message": e.to_string()});
-                    yield Ok(Event::default().data(data.to_string()));
-                    stream_failed = true;
+                    generation.publish(data.to_string()).await;
+                    generation.publish("[DONE]".to_string()).await;
+                    return;
+                }
+            };
+
+            // 2) Token events.
+            let mut accumulated = String::new();
+            let mut token_stream = std::pin::pin!(token_stream);
+            let mut stream_failed = false;
+            let mut was_cancelled = false;
+            while let Some(result) = token_stream.next().await {
+                if generation.is_cancelled() {
+                    // Stop button: keep the partial answer (persisted below) —
+                    // matches what the user saw when they pressed stop.
+                    was_cancelled = true;
                     break;
                 }
+                match result {
+                    Ok(token) => {
+                        accumulated.push_str(&token);
+                        let data = serde_json::json!({"type":"token","text": token});
+                        generation.publish(data.to_string()).await;
+                    }
+                    Err(e) => {
+                        let data = serde_json::json!({"type":"error","message": e.to_string()});
+                        generation.publish(data.to_string()).await;
+                        stream_failed = true;
+                        break;
+                    }
+                }
             }
-        }
-        if stream_failed {
-            // A mid-stream failure leaves the turn unsaved (the user keeps their
-            // text client-side); surface terminal sentinel and stop.
-            yield Ok(Event::default().data("[DONE]"));
-            return;
-        }
-
-        // 3) Citations — resolved once, in the clean first-party shape.
-        let footer_meta = metadata_cell.lock().unwrap().clone();
-        // A refusal cites nothing and must surface no sources: the no-context
-        // guard records no citations, and without this the image step below would
-        // fall back to ALL retrieved (irrelevant) chunks — showing source
-        // thumbnails on a "no relevant information" answer. Detected via the
-        // no-answer metadata state (guard refusal) or the answer text (model
-        // refusal).
-        let is_refusal_answer = (footer_meta.confidence.is_none()
-            && footer_meta.confidence_summary.is_some())
-            || thairag_agent::citation_parser::is_refusal(&accumulated);
-        let mut persisted_citations: Vec<crate::chat_history::PersistedCitation> = Vec::new();
-        if cite_enabled && !is_refusal_answer {
-            let sources = build_citation_sources(
-                &footer_meta,
-                source_max,
-                |doc_id, fallback| resolve_doc_title(&state, doc_id, fallback),
-            );
-            persisted_citations = sources
-                .iter()
-                .map(|s| crate::chat_history::PersistedCitation {
-                    doc_id: s.doc_id.clone(),
-                    title: s.title.clone(),
-                    page: s.page,
-                    section: s.section.clone(),
-                    url: if cite_base.is_empty() {
-                        None
-                    } else {
-                        Some(citation_url(&state, &cite_base, &s.doc_id, s.page, s.section.as_deref()))
-                    },
-                    snippet: s.snippet.clone(),
-                })
-                .collect();
-            if !persisted_citations.is_empty() {
-                let data = serde_json::json!({
-                    "type": "citation",
-                    "citations": persisted_citations,
-                });
-                yield Ok(Event::default().data(data.to_string()));
+            if stream_failed {
+                // A mid-stream failure leaves the turn unsaved (the user keeps their
+                // text client-side); surface terminal sentinel and stop.
+                generation.publish("[DONE]".to_string()).await;
+                return;
             }
-        }
 
-        // 3b) Inline source images — the source images of the chunks the answer
-        // actually cited (falls back to all retrieved chunks only when there are
-        // no structured citations), so images track the citations, not raw
-        // retrieval. Gated (default off); needs a browser-reachable base + key.
-        let image_chunks: Vec<thairag_core::types::RetrievedChunkMeta> =
-            if is_refusal_answer {
+            // 3) Citations — resolved once, in the clean first-party shape.
+            let footer_meta = metadata_cell.lock().unwrap().clone();
+            // A refusal cites nothing and must surface no sources: the no-context
+            // guard records no citations, and without this the image step below would
+            // fall back to ALL retrieved (irrelevant) chunks — showing source
+            // thumbnails on a "no relevant information" answer. Detected via the
+            // no-answer metadata state (guard refusal) or the answer text (model
+            // refusal).
+            let is_refusal_answer = (footer_meta.confidence.is_none()
+                && footer_meta.confidence_summary.is_some())
+                || thairag_agent::citation_parser::is_refusal(&accumulated);
+            let mut persisted_citations: Vec<crate::chat_history::PersistedCitation> = Vec::new();
+            if cite_enabled && !is_refusal_answer {
+                let sources =
+                    build_citation_sources(&footer_meta, source_max, |doc_id, fallback| {
+                        resolve_doc_title(&state, doc_id, fallback)
+                    });
+                persisted_citations = sources
+                    .iter()
+                    .map(|s| crate::chat_history::PersistedCitation {
+                        doc_id: s.doc_id.clone(),
+                        title: s.title.clone(),
+                        page: s.page,
+                        section: s.section.clone(),
+                        url: if cite_base.is_empty() {
+                            None
+                        } else {
+                            Some(citation_url(
+                                &state,
+                                &cite_base,
+                                &s.doc_id,
+                                s.page,
+                                s.section.as_deref(),
+                            ))
+                        },
+                        snippet: s.snippet.clone(),
+                    })
+                    .collect();
+                if !persisted_citations.is_empty() {
+                    let data = serde_json::json!({
+                        "type": "citation",
+                        "citations": persisted_citations,
+                    });
+                    generation.publish(data.to_string()).await;
+                }
+            }
+
+            // 3b) Inline source images — the source images of the chunks the answer
+            // actually cited (falls back to all retrieved chunks only when there are
+            // no structured citations), so images track the citations, not raw
+            // retrieval. Gated (default off); needs a browser-reachable base + key.
+            let image_chunks: Vec<thairag_core::types::RetrievedChunkMeta> = if is_refusal_answer {
                 // Refusal → no sources at all (don't fall back to retrieval).
                 Vec::new()
             } else if footer_meta.citations.is_empty() {
@@ -2449,160 +2486,209 @@ pub async fn stream_conversation_message(
                     .cloned()
                     .collect()
             };
-        let mut persisted_images: Vec<crate::chat_history::PersistedImage> = Vec::new();
-        if inline_images_enabled
-            && !cite_base.is_empty()
-            && let Some(jwt) = state.jwt.as_deref()
-        {
-            for (img_id, page) in
-                resolve_inline_images(&*state.km_store, &image_chunks, inline_images_max)
+            let mut persisted_images: Vec<crate::chat_history::PersistedImage> = Vec::new();
+            if inline_images_enabled
+                && !cite_base.is_empty()
+                && let Some(jwt) = state.jwt.as_deref()
             {
-                // Sign a single-image, time-limited token (reusing the citation
-                // token model with the image id as subject) so a browser <img>
-                // can load it from the public media route without auth headers.
-                if let Ok(token) = jwt.encode_citation(&img_id.0.to_string(), 24) {
-                    persisted_images.push(crate::chat_history::PersistedImage {
-                        image_id: img_id.0.to_string(),
-                        url: format!("{cite_base}/api/chat/media/{}?token={token}", img_id.0),
-                        page,
-                    });
+                for (img_id, page) in
+                    resolve_inline_images(&*state.km_store, &image_chunks, inline_images_max)
+                {
+                    // Sign a single-image, time-limited token (reusing the citation
+                    // token model with the image id as subject) so a browser <img>
+                    // can load it from the public media route without auth headers.
+                    if let Ok(token) = jwt.encode_citation(&img_id.0.to_string(), 24) {
+                        persisted_images.push(crate::chat_history::PersistedImage {
+                            image_id: img_id.0.to_string(),
+                            url: format!("{cite_base}/api/chat/media/{}?token={token}", img_id.0),
+                            page,
+                        });
+                    }
+                }
+                if !persisted_images.is_empty() {
+                    let data = serde_json::json!({"type": "image", "images": persisted_images});
+                    generation.publish(data.to_string()).await;
                 }
             }
-            if !persisted_images.is_empty() {
-                let data = serde_json::json!({"type": "image", "images": persisted_images});
-                yield Ok(Event::default().data(data.to_string()));
-            }
-        }
 
-        // 4) Token accounting (metrics + observability), mirroring /v1.
-        let llm_usage = usage_cell.lock().unwrap().take().unwrap_or_default();
-        state.metrics.record_tokens(llm_usage.prompt_tokens, llm_usage.completion_tokens);
-        persist_usage(&state, llm_usage.prompt_tokens, llm_usage.completion_tokens);
+            // 4) Token accounting (metrics + observability), mirroring /v1.
+            let llm_usage = usage_cell.lock().unwrap().take().unwrap_or_default();
+            state
+                .metrics
+                .record_tokens(llm_usage.prompt_tokens, llm_usage.completion_tokens);
+            persist_usage(&state, llm_usage.prompt_tokens, llm_usage.completion_tokens);
 
-        // 5) Persist the turn. Regenerate replaces only the assistant turn (the
-        // user message already exists + the old answer was deleted above); a
-        // normal turn persists both the user prompt and the assistant reply.
-        let token_stats = crate::chat_history::PersistedTokenStats {
-            prompt_tokens: llm_usage.prompt_tokens,
-            completion_tokens: llm_usage.completion_tokens,
-        };
-        // Deferred swap: now that the answer is ready, delete the rows the
-        // edit/regenerate replaces, then persist the new turn. Done here (not up
-        // front) so a failed/aborted stream never loses the original.
-        for old_id in &defer_delete_ids {
-            if let Err(e) = state.km_store.delete_message(old_id) {
-                tracing::warn!(error = %e, old_id, "failed to delete replaced message");
-            }
-        }
-        let persist_result = if is_regenerate || user_pre_persisted {
-            // Normal sends pre-persisted the user row before streaming began;
-            // regenerate never re-writes it. Either way only the assistant
-            // reply lands here.
-            crate::chat_history::persist_assistant(
-                &state.km_store,
-                &conv_id,
-                &accumulated,
-                &persisted_citations,
-                &persisted_images,
-                &token_stats,
-            )
-        } else {
-            // Edit-and-resend: the deferred swap above just removed the old
-            // pair; persist the edited prompt and its new answer together.
-            crate::chat_history::persist_turn(
-                &state.km_store,
-                &conv_id,
-                &content,
-                &accumulated,
-                &persisted_citations,
-                &persisted_images,
-                &token_stats,
-                &persisted_attachments,
-            )
-        };
-        let message_id = match persist_result {
-            Ok(row) => row.id,
-            Err(e) => {
-                let data = serde_json::json!({
-                    "type": "error",
-                    "message": format!("failed to save message: {e}"),
-                });
-                yield Ok(Event::default().data(data.to_string()));
-                String::new()
-            }
-        };
-
-        // ── Inference logging ────────────────────────────────────────
-        // First-party turns land in the same inference_logs the /v1 path
-        // writes, keyed by response_id == the assistant MessageRow id. That
-        // single convention is what lets the conversations feedback endpoint
-        // correlate thumbs into the auto-tuning loop with no extra schema.
-        if !message_id.is_empty() {
-            let entry = crate::store::InferenceLogEntry {
-                id: Uuid::new_v4().to_string(),
-                timestamp: Utc::now().to_rfc3339(),
-                user_id: Some(log_user_id.clone()),
-                workspace_id: log_workspace_id.clone(),
-                org_id: None,
-                dept_id: None,
-                session_id: Some(conv_id.clone()),
-                response_id: message_id.clone(),
-                query_text: content.chars().take(2000).collect(),
-                detected_language: footer_meta.language.clone(),
-                intent: footer_meta.intent.clone(),
-                complexity: footer_meta.complexity.clone(),
-                llm_kind: log_llm_kind.clone(),
-                llm_model: log_llm_model.clone(),
-                settings_scope: log_settings_scope.clone(),
+            // 5) Persist the turn. Regenerate replaces only the assistant turn (the
+            // user message already exists + the old answer was deleted above); a
+            // normal turn persists both the user prompt and the assistant reply.
+            let token_stats = crate::chat_history::PersistedTokenStats {
                 prompt_tokens: llm_usage.prompt_tokens,
                 completion_tokens: llm_usage.completion_tokens,
-                estimated_context_tokens: footer_meta.estimated_context_tokens.unwrap_or(0),
-                total_ms: log_start.elapsed().as_millis() as u64,
-                search_ms: footer_meta.search_ms,
-                generation_ms: footer_meta.generation_ms,
-                chunks_retrieved: footer_meta.chunks_retrieved,
-                avg_chunk_score: footer_meta.avg_chunk_score,
-                self_rag_decision: footer_meta.self_rag_decision.clone(),
-                self_rag_confidence: footer_meta.self_rag_confidence,
-                quality_guard_pass: footer_meta.quality_guard_pass,
-                relevance_score: footer_meta.relevance_score,
-                hallucination_score: footer_meta.hallucination_score,
-                completeness_score: footer_meta.completeness_score,
-                pipeline_route: footer_meta.pipeline_route.clone(),
-                agents_used: "[]".into(),
-                status: "success".into(),
-                error_message: None,
-                response_length: accumulated.len() as u32,
-                feedback_score: None,
-                input_guardrails_pass: footer_meta.input_guardrails_pass,
-                output_guardrails_pass: footer_meta.output_guardrails_pass,
-                guardrail_violation_codes: footer_meta
-                    .guardrail_violations
-                    .iter()
-                    .map(|v| v.code.as_str())
-                    .collect::<Vec<_>>()
-                    .join(","),
             };
-            let km = state.km_store.clone();
-            tokio::task::spawn_blocking(move || km.insert_inference_log(&entry));
+            // Deferred swap: now that the answer is ready, delete the rows the
+            // edit/regenerate replaces, then persist the new turn. Done here (not up
+            // front) so a failed/aborted stream never loses the original.
+            for old_id in &defer_delete_ids {
+                if let Err(e) = state.km_store.delete_message(old_id) {
+                    tracing::warn!(error = %e, old_id, "failed to delete replaced message");
+                }
+            }
+            let persist_result = if is_regenerate || user_pre_persisted {
+                // Normal sends pre-persisted the user row before streaming began;
+                // regenerate never re-writes it. Either way only the assistant
+                // reply lands here.
+                crate::chat_history::persist_assistant(
+                    &state.km_store,
+                    &conv_id,
+                    &accumulated,
+                    &persisted_citations,
+                    &persisted_images,
+                    &token_stats,
+                )
+            } else {
+                // Edit-and-resend: the deferred swap above just removed the old
+                // pair; persist the edited prompt and its new answer together.
+                crate::chat_history::persist_turn(
+                    &state.km_store,
+                    &conv_id,
+                    &content,
+                    &accumulated,
+                    &persisted_citations,
+                    &persisted_images,
+                    &token_stats,
+                    &persisted_attachments,
+                )
+            };
+            let message_id = match persist_result {
+                Ok(row) => row.id,
+                Err(e) => {
+                    let data = serde_json::json!({
+                        "type": "error",
+                        "message": format!("failed to save message: {e}"),
+                    });
+                    generation.publish(data.to_string()).await;
+                    String::new()
+                }
+            };
+
+            // ── Inference logging ────────────────────────────────────────
+            // First-party turns land in the same inference_logs the /v1 path
+            // writes, keyed by response_id == the assistant MessageRow id. That
+            // single convention is what lets the conversations feedback endpoint
+            // correlate thumbs into the auto-tuning loop with no extra schema.
+            if !message_id.is_empty() {
+                let entry = crate::store::InferenceLogEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    user_id: Some(log_user_id.clone()),
+                    workspace_id: log_workspace_id.clone(),
+                    org_id: None,
+                    dept_id: None,
+                    session_id: Some(conv_id.clone()),
+                    response_id: message_id.clone(),
+                    query_text: content.chars().take(2000).collect(),
+                    detected_language: footer_meta.language.clone(),
+                    intent: footer_meta.intent.clone(),
+                    complexity: footer_meta.complexity.clone(),
+                    llm_kind: log_llm_kind.clone(),
+                    llm_model: log_llm_model.clone(),
+                    settings_scope: log_settings_scope.clone(),
+                    prompt_tokens: llm_usage.prompt_tokens,
+                    completion_tokens: llm_usage.completion_tokens,
+                    estimated_context_tokens: footer_meta.estimated_context_tokens.unwrap_or(0),
+                    total_ms: log_start.elapsed().as_millis() as u64,
+                    search_ms: footer_meta.search_ms,
+                    generation_ms: footer_meta.generation_ms,
+                    chunks_retrieved: footer_meta.chunks_retrieved,
+                    avg_chunk_score: footer_meta.avg_chunk_score,
+                    self_rag_decision: footer_meta.self_rag_decision.clone(),
+                    self_rag_confidence: footer_meta.self_rag_confidence,
+                    quality_guard_pass: footer_meta.quality_guard_pass,
+                    relevance_score: footer_meta.relevance_score,
+                    hallucination_score: footer_meta.hallucination_score,
+                    completeness_score: footer_meta.completeness_score,
+                    pipeline_route: footer_meta.pipeline_route.clone(),
+                    agents_used: "[]".into(),
+                    status: if was_cancelled {
+                        "cancelled".into()
+                    } else {
+                        "success".into()
+                    },
+                    error_message: None,
+                    response_length: accumulated.len() as u32,
+                    feedback_score: None,
+                    input_guardrails_pass: footer_meta.input_guardrails_pass,
+                    output_guardrails_pass: footer_meta.output_guardrails_pass,
+                    guardrail_violation_codes: footer_meta
+                        .guardrail_violations
+                        .iter()
+                        .map(|v| v.code.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                };
+                let km = state.km_store.clone();
+                tokio::task::spawn_blocking(move || km.insert_inference_log(&entry));
+            }
+
+            // 6) Terminal success.
+            let done = serde_json::json!({
+                "type": "done",
+                "cancelled": was_cancelled,
+                "message_id": message_id,
+                "usage": {
+                    "prompt_tokens": llm_usage.prompt_tokens,
+                    "completion_tokens": llm_usage.completion_tokens,
+                },
+                "confidence": footer_meta.confidence,
+                "confidence_summary": footer_meta.confidence_summary,
+                "confidence_factors": footer_meta.confidence_factors,
+            });
+            generation.publish(done.to_string()).await;
+            generation.publish("[DONE]".to_string()).await;
+        };
+        body.await;
+        hub_for_finish.finish(&conv_for_finish, &gen_for_finish);
+    });
+
+    Ok(generation_sse(&generation).await)
+}
+
+/// Build the SSE response that follows a (possibly already-running)
+/// generation: replay the buffered prefix, then live events until `[DONE]`.
+/// Used by both the send handler and the resume endpoint — a reconnecting
+/// client reconstructs the partial answer exactly.
+async fn generation_sse(generation: &std::sync::Arc<crate::generation::Generation>) -> Response {
+    let (snapshot, mut rx) = generation.subscribe().await;
+    let already_done = snapshot.iter().any(|p| p == "[DONE]");
+    let sse_stream = async_stream::stream! {
+        for payload in snapshot {
+            let terminal = payload == "[DONE]";
+            yield Ok::<_, std::convert::Infallible>(Event::default().data(payload));
+            if terminal {
+                return;
+            }
         }
-
-        // 6) Terminal success.
-        let done = serde_json::json!({
-            "type": "done",
-            "message_id": message_id,
-            "usage": {
-                "prompt_tokens": llm_usage.prompt_tokens,
-                "completion_tokens": llm_usage.completion_tokens,
-            },
-            "confidence": footer_meta.confidence,
-            "confidence_summary": footer_meta.confidence_summary,
-            "confidence_factors": footer_meta.confidence_factors,
-        });
-        yield Ok(Event::default().data(done.to_string()));
-        yield Ok(Event::default().data("[DONE]"));
+        if already_done {
+            return;
+        }
+        loop {
+            match rx.recv().await {
+                Ok(payload) => {
+                    let terminal = payload == "[DONE]";
+                    yield Ok(Event::default().data(payload));
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    // Lagged past the channel or the sender vanished: end
+                    // cleanly — the client refetches persisted messages.
+                    yield Ok(Event::default().data("[DONE]"));
+                    break;
+                }
+            }
+        }
     };
-
     let mut response = Sse::new(sse_stream)
         .keep_alive(
             KeepAlive::new()
@@ -2618,7 +2704,58 @@ pub async fn stream_conversation_message(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-cache"),
     );
-    Ok(response)
+    response
+}
+
+/// GET /api/chat/conversations/{id}/stream — reattach to an in-flight
+/// generation (replay + follow). 404 when nothing is generating: the caller
+/// should treat that as "finished — load the messages".
+pub async fn resume_conversation_stream(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(conversation_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let conv = state
+        .km_store
+        .get_conversation(&conversation_id)
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Conversation not found".into())))?;
+    if conv.user_id != claims.sub {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "You do not have access to this conversation".into(),
+        )));
+    }
+    match state.generation_hub.get(&conversation_id) {
+        Some(generation) => Ok(generation_sse(&generation).await),
+        None => Err(ApiError(ThaiRagError::NotFound(
+            "No generation in progress".into(),
+        ))),
+    }
+}
+
+/// POST /api/chat/conversations/{id}/cancel — stop the in-flight generation.
+/// The partial answer is persisted by the generation task. 404 when nothing
+/// is generating.
+pub async fn cancel_conversation_generation(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(conversation_id): Path<String>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let conv = state
+        .km_store
+        .get_conversation(&conversation_id)
+        .ok_or_else(|| ApiError(ThaiRagError::NotFound("Conversation not found".into())))?;
+    if conv.user_id != claims.sub {
+        return Err(ApiError(ThaiRagError::Authorization(
+            "You do not have access to this conversation".into(),
+        )));
+    }
+    if state.generation_hub.cancel(&conversation_id) {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError(ThaiRagError::NotFound(
+            "No generation in progress".into(),
+        )))
+    }
 }
 
 /// Resolve the source images to surface inline, deduped by image and capped.

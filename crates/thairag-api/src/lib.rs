@@ -9,6 +9,7 @@ pub mod csrf;
 pub mod embedding_cache;
 pub mod error;
 pub mod eval;
+pub mod generation;
 pub mod job_queue;
 pub mod knowledge_graph;
 pub mod login_tracker;

@@ -1232,6 +1232,8 @@ pub struct AppState {
     pub login_tracker: LoginTracker,
     pub prompt_registry: Arc<PromptRegistry>,
     pub user_request_limiter: UserRequestLimiter,
+    /// Detached chat generations (answers that outlive their SSE connection).
+    pub generation_hub: std::sync::Arc<crate::generation::GenerationHub>,
     /// Per-user token-bucket rate limiter (applied after auth).
     pub user_rate_limiter: crate::rate_limit::UserRateLimiter,
     /// Per-IP rate limiter reference (for stats dashboard). None if rate limiting disabled.
@@ -1528,6 +1530,7 @@ impl AppState {
             login_tracker,
             prompt_registry: Arc::new(PromptRegistry::new()),
             user_request_limiter: UserRequestLimiter::new(5),
+            generation_hub: std::sync::Arc::new(crate::generation::GenerationHub::default()),
             user_rate_limiter: crate::rate_limit::UserRateLimiter::new(10, 20),
             ip_rate_limiter: None,
             vault,
@@ -1821,6 +1824,7 @@ impl AppState {
             login_tracker,
             prompt_registry,
             user_request_limiter,
+            generation_hub: std::sync::Arc::new(crate::generation::GenerationHub::default()),
             user_rate_limiter,
             ip_rate_limiter: None,
             vault,

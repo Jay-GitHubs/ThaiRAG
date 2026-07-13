@@ -35,6 +35,8 @@ import {
   summarizeConversation,
   setMessageFeedback,
   streamMessage,
+  resumeStream,
+  cancelGeneration,
 } from '../api/conversations';
 import { parseAttachmentNames, parseCitations, parseImages } from '../api/types';
 import { useI18n } from '../i18n/LocaleProvider';
@@ -117,6 +119,19 @@ export function ChatPage() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Conversations with a (possibly background) generation in flight — powers
+  // the sidebar busy dots. Added on send, cleared on done/error while
+  // attached or when a visit finds nothing to resume.
+  const [busyConvs, setBusyConvs] = useState<Set<string>>(new Set());
+  const markBusy = useCallback((id: string, busy: boolean) => {
+    setBusyConvs((prev) => {
+      if (busy === prev.has(id)) return prev;
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   // Desktop-only: collapse the sidebar to widen the reading column (persisted).
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem('thairag-sidebar-collapsed') === '1',
@@ -213,6 +228,50 @@ export function ChatPage() {
       })
       .finally(() => {
         if (!cancelled) setLoadingMsgs(false);
+      })
+      .then(() => {
+        if (cancelled) return;
+        // Reattach to a background generation, if one is running here: the
+        // server replays buffered events first, rebuilding the partial
+        // answer, then follows live. 'none' → whatever was loaded is final.
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setMessages((prev) =>
+          prev.length > 0 && prev[prev.length - 1].role === 'user'
+            ? [...prev, { role: 'assistant' as const, content: '', citations: [], images: [], streaming: true }]
+            : prev,
+        );
+        let attached = false;
+        resumeStream(
+          activeId,
+          (evt) => {
+            attached = true;
+            handleStreamEvent(evt);
+            if (evt.type === 'done' || evt.type === 'error') markBusy(activeId, false);
+          },
+          controller.signal,
+        )
+          .then((status) => {
+            if (cancelled) return;
+            if (status === 'none') {
+              markBusy(activeId, false);
+              // Drop the optimistic placeholder if nothing was streaming.
+              if (!attached) {
+                setMessages((prev) =>
+                  prev.length > 0 &&
+                  prev[prev.length - 1].role === 'assistant' &&
+                  prev[prev.length - 1].streaming
+                    ? prev.slice(0, -1)
+                    : prev,
+                );
+              }
+            } else {
+              markBusy(activeId, true);
+            }
+          })
+          .catch(() => {
+            /* aborted by a switch, or transient — persisted state wins */
+          });
       });
     return () => {
       cancelled = true;
@@ -300,8 +359,15 @@ export function ChatPage() {
   } | null>(null);
 
   const handleStop = useCallback(() => {
+    // Generation is detached server-side: aborting the local reader only
+    // detaches the VIEW. Tell the server to stop (it persists the partial
+    // answer); the local abort keeps the UI snappy.
+    if (activeId) {
+      cancelGeneration(activeId);
+      markBusy(activeId, false);
+    }
     abortRef.current?.abort();
-  }, []);
+  }, [activeId, markBusy]);
 
   // Thumbs feedback on an assistant message. Optimistic; reverts on failure.
   const handleFeedback = useCallback(
@@ -447,8 +513,19 @@ export function ChatPage() {
       streamingConvRef.current = convId;
       streamStartRef.current = Date.now();
 
+      markBusy(convId, true);
+      const sendConvId = convId;
       try {
-        await streamMessage(convId, text, handleStreamEvent, controller.signal, attachments);
+        await streamMessage(
+          convId,
+          text,
+          (evt) => {
+            handleStreamEvent(evt);
+            if (evt.type === 'done' || evt.type === 'error') markBusy(sendConvId, false);
+          },
+          controller.signal,
+          attachments,
+        );
       } catch (e) {
         // A user-pressed Stop aborts the fetch — keep the partial answer, no toast.
         if (!controller.signal.aborted) {
@@ -508,7 +585,19 @@ export function ChatPage() {
     streamingConvRef.current = activeId;
     streamStartRef.current = Date.now();
     try {
-      await streamMessage(activeId, '', handleStreamEvent, controller.signal, undefined, true);
+      markBusy(activeId, true);
+      const regenConvId = activeId;
+      await streamMessage(
+        activeId,
+        '',
+        (evt) => {
+          handleStreamEvent(evt);
+          if (evt.type === 'done' || evt.type === 'error') markBusy(regenConvId, false);
+        },
+        controller.signal,
+        undefined,
+        true,
+      );
     } catch (e) {
       if (!controller.signal.aborted) {
         antdMessage.error(e instanceof Error ? e.message : t('errRegenerate'));
@@ -652,6 +741,7 @@ export function ChatPage() {
     <ConversationSidebar
       conversations={conversations}
       activeId={activeId}
+      busyIds={busyConvs}
       onSelect={(id) => {
         setActiveId(id);
         setDrawerOpen(false);

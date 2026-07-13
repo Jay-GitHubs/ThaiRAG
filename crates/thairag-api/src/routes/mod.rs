@@ -784,6 +784,14 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             get(conversations::list_messages).post(chat::stream_conversation_message),
         )
         .route(
+            "/api/chat/conversations/{id}/stream",
+            get(chat::resume_conversation_stream),
+        )
+        .route(
+            "/api/chat/conversations/{id}/cancel",
+            post(chat::cancel_conversation_generation),
+        )
+        .route(
             "/api/chat/conversations/{id}/images",
             post(chat::generate_conversation_image),
         )

@@ -106,6 +106,78 @@ export async function setMessageFeedback(
  * (`[DONE]`). Each SSE frame is a single `data:` JSON object — comment lines
  * (keep-alive pings) and blank separators are ignored.
  */
+/** Consume a first-party SSE body, dispatching each JSON event. Shared by
+ * send and resume — both speak the identical protocol. */
+async function consumeSse(
+  res: Response,
+  onEvent: (evt: StreamEvent) => void,
+): Promise<void> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let dataLines: string[] = [];
+  const flush = () => {
+    if (dataLines.length === 0) return;
+    const data = dataLines.join('\n');
+    dataLines = [];
+    if (data === '[DONE]') return;
+    try {
+      onEvent(JSON.parse(data) as StreamEvent);
+    } catch {
+      /* ignore malformed frame */
+    }
+  };
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      } else if (line === '') {
+        flush();
+      }
+    }
+  }
+  flush();
+}
+
+/** Reattach to an in-flight generation (server keeps generating even with no
+ * client attached). Replays buffered events (rebuilding the partial answer)
+ * then follows live. Resolves 'none' when nothing is generating — the caller
+ * should treat the persisted messages as final. */
+export async function resumeStream(
+  conversationId: string,
+  onEvent: (evt: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<'resumed' | 'none'> {
+  const token = getToken();
+  const res = await fetch(`/api/chat/conversations/${conversationId}/stream`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  });
+  if (res.status === 404) return 'none';
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  await consumeSse(res, onEvent);
+  return 'resumed';
+}
+
+/** Stop the in-flight generation server-side. The partial answer is
+ * persisted by the backend. A 404 (nothing running) is not an error. */
+export async function cancelGeneration(conversationId: string): Promise<void> {
+  const token = getToken();
+  await fetch(`/api/chat/conversations/${conversationId}/cancel`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  }).catch(() => {
+    /* best-effort */
+  });
+}
+
 export function streamMessage(
   conversationId: string,
   content: string,
@@ -137,44 +209,7 @@ export function streamMessage(
           reject(new Error(`HTTP ${res.status}: ${text}`));
           return;
         }
-        const reader = res.body?.getReader();
-        if (!reader) {
-          reject(new Error('No response body'));
-          return;
-        }
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let dataLines: string[] = [];
-
-        const flush = () => {
-          if (dataLines.length === 0) return;
-          const data = dataLines.join('\n');
-          dataLines = [];
-          if (data === '[DONE]') return;
-          try {
-            onEvent(JSON.parse(data) as StreamEvent);
-          } catch {
-            /* ignore malformed frame */
-          }
-        };
-
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (line.startsWith('data:')) {
-              dataLines.push(line.slice(5).trim());
-            } else if (line === '') {
-              flush();
-            }
-            // `:`-prefixed comment lines (keep-alive) and others are ignored.
-          }
-        }
-        flush();
+        await consumeSse(res, onEvent);
         resolve();
       })
       .catch(reject);

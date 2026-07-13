@@ -464,6 +464,8 @@ SSE streaming. All routes require auth.
 | DELETE | `/api/chat/conversations/{id}` | Delete |
 | GET | `/api/chat/conversations/{id}/messages` | List messages |
 | POST | `/api/chat/conversations/{id}/messages` | Send + stream the answer (SSE, shapes below) |
+| GET | `/api/chat/conversations/{id}/stream` | Reattach to an in-flight generation (SSE replay + follow; answers generate detached from the connection). 404 = nothing generating — load the messages |
+| POST | `/api/chat/conversations/{id}/cancel` | Stop the in-flight generation; the partial answer is persisted. 404 = nothing generating |
 | POST | `/api/chat/conversations/{id}/messages/{message_id}/feedback` | Thumbs rating — body `{"feedback": 1 \| -1 \| 0}` (integer; correlates to `inference_logs.response_id == message_id`) |
 | POST | `/api/chat/conversations/{id}/summarize` | Summarize the conversation |
 | POST | `/api/chat/conversations/{id}/images` | Generate images (capability-gated) |
