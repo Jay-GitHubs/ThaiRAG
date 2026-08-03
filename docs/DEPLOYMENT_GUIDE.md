@@ -23,6 +23,11 @@ open http://localhost:8081               # Admin UI
 
 Images are pulled from GitHub Container Registry by default. Published as **multi-arch manifests** covering both `linux/amd64` and `linux/arm64` — Docker selects the right variant automatically, so the same tag pulls on x86 Linux servers and Apple Silicon dev machines.
 
+The API, admin UI, and chat UI images are **published automatically by CI**
+(`.github/workflows/publish.yml`) on every push to `main`, tagged `latest` plus
+the short commit SHA. The PaddleOCR sidecar changes rarely and is published
+manually when its Dockerfile changes.
+
 | Image | GHCR | Docker Hub |
 |-------|------|------------|
 | ThaiRAG API | `ghcr.io/jay-githubs/thairag` | `jdevspecialist/thairag` |
