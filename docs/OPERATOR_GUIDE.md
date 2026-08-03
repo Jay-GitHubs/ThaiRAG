@@ -735,12 +735,17 @@ Live retrieval is the more privacy-preserving path: the connector content is nev
 
 ---
 
-## 4.6 Self-hosted CI runner (Mac Studio)
+## 4.6 Self-hosted CI runner (DECOMMISSIONED 2026-08-03)
 
-CI uses a hybrid runner setup to keep PR builds safe while making main-branch builds fast:
+> **Status:** The Mac Studio runner was decommissioned on 2026-08-03 (machine
+> repurposed as a GPU server). All CI jobs now run on GitHub-hosted runners.
+> This section is kept as the recipe for standing up a replacement self-hosted
+> runner (e.g. on the GPU server) and restoring the trust-routed fast path.
+
+The hybrid runner setup kept PR builds safe while making main-branch builds fast:
 
 - **`pull_request`** events run on GitHub-hosted `ubuntu-latest`. Anyone can edit `.github/workflows/*.yml` in a PR, so PRs must run on a runner GitHub controls.
-- **`push` to main** events run on the self-hosted Mac Studio (`mac-studio` label). Persistent `target/` cache + M-series CPU = main-branch builds in ~1-2 min instead of ~5-8 min on GitHub-hosted.
+- **`push` to main** events ran on the self-hosted Mac Studio (`mac-studio` label). Persistent `target/` cache + M-series CPU = main-branch builds in ~1-2 min instead of ~5-8 min on GitHub-hosted. To restore this, register the new runner with a label (e.g. `gpu-server`) and put the trust-routing conditional below back into `ci.yml`'s four Rust jobs, substituting the new label for `mac-studio`.
 
 ### One-time runner setup
 
