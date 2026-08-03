@@ -10,10 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 # When a new commit pushes to a branch, cancel any in-flight run on the
-# same branch. Prevents the single self-hosted Mac Studio runner from
-# queueing up stale jobs from superseded commits — that queue blocks the
-# latest commit's tests until the older job finishes (often 10+ minutes
-# of wasted Mac CPU on code we don't care about anymore).
+# same branch — no point finishing jobs for a superseded commit.
 #
 # Group key includes `github.ref` so different branches (main vs PR
 # branches) don't cancel each other.
@@ -24,37 +21,20 @@ concurrency:
 jobs:
   # ── Rust: parallel jobs (fmt / clippy / test / cli build). ──
   #
-  # `runs-on` routes by trust level:
-  # - `push` to main (already-reviewed code) → `mac-studio` self-hosted.
-  # - `pull_request` from OWNER (the repo owner authoring their own PRs)
-  #   → `mac-studio`. The owner already has merge rights; running their
-  #   PR code on their own Mac adds no new attack surface and gives them
-  #   the same fast warm-cache builds as main pushes.
-  # - `pull_request` from anyone else (MEMBER, COLLABORATOR, CONTRIBUTOR,
-  #   external) → `ubuntu-latest`. Belt-and-suspenders with the repo
-  #   setting "Require approval for first-time contributors". External
-  #   PRs must NEVER pick up the self-hosted runner — anyone can edit
-  #   .github/workflows/*.yml in a PR, and that would run as the runner
-  #   user with access to its shell, SSH keys, persistent target/, etc.
-  #
-  # Mac Studio prerequisites (rust 1.95, cargo-nextest, poppler) are
-  # installed once on the host — see OPERATOR_GUIDE §4.6.
-  #
-  # Linux-only setup steps are gated with `if: runner.os == 'Linux'`.
+  # All jobs run on GitHub-hosted runners. The `mac-studio` self-hosted
+  # runner (trust-routed fast path for main pushes + owner PRs) was
+  # decommissioned 2026-08-03 — the machine was repurposed. If a new
+  # self-hosted runner comes online (e.g. the GPU server), restore the
+  # trust-routing conditional documented in OPERATOR_GUIDE §4.6: route
+  # ONLY `push` and OWNER-authored PRs to it, never external PRs (anyone
+  # can edit .github/workflows/*.yml in a PR, and that code runs as the
+  # runner user).
 
   fmt:
     name: Rust fmt
-    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
-      # `clean: false` preserves the runner's `target/` directory between
-      # jobs. Default `clean: true` runs `git clean -ffdx` which removes
-      # untracked files INCLUDING gitignored ones (the `-x` flag) — that
-      # wipes `target/` and forces every job on the self-hosted Mac to
-      # cold-compile from scratch. On ephemeral ubuntu-latest runners
-      # this setting is a no-op (nothing to preserve).
       - uses: actions/checkout@v4
-        with:
-          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
@@ -63,23 +43,17 @@ jobs:
 
   clippy:
     name: Rust clippy
-    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
           components: clippy
-      # rust-cache only helps GitHub-hosted runners — on self-hosted, the
-      # native `target/` directory persists across runs.
       - uses: Swatinem/rust-cache@v2
-        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
       # poppler-utils provides pdftoppm for PDF vision-fallback tests.
-      # On the self-hosted Mac, install via `brew install poppler` once.
       - name: Install poppler-utils (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
@@ -87,25 +61,19 @@ jobs:
 
   test:
     name: Rust tests
-    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
-        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
       - name: Install poppler-utils (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
-      # cargo-nextest: 2-3× faster than `cargo test` in CI. taiki-e/install-action
-      # is idempotent — on the self-hosted runner where nextest is pre-installed
-      # via `cargo install cargo-nextest`, it detects the existing binary and
-      # skips the download.
+      # cargo-nextest: 2-3× faster than `cargo test` in CI.
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -116,16 +84,13 @@ jobs:
 
   build-cli:
     name: Rust CLI build
-    runs-on: ${{ (github.event_name == 'push' || github.event.pull_request.author_association == 'OWNER') && 'mac-studio' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          clean: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@v2
-        if: runner.environment == 'github-hosted'
         with:
           shared-key: "rust-${{ runner.os }}"
       - run: cargo build -p thairag-cli
