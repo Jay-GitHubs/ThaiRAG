@@ -36,10 +36,11 @@ curl -X POST http://localhost:8080/api/auth/api-keys \
 ```
 
 A deploy-wide static key can also be set via `THAIRAG__AUTH__API_KEYS`
-(comma-separated). The compose stack wires this from `THAIRAG_API_KEY` in `.env`:
+(comma-separated) in `.env` — generate your own value; static-key auth is
+disabled when the variable is empty or unset:
 
 ```bash
-THAIRAG_API_KEY=trag_your-custom-key
+THAIRAG__AUTH__API_KEYS=trag_your-custom-key   # e.g. `openssl rand -hex 24`
 ```
 
 ### Permission Scope of API-Key Requests

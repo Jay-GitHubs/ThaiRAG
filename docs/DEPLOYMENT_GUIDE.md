@@ -187,8 +187,8 @@ login.
 
 Any OpenAI-compatible client can use ThaiRAG's `/v1` surface as a drop-in
 backend. Point it at `http://<host>:8080/v1` and authenticate with a static API
-key (set `THAIRAG_API_KEY` in `.env`, sent as `X-API-Key` or as the bearer
-token, depending on the client). Allow long timeouts — the multi-agent pipeline
+key (set `THAIRAG__AUTH__API_KEYS` in `.env` to your own generated value; sent
+as `X-API-Key` or as the bearer token, depending on the client). Allow long timeouts — the multi-agent pipeline
 can take 60+ seconds. See the [Integration Guide](INTEGRATION_GUIDE.md) for the
 full client setup, including how API-key scope differs from per-user (chat-ui)
 permission enforcement.
