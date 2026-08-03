@@ -596,6 +596,30 @@ vectors; PageIndex tree building requires the gateway to support
 `response_format: json_schema` (most vLLM builds do). Full cutover procedure:
 [LAUNCH_RUNBOOK.md](LAUNCH_RUNBOOK.md).
 
+### Hardened TLS stack (`docker-compose.prod.yml`)
+
+For a single-VM production deploy with TLS, use the prod compose file — it
+adds an nginx TLS terminator (only ports 80/443/8443 exposed; everything else
+on an internal network), rate limiting, resource limits, and log rotation:
+
+```bash
+cp .env.prod.example .env.prod         # fill in secrets
+./scripts/deploy.sh                    # certs + backup + pull/build + boot
+# or directly:
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+```
+
+- Images are **pulled from the registry by default** (`pull_policy: missing`
+  with the same `THAIRAG_*_IMAGE` / `THAIRAG_TAG` overrides as the registry
+  stack) — no source tree or Rust build needed on the VM. `docker compose -f
+  docker-compose.prod.yml build` still builds from source when you want it.
+- URL layout: **Chat UI at `https://<domain>/`**, **Admin UI at
+  `https://<domain>:8443/`** (its own port — the SPA is built with
+  root-absolute asset URLs and cannot live under a `/admin/` sub-path;
+  `/admin/` now redirects), API under `/v1` + `/api` at the root domain.
+- SSE streaming (first-party chat, detached-generation resume, admin
+  test-query) is proxied unbuffered end-to-end.
+
 ## Production Checklist
 
 - [ ] Set `THAIRAG__AUTH__ENABLED=true`

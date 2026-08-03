@@ -80,7 +80,9 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/healthz || exit 1"]
+      # The qdrant image ships no wget/curl — probe the HTTP port over
+      # /dev/tcp (bash builtin) instead.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -99,8 +101,14 @@ services:
         max-file: "3"
 
   # ── ThaiRAG API ────────────────────────────────────────────────────────────
+  # Pulls the published image by default; `build:` remains for source deploys
+  # (`docker compose -f docker-compose.prod.yml build`). `pull_policy: missing`
+  # makes `up` pull instead of building — a VM without the source tree (or the
+  # RAM for a Rust workspace build) deploys straight from the registry.
   thairag:
+    image: ${THAIRAG_IMAGE:-ghcr.io/jay-githubs/thairag}:${THAIRAG_TAG:-latest}
     build: .
+    pull_policy: missing
     restart: unless-stopped
     volumes:
       - thairag-data:/data
@@ -110,7 +118,11 @@ services:
       THAIRAG__SERVER__PORT: "8080"
       THAIRAG_TIER: ${THAIRAG_TIER:-standard}
     networks:
+      # backend is internal-only (no egress) — the API must ALSO join
+      # frontend or it cannot reach any LLM/embedding provider (hosted APIs,
+      # gateways, model downloads). Datastores stay backend-only.
       - backend
+      - frontend
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,7 +131,9 @@ services:
       qdrant:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      # The runtime image (debian slim) ships no wget/curl — do the HTTP GET
+      # with bash's /dev/tcp and check for a 200.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -137,18 +151,42 @@ services:
         max-size: "50m"
         max-file: "10"
 
-  # ── Admin UI (built as static files, served by nginx) ─────────────────────
-  # The admin-ui container builds the React app; nginx serves the output.
-  # On first deploy this container exits 0 after build — that is expected.
-  admin-ui-builder:
+  # ── Admin UI ───────────────────────────────────────────────────────────────
+  # The published image is a self-contained nginx: SPA + /api,/v1,/health,
+  # /metrics proxying to `thairag` with correct SSE handling. The outer nginx
+  # exposes it on its own HTTPS port (8443) — the SPA is built with Vite base
+  # `/`, so it cannot be served under a sub-path like /admin/ (root-absolute
+  # asset URLs would 404).
+  admin-ui:
+    image: ${THAIRAG_ADMIN_IMAGE:-ghcr.io/jay-githubs/thairag-admin}:${THAIRAG_TAG:-latest}
     build: ./admin-ui
-    image: thairag-admin-ui:latest
-    # Override entrypoint so we can copy the built assets to a shared volume.
-    entrypoint: ["sh", "-c", "cp -r /usr/share/nginx/html/. /dist/"]
-    volumes:
-      - admin-ui-dist:/dist
-    networks: []
-    restart: "no"
+    pull_policy: missing
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      - thairag
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Chat UI (first-party end-user frontend, served at the root domain) ─────
+  chat-ui:
+    image: ${THAIRAG_CHAT_IMAGE:-ghcr.io/jay-githubs/thairag-chat}:${THAIRAG_TAG:-latest}
+    build: ./chat-ui
+    pull_policy: missing
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      - thairag
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ── Prometheus ────────────────────────────────────────────────────────────
   prometheus:
@@ -229,10 +267,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "8443:8443"   # Admin UI (own port — the SPA can't live under /admin/)
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
-      - admin-ui-dist:/usr/share/nginx/html/admin:ro
       - nginx-logs:/var/log/nginx
     networks:
       - frontend
@@ -240,8 +278,10 @@ services:
     depends_on:
       thairag:
         condition: service_healthy
-      admin-ui-builder:
-        condition: service_completed_successfully
+      admin-ui:
+        condition: service_started
+      chat-ui:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
       interval: 15s
@@ -280,8 +320,6 @@ volumes:
   prometheus-data:
     driver: local
   grafana-data:
-    driver: local
-  admin-ui-dist:
     driver: local
   nginx-logs:
     driver: local
