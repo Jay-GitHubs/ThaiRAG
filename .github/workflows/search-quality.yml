@@ -1,13 +1,13 @@
 name: Search Quality
 
 on:
-  # Nightly regression run (04:00 UTC ≈ 11:00 ICT).
-  # Runs against whatever tier is configured via repo env/secrets;
-  # not gated on PRs because meaningful evaluation needs a real LLM
-  # provider (Ollama with models, or Claude/OpenAI keys) and standard
-  # GitHub-hosted runners can't host that economically.
-  schedule:
-    - cron: "0 4 * * *"
+  # Manual-only. The nightly schedule was removed 2026-08-03: meaningful
+  # evaluation needs a real LLM provider (Ollama with models, or
+  # Claude/OpenAI keys), which GitHub-hosted runners can't provide — the
+  # free-tier stack never becomes healthy on a hosted runner, and the run
+  # failed every night for 20+ days straight. Re-add a schedule only when
+  # a runner with a real eval stack exists (e.g. a self-hosted runner on
+  # the GPU server).
   workflow_dispatch:
     inputs:
       threshold:
@@ -38,16 +38,22 @@ jobs:
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/health; then
               echo "API is up"
-              break
+              exit 0
             fi
             echo "Waiting... ($i/30)"
             sleep 5
           done
+          echo "::error::API never became healthy after 150s — evaluation cannot run"
+          exit 1
 
       - name: Run search quality evaluation
         run: |
           THRESHOLD=${{ github.event.inputs.threshold || '0.90' }} \
           bash scripts/search-quality-ci.sh
+
+      - name: Dump stack logs on failure
+        if: failure()
+        run: docker compose logs --tail 200
 
       - name: Upload results
         if: always()
