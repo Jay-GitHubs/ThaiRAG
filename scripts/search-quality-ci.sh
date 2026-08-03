@@ -79,6 +79,7 @@ for q in queries:
         answer = response.get("choices", [{}])[0].get("message", {}).get("content", "")
     except urllib.error.URLError as e:
         print(f"  [WARN] Query '{query_id}' failed: {e}")
+        response = {}
         cited  = set()
         answer = ""
 
