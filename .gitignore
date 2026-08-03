@@ -1,6 +1,8 @@
 /target
 config/local.toml
 .env
+.env.prod
+nginx/certs/
 *.swp
 *.swo
 .DS_Store
