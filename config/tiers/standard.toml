@@ -9,7 +9,7 @@ model = "claude-sonnet-4-20250514"
 api_key = ""
 
 [providers.embedding]
-kind = "openai"
+kind = "open_ai"
 model = "text-embedding-3-small"
 dimension = 1536
 api_key = ""
