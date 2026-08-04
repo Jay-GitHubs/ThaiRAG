@@ -75,6 +75,11 @@ services:
       THAIRAG__PROVIDERS__EMBEDDING__API_KEY: ${THAIRAG__PROVIDERS__EMBEDDING__API_KEY:-}
       THAIRAG__PROVIDERS__RERANKER__API_KEY: ${THAIRAG__PROVIDERS__RERANKER__API_KEY:-}
       THAIRAG__PROVIDERS__VECTOR_STORE__URL: http://qdrant:6334
+      # This lean stack ships no Redis; the standard tier preset defaults
+      # session/embedding-cache backends to redis, which would fall back
+      # noisily (bounded connect timeout) — pin them to memory instead.
+      THAIRAG__SESSION__BACKEND: ${THAIRAG__SESSION__BACKEND:-memory}
+      THAIRAG__EMBEDDING_CACHE__BACKEND: ${THAIRAG__EMBEDDING_CACHE__BACKEND:-memory}
       THAIRAG__ADMIN__EMAIL: ${THAIRAG__ADMIN__EMAIL:-}
       THAIRAG__ADMIN__PASSWORD: ${THAIRAG__ADMIN__PASSWORD:-}
       THAIRAG__AUTH__API_KEYS: ${THAIRAG__AUTH__API_KEYS:-}
