@@ -195,8 +195,8 @@ login.
 
 Any OpenAI-compatible client can use ThaiRAG's `/v1` surface as a drop-in
 backend. Point it at `http://<host>:8080/v1` and authenticate with a static API
-key (set `THAIRAG_API_KEY` in `.env`, sent as `X-API-Key` or as the bearer
-token, depending on the client). Allow long timeouts — the multi-agent pipeline
+key (set `THAIRAG__AUTH__API_KEYS` in `.env` to your own generated value; sent
+as `X-API-Key` or as the bearer token, depending on the client). Allow long timeouts — the multi-agent pipeline
 can take 60+ seconds. See the [Integration Guide](INTEGRATION_GUIDE.md) for the
 full client setup, including how API-key scope differs from per-user (chat-ui)
 permission enforcement.
@@ -364,11 +364,11 @@ cd admin-ui && npx playwright test
 
 | Key | Env Override | Description |
 |-----|-------------|-------------|
-| `providers.llm.kind` | `THAIRAG__PROVIDERS__LLM__KIND` | `ollama`, `claude`, `openai`, `openai_compatible`, `gemini` |
+| `providers.llm.kind` | `THAIRAG__PROVIDERS__LLM__KIND` | `ollama`, `claude`, `open_ai`, `open_ai_compatible`, `gemini` |
 | `providers.llm.model` | `THAIRAG__PROVIDERS__LLM__MODEL` | Model name |
 | `providers.llm.api_key` | `THAIRAG__PROVIDERS__LLM__API_KEY` | API key |
 | `providers.llm.base_url` | `THAIRAG__PROVIDERS__LLM__BASE_URL` | Base URL (Ollama/OpenAI) |
-| `providers.embedding.kind` | `THAIRAG__PROVIDERS__EMBEDDING__KIND` | `fastembed`, `openai`, `ollama`, `cohere` |
+| `providers.embedding.kind` | `THAIRAG__PROVIDERS__EMBEDDING__KIND` | `fastembed`, `open_ai`, `ollama`, `cohere` |
 | `providers.embedding.model` | `THAIRAG__PROVIDERS__EMBEDDING__MODEL` | Model name |
 | `providers.embedding.dimension` | `THAIRAG__PROVIDERS__EMBEDDING__DIMENSION` | Vector dimension |
 | `providers.vector_store.kind` | `THAIRAG__PROVIDERS__VECTOR_STORE__KIND` | `in_memory`, `qdrant`, `pgvector`, `chroma_db`, `pinecone`, `weaviate`, `milvus` |
@@ -590,7 +590,7 @@ of mixing hosted APIs:
 THAIRAG__PROVIDERS__LLM__KIND=open_ai_compatible
 THAIRAG__PROVIDERS__LLM__BASE_URL=https://<your-gateway>/v1     # chat model, e.g. qwen3.6-27b-fast
 THAIRAG__PROVIDERS__LLM__API_KEY=<gateway key>
-THAIRAG__PROVIDERS__EMBEDDING__KIND=openai
+THAIRAG__PROVIDERS__EMBEDDING__KIND=open_ai
 THAIRAG__PROVIDERS__EMBEDDING__BASE_URL=https://<your-gateway>/v1  # e.g. embed-qwen3
 THAIRAG__PROVIDERS__RERANKER__KIND=passthrough                  # no OpenAI-compatible reranker exists
 ```
