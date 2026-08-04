@@ -21,6 +21,14 @@ curl http://localhost:8080/health        # API
 open http://localhost:8081               # Admin UI
 ```
 
+> **Providers can be configured after boot.** The server starts healthy even
+> with no LLM/embedding credentials — unconfigured providers are logged as
+> readiness warnings, and chat/ingest fail cleanly until they're set. Log in
+> to the Admin UI → **Settings → Providers** and fill in your endpoints and
+> keys there (persisted + hot-reloaded, no restart) — or set `THAIRAG__PROVIDERS__*`
+> in `.env` before starting if you prefer config-as-code. `/health?deep=true`
+> reports provider readiness.
+
 Images are pulled from GitHub Container Registry by default. Published as **multi-arch manifests** covering both `linux/amd64` and `linux/arm64` — Docker selects the right variant automatically, so the same tag pulls on x86 Linux servers and Apple Silicon dev machines.
 
 All four images are **published automatically by CI** (the

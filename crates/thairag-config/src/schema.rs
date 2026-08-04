@@ -49,12 +49,28 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Strict validation: structural checks AND provider completeness.
+    /// Used on settings-save, where an admin is actively configuring and an
+    /// incomplete provider config should be rejected with a clear error.
+    /// For BOOT, use `validate_structural()` + `readiness_warnings()` instead
+    /// — an unconfigured provider must not prevent the server from starting,
+    /// or the admin UI can never come up to configure it.
     pub fn validate(&self) -> std::result::Result<(), String> {
-        let require = |field: &str, value: &str| -> std::result::Result<(), String> {
+        if let Some(warning) = self.readiness_warnings().into_iter().next() {
+            return Err(warning);
+        }
+        self.validate_structural()
+    }
+
+    /// Non-fatal readiness gaps: provider credentials/endpoints not yet
+    /// filled in. The server boots and serves /health plus the admin UI;
+    /// affected providers fail at call time until configured (Settings →
+    /// Providers, hot-reloaded — or env). `/health?deep=true` reflects them.
+    pub fn readiness_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut require = |field: &str, value: &str| {
             if value.trim().is_empty() {
-                Err(format!("{field} must not be empty"))
-            } else {
-                Ok(())
+                warnings.push(format!("{field} must not be empty"));
             }
         };
 
@@ -62,13 +78,13 @@ impl AppConfig {
 
         // LLM
         match p.llm.kind {
-            LlmKind::Ollama => require("providers.llm.base_url", &p.llm.base_url)?,
+            LlmKind::Ollama => require("providers.llm.base_url", &p.llm.base_url),
             LlmKind::Claude | LlmKind::OpenAi | LlmKind::Gemini => {
-                require("providers.llm.api_key", &p.llm.api_key)?
+                require("providers.llm.api_key", &p.llm.api_key)
             }
             LlmKind::OpenAiCompatible => {
-                require("providers.llm.base_url", &p.llm.base_url)?;
-                require("providers.llm.api_key", &p.llm.api_key)?;
+                require("providers.llm.base_url", &p.llm.base_url);
+                require("providers.llm.api_key", &p.llm.api_key);
             }
         }
 
@@ -76,10 +92,10 @@ impl AppConfig {
         match p.embedding.kind {
             EmbeddingKind::Fastembed => {}
             EmbeddingKind::OpenAi | EmbeddingKind::Cohere => {
-                require("providers.embedding.api_key", &p.embedding.api_key)?;
+                require("providers.embedding.api_key", &p.embedding.api_key);
             }
             EmbeddingKind::Ollama => {
-                require("providers.embedding.base_url", &p.embedding.base_url)?;
+                require("providers.embedding.base_url", &p.embedding.base_url);
             }
         }
 
@@ -90,18 +106,18 @@ impl AppConfig {
             | VectorStoreKind::ChromaDb
             | VectorStoreKind::Milvus
             | VectorStoreKind::Weaviate => {
-                require("providers.vector_store.url", &p.vector_store.url)?;
+                require("providers.vector_store.url", &p.vector_store.url);
                 require(
                     "providers.vector_store.collection",
                     &p.vector_store.collection,
-                )?;
+                );
             }
             VectorStoreKind::Pgvector => {
-                require("providers.vector_store.url", &p.vector_store.url)?;
+                require("providers.vector_store.url", &p.vector_store.url);
             }
             VectorStoreKind::Pinecone => {
-                require("providers.vector_store.url", &p.vector_store.url)?;
-                require("providers.vector_store.api_key", &p.vector_store.api_key)?;
+                require("providers.vector_store.url", &p.vector_store.url);
+                require("providers.vector_store.api_key", &p.vector_store.api_key);
             }
         }
 
@@ -109,11 +125,18 @@ impl AppConfig {
         match p.reranker.kind {
             RerankerKind::Passthrough => {}
             RerankerKind::Cohere | RerankerKind::Jina => {
-                require("providers.reranker.api_key", &p.reranker.api_key)?;
-                require("providers.reranker.model", &p.reranker.model)?;
+                require("providers.reranker.api_key", &p.reranker.api_key);
+                require("providers.reranker.model", &p.reranker.model);
             }
         }
 
+        warnings
+    }
+
+    /// Boot-fatal structural checks only (budget caps, chunking bounds).
+    /// Provider completeness is intentionally excluded — see
+    /// `readiness_warnings()`.
+    pub fn validate_structural(&self) -> std::result::Result<(), String> {
         // LLM10: Validate chat pipeline budget caps
         let cp = &self.chat_pipeline;
         if cp.quality_guard_max_retries > 5 {
@@ -2351,6 +2374,49 @@ mod tests {
         cfg.providers.reranker.model = "rerank-v3".into();
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("providers.reranker.api_key"), "got: {err}");
+    }
+
+    #[test]
+    fn unconfigured_providers_boot_with_warnings_not_errors() {
+        // A standard-tier-shaped config with NO credentials must pass the
+        // boot gate (validate_structural) while reporting every gap as a
+        // readiness warning — this is the "boot first, configure providers
+        // in the admin UI later" contract.
+        let mut cfg = free_tier_config();
+        cfg.providers.llm.kind = LlmKind::Claude;
+        cfg.providers.llm.api_key = String::new();
+        cfg.providers.embedding.kind = EmbeddingKind::OpenAi;
+        cfg.providers.embedding.api_key = String::new();
+        cfg.providers.reranker.kind = RerankerKind::Cohere;
+        cfg.providers.reranker.model = "rerank-v3".into();
+
+        assert!(cfg.validate_structural().is_ok());
+        let warnings = cfg.readiness_warnings();
+        assert!(warnings.iter().any(|w| w.contains("providers.llm.api_key")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("providers.embedding.api_key"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("providers.reranker.api_key"))
+        );
+        // Strict validation (settings-save path) still rejects it.
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn fully_configured_free_tier_has_no_readiness_warnings() {
+        assert!(free_tier_config().readiness_warnings().is_empty());
+    }
+
+    #[test]
+    fn structural_problems_stay_boot_fatal() {
+        let mut cfg = free_tier_config();
+        cfg.chat_pipeline.max_llm_calls_per_request = 0;
+        assert!(cfg.validate_structural().is_err());
     }
 
     #[test]

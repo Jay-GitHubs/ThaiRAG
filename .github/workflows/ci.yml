@@ -181,6 +181,32 @@ jobs:
           docker logs thairag-smoke || true
           docker rm -f thairag-smoke || true
           exit 1
+      # A clean deploy has NO provider credentials yet — the server must still
+      # boot (readiness warnings, not a panic) so the admin UI can come up to
+      # configure providers. Guards the "boot first, configure later" contract.
+      - name: Boot smoke test (standard tier, providers unconfigured)
+        run: |
+          docker run -d --name thairag-smoke-std -p 18081:8080 \
+            -e THAIRAG_TIER=standard \
+            -e THAIRAG__DATABASE__URL= \
+            -e THAIRAG__PROVIDERS__EMBEDDING__KIND=open_ai \
+            -e THAIRAG__PROVIDERS__VECTOR_STORE__KIND=in_memory \
+            -e THAIRAG__AUTH__ENABLED=false \
+            thairag-ci
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:18081/health 2>/dev/null | grep -q '"status":"ok"'; then
+              echo "unconfigured standard tier boots healthy"
+              docker logs thairag-smoke-std 2>&1 | grep -i "provider not fully configured" \
+                && echo "readiness warnings present"
+              docker rm -f thairag-smoke-std
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::standard tier with unconfigured providers failed to boot"
+          docker logs thairag-smoke-std || true
+          docker rm -f thairag-smoke-std || true
+          exit 1
 
   # ── On merge to main: matrix-build per platform on native runners. ──
   # ── amd64 runs on ubuntu-latest, arm64 runs on the free ubuntu-24.04-arm ──

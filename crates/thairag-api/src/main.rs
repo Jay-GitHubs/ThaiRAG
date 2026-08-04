@@ -56,9 +56,18 @@ async fn main() {
             .init();
     }
 
-    // Load and validate config
+    // Load and validate config. Only STRUCTURAL problems are boot-fatal;
+    // unconfigured providers (empty api keys/urls) boot with warnings so the
+    // admin UI can come up and be used to configure them (hot-reload).
     let config = thairag_config::load_config().expect("Failed to load configuration");
-    config.validate().expect("Invalid configuration");
+    config.validate_structural().expect("Invalid configuration");
+    for warning in config.readiness_warnings() {
+        tracing::warn!(
+            %warning,
+            "provider not fully configured — chat/ingest will fail until set \
+             via Admin UI (Settings → Providers, hot-reload) or env"
+        );
+    }
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let shutdown_timeout = Duration::from_secs(config.server.shutdown_timeout_secs);
@@ -91,10 +100,15 @@ async fn main() {
         let pc = if let Some(ref pc) = saved_providers {
             let mut validate_cfg = config.clone();
             validate_cfg.providers = pc.clone();
-            if let Err(e) = validate_cfg.validate() {
+            // Structural problems reject the saved config; mere incompleteness
+            // (empty keys) only warns — same boot policy as the file config.
+            if let Err(e) = validate_cfg.validate_structural() {
                 tracing::warn!("Saved provider config is invalid, ignoring: {e}");
                 &config.providers
             } else {
+                for warning in validate_cfg.readiness_warnings() {
+                    tracing::warn!(%warning, "saved provider config not fully configured");
+                }
                 pc
             }
         } else {
