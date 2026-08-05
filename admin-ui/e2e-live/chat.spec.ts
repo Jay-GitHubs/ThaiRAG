@@ -30,6 +30,13 @@ test.describe('chat UI (live)', () => {
       await expect
         .poll(async () => (await assistant.innerText()).trim().length, { timeout: 5_000 })
         .toBeGreaterThan(0);
+      // RAG answers vary, so no content match — but reject provider-error
+      // bubbles, which also render as assistant turns and previously passed
+      // the length-only assertion.
+      const ragBubble = (await assistant.innerText()).toLowerCase();
+      for (const marker of ['provider error', 'request failed', 'unreachable', 'localhost']) {
+        expect(ragBubble).not.toContain(marker);
+      }
 
       // Conversation URL (post-#352 /c/{id} routes) → id for API cleanup.
       const m = page.url().match(/\/c\/([0-9a-f-]{36})/);
@@ -70,9 +77,17 @@ test.describe('chat UI (live)', () => {
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 200_000 });
     const assistant = page.getByTestId('msg-assistant').last();
+    // Demand the actual answer, not merely non-empty text: an LLM/provider
+    // error also renders as an assistant bubble, and a length>0 assertion
+    // green-lit exactly that on production ("OpenAI stream request failed:
+    // ... http://localhost:11435 ..."). Never again.
     await expect
-      .poll(async () => (await assistant.innerText()).trim().length, { timeout: 5_000 })
-      .toBeGreaterThan(0);
+      .poll(async () => (await assistant.innerText()).toLowerCase(), { timeout: 10_000 })
+      .toContain('pong');
+    const bubble = (await assistant.innerText()).toLowerCase();
+    for (const marker of ['provider error', 'request failed', 'unreachable', 'localhost']) {
+      expect(bubble).not.toContain(marker);
+    }
 
     const m = page.url().match(/\/c\/([0-9a-f-]{36})/);
     const token = tokenFor(CHAT_ORIGIN);
