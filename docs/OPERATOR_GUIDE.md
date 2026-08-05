@@ -60,7 +60,7 @@ When you run more than one API replica:
 - **Job queue**: switch to Redis if you use connector sync, batch ingest, or scheduled refresh.
 - **Sticky sessions**: not required if all three above are on Redis.
 - **WebSocket affinity**: required only if you use `/ws/chat`. SSE chat works without it.
-- **Health-check endpoint**: point the LB at `GET /health` (cheap, always returns 200 if the binary is live). Use `GET /health?deep=true` from a dedicated readiness probe — it pings the LLM, embedding, and vector store providers, so it'll return 500 when an upstream is degraded.
+- **Health-check endpoint**: point the LB at `GET /health` (cheap, always returns 200 if the binary is live). Use `GET /health?deep=true` from a dedicated readiness probe — it probes the effective provider config and returns 503 with a per-check breakdown when anything configured is unreachable.
 
 ### 1.4 Secrets
 
@@ -89,7 +89,7 @@ Do **not**:
 
 Pre-built images are published as **multi-arch manifests** (linux/amd64 + linux/arm64). The same tag pulls correctly on x86 production servers and Apple Silicon dev machines. Available on both GHCR (`ghcr.io/jay-githubs/thairag`) and Docker Hub (`jdevspecialist/thairag`); see DEPLOYMENT_GUIDE.md for the registry switch.
 
-For air-gapped environments: build from source against the published `rust:1.88-bookworm` base, then re-tag and push to your internal registry.
+For air-gapped environments: build from source against the published `rust:1.95-bookworm` base, then re-tag and push to your internal registry.
 
 ---
 
