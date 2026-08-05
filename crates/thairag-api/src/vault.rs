@@ -114,6 +114,70 @@ impl Vault {
         String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {e}"))
     }
 
+    /// Prefix marking a value as vault-encrypted (versioned for future
+    /// algorithm changes). Values without it are treated as legacy plaintext.
+    pub const ENC_MARKER: &'static str = "vault:v1:";
+
+    /// Encrypt and tag a value so readers can distinguish it from plaintext.
+    pub fn encrypt_marked(&self, plaintext: &str) -> String {
+        format!("{}{}", Self::ENC_MARKER, self.encrypt(plaintext))
+    }
+
+    /// Whether a stored value carries the encryption marker.
+    pub fn is_marked(value: &str) -> bool {
+        value.starts_with(Self::ENC_MARKER)
+    }
+
+    /// Decrypt a marked value; legacy plaintext passes through unchanged.
+    /// Undecryptable ciphertext (rotated/lost master key) becomes EMPTY so the
+    /// provider surfaces as unconfigured instead of sending garbage upstream.
+    pub fn try_decrypt_marked(&self, value: &str) -> String {
+        match value.strip_prefix(Self::ENC_MARKER) {
+            None => value.to_string(),
+            Some(ct) => self.decrypt(ct).unwrap_or_else(|e| {
+                tracing::error!(
+                    error = %e,
+                    "failed to decrypt stored api_key (master key changed?) — treating as unset"
+                );
+                String::new()
+            }),
+        }
+    }
+
+    /// Encrypt every non-empty `api_key` in a provider config for at-rest
+    /// persistence. Idempotent — already-marked values are left alone.
+    pub fn encrypt_provider_api_keys(&self, pc: &mut thairag_config::schema::ProvidersConfig) {
+        let mut enc = |key: &mut String| {
+            if !key.is_empty() && !Self::is_marked(key) {
+                *key = self.encrypt_marked(key);
+            }
+        };
+        enc(&mut pc.llm.api_key);
+        enc(&mut pc.embedding.api_key);
+        enc(&mut pc.vector_store.api_key);
+        enc(&mut pc.reranker.api_key);
+        if let Some(vision) = pc.doc_vision_llm.as_mut() {
+            enc(&mut vision.api_key);
+        }
+    }
+
+    /// Reverse of [`encrypt_provider_api_keys`] for configs loaded from the
+    /// store. Legacy plaintext rows pass through unchanged.
+    pub fn decrypt_provider_api_keys(&self, pc: &mut thairag_config::schema::ProvidersConfig) {
+        let mut dec = |key: &mut String| {
+            if !key.is_empty() {
+                *key = self.try_decrypt_marked(key);
+            }
+        };
+        dec(&mut pc.llm.api_key);
+        dec(&mut pc.embedding.api_key);
+        dec(&mut pc.vector_store.api_key);
+        dec(&mut pc.reranker.api_key);
+        if let Some(vision) = pc.doc_vision_llm.as_mut() {
+            dec(&mut vision.api_key);
+        }
+    }
+
     /// Mask an API key for display: "sk-proj-abc123xyz" -> "sk-p...xyz"
     pub fn mask(key: &str) -> String {
         let len = key.len();
@@ -145,6 +209,50 @@ mod tests {
         let encrypted = vault.encrypt(plaintext);
         let decrypted = vault.decrypt(&encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn marked_roundtrip_and_plaintext_passthrough() {
+        let vault = test_vault();
+        let marked = vault.encrypt_marked("sk-secret");
+        assert!(Vault::is_marked(&marked));
+        assert!(!marked.contains("sk-secret"));
+        assert_eq!(vault.try_decrypt_marked(&marked), "sk-secret");
+        // Legacy plaintext rows pass through unchanged.
+        assert_eq!(
+            vault.try_decrypt_marked("sk-legacy-plain"),
+            "sk-legacy-plain"
+        );
+        // Corrupted ciphertext degrades to unset, not garbage.
+        assert_eq!(vault.try_decrypt_marked("vault:v1:deadbeef"), "");
+    }
+
+    #[test]
+    fn provider_api_keys_encrypt_at_rest_and_restore() {
+        let vault = test_vault();
+        let mut pc: thairag_config::schema::ProvidersConfig =
+            serde_json::from_value(serde_json::json!({
+                "llm": { "kind": "open_ai_compatible", "model": "m", "base_url": "http://gw/v1", "api_key": "sk-llm" },
+                "embedding": { "kind": "open_ai", "model": "e", "dimension": 1024, "api_key": "sk-emb" },
+                "vector_store": { "kind": "qdrant", "url": "http://q:6334", "collection": "c" },
+                "text_search": { "kind": "tantivy", "index_path": "/tmp/x" },
+                "reranker": { "kind": "passthrough" },
+            }))
+            .expect("test ProvidersConfig must parse");
+
+        vault.encrypt_provider_api_keys(&mut pc);
+        let json = serde_json::to_string(&pc).unwrap();
+        assert!(!json.contains("sk-llm") && !json.contains("sk-emb"));
+        assert!(pc.reranker.api_key.is_empty());
+
+        // Idempotent: a second pass must not double-encrypt.
+        let once = pc.llm.api_key.clone();
+        vault.encrypt_provider_api_keys(&mut pc);
+        assert_eq!(pc.llm.api_key, once);
+
+        vault.decrypt_provider_api_keys(&mut pc);
+        assert_eq!(pc.llm.api_key, "sk-llm");
+        assert_eq!(pc.embedding.api_key, "sk-emb");
     }
 
     #[test]
