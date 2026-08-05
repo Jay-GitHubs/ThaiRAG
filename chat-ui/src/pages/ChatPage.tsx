@@ -88,6 +88,12 @@ export function ChatPage() {
   ).current;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // True once the user explicitly picked, created, or cleared a conversation.
+  // The initial list load must never override an explicit choice: on slow
+  // networks it resolves AFTER the user has already hit "New chat" (or even
+  // sent the first message) and used to yank the view back to the previous
+  // conversation while the new message landed in the invisible new one.
+  const userPickedRef = useRef(false);
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
@@ -152,15 +158,22 @@ export function ChatPage() {
   useEffect(() => {
     listConversations()
       .then((list) => {
-        setConversations(list);
+        // Merge, don't replace: a conversation lazily created before this
+        // resolves (fast first message) must survive in the sidebar.
+        setConversations((prev) => {
+          const fromServer = new Set(list.map((c) => c.id));
+          return [...prev.filter((c) => !fromServer.has(c.id)), ...list];
+        });
         // Deep link (/c/{id}) wins; otherwise restore the most recent
-        // conversation, as before. An unknown id falls back too (the URL is
-        // normalized by the activeId→URL sync effect below).
+        // conversation — but ONLY if the user hasn't already made an explicit
+        // choice while this request was in flight.
         const fromUrl = urlConversationId && list.some((c) => c.id === urlConversationId)
           ? urlConversationId
           : null;
         if (fromUrl) setActiveId(fromUrl);
-        else if (list.length > 0) setActiveId(list[0].id);
+        else if (!userPickedRef.current && list.length > 0) {
+          setActiveId((prev) => prev ?? list[0].id);
+        }
       })
       .catch(() => antdMessage.error(t('errLoadConversations')));
     listWorkspaces()
@@ -395,6 +408,7 @@ export function ChatPage() {
   // pickers choose. The conversation is created lazily on the first message
   // (handleSend), so toggling General/Knowledge-Base actually applies to it.
   const handleNew = useCallback(() => {
+    userPickedRef.current = true;
     setActiveId(null);
     setMessages([]);
   }, []);
@@ -460,6 +474,7 @@ export function ChatPage() {
             newMode,
           );
           setConversations((prev) => [conv, ...prev]);
+          userPickedRef.current = true;
           setActiveId(conv.id);
           convId = conv.id;
           isFirstMessage = true;
@@ -743,6 +758,7 @@ export function ChatPage() {
       activeId={activeId}
       busyIds={busyConvs}
       onSelect={(id) => {
+        userPickedRef.current = true;
         setActiveId(id);
         setDrawerOpen(false);
       }}
