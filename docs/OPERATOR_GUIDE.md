@@ -64,12 +64,26 @@ When you run more than one API replica:
 
 ### 1.4 Secrets
 
-Everything sensitive — LLM API keys, OAuth client secrets, OIDC discovery URLs, LDAP bind passwords — lives in **Vault** (the built-in encrypted key store at `crates/thairag-api/src/vault.rs`), not in env vars or config files. Vault uses a master key from the `VAULT_MASTER_KEY` env var to encrypt at rest under `vault/`. Provider configs reference vault entries by `profile_id`; the runtime resolves them via `resolve_profile()` at every bundle rebuild.
+Everything sensitive — LLM API keys, OAuth client secrets, OIDC discovery URLs, LDAP bind passwords — lives in **Vault** (the built-in AES-256-GCM key store at `crates/thairag-api/src/vault.rs`), not in env vars or config files. The master key comes from the `THAIRAG_ENCRYPTION_KEY` env var (64 hex chars, e.g. `openssl rand -hex 32`); if unset, a key is auto-generated at `{data_dir}/encryption.key` — set the env var in production so the master key never lives on the same volume as the data it protects.
+
+Provider API keys are encrypted at rest **both ways**:
+
+- Keys typed into **Settings → Providers** are transparently vault-encrypted
+  (`vault:v1:…` prefix) inside the persisted `provider_config` setting and
+  decrypted in memory at bundle rebuild. Legacy plaintext rows keep working
+  and are re-encrypted on the next save. If the master key is lost, stored
+  keys surface as *unconfigured* (readiness warning) — re-enter them.
+- **Settings → Vault** credential profiles store keys encrypted and are
+  referenced by `profile_id`; the runtime resolves them via
+  `resolve_profile()` at every bundle rebuild. Prefer profiles when several
+  providers share one credential.
+
+A database dump alone reveals no provider keys in either flow.
 
 Do **not**:
 - Put LLM API keys directly in `config/local.toml` or `THAIRAG__PROVIDERS__LLM__API_KEY`. That leaks them into config snapshots and audit logs.
 - Commit the vault directory.
-- Reuse the same `VAULT_MASTER_KEY` across environments.
+- Reuse the same `THAIRAG_ENCRYPTION_KEY` across environments.
 
 ### 1.5 Images
 
