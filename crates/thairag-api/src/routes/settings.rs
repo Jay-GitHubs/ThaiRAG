@@ -2606,7 +2606,8 @@ pub async fn update_document_config(
             llm_update: &UpdateLlmConfig,
             current: Option<thairag_config::schema::LlmConfig>,
         ) -> Result<(), ApiError> {
-            let mut llm_config = current.unwrap_or_else(|| state.config.providers.llm.clone());
+            let mut llm_config =
+                current.unwrap_or_else(|| state.providers().providers_config.llm.clone());
             if let Some(kind) = &llm_update.kind {
                 llm_config.kind =
                     parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -3002,7 +3003,11 @@ pub async fn update_general_chat_config(
         state.km_store.set_setting("general_chat.llm", "null");
     } else if let Some(u) = &req.llm {
         let current = build_effective_general_chat(&state.config, &*state.km_store).llm;
-        let mut cfg = current.unwrap_or_else(|| state.config.providers.llm.clone());
+        // Seed and inherit from the EFFECTIVE main LLM, not the boot config —
+        // on runtime-configured deployments the boot config holds tier
+        // defaults (wrong endpoint, empty key).
+        let eff_llm = state.providers().providers_config.llm.clone();
+        let mut cfg = current.unwrap_or_else(|| eff_llm.clone());
         if let Some(kind) = &u.kind {
             let new_kind =
                 parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -3011,7 +3016,7 @@ pub async fn update_general_chat_config(
                 cfg.base_url = String::new();
                 cfg.api_key = match cfg.kind {
                     thairag_core::types::LlmKind::Ollama => String::new(),
-                    _ => state.config.providers.llm.api_key.clone(),
+                    _ => eff_llm.api_key.clone(),
                 };
             }
         }
@@ -4240,7 +4245,9 @@ pub async fn update_chat_pipeline_config(
     ) -> Result<(), ApiError> {
         use thairag_core::types::LlmKind;
 
-        let mut cfg = current.unwrap_or_else(|| state.config.providers.llm.clone());
+        // Seed and inherit from the EFFECTIVE main LLM, not the boot config.
+        let eff_llm = state.providers().providers_config.llm.clone();
+        let mut cfg = current.unwrap_or_else(|| eff_llm.clone());
         if let Some(kind) = &update.kind {
             let new_kind =
                 parse_llm_kind(kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -4253,7 +4260,7 @@ pub async fn update_chat_pipeline_config(
                     LlmKind::OpenAi
                     | LlmKind::OpenAiCompatible
                     | LlmKind::Claude
-                    | LlmKind::Gemini => state.config.providers.llm.api_key.clone(),
+                    | LlmKind::Gemini => eff_llm.api_key.clone(),
                     LlmKind::Ollama => String::new(),
                 };
             }
@@ -5037,16 +5044,21 @@ pub async fn apply_preset(
     // its base_url + api_key, and map each curated role model to a gateway
     // model. So applying any "thai-*" preset produces OpenAI-compatible configs,
     // never Ollama. (`url` from the request is ignored for the LLM provider.)
-    let gw_base = state.config.providers.llm.base_url.clone();
-    let gw_key = state.config.providers.llm.api_key.clone();
-    let gw_embed_base = state.config.providers.embedding.base_url.clone();
-    let gw_embed_model = state.config.providers.embedding.model.clone();
-    let gw_embed_dim = state.config.providers.embedding.dimension.to_string();
+    // Read the configured provider from the EFFECTIVE config — on deployments
+    // configured via the admin UI the boot config still holds tier defaults
+    // (local Ollama URL, empty keys), and presets built from those defaults
+    // are how stale localhost endpoints ended up in production settings.
+    let eff = state.providers().providers_config.clone();
+    let gw_base = eff.llm.base_url.clone();
+    let gw_key = eff.llm.api_key.clone();
+    let gw_embed_base = eff.embedding.base_url.clone();
+    let gw_embed_model = eff.embedding.model.clone();
+    let gw_embed_dim = eff.embedding.dimension.to_string();
     // Pin the embedding *kind* too, not just model/url/dim. A leftover
     // `providers.embedding.kind=ollama` otherwise survives a preset apply and
     // produces a broken hybrid (Ollama provider pointed at the gateway URL →
     // 404 on ingest). Use the configured provider's serde kind (e.g. open_ai).
-    let gw_embed_kind = serde_json::to_value(&state.config.providers.embedding.kind)
+    let gw_embed_kind = serde_json::to_value(&eff.embedding.kind)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_else(|| "open_ai".to_string());
@@ -6225,7 +6237,9 @@ pub async fn get_vectordb_info(
         ApiError(e)
     });
 
-    let cfg = &state.config.providers.vector_store;
+    // Report the EFFECTIVE vector-store config, not the boot config.
+    let eff = state.providers().providers_config.clone();
+    let cfg = &eff.vector_store;
     let stats = stats.unwrap_or_default();
 
     Ok(Json(serde_json::json!({
