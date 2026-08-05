@@ -804,6 +804,26 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 
 Things to decide once, then let the platform run.
 
+### 5.0 Standing operational habits
+
+- **Update ritual** (registry deployments): `pull` → `up -d` → **verify the
+  running digest** (`docker inspect thairag-thairag-1 --format '{{.Image}}'`
+  against the publish run's digest). A pulled-but-not-recreated container
+  once served an already-fixed bug for a day. Pass every `-f` compose file on
+  every command, keep `COMPOSE_PROFILES=ocr` in `.env` so the OCR sidecar
+  survives updates, and never update mid-ingestion.
+- **Monitor `GET /health?deep=true`** and alert on 503. It probes the
+  *effective* (runtime) provider config, so it reflects admin-UI changes
+  immediately; per-check statuses are `ok` / `fail` / `not_configured` and
+  only `fail` degrades.
+- **Run the live smoke suite after any change** — see the Testing Guide's
+  "Live Production Smoke Suite": ~30 s, 12 tests, verifies real answers on
+  both chat paths plus security posture, with no credentials stored anywhere.
+- **Configure providers in the Admin UI**, not `.env`, unless you need
+  config-as-code: runtime settings are the *effective* config (hot-reloaded,
+  keys encrypted at rest) and take precedence over files/env everywhere —
+  pipeline, general chat, presets, health.
+
 ### 5.1 Guardrails policy
 
 Enable detectors that match your data. For a typical Thai enterprise tenant:
