@@ -51,3 +51,4 @@ Thumbs.db
 *.bak
 *.tmp
 admin-ui/e2e-live/.auth/
+admin-ui/e2e-live/.env.live

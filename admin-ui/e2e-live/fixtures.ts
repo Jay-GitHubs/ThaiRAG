@@ -5,9 +5,26 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const ADMIN_ORIGIN = 'https://admin.thai-rag.com';
-export const CHAT_ORIGIN = 'https://chat.thai-rag.com';
-export const API_ORIGIN = 'https://api.thai-rag.com';
+/**
+ * Deployment endpoints come from the environment ONLY — never hardcode real
+ * hostnames here: the repo is public and the source must not advertise the
+ * infrastructure it is tested against. Set them via env vars or the
+ * gitignored `e2e-live/.env.live` (see `.env.live.example`).
+ */
+function requiredEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) {
+    throw new Error(
+      `${name} is not set. Export it or copy e2e-live/.env.live.example to ` +
+        `e2e-live/.env.live (gitignored) and fill in your deployment's URLs.`,
+    );
+  }
+  return v.replace(/\/+$/, '');
+}
+
+export const ADMIN_ORIGIN = requiredEnv('LIVE_ADMIN_URL');
+export const CHAT_ORIGIN = requiredEnv('LIVE_CHAT_URL');
+export const API_ORIGIN = requiredEnv('LIVE_API_URL');
 export const AUTH_FILE = path.join(__dirname, '.auth', 'live-session.json');
 
 export function loadSessions(): Record<string, Record<string, string>> {
