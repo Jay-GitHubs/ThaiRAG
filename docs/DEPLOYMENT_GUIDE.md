@@ -56,6 +56,39 @@ To pin a specific version (Git SHA):
 THAIRAG_TAG=abc1234
 ```
 
+### Updating a deployment
+
+```bash
+docker compose -f docker-compose.registry.yml pull   # downloads newer images — changes NOTHING running
+docker compose -f docker-compose.registry.yml up -d  # recreates only the containers whose image/config changed
+docker inspect thairag-thairag-1 --format '{{.Image}}'   # VERIFY: compare against the publish run's digest
+```
+
+Rules of the ritual, each learned in production:
+
+- `pull` alone updates nothing — always follow with `up -d`. And `restart`
+  does **not** re-read `.env`; only `up -d` recreates with new env.
+- **Verify the digest** after every update. "I pulled" is not "it's running
+  the new build" — a stale container once served a fixed bug for a full day.
+- If you use extra compose files (port-binding overrides, etc.), pass every
+  `-f` on **every** command — a bare invocation silently ignores them.
+- Profile-gated services (the `ocr` PaddleOCR sidecar) are skipped by every
+  compose command unless the profile is active. Pin `COMPOSE_PROFILES=ocr`
+  in `.env` once, or the sidecar drops out on the next update.
+- Never update mid-ingestion — recreating `thairag` kills in-flight document
+  processing.
+
+### Health endpoints
+
+- `GET /health` — cheap liveness: `{"status":"ok"}` whenever the binary runs.
+- `GET /health?deep=true` — readiness with per-provider probes. Returns
+  **200** when everything configured is reachable, **503** with
+  `"status":"degraded"` and a per-check breakdown otherwise
+  (`ok` / `fail` / `not_configured` — only `fail` degrades). Probes the
+  **effective** provider config (admin-UI settings, hot-reloaded), so it
+  reflects runtime reconfiguration immediately. Point monitoring at it and
+  alert on 503.
+
 ---
 
 ## Docker Compose (Build from Source)

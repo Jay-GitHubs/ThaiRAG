@@ -140,7 +140,38 @@ External Services (Docker Compose):
 
 ## Quick Start
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Pre-built Images (Recommended — no clone, no build)
+
+```bash
+# 1. Download the two files you need
+curl -O https://raw.githubusercontent.com/Jay-GitHubs/ThaiRAG/main/docker-compose.registry.yml
+curl -O https://raw.githubusercontent.com/Jay-GitHubs/ThaiRAG/main/.env.example
+cp .env.example .env   # set POSTGRES_PASSWORD and THAIRAG__AUTH__JWT_SECRET
+
+# 2. Start (images pull from GHCR; published by CI on every merge to main)
+docker compose -f docker-compose.registry.yml up -d
+
+# 3. Access
+#    API:        http://localhost:8080
+#    Admin UI:   http://localhost:8081
+#    Chat UI:    http://localhost:8082
+```
+
+> **No provider keys needed to boot.** The server starts healthy with
+> unconfigured providers (logged as readiness warnings) — log in to the
+> Admin UI and set your LLM/embedding endpoints and keys under
+> **Settings → Providers** (persisted, hot-reloaded, encrypted at rest).
+> `/health?deep=true` reports per-provider readiness.
+
+**Updating a deployment:**
+
+```bash
+docker compose -f docker-compose.registry.yml pull
+docker compose -f docker-compose.registry.yml up -d
+docker inspect thairag-thairag-1 --format '{{.Image}}'   # verify the digest changed
+```
+
+### Option 2: Docker Compose from Source
 
 ```bash
 # 1. Clone and configure
@@ -160,7 +191,7 @@ docker compose -f docker-compose.yml -f docker-compose.test-idp.yml up --build -
 #    Keycloak:   http://localhost:9090  (full stack only)
 ```
 
-### Option 2: Local Development
+### Option 3: Local Development
 
 ```bash
 # Prerequisites: Rust 1.95+ (edition 2024), Node.js 22 — matching CI
@@ -208,6 +239,15 @@ Tiers are config *defaults*. Production deployments commonly run **all-gateway**
 instead: every provider pointed at one OpenAI-compatible endpoint (LLM +
 embedding + vision on the same host) — see the Deployment Guide's
 all-gateway section.
+
+**Runtime settings override everything above.** Providers configured in the
+Admin UI (**Settings → Providers**) are persisted to the database, hot-reloaded
+without a restart, and take precedence over file/env config — this *effective*
+config is what the pipeline, general chat, health checks, and presets all use.
+API keys saved through the UI are AES-256-GCM encrypted at rest (master key
+from `THAIRAG_ENCRYPTION_KEY`, or an auto-generated key file); a database dump
+reveals no credentials. Switching a provider to a kind with its own default
+endpoint (e.g. Ollama → OpenAI) automatically clears the stale `base_url`.
 
 ### Key Environment Variables
 

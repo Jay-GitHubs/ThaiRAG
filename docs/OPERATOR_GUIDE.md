@@ -60,7 +60,7 @@ When you run more than one API replica:
 - **Job queue**: switch to Redis if you use connector sync, batch ingest, or scheduled refresh.
 - **Sticky sessions**: not required if all three above are on Redis.
 - **WebSocket affinity**: required only if you use `/ws/chat`. SSE chat works without it.
-- **Health-check endpoint**: point the LB at `GET /health` (cheap, always returns 200 if the binary is live). Use `GET /health?deep=true` from a dedicated readiness probe — it pings the LLM, embedding, and vector store providers, so it'll return 500 when an upstream is degraded.
+- **Health-check endpoint**: point the LB at `GET /health` (cheap, always returns 200 if the binary is live). Use `GET /health?deep=true` from a dedicated readiness probe — it probes the effective provider config and returns 503 with a per-check breakdown when anything configured is unreachable.
 
 ### 1.4 Secrets
 
@@ -89,7 +89,7 @@ Do **not**:
 
 Pre-built images are published as **multi-arch manifests** (linux/amd64 + linux/arm64). The same tag pulls correctly on x86 production servers and Apple Silicon dev machines. Available on both GHCR (`ghcr.io/jay-githubs/thairag`) and Docker Hub (`jdevspecialist/thairag`); see DEPLOYMENT_GUIDE.md for the registry switch.
 
-For air-gapped environments: build from source against the published `rust:1.88-bookworm` base, then re-tag and push to your internal registry.
+For air-gapped environments: build from source against the published `rust:1.95-bookworm` base, then re-tag and push to your internal registry.
 
 ---
 
@@ -803,6 +803,26 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 ## 5. Operations checklist
 
 Things to decide once, then let the platform run.
+
+### 5.0 Standing operational habits
+
+- **Update ritual** (registry deployments): `pull` → `up -d` → **verify the
+  running digest** (`docker inspect thairag-thairag-1 --format '{{.Image}}'`
+  against the publish run's digest). A pulled-but-not-recreated container
+  once served an already-fixed bug for a day. Pass every `-f` compose file on
+  every command, keep `COMPOSE_PROFILES=ocr` in `.env` so the OCR sidecar
+  survives updates, and never update mid-ingestion.
+- **Monitor `GET /health?deep=true`** and alert on 503. It probes the
+  *effective* (runtime) provider config, so it reflects admin-UI changes
+  immediately; per-check statuses are `ok` / `fail` / `not_configured` and
+  only `fail` degrades.
+- **Run the live smoke suite after any change** — see the Testing Guide's
+  "Live Production Smoke Suite": ~30 s, 12 tests, verifies real answers on
+  both chat paths plus security posture, with no credentials stored anywhere.
+- **Configure providers in the Admin UI**, not `.env`, unless you need
+  config-as-code: runtime settings are the *effective* config (hot-reloaded,
+  keys encrypted at rest) and take precedence over files/env everywhere —
+  pipeline, general chat, presets, health.
 
 ### 5.1 Guardrails policy
 
