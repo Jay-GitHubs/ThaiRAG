@@ -79,7 +79,12 @@ async fn deep_health(state: AppState) -> Response {
     const T: u64 = 2500; // per-probe timeout (ms); probes run concurrently
 
     let cfg = state.config.clone();
-    let p = &cfg.providers;
+    // Probe the EFFECTIVE provider config (persisted admin-UI settings,
+    // hot-reloaded), not the static boot config — otherwise the endpoint
+    // keeps reporting boot-era URLs (e.g. a default Ollama base_url) forever
+    // after an operator reconfigures providers at runtime.
+    let effective = state.providers().providers_config.clone();
+    let p = &effective;
 
     // ── Database (SELECT 1) ──
     let database = match state.km_store.health_check() {
@@ -157,8 +162,12 @@ async fn deep_health(state: AppState) -> Response {
     };
 
     // ── Deterministic OCR sidecar (the opt-in `ocr` profile) ──
+    // The sidecar URL is runtime-tunable (document.ocr_sidecar_url setting) —
+    // use the effective document config, not the boot config.
+    let effective_doc =
+        crate::routes::settings::build_effective_document_config(&state.config, &*state.km_store);
     let ocr_sidecar = async {
-        let url = cfg.document.ocr_sidecar_url.trim_end_matches('/');
+        let url = effective_doc.ocr_sidecar_url.trim_end_matches('/');
         if url.is_empty() {
             check(
                 "not_configured",

@@ -622,6 +622,7 @@ pub async fn update_provider_config(
         }
     }
     if let Some(emb) = body.embedding {
+        let old_kind = pc.embedding.kind.clone();
         if let Some(kind) = emb.kind {
             pc.embedding.kind =
                 parse_embedding_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -632,11 +633,26 @@ pub async fn update_provider_config(
         if let Some(dimension) = emb.dimension {
             pc.embedding.dimension = dimension;
         }
+        let explicit_base_url = emb.base_url.is_some();
         if let Some(base_url) = emb.base_url {
             pc.embedding.base_url = base_url;
         }
         if let Some(api_key) = emb.api_key {
             pc.embedding.api_key = api_key;
+        }
+        // Switching to a hosted kind with its own default URL must not keep a
+        // stale base_url from the previous kind (e.g. a local Ollama URL) —
+        // the provider would silently call the wrong endpoint.
+        if pc.embedding.kind != old_kind {
+            use thairag_core::types::EmbeddingKind;
+            match pc.embedding.kind {
+                EmbeddingKind::Ollama => { /* user manages base_url */ }
+                EmbeddingKind::OpenAi | EmbeddingKind::Cohere | EmbeddingKind::Fastembed => {
+                    if !explicit_base_url {
+                        pc.embedding.base_url = String::new();
+                    }
+                }
+            }
         }
     }
     if let Some(vs) = body.vector_store {
@@ -659,6 +675,7 @@ pub async fn update_provider_config(
         }
     }
     if let Some(rr) = body.reranker {
+        let old_kind = pc.reranker.kind.clone();
         if let Some(kind) = rr.kind {
             pc.reranker.kind =
                 parse_reranker_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -669,11 +686,26 @@ pub async fn update_provider_config(
         if let Some(api_key) = rr.api_key {
             pc.reranker.api_key = api_key;
         }
+        let explicit_base_url = rr.base_url.is_some();
         if let Some(base_url) = rr.base_url {
             pc.reranker.base_url = base_url;
         }
         if let Some(normalize_scores) = rr.normalize_scores {
             pc.reranker.normalize_scores = normalize_scores;
+        }
+        // Same stale-base_url guard as the LLM/embedding sections: only the
+        // jina kind treats base_url as user-managed (generic /v1/rerank
+        // client); cohere/passthrough use their own defaults.
+        if pc.reranker.kind != old_kind {
+            use thairag_core::types::RerankerKind;
+            match pc.reranker.kind {
+                RerankerKind::Jina => { /* user manages base_url */ }
+                RerankerKind::Cohere | RerankerKind::Passthrough => {
+                    if !explicit_base_url {
+                        pc.reranker.base_url = String::new();
+                    }
+                }
+            }
         }
     }
 
@@ -714,6 +746,7 @@ pub async fn update_provider_config(
                 supports_vision: None,
             }
         });
+        let old_kind = current.kind.clone();
         if let Some(kind) = vis.kind {
             current.kind =
                 parse_llm_kind(&kind).map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
@@ -721,6 +754,7 @@ pub async fn update_provider_config(
         if let Some(model) = vis.model {
             current.model = model;
         }
+        let explicit_base_url = vis.base_url.is_some();
         if let Some(base_url) = vis.base_url {
             current.base_url = base_url;
         }
@@ -750,6 +784,18 @@ pub async fn update_provider_config(
             current.profile_id = None;
         } else if let Some(pid) = vis.profile_id {
             current.profile_id = Some(pid);
+        }
+        // Same stale-base_url guard as the primary LLM section.
+        if current.kind != old_kind {
+            use thairag_core::types::LlmKind;
+            match current.kind {
+                LlmKind::Ollama | LlmKind::OpenAiCompatible => { /* user manages base_url */ }
+                LlmKind::Claude | LlmKind::OpenAi | LlmKind::Gemini => {
+                    if !explicit_base_url {
+                        current.base_url = String::new();
+                    }
+                }
+            }
         }
         pc.doc_vision_llm = Some(current);
     }
@@ -5757,6 +5803,7 @@ pub async fn apply_preset(
     }
 
     // Apply LLM override from chat pipeline preset (shared mode)
+    let old_llm_kind = pc.llm.kind.clone();
     if let Some(llm_json) = store.get_setting("chat_pipeline.llm")
         && let Ok(v) = serde_json::from_str::<serde_json::Value>(&llm_json)
     {
@@ -5768,11 +5815,27 @@ pub async fn apply_preset(
         if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
             pc.llm.model = model.to_string();
         }
+        let explicit_base_url = v.get("base_url").and_then(|u| u.as_str()).is_some();
         if let Some(base_url) = v.get("base_url").and_then(|u| u.as_str()) {
             pc.llm.base_url = base_url.to_string();
         }
         if let Some(api_key) = v.get("api_key").and_then(|k| k.as_str()) {
             pc.llm.api_key = api_key.to_string();
+        }
+        // Same stale-base_url guard as update_provider_config: switching to a
+        // hosted kind must not inherit the previous kind's base_url (e.g. a
+        // local Ollama URL) — this exact path shipped kind=OpenAi with
+        // base_url=http://localhost:11435 to production.
+        if pc.llm.kind != old_llm_kind {
+            use thairag_core::types::LlmKind;
+            match pc.llm.kind {
+                LlmKind::Ollama | LlmKind::OpenAiCompatible => {}
+                LlmKind::Claude | LlmKind::OpenAi | LlmKind::Gemini => {
+                    if !explicit_base_url {
+                        pc.llm.base_url = String::new();
+                    }
+                }
+            }
         }
     }
 
