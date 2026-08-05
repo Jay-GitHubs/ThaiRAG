@@ -1769,10 +1769,12 @@ impl AppState {
                 crate::routes::settings::build_effective_document_config(&config, &*km_store);
             let eff_search =
                 crate::routes::settings::build_effective_search_config(&config, &*km_store);
-            // Also read DB-overridden provider config
+            // Also read DB-overridden provider config (api_keys are
+            // vault-encrypted at rest; legacy plaintext passes through).
             let pc = if let Some(json) = km_store.get_setting("provider_config")
-                && let Ok(pc) = serde_json::from_str::<ProvidersConfig>(&json)
+                && let Ok(mut pc) = serde_json::from_str::<ProvidersConfig>(&json)
             {
+                vault.decrypt_provider_api_keys(&mut pc);
                 pc
             } else {
                 config.providers.clone()

@@ -96,7 +96,13 @@ async fn main() {
         let saved_providers = state
             .km_store
             .get_setting("provider_config")
-            .and_then(|s| serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&s).ok());
+            .and_then(|s| serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&s).ok())
+            .map(|mut pc| {
+                // api_keys are vault-encrypted at rest; legacy plaintext rows
+                // pass through unchanged.
+                state.vault.decrypt_provider_api_keys(&mut pc);
+                pc
+            });
         let pc = if let Some(ref pc) = saved_providers {
             let mut validate_cfg = config.clone();
             validate_cfg.providers = pc.clone();

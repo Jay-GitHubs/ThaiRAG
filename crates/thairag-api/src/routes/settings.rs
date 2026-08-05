@@ -760,12 +760,20 @@ pub async fn update_provider_config(
         || old_embedding.model != pc.embedding.model
         || old_embedding.kind != pc.embedding.kind;
 
-    // Validate the new config
+    // Validate the new config. STRUCTURAL problems only — the UI saves one
+    // provider section at a time, and strict whole-config validation
+    // deadlocks progressive setup: on a clean install (tier defaults, no
+    // keys anywhere) every partial save fails because the OTHER sections
+    // are still incomplete. Incomplete sections are readiness warnings, not
+    // errors — same policy as boot.
     let mut validate_config = (*state.config).clone();
     validate_config.providers = pc.clone();
     validate_config
-        .validate()
+        .validate_structural()
         .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+    for warning in validate_config.readiness_warnings() {
+        tracing::warn!(%warning, "provider config saved with unconfigured sections");
+    }
 
     // If embedding changed, auto-save a snapshot, clear old vectors, and update fingerprint
     if embedding_changed {
@@ -877,8 +885,11 @@ pub async fn update_provider_config(
         }
     }
 
-    // Persist to DB
-    let json = serde_json::to_string(&pc)
+    // Persist to DB — api_keys are vault-encrypted at rest (the in-memory
+    // `pc` keeps raw keys for the provider bundle rebuild below).
+    let mut persisted = pc.clone();
+    state.vault.encrypt_provider_api_keys(&mut persisted);
+    let json = serde_json::to_string(&persisted)
         .map_err(|e| ApiError(ThaiRagError::Internal(format!("Serialize failed: {e}"))))?;
     state.km_store.set_setting("provider_config", &json);
 
@@ -5765,8 +5776,11 @@ pub async fn apply_preset(
         }
     }
 
-    // Persist the full provider_config blob so GET /providers returns updated values
-    if let Ok(json) = serde_json::to_string(&pc) {
+    // Persist the full provider_config blob so GET /providers returns updated
+    // values — api_keys vault-encrypted at rest.
+    let mut persisted = pc.clone();
+    state.vault.encrypt_provider_api_keys(&mut persisted);
+    if let Ok(json) = serde_json::to_string(&persisted) {
         store.set_setting("provider_config", &json);
     }
 
@@ -6537,7 +6551,18 @@ pub async fn restore_snapshot(
                 }
             }
             if let Ok(merged) = serde_json::to_string(&snap_pc) {
-                state.km_store.set_setting("provider_config", &merged);
+                // Old snapshots may carry plaintext api_keys — re-encrypt the
+                // merged blob when it parses; store verbatim otherwise.
+                if let Ok(mut merged_pc) =
+                    serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&merged)
+                {
+                    state.vault.encrypt_provider_api_keys(&mut merged_pc);
+                    if let Ok(re_encrypted) = serde_json::to_string(&merged_pc) {
+                        state.km_store.set_setting("provider_config", &re_encrypted);
+                    }
+                } else {
+                    state.km_store.set_setting("provider_config", &merged);
+                }
             }
         }
         // Restore the current embedding fingerprint
@@ -6560,6 +6585,10 @@ pub async fn restore_snapshot(
         .km_store
         .get_setting("provider_config")
         .and_then(|s| serde_json::from_str(&s).ok())
+        .map(|mut pc: thairag_config::schema::ProvidersConfig| {
+            state.vault.decrypt_provider_api_keys(&mut pc);
+            pc
+        })
         .unwrap_or_else(|| state.config.providers.clone());
     let bundle = state.build_provider_bundle(
         &pc,
