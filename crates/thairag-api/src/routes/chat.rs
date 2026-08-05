@@ -1925,11 +1925,14 @@ pub async fn generate_conversation_image(
     }
 
     // Resolve the image endpoint + key: image_generation overrides, else the
-    // general_chat LLM, else the main LLM.
+    // general_chat LLM, else the main LLM. Use the EFFECTIVE provider config
+    // (admin-UI settings, hot-reloaded) — the boot config may still point at
+    // tier defaults the operator replaced at runtime.
+    let eff_llm = state.providers().providers_config.llm.clone();
     let base = [
         img.base_url.as_str(),
         gc.llm.as_ref().map(|l| l.base_url.as_str()).unwrap_or(""),
-        state.config.providers.llm.base_url.as_str(),
+        eff_llm.base_url.as_str(),
     ]
     .into_iter()
     .find(|s| !s.is_empty())
@@ -1946,7 +1949,7 @@ pub async fn generate_conversation_image(
         .as_ref()
         .map(|l| l.api_key.clone())
         .filter(|k| !k.is_empty())
-        .unwrap_or_else(|| state.config.providers.llm.api_key.clone());
+        .unwrap_or_else(|| eff_llm.api_key.clone());
 
     // OpenAI-compatible image generation; ask for base64 so the result is
     // self-contained (no dependency on a provider-hosted, expiring URL).
@@ -2241,10 +2244,14 @@ pub async fn stream_conversation_message(
     let general_chat_cfg =
         crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store);
     let general_llm = if is_general {
+        // Fall back to the EFFECTIVE main LLM (admin-UI settings, hot-reloaded),
+        // NOT the static boot config — on deployments configured entirely at
+        // runtime the boot config still points at tier defaults (e.g. a local
+        // Ollama), which made general chat fail while RAG chat worked.
         let cfg = general_chat_cfg
             .llm
             .clone()
-            .unwrap_or_else(|| state.config.providers.llm.clone());
+            .unwrap_or_else(|| state.providers().providers_config.llm.clone());
         Some(thairag_provider_llm::create_llm_provider(&cfg))
     } else {
         None
