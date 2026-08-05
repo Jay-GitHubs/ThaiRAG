@@ -3843,3 +3843,55 @@ Verify the searchable, free-text model pickers and the advisory badges in **Sett
 ### Pass criteria
 
 Any model id is selectable via free text (28.1); per-section sync works (28.2); advisory badges render and are clearly framed as recommendations (28.3–28.4); the UI degrades gracefully when discovery is off/unreachable (28.5).
+
+---
+
+## Live Production Smoke Suite (`admin-ui/e2e-live`)
+
+A Playwright suite that tests a **real deployment** end-to-end — both UIs, the
+API surface, security posture, and provider health — with **zero credentials
+or endpoints stored in the repository**.
+
+### Design
+
+- **Endpoints from env only.** Copy `admin-ui/e2e-live/.env.live.example` to
+  `.env.live` (gitignored) and fill in your deployment's URLs
+  (`LIVE_ADMIN_URL` / `LIVE_CHAT_URL` / `LIVE_API_URL`). Missing values fail
+  fast with instructions — the tracked source never names real hosts.
+- **Manual-login gate.** The first run opens the real login pages headed and
+  waits (up to 5 min each) for a human to sign in on the admin and chat UIs.
+  It then captures each origin's `sessionStorage` (both UIs keep the JWT
+  there — Playwright's `storageState` cannot capture sessionStorage) and
+  re-injects it into every test page. Sessions are reused for 8 hours, so
+  re-runs are hands-free. Credentials are never typed anywhere but the real
+  login page.
+- **Optional API key.** Set `LIVE_API_KEY` in `.env.live` (mint one via
+  Admin → Settings → API Keys, or `POST /api/auth/api-keys`) to activate the
+  authenticated `/v1` completions test; without it that one test skips.
+
+### Run
+
+```bash
+cd admin-ui
+npx playwright test -c playwright.live.config.ts --headed
+```
+
+Headed is the point — you must be present for the (first) login. A full run
+takes ~20–30 s once authenticated.
+
+### Coverage (12 tests)
+
+| Area | Verifies |
+|---|---|
+| Admin UI | Dashboard + core routes render; full KM org→dept→workspace CRUD (uses `livetest-*` names, cleans up via API even on failure) |
+| Security | Provider settings never echo a raw `api_key` to the browser; unauthenticated `/v1` completions are rejected (401) |
+| API | `/health` ok; `/health?deep=true` answers with the per-provider readiness contract (degradation is *reported*, and logged in the test output); `/v1/models` lists the model; authed `/v1` completion returns real content |
+| Chat UI | New chat → streamed answer → survives reload → deleted; general mode answers without retrieval |
+
+### Assertions are strict on purpose
+
+Chat tests demand the **actual answer** (or reject provider-error markers such
+as `request failed` / `unreachable` / `localhost`) rather than accepting any
+non-empty bubble — a length-only assertion once green-lit a production
+deployment whose LLM calls were all failing (the error text rendered as an
+assistant message). If this suite is green, the answers were real.

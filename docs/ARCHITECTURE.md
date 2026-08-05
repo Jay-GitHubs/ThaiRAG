@@ -259,6 +259,21 @@ MCP (Model Context Protocol) integration for connecting to external data sources
 - Dependencies: `rmcp`, `sha2`, `cron`, `tokio-util`
 
 ### thairag-api
+
+**Boot config vs effective config (invariant).** `state.config` is the
+file/env configuration frozen at startup; the *effective* provider config is
+`state.providers().providers_config` — boot config layered with persisted
+admin-UI settings, rebuilt on every settings save (hot-reload). **Runtime code
+must read the effective config**: the chat pipeline, general-chat fallback
+LLM, image generation, per-agent/general-chat seeding, preset building, deep
+health, and stats endpoints all do. Reading `state.config.providers` outside
+boot-time wiring (backend selection, the no-persisted-settings fallback) is
+almost certainly a bug — a whole class of "works in RAG chat, fails in X"
+production issues came from exactly that. Provider `api_key`s inside the
+persisted `provider_config` setting are vault-encrypted at rest
+(`vault:v1:…` marker, AES-256-GCM, master key from `THAIRAG_ENCRYPTION_KEY`
+or an auto-generated key file) and decrypted in memory on load.
+
 Axum HTTP server with:
 - **Routes**: Auth, Chat (V1 OpenAI-compatible + V2 with metadata + WebSocket at `/ws/chat`), KM hierarchy CRUD (including super-admin `POST /api/km/users` for local user creation), Documents (versioning, batch, ACL), Settings, Health, Feedback, Webhooks, Backup/Restore, Vector Migration, Rate Limit Stats, Jobs, Evaluation, A/B Tests, **Plugins** (`GET /api/km/plugins`, `POST /plugins/{name}/{enable,disable}`), **Guardrails** (`GET /api/km/guardrails/{stats,violations}`, `POST /api/km/guardrails/preview`), Knowledge Graph, API Keys, Vault
 - **Stores**: SQLite (default), PostgreSQL, In-Memory — implementing `KmStoreTrait`. Session and cache stores optionally backed by Redis via `thairag-provider-redis`
