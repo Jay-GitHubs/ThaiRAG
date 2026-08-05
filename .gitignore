@@ -50,3 +50,4 @@ scripts/bench/__pycache__/
 Thumbs.db
 *.bak
 *.tmp
+admin-ui/e2e-live/.auth/
