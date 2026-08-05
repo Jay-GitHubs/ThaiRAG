@@ -147,7 +147,7 @@ impl Vault {
     /// Encrypt every non-empty `api_key` in a provider config for at-rest
     /// persistence. Idempotent — already-marked values are left alone.
     pub fn encrypt_provider_api_keys(&self, pc: &mut thairag_config::schema::ProvidersConfig) {
-        let mut enc = |key: &mut String| {
+        let enc = |key: &mut String| {
             if !key.is_empty() && !Self::is_marked(key) {
                 *key = self.encrypt_marked(key);
             }
@@ -164,7 +164,7 @@ impl Vault {
     /// Reverse of [`encrypt_provider_api_keys`] for configs loaded from the
     /// store. Legacy plaintext rows pass through unchanged.
     pub fn decrypt_provider_api_keys(&self, pc: &mut thairag_config::schema::ProvidersConfig) {
-        let mut dec = |key: &mut String| {
+        let dec = |key: &mut String| {
             if !key.is_empty() {
                 *key = self.try_decrypt_marked(key);
             }
