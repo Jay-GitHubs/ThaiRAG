@@ -56,9 +56,14 @@ test.describe('chat UI (live)', () => {
     await page.goto(`${CHAT_ORIGIN}/`);
     await page.getByRole('button', { name: 'New chat' }).click();
     // The mode toggle only exists when general chat is enabled server-side.
-    const generalToggle = page.getByRole('radio', { name: /general/i });
-    test.skip(!(await generalToggle.isVisible().catch(() => false)), 'general mode not enabled');
-    await generalToggle.click();
+    // It's an antd Segmented (data-testid, not radios) and the label is
+    // localized — match English and Thai.
+    const modeSegmented = page.getByTestId('mode-segmented');
+    test.skip(
+      !(await modeSegmented.isVisible().catch(() => false)),
+      'general mode not enabled',
+    );
+    await modeSegmented.getByText(/general|ทั่วไป/i).click();
 
     const prompt = 'Reply with the single word: pong';
     await page.getByPlaceholder(COMPOSER).fill(prompt);
