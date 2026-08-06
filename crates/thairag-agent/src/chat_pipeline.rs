@@ -8,9 +8,9 @@ use thairag_core::error::Result;
 use thairag_core::permission::AccessScope;
 use thairag_core::traits::{GuardrailMetricsRecorder, LlmProvider, SearchPluginEngine};
 use thairag_core::types::{
-    ChatMessage, ChunkMetadata, DocId, GuardrailViolationMeta, ImageContent, ImageId, LlmResponse,
-    LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata, PipelineProgress, ProgressSender,
-    QueryIntent, SearchQuery, SearchResult, SessionAttachment, StageStatus,
+    ChatMessage, ChunkMetadata, Citation, DocId, GuardrailViolationMeta, ImageContent, ImageId,
+    LlmResponse, LlmStreamResponse, LlmUsage, MetadataCell, PipelineMetadata, PipelineProgress,
+    ProgressSender, QueryIntent, SearchQuery, SearchResult, SessionAttachment, StageStatus,
 };
 use thairag_search::HybridSearchEngine;
 use tokio_stream::StreamExt;
@@ -535,6 +535,33 @@ impl ChatPipeline {
     }
 
     /// Update pipeline metadata if the cell is present.
+    /// Populate metadata so a whole-document summary answer carries a
+    /// document-level citation and a grounding confidence — otherwise the
+    /// doc-op summarize path (which skips chunk retrieval) looks ungrounded
+    /// (no citations, no confidence), which users read as a broken feature.
+    /// The single citation points at the summarized document; confidence is
+    /// high because the answer is generated from that document's own text.
+    fn apply_doc_summary_provenance(metadata: &Option<MetadataCell>, doc_id: DocId, title: &str) {
+        let doc_title = if title.is_empty() {
+            None
+        } else {
+            Some(title.to_string())
+        };
+        Self::update_metadata(metadata, |m| {
+            m.citations = vec![Citation {
+                claim: String::new(),
+                marker: 1,
+                chunk_id: String::new(),
+                doc_id: doc_id.0.to_string(),
+                doc_title,
+                score: 1.0,
+            }];
+            m.confidence = Some(9);
+            m.confidence_summary =
+                Some("Summarized directly from the full source document.".to_string());
+        });
+    }
+
     fn update_metadata(cell: &Option<MetadataCell>, f: impl FnOnce(&mut PipelineMetadata)) {
         if let Some(cell) = cell
             && let Ok(mut meta) = cell.lock()
@@ -966,6 +993,7 @@ impl ChatPipeline {
                             m.pipeline_route = Some("doc_summary".into());
                             m.generation_ms = Some(gen_ms);
                         });
+                        Self::apply_doc_summary_provenance(&metadata, doc_id, &title);
                         info!(
                             total_ms = pipeline_start.elapsed().as_millis() as u64,
                             "Pipeline: complete (doc summary)"
@@ -2089,6 +2117,7 @@ impl ChatPipeline {
                         Self::update_metadata(&metadata, |m| {
                             m.pipeline_route = Some("doc_summary".into());
                         });
+                        Self::apply_doc_summary_provenance(&metadata, doc_id, &title);
                         info!(
                             total_ms = pipeline_start.elapsed().as_millis() as u64,
                             "Pipeline: complete (doc summary, streaming)"
@@ -3488,6 +3517,52 @@ mod tests {
     use super::insufficient_context_message;
     use crate::context_curator::{CuratedChunk, CuratedContext};
     use thairag_core::types::{ChunkId, DocId};
+
+    #[test]
+    fn doc_summary_provenance_populates_citation_and_confidence() {
+        use std::sync::{Arc, Mutex};
+        use thairag_core::types::PipelineMetadata;
+
+        let cell: thairag_core::types::MetadataCell =
+            Arc::new(Mutex::new(PipelineMetadata::default()));
+        let doc = DocId(uuid::Uuid::nil());
+        super::ChatPipeline::apply_doc_summary_provenance(&Some(cell.clone()), doc, "My Doc");
+
+        let m = cell.lock().unwrap();
+        assert_eq!(
+            m.citations.len(),
+            1,
+            "summary must carry one doc-level citation"
+        );
+        let c = &m.citations[0];
+        assert_eq!(c.doc_id, doc.0.to_string());
+        assert_eq!(c.doc_title.as_deref(), Some("My Doc"));
+        assert_eq!(
+            c.chunk_id, "",
+            "whole-doc summary cites the document, not a chunk"
+        );
+        assert_eq!(m.confidence, Some(9));
+        assert!(
+            m.confidence_summary
+                .as_deref()
+                .unwrap()
+                .contains("full source document")
+        );
+    }
+
+    #[test]
+    fn doc_summary_provenance_empty_title_is_none() {
+        use std::sync::{Arc, Mutex};
+        use thairag_core::types::PipelineMetadata;
+        let cell: thairag_core::types::MetadataCell =
+            Arc::new(Mutex::new(PipelineMetadata::default()));
+        super::ChatPipeline::apply_doc_summary_provenance(
+            &Some(cell.clone()),
+            DocId(uuid::Uuid::nil()),
+            "",
+        );
+        assert_eq!(cell.lock().unwrap().citations[0].doc_title, None);
+    }
 
     fn ctx(scores: &[f32]) -> CuratedContext {
         ctx_vec(scores, &[])
