@@ -446,6 +446,20 @@ pub struct InferenceLogEntry {
     /// Comma-separated violation codes. Empty string when no violations.
     /// Codes only — never matched substrings, to keep the table PDPA-safe.
     pub guardrail_violation_codes: String,
+    /// Where this record came from: "chat" (conversational traffic incl.
+    /// /v1 and /v2), "test_query", or "ingest" (document-processing usage).
+    /// Ingest rows are excluded from analytics unless explicitly requested,
+    /// so pre-existing chat metrics never shift.
+    #[serde(default = "default_log_source")]
+    pub source: String,
+    /// Database-backed API key (key id) that authenticated this request, or
+    /// "static" for the config-list key. None = interactive JWT login.
+    #[serde(default)]
+    pub api_key_id: Option<String>,
+}
+
+pub(crate) fn default_log_source() -> String {
+    "chat".into()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -459,8 +473,23 @@ pub struct InferenceLogFilter {
     pub intent: Option<String>,
     pub response_id: Option<String>,
     pub session_id: Option<String>,
+    /// Source selector. `None` = everything EXCEPT "ingest" (preserves the
+    /// semantics all existing analytics were built on); `Some("all")` = no
+    /// source filtering; `Some(s)` = exact match.
+    pub source: Option<String>,
+    /// Exact-match filter on the authenticating API key id.
+    pub api_key_id: Option<String>,
     pub limit: usize,
     pub offset: usize,
+}
+
+/// The single source-filter rule shared by every store backend.
+pub(crate) fn source_matches(filter_source: &Option<String>, row_source: &str) -> bool {
+    match filter_source.as_deref() {
+        None => row_source != "ingest",
+        Some("all") => true,
+        Some(s) => row_source == s,
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -483,6 +512,30 @@ pub struct InferenceStats {
     pub feedback_positive_rate: f64,
     pub by_model: Vec<ModelStats>,
     pub by_workspace: Vec<WorkspaceStats>,
+    /// Estimated USD cost across all included rows (static price table —
+    /// the provider dashboard is billing ground truth). `Some(x)` when at
+    /// least one row's model is priceable; `None` when none are.
+    #[serde(default)]
+    pub total_estimated_cost_usd: Option<f64>,
+    #[serde(default)]
+    pub by_user: Vec<EntityStats>,
+    #[serde(default)]
+    pub by_dept: Vec<EntityStats>,
+    #[serde(default)]
+    pub by_org: Vec<EntityStats>,
+    #[serde(default)]
+    pub by_api_key: Vec<EntityStats>,
+}
+
+/// Token/cost rollup for one attribution entity (user, dept, org, api key).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EntityStats {
+    pub id: String,
+    pub count: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -492,6 +545,14 @@ pub struct ModelStats {
     pub avg_ms: f64,
     pub avg_quality: f64,
     pub total_tokens: u64,
+    #[serde(default)]
+    pub llm_kind: String,
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -500,6 +561,227 @@ pub struct WorkspaceStats {
     pub count: u64,
     pub avg_ms: f64,
     pub total_tokens: u64,
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub estimated_cost_usd: Option<f64>,
+}
+
+/// Shared stats computation over already-filtered entries. All three store
+/// backends delegate here so aggregation semantics cannot diverge; the
+/// retention cap (50k rows) keeps in-memory aggregation cheap.
+pub(crate) fn compute_inference_stats(entries: &[InferenceLogEntry]) -> InferenceStats {
+    use std::collections::HashMap;
+
+    let total = entries.len() as u64;
+    if total == 0 {
+        return InferenceStats {
+            total_requests: 0,
+            avg_total_ms: 0.0,
+            avg_search_ms: 0.0,
+            avg_generation_ms: 0.0,
+            avg_relevance_score: 0.0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+            success_rate: 0.0,
+            quality_pass_rate: 0.0,
+            feedback_positive_rate: 0.0,
+            by_model: Vec::new(),
+            by_workspace: Vec::new(),
+            total_estimated_cost_usd: None,
+            by_user: Vec::new(),
+            by_dept: Vec::new(),
+            by_org: Vec::new(),
+            by_api_key: Vec::new(),
+        };
+    }
+
+    let entry_cost = |e: &InferenceLogEntry| {
+        crate::pricing::estimate_cost(
+            &e.llm_kind,
+            &e.llm_model,
+            e.prompt_tokens as u64,
+            e.completion_tokens as u64,
+        )
+    };
+    // Sum of Option costs: Some(total) when at least one row priced.
+    fn add_cost(acc: &mut Option<f64>, c: Option<f64>) {
+        if let Some(v) = c {
+            *acc = Some(acc.unwrap_or(0.0) + v);
+        }
+    }
+    fn round4(c: Option<f64>) -> Option<f64> {
+        c.map(|v| (v * 10000.0).round() / 10000.0)
+    }
+
+    let n = total as f64;
+    let avg_total_ms = entries.iter().map(|e| e.total_ms as f64).sum::<f64>() / n;
+    let search: Vec<f64> = entries
+        .iter()
+        .filter_map(|e| e.search_ms.map(|v| v as f64))
+        .collect();
+    let generation: Vec<f64> = entries
+        .iter()
+        .filter_map(|e| e.generation_ms.map(|v| v as f64))
+        .collect();
+    let relevance: Vec<f64> = entries
+        .iter()
+        .filter_map(|e| e.relevance_score.map(|v| v as f64))
+        .collect();
+    let avg = |v: &[f64]| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+
+    let total_prompt: u64 = entries.iter().map(|e| e.prompt_tokens as u64).sum();
+    let total_completion: u64 = entries.iter().map(|e| e.completion_tokens as u64).sum();
+    let success = entries.iter().filter(|e| e.status == "success").count() as f64;
+    let quality_known: Vec<bool> = entries
+        .iter()
+        .filter_map(|e| e.quality_guard_pass)
+        .collect();
+    let quality_pass_rate = if quality_known.is_empty() {
+        0.0
+    } else {
+        quality_known.iter().filter(|b| **b).count() as f64 / quality_known.len() as f64
+    };
+    let feedback: Vec<i8> = entries.iter().filter_map(|e| e.feedback_score).collect();
+    let feedback_positive_rate = if feedback.is_empty() {
+        0.0
+    } else {
+        feedback.iter().filter(|s| **s > 0).count() as f64 / feedback.len() as f64
+    };
+
+    let mut total_cost: Option<f64> = None;
+    for e in entries {
+        add_cost(&mut total_cost, entry_cost(e));
+    }
+
+    // by (kind, model)
+    #[derive(Default)]
+    struct MAcc {
+        kind: String,
+        count: u64,
+        ms: f64,
+        quality: f64,
+        qn: u64,
+        prompt: u64,
+        completion: u64,
+        cost: Option<f64>,
+    }
+    let mut models: HashMap<String, MAcc> = HashMap::new();
+    for e in entries {
+        let a = models.entry(e.llm_model.clone()).or_default();
+        a.kind = e.llm_kind.clone();
+        a.count += 1;
+        a.ms += e.total_ms as f64;
+        if let Some(q) = e.relevance_score {
+            a.quality += q as f64;
+            a.qn += 1;
+        }
+        a.prompt += e.prompt_tokens as u64;
+        a.completion += e.completion_tokens as u64;
+        add_cost(&mut a.cost, entry_cost(e));
+    }
+    let mut by_model: Vec<ModelStats> = models
+        .into_iter()
+        .map(|(model, a)| ModelStats {
+            model,
+            count: a.count,
+            avg_ms: a.ms / a.count as f64,
+            avg_quality: if a.qn == 0 {
+                0.0
+            } else {
+                a.quality / a.qn as f64
+            },
+            total_tokens: a.prompt + a.completion,
+            llm_kind: a.kind,
+            prompt_tokens: a.prompt,
+            completion_tokens: a.completion,
+            estimated_cost_usd: round4(a.cost),
+        })
+        .collect();
+    by_model.sort_by_key(|m| std::cmp::Reverse(m.total_tokens));
+    by_model.truncate(50);
+
+    #[derive(Default)]
+    struct GAcc {
+        count: u64,
+        ms: f64,
+        prompt: u64,
+        completion: u64,
+        cost: Option<f64>,
+    }
+    let group = |key_of: &dyn Fn(&InferenceLogEntry) -> Option<String>| {
+        let mut acc: HashMap<String, GAcc> = HashMap::new();
+        for e in entries {
+            if let Some(k) = key_of(e) {
+                let a = acc.entry(k).or_default();
+                a.count += 1;
+                a.ms += e.total_ms as f64;
+                a.prompt += e.prompt_tokens as u64;
+                a.completion += e.completion_tokens as u64;
+                add_cost(&mut a.cost, entry_cost(e));
+            }
+        }
+        acc
+    };
+    let to_entities = |acc: HashMap<String, GAcc>| {
+        let mut v: Vec<EntityStats> = acc
+            .into_iter()
+            .map(|(id, a)| EntityStats {
+                id,
+                count: a.count,
+                prompt_tokens: a.prompt,
+                completion_tokens: a.completion,
+                total_tokens: a.prompt + a.completion,
+                estimated_cost_usd: round4(a.cost),
+            })
+            .collect();
+        v.sort_by_key(|e| std::cmp::Reverse(e.total_tokens));
+        v.truncate(50);
+        v
+    };
+
+    let mut by_workspace: Vec<WorkspaceStats> = group(&|e| e.workspace_id.clone())
+        .into_iter()
+        .map(|(id, a)| WorkspaceStats {
+            workspace_id: id,
+            count: a.count,
+            avg_ms: a.ms / a.count as f64,
+            total_tokens: a.prompt + a.completion,
+            prompt_tokens: a.prompt,
+            completion_tokens: a.completion,
+            estimated_cost_usd: round4(a.cost),
+        })
+        .collect();
+    by_workspace.sort_by_key(|w| std::cmp::Reverse(w.total_tokens));
+    by_workspace.truncate(50);
+
+    InferenceStats {
+        total_requests: total,
+        avg_total_ms,
+        avg_search_ms: avg(&search),
+        avg_generation_ms: avg(&generation),
+        avg_relevance_score: avg(&relevance),
+        total_prompt_tokens: total_prompt,
+        total_completion_tokens: total_completion,
+        success_rate: success / n,
+        quality_pass_rate,
+        feedback_positive_rate,
+        by_model,
+        by_workspace,
+        total_estimated_cost_usd: round4(total_cost),
+        by_user: to_entities(group(&|e| e.user_id.clone())),
+        by_dept: to_entities(group(&|e| e.dept_id.clone())),
+        by_org: to_entities(group(&|e| e.org_id.clone())),
+        by_api_key: to_entities(group(&|e| e.api_key_id.clone())),
+    }
 }
 
 // ── Document Versioning ──────────────────────────────────────────────

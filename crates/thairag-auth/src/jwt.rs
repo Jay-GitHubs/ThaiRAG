@@ -37,6 +37,7 @@ impl JwtService {
             email: email.to_string(),
             iat: now,
             exp: now + (self.expiry_hours as usize * 3600),
+            api_key_id: None,
         };
         encode(&Header::default(), &claims, &self.encoding_key)
             .map_err(|e| ThaiRagError::Auth(e.to_string()))

@@ -187,6 +187,7 @@ pub async fn v2_chat_completions(
 
     // ── Scope resolution ────────────────────────────────────────────
     let user_id = resolve_user_id(&state, &claims, &headers);
+    let api_key_id = claims.api_key_id.clone();
 
     let scope = if let Some(uid) = user_id {
         let ws_ids = state.km_store.get_user_workspace_ids(uid);
@@ -238,6 +239,7 @@ pub async fn v2_chat_completions(
             memories,
             available_scopes,
             user_id,
+            api_key_id.clone(),
             personal_memories,
             settings_scope,
             attachments,
@@ -287,6 +289,7 @@ async fn handle_v2_non_stream(
     memories: Vec<MemoryEntry>,
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
+    api_key_id: Option<String>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
@@ -461,6 +464,8 @@ async fn handle_v2_non_stream(
                 .map(|v| v.code.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
+            source: "chat".into(),
+            api_key_id: api_key_id.clone(),
         };
         let store = state.km_store.clone();
         tokio::spawn(async move {

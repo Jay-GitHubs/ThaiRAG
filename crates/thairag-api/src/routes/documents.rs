@@ -651,6 +651,82 @@ async fn process_document_inner_impl(
             .km_store
             .update_document_status(doc_id, DocStatus::Ready, chunk_count as i64, None);
 
+    // ── Ingest usage metering (Gap B) ──
+    // Record one summary row per successful ingest so document-processing
+    // token volume is attributable per workspace/dept/org, segregated from
+    // chat traffic by `source = "ingest"` (excluded from analytics by
+    // default). Tokens are an ESTIMATE of embedding input from the converted
+    // text length (~4 chars/token); estimated_cost stays None because
+    // embedding pricing differs from the chat price table and the dominant
+    // AI-preprocessing LLM token cost is not yet surfaced here (tracked
+    // follow-up). This never blocks or fails ingest.
+    if chunk_count > 0 {
+        let text_len = state
+            .km_store
+            .get_document_content(doc_id)
+            .ok()
+            .flatten()
+            .map(|t| t.chars().count())
+            .unwrap_or(0);
+        let est_embedding_tokens = (text_len / 4) as u32;
+        let scope = state.resolve_scope_for_workspace(workspace_id);
+        let (org_id, dept_id) = match &scope {
+            crate::store::SettingsScope::Org(o) => (Some(o.0.to_string()), None),
+            crate::store::SettingsScope::Dept { org_id, dept_id } => {
+                (Some(org_id.0.to_string()), Some(dept_id.0.to_string()))
+            }
+            crate::store::SettingsScope::Workspace {
+                org_id, dept_id, ..
+            } => (Some(org_id.0.to_string()), Some(dept_id.0.to_string())),
+            crate::store::SettingsScope::Global => (None, None),
+        };
+        let emb = &state.providers().providers_config.embedding;
+        let entry = crate::store::InferenceLogEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            user_id: None,
+            workspace_id: Some(workspace_id.0.to_string()),
+            org_id,
+            dept_id,
+            session_id: None,
+            response_id: format!("ingest-{}", doc_id.0),
+            query_text: format!("ingest:{}", doc_id.0),
+            detected_language: None,
+            intent: Some("ingest".into()),
+            complexity: None,
+            llm_kind: format!("{:?}", emb.kind).to_lowercase(),
+            llm_model: emb.model.clone(),
+            settings_scope: format!("{scope:?}"),
+            prompt_tokens: est_embedding_tokens,
+            completion_tokens: 0,
+            estimated_context_tokens: 0,
+            total_ms: 0,
+            search_ms: None,
+            generation_ms: None,
+            chunks_retrieved: Some(chunk_count as u32),
+            avg_chunk_score: None,
+            self_rag_decision: None,
+            self_rag_confidence: None,
+            quality_guard_pass: None,
+            relevance_score: None,
+            hallucination_score: None,
+            completeness_score: None,
+            pipeline_route: Some("ingest".into()),
+            agents_used: String::new(),
+            status: "success".into(),
+            error_message: None,
+            response_length: 0,
+            feedback_score: None,
+            input_guardrails_pass: None,
+            output_guardrails_pass: None,
+            guardrail_violation_codes: String::new(),
+            source: "ingest".into(),
+            api_key_id: None,
+        };
+        let km = state.km_store.clone();
+        tokio::task::spawn_blocking(move || km.insert_inference_log(&entry));
+    }
+
     // Update content_hash and increment version on the document
     if let Ok(doc) = state.km_store.get_document(doc_id) {
         // We update via a status call that's already done; content_hash is stored separately

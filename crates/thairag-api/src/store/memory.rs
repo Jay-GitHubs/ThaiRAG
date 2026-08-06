@@ -1635,6 +1635,14 @@ impl KmStoreTrait for MemoryKmStore {
                 {
                     return false;
                 }
+                if let Some(ref key) = filter.api_key_id
+                    && e.api_key_id.as_deref() != Some(key.as_str())
+                {
+                    return false;
+                }
+                if !super::source_matches(&filter.source, &e.source) {
+                    return false;
+                }
                 true
             })
             .cloned()
@@ -1652,172 +1660,18 @@ impl KmStoreTrait for MemoryKmStore {
     }
 
     fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
-        // Re-use the same filtering logic but without limit/offset
-        let no_limit_filter = super::InferenceLogFilter {
-            workspace_id: filter.workspace_id.clone(),
-            user_id: filter.user_id.clone(),
-            from_timestamp: filter.from_timestamp.clone(),
-            to_timestamp: filter.to_timestamp.clone(),
-            status: filter.status.clone(),
-            llm_model: filter.llm_model.clone(),
-            intent: filter.intent.clone(),
-            response_id: filter.response_id.clone(),
-            session_id: filter.session_id.clone(),
-            limit: 0,
+        // Aggregate over the same filtered set the list endpoint returns
+        // (minus paging), delegating to the shared cross-backend computation
+        // so semantics can't diverge between stores.
+        // Fetch all matching rows for aggregation. `limit: 0` means "no rows"
+        // in SQL LIMIT, so use a bound above the 50k log-retention cap.
+        let full = super::InferenceLogFilter {
+            limit: 1_000_000,
             offset: 0,
+            ..filter.clone()
         };
-        let entries = self.list_inference_logs(&no_limit_filter);
-        let total = entries.len() as u64;
-
-        if total == 0 {
-            return super::InferenceStats {
-                total_requests: 0,
-                avg_total_ms: 0.0,
-                avg_search_ms: 0.0,
-                avg_generation_ms: 0.0,
-                avg_relevance_score: 0.0,
-                total_prompt_tokens: 0,
-                total_completion_tokens: 0,
-                success_rate: 0.0,
-                quality_pass_rate: 0.0,
-                feedback_positive_rate: 0.0,
-                by_model: Vec::new(),
-                by_workspace: Vec::new(),
-            };
-        }
-
-        let total_f = total as f64;
-        let sum_total_ms: u64 = entries.iter().map(|e| e.total_ms).sum();
-        let sum_search_ms: u64 = entries.iter().filter_map(|e| e.search_ms).sum();
-        let search_count = entries.iter().filter(|e| e.search_ms.is_some()).count() as f64;
-        let sum_gen_ms: u64 = entries.iter().filter_map(|e| e.generation_ms).sum();
-        let gen_count = entries.iter().filter(|e| e.generation_ms.is_some()).count() as f64;
-        // Per-row best available relevance signal: the LLM-judged score when
-        // the quality guard ran, else the retrieval chunk score (mirrors the
-        // SQL stores' clamped COALESCE(relevance_score, avg_chunk_score)).
-        // Clamped to [0,1]: lexical-fallback rows store raw BM25 scores (up to
-        // ~72 observed) that would otherwise swamp the normalized cosine rows.
-        let sum_relevance: f64 = entries
-            .iter()
-            .filter_map(|e| e.relevance_score.or(e.avg_chunk_score))
-            .map(|s| (s as f64).min(1.0))
-            .sum();
-        let relevance_count = entries
-            .iter()
-            .filter(|e| e.relevance_score.or(e.avg_chunk_score).is_some())
-            .count() as f64;
-        let total_prompt: u64 = entries.iter().map(|e| e.prompt_tokens as u64).sum();
-        let total_completion: u64 = entries.iter().map(|e| e.completion_tokens as u64).sum();
-        let success_count = entries.iter().filter(|e| e.status == "success").count() as f64;
-        let quality_pass_count = entries
-            .iter()
-            .filter(|e| e.quality_guard_pass == Some(true))
-            .count() as f64;
-        let quality_total = entries
-            .iter()
-            .filter(|e| e.quality_guard_pass.is_some())
-            .count() as f64;
-        let feedback_positive = entries
-            .iter()
-            .filter(|e| e.feedback_score.is_some_and(|s| s > 0))
-            .count() as f64;
-        let feedback_total = entries
-            .iter()
-            .filter(|e| e.feedback_score.is_some())
-            .count() as f64;
-
-        // Group by model
-        let mut model_map: HashMap<String, Vec<&super::InferenceLogEntry>> = HashMap::new();
-        for e in &entries {
-            model_map.entry(e.llm_model.clone()).or_default().push(e);
-        }
-        let by_model: Vec<super::ModelStats> = model_map
-            .into_iter()
-            .map(|(model, es)| {
-                let count = es.len() as u64;
-                let avg_ms = es.iter().map(|e| e.total_ms).sum::<u64>() as f64 / count as f64;
-                let rel_scores: Vec<f64> = es
-                    .iter()
-                    .filter_map(|e| e.relevance_score.map(|s| s as f64))
-                    .collect();
-                let avg_quality = if rel_scores.is_empty() {
-                    0.0
-                } else {
-                    rel_scores.iter().sum::<f64>() / rel_scores.len() as f64
-                };
-                let total_tokens = es
-                    .iter()
-                    .map(|e| (e.prompt_tokens + e.completion_tokens) as u64)
-                    .sum();
-                super::ModelStats {
-                    model,
-                    count,
-                    avg_ms,
-                    avg_quality,
-                    total_tokens,
-                }
-            })
-            .collect();
-
-        // Group by workspace
-        let mut ws_map: HashMap<String, Vec<&super::InferenceLogEntry>> = HashMap::new();
-        for e in &entries {
-            if let Some(ref ws_id) = e.workspace_id {
-                ws_map.entry(ws_id.clone()).or_default().push(e);
-            }
-        }
-        let by_workspace: Vec<super::WorkspaceStats> = ws_map
-            .into_iter()
-            .map(|(workspace_id, es)| {
-                let count = es.len() as u64;
-                let avg_ms = es.iter().map(|e| e.total_ms).sum::<u64>() as f64 / count as f64;
-                let total_tokens = es
-                    .iter()
-                    .map(|e| (e.prompt_tokens + e.completion_tokens) as u64)
-                    .sum();
-                super::WorkspaceStats {
-                    workspace_id,
-                    count,
-                    avg_ms,
-                    total_tokens,
-                }
-            })
-            .collect();
-
-        super::InferenceStats {
-            total_requests: total,
-            avg_total_ms: sum_total_ms as f64 / total_f,
-            avg_search_ms: if search_count > 0.0 {
-                sum_search_ms as f64 / search_count
-            } else {
-                0.0
-            },
-            avg_generation_ms: if gen_count > 0.0 {
-                sum_gen_ms as f64 / gen_count
-            } else {
-                0.0
-            },
-            avg_relevance_score: if relevance_count > 0.0 {
-                sum_relevance / relevance_count
-            } else {
-                0.0
-            },
-            total_prompt_tokens: total_prompt,
-            total_completion_tokens: total_completion,
-            success_rate: success_count / total_f,
-            quality_pass_rate: if quality_total > 0.0 {
-                quality_pass_count / quality_total
-            } else {
-                0.0
-            },
-            feedback_positive_rate: if feedback_total > 0.0 {
-                feedback_positive / feedback_total
-            } else {
-                0.0
-            },
-            by_model,
-            by_workspace,
-        }
+        let entries = self.list_inference_logs(&full);
+        super::compute_inference_stats(&entries)
     }
 
     fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
@@ -3395,6 +3249,258 @@ impl KmStoreTrait for MemoryKmStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Metering characterization + gap tests (PR: cost attribution) ──
+
+    fn make_log(
+        id: &str,
+        user: Option<&str>,
+        ws: Option<&str>,
+        kind: &str,
+        model: &str,
+        prompt: u32,
+        completion: u32,
+    ) -> crate::store::InferenceLogEntry {
+        crate::store::InferenceLogEntry {
+            id: id.into(),
+            timestamp: "2026-08-06T00:00:00Z".into(),
+            user_id: user.map(Into::into),
+            workspace_id: ws.map(Into::into),
+            org_id: None,
+            dept_id: None,
+            session_id: None,
+            response_id: format!("resp-{id}"),
+            query_text: "q".into(),
+            detected_language: None,
+            intent: None,
+            complexity: None,
+            llm_kind: kind.into(),
+            llm_model: model.into(),
+            settings_scope: "Global".into(),
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            estimated_context_tokens: 0,
+            total_ms: 100,
+            search_ms: Some(10),
+            generation_ms: Some(80),
+            chunks_retrieved: Some(3),
+            avg_chunk_score: Some(0.5),
+            self_rag_decision: None,
+            self_rag_confidence: None,
+            quality_guard_pass: None,
+            relevance_score: Some(0.5),
+            hallucination_score: None,
+            completeness_score: None,
+            pipeline_route: None,
+            agents_used: String::new(),
+            status: "success".into(),
+            error_message: None,
+            response_length: 10,
+            feedback_score: None,
+            input_guardrails_pass: None,
+            output_guardrails_pass: None,
+            guardrail_violation_codes: String::new(),
+            source: "chat".into(),
+            api_key_id: None,
+        }
+    }
+
+    /// CHARACTERIZATION: pins pre-change stats semantics. If this breaks,
+    /// the metering PR changed existing analytics behavior — investigate.
+    #[test]
+    fn inference_stats_characterization_prechange() {
+        let store = MemoryKmStore::new();
+        store.insert_inference_log(&make_log(
+            "a",
+            Some("u1"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            1000,
+            200,
+        ));
+        store.insert_inference_log(&make_log(
+            "b",
+            Some("u1"),
+            Some("w2"),
+            "open_ai",
+            "gpt-4o-mini",
+            500,
+            100,
+        ));
+        store.insert_inference_log(&make_log(
+            "c",
+            Some("u2"),
+            Some("w1"),
+            "ollama",
+            "qwen3:14b",
+            800,
+            300,
+        ));
+
+        let stats = store.get_inference_stats(&crate::store::InferenceLogFilter::default());
+        assert_eq!(stats.total_requests, 3);
+        assert_eq!(stats.total_prompt_tokens, 2300);
+        assert_eq!(stats.total_completion_tokens, 600);
+        assert_eq!(stats.by_model.len(), 2);
+        assert_eq!(stats.by_workspace.len(), 2);
+        let gpt = stats
+            .by_model
+            .iter()
+            .find(|m| m.model == "gpt-4o-mini")
+            .unwrap();
+        assert_eq!(gpt.count, 2);
+        assert_eq!(gpt.total_tokens, 1800);
+        let w1 = stats
+            .by_workspace
+            .iter()
+            .find(|w| w.workspace_id == "w1")
+            .unwrap();
+        assert_eq!(w1.count, 2);
+        assert_eq!(w1.total_tokens, 2300);
+
+        // user filter still narrows
+        let f = crate::store::InferenceLogFilter {
+            user_id: Some("u1".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.get_inference_stats(&f).total_requests, 2);
+    }
+
+    #[test]
+    fn gap_a_cost_and_by_user_attribution() {
+        let store = MemoryKmStore::new();
+        // gpt-4o-mini: prompt $0.15/M, completion $0.60/M
+        store.insert_inference_log(&make_log(
+            "a",
+            Some("u1"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            1_000_000,
+            1_000_000,
+        ));
+        store.insert_inference_log(&make_log(
+            "b",
+            Some("u2"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            1_000_000,
+            0,
+        ));
+        let stats = store.get_inference_stats(&crate::store::InferenceLogFilter::default());
+
+        assert_eq!(stats.total_estimated_cost_usd, Some(0.90));
+        assert_eq!(stats.by_user.len(), 2);
+        let u1 = stats.by_user.iter().find(|e| e.id == "u1").unwrap();
+        assert_eq!(u1.estimated_cost_usd, Some(0.75));
+        let u2 = stats.by_user.iter().find(|e| e.id == "u2").unwrap();
+        assert_eq!(u2.estimated_cost_usd, Some(0.15));
+        let m = &stats.by_model[0];
+        assert_eq!(m.prompt_tokens, 2_000_000);
+        assert_eq!(m.completion_tokens, 1_000_000);
+        assert_eq!(m.estimated_cost_usd, Some(0.90));
+        assert_eq!(m.llm_kind, "open_ai");
+    }
+
+    #[test]
+    fn gap_a_local_model_cost_is_zero_not_none() {
+        let store = MemoryKmStore::new();
+        store.insert_inference_log(&make_log(
+            "a",
+            Some("u1"),
+            Some("w1"),
+            "ollama",
+            "qwen3:14b",
+            1_000_000,
+            1_000_000,
+        ));
+        let stats = store.get_inference_stats(&crate::store::InferenceLogFilter::default());
+        assert_eq!(stats.total_estimated_cost_usd, Some(0.0));
+    }
+
+    #[test]
+    fn gap_b_ingest_rows_excluded_by_default_included_on_request() {
+        let store = MemoryKmStore::new();
+        store.insert_inference_log(&make_log(
+            "chat1",
+            Some("u1"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            1000,
+            200,
+        ));
+        let mut ingest = make_log(
+            "ing1",
+            Some("u1"),
+            Some("w1"),
+            "open_ai",
+            "text-embedding-3-small",
+            5000,
+            0,
+        );
+        ingest.source = "ingest".into();
+        store.insert_inference_log(&ingest);
+
+        let default_stats = store.get_inference_stats(&crate::store::InferenceLogFilter::default());
+        assert_eq!(default_stats.total_requests, 1);
+        assert_eq!(default_stats.total_prompt_tokens, 1000);
+
+        let ingest_only = crate::store::InferenceLogFilter {
+            source: Some("ingest".into()),
+            ..Default::default()
+        };
+        let s2 = store.get_inference_stats(&ingest_only);
+        assert_eq!(s2.total_requests, 1);
+        assert_eq!(s2.total_prompt_tokens, 5000);
+
+        let all = crate::store::InferenceLogFilter {
+            source: Some("all".into()),
+            ..Default::default()
+        };
+        assert_eq!(store.get_inference_stats(&all).total_requests, 2);
+    }
+
+    #[test]
+    fn gap_c_api_key_attribution_and_filter() {
+        let store = MemoryKmStore::new();
+        let mut k1 = make_log(
+            "a",
+            Some("svc"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            1000,
+            100,
+        );
+        k1.api_key_id = Some("key-123".into());
+        store.insert_inference_log(&k1);
+        let mut k2 = make_log(
+            "b",
+            Some("svc"),
+            Some("w1"),
+            "open_ai",
+            "gpt-4o-mini",
+            2000,
+            200,
+        );
+        k2.api_key_id = Some("key-999".into());
+        store.insert_inference_log(&k2);
+
+        let stats = store.get_inference_stats(&crate::store::InferenceLogFilter::default());
+        assert_eq!(stats.by_api_key.len(), 2);
+
+        let only = crate::store::InferenceLogFilter {
+            api_key_id: Some("key-123".into()),
+            ..Default::default()
+        };
+        let s2 = store.get_inference_stats(&only);
+        assert_eq!(s2.total_requests, 1);
+        assert_eq!(s2.total_prompt_tokens, 1000);
+    }
+
     use thairag_core::models::PermissionScope;
     use thairag_core::permission::Role;
 

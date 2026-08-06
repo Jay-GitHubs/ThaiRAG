@@ -147,6 +147,9 @@ pub async fn chat_completions(
     } else {
         claims.sub.parse::<Uuid>().ok().map(UserId)
     };
+    // Captured for per-key usage attribution in the inference log (Gap C);
+    // moved into the generation task alongside user_id.
+    let api_key_id = claims.api_key_id.clone();
 
     let scope = if let Some(uid) = user_id {
         let ws_ids = state.km_store.get_user_workspace_ids(uid);
@@ -198,6 +201,7 @@ pub async fn chat_completions(
             memories,
             available_scopes,
             user_id,
+            api_key_id.clone(),
             personal_memories,
             settings_scope,
             attachments,
@@ -213,6 +217,7 @@ pub async fn chat_completions(
             memories,
             available_scopes,
             user_id,
+            api_key_id.clone(),
             personal_memories,
             settings_scope,
             attachments,
@@ -1004,6 +1009,7 @@ async fn handle_non_stream(
     memories: Vec<MemoryEntry>,
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
+    api_key_id: Option<String>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
@@ -1195,6 +1201,8 @@ async fn handle_non_stream(
                 .map(|v| v.code.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
+            source: "chat".into(),
+            api_key_id: api_key_id.clone(),
         };
 
         // ── Search Analytics ──
@@ -1337,6 +1345,7 @@ async fn handle_stream(
     memories: Vec<MemoryEntry>,
     available_scopes: Vec<SearchableScope>,
     user_id: Option<UserId>,
+    api_key_id: Option<String>,
     personal_memories: Vec<PersonalMemory>,
     settings_scope: crate::store::SettingsScope,
     attachments: Vec<SessionAttachment>,
@@ -1754,6 +1763,8 @@ async fn handle_stream(
                     .map(|v| v.code.as_str())
                     .collect::<Vec<_>>()
                     .join(","),
+                source: "chat".into(),
+                api_key_id: api_key_id.clone(),
             };
 
             // ── Search Analytics ──
@@ -2039,6 +2050,8 @@ pub async fn stream_conversation_message(
         ))
     })?;
     let user_id_str = claims.sub.clone();
+    // For per-key usage attribution in the inference log (Gap C).
+    let api_key_id = claims.api_key_id.clone();
 
     // ── Per-user concurrency + token-bucket rate limiting ──
     let request_guard = state
@@ -2337,6 +2350,7 @@ pub async fn stream_conversation_message(
     let hub_for_finish = state.generation_hub.clone();
     let conv_for_finish = conversation_id.clone();
     let gen_for_finish = generation.clone();
+    let api_key_id = api_key_id.clone();
     tokio::spawn(async move {
         // Hold the per-user concurrency slot for the LIFETIME OF GENERATION,
         // not of the HTTP request.
@@ -2632,6 +2646,8 @@ pub async fn stream_conversation_message(
                         .map(|v| v.code.as_str())
                         .collect::<Vec<_>>()
                         .join(","),
+                    source: "chat".into(),
+                    api_key_id: api_key_id.clone(),
                 };
                 let km = state.km_store.clone();
                 tokio::task::spawn_blocking(move || km.insert_inference_log(&entry));

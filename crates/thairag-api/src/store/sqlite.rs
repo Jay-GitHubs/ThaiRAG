@@ -100,6 +100,10 @@ impl SqliteKmStore {
             "ALTER TABLE inference_logs ADD COLUMN output_guardrails_pass INTEGER",
             "ALTER TABLE inference_logs ADD COLUMN guardrail_violation_codes TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE inference_logs ADD COLUMN estimated_context_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE inference_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'",
+            "ALTER TABLE inference_logs ADD COLUMN api_key_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_inference_logs_source ON inference_logs(source)",
+            "CREATE INDEX IF NOT EXISTS idx_inference_logs_api_key_id ON inference_logs(api_key_id)",
         ] {
             // SQLite returns "duplicate column name" if the column already exists; ignore.
             let _ = conn.execute(stmt, []);
@@ -2784,13 +2788,14 @@ impl KmStoreTrait for SqliteKmStore {
                 quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                 pipeline_route, agents_used, status, error_message, response_length,
                 feedback_score,
-                input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes,
+                source, api_key_id
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                 ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
                 ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29,
                 ?30, ?31, ?32, ?33, ?34, ?35,
-                ?36, ?37, ?38
+                ?36, ?37, ?38, ?39, ?40
             )",
             params![
                 entry.id,
@@ -2831,6 +2836,8 @@ impl KmStoreTrait for SqliteKmStore {
                 entry.input_guardrails_pass.map(|v| v as i32),
                 entry.output_guardrails_pass.map(|v| v as i32),
                 entry.guardrail_violation_codes,
+                entry.source,
+                entry.api_key_id,
             ],
         )
         .ok();
@@ -2897,6 +2904,20 @@ impl KmStoreTrait for SqliteKmStore {
             param_values.push(Box::new(session_id.clone()));
             conditions.push(format!("session_id = ?{}", param_values.len()));
         }
+        if let Some(ref key) = filter.api_key_id {
+            param_values.push(Box::new(key.clone()));
+            conditions.push(format!("api_key_id = ?{}", param_values.len()));
+        }
+        // Source rule mirrors `super::source_matches`: None => exclude ingest,
+        // "all" => no filter, else exact match.
+        match filter.source.as_deref() {
+            None => conditions.push("source != 'ingest'".to_string()),
+            Some("all") => {}
+            Some(src) => {
+                param_values.push(Box::new(src.to_string()));
+                conditions.push(format!("source = ?{}", param_values.len()));
+            }
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -2919,7 +2940,8 @@ impl KmStoreTrait for SqliteKmStore {
                     quality_guard_pass, relevance_score, hallucination_score, completeness_score,
                     pipeline_route, agents_used, status, error_message, response_length,
                     feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes,
+                    source, api_key_id
              FROM inference_logs {where_clause}
              ORDER BY timestamp DESC
              LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
@@ -2973,6 +2995,10 @@ impl KmStoreTrait for SqliteKmStore {
                 input_guardrails_pass: row.get::<_, Option<i32>>(35)?.map(|v| v != 0),
                 output_guardrails_pass: row.get::<_, Option<i32>>(36)?.map(|v| v != 0),
                 guardrail_violation_codes: row.get(37).unwrap_or_default(),
+                source: row
+                    .get::<_, Option<String>>(38)?
+                    .unwrap_or_else(|| "chat".into()),
+                api_key_id: row.get(39)?,
             })
         })
         .unwrap()
@@ -2981,161 +3007,17 @@ impl KmStoreTrait for SqliteKmStore {
     }
 
     fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
-        let conn = self.conn.lock().unwrap();
-
-        let mut conditions = Vec::new();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(ref ws) = filter.workspace_id {
-            param_values.push(Box::new(ws.clone()));
-            conditions.push(format!("workspace_id = ?{}", param_values.len()));
-        }
-        if let Some(ref uid) = filter.user_id {
-            param_values.push(Box::new(uid.clone()));
-            conditions.push(format!("user_id = ?{}", param_values.len()));
-        }
-        if let Some(ref from) = filter.from_timestamp {
-            param_values.push(Box::new(from.clone()));
-            conditions.push(format!("timestamp >= ?{}", param_values.len()));
-        }
-        if let Some(ref to) = filter.to_timestamp {
-            param_values.push(Box::new(to.clone()));
-            conditions.push(format!("timestamp <= ?{}", param_values.len()));
-        }
-        if let Some(ref status) = filter.status {
-            param_values.push(Box::new(status.clone()));
-            conditions.push(format!("status = ?{}", param_values.len()));
-        }
-        if let Some(ref model) = filter.llm_model {
-            param_values.push(Box::new(model.clone()));
-            conditions.push(format!("llm_model = ?{}", param_values.len()));
-        }
-        if let Some(ref intent) = filter.intent {
-            param_values.push(Box::new(intent.clone()));
-            conditions.push(format!("intent = ?{}", param_values.len()));
-        }
-        if let Some(ref response_id) = filter.response_id {
-            param_values.push(Box::new(response_id.clone()));
-            conditions.push(format!("response_id = ?{}", param_values.len()));
-        }
-        if let Some(ref session_id) = filter.session_id {
-            param_values.push(Box::new(session_id.clone()));
-            conditions.push(format!("session_id = ?{}", param_values.len()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
+        // Delegate to the shared cross-backend computation over the filtered
+        // rows (source/api_key filters applied in list_inference_logs).
+        // Fetch all matching rows for aggregation. `limit: 0` means "no rows"
+        // in SQL LIMIT, so use a bound above the 50k log-retention cap.
+        let full = super::InferenceLogFilter {
+            limit: 1_000_000,
+            offset: 0,
+            ..filter.clone()
         };
-
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-
-        // Aggregate stats
-        let sql = format!(
-            "SELECT
-                COUNT(*),
-                COALESCE(AVG(total_ms), 0),
-                COALESCE(AVG(search_ms), 0),
-                COALESCE(AVG(generation_ms), 0),
-                COALESCE(AVG(MIN(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0),
-                COALESCE(SUM(prompt_tokens), 0),
-                COALESCE(SUM(completion_tokens), 0),
-                COALESCE(SUM(CASE WHEN status = 'success' THEN 1.0 ELSE 0.0 END) / NULLIF(COUNT(*), 0), 0),
-                COALESCE(SUM(CASE WHEN quality_guard_pass = 1 THEN 1.0 ELSE 0.0 END) / NULLIF(SUM(CASE WHEN quality_guard_pass IS NOT NULL THEN 1 ELSE 0 END), 0), 0),
-                COALESCE(SUM(CASE WHEN feedback_score > 0 THEN 1.0 ELSE 0.0 END) / NULLIF(SUM(CASE WHEN feedback_score IS NOT NULL THEN 1 ELSE 0 END), 0), 0)
-             FROM inference_logs {where_clause}"
-        );
-
-        let (
-            total_requests,
-            avg_total_ms,
-            avg_search_ms,
-            avg_generation_ms,
-            avg_relevance_score,
-            total_prompt_tokens,
-            total_completion_tokens,
-            success_rate,
-            quality_pass_rate,
-            feedback_positive_rate,
-        ) = conn
-            .query_row(&sql, params_refs.as_slice(), |row| {
-                Ok((
-                    row.get::<_, i64>(0)? as u64,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                    row.get::<_, f64>(4)?,
-                    row.get::<_, i64>(5)? as u64,
-                    row.get::<_, i64>(6)? as u64,
-                    row.get::<_, f64>(7)?,
-                    row.get::<_, f64>(8)?,
-                    row.get::<_, f64>(9)?,
-                ))
-            })
-            .unwrap_or((0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0));
-
-        // By model
-        let model_sql = format!(
-            "SELECT llm_model, COUNT(*), COALESCE(AVG(total_ms), 0),
-                    COALESCE(AVG(MIN(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0),
-                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
-             FROM inference_logs {where_clause}
-             GROUP BY llm_model ORDER BY COUNT(*) DESC"
-        );
-        let by_model = {
-            let mut stmt = conn.prepare(&model_sql).unwrap();
-            stmt.query_map(params_refs.as_slice(), |row| {
-                Ok(super::ModelStats {
-                    model: row.get(0)?,
-                    count: row.get::<_, i64>(1)? as u64,
-                    avg_ms: row.get(2)?,
-                    avg_quality: row.get(3)?,
-                    total_tokens: row.get::<_, i64>(4)? as u64,
-                })
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-        };
-
-        // By workspace
-        let ws_sql = format!(
-            "SELECT COALESCE(workspace_id, ''), COUNT(*), COALESCE(AVG(total_ms), 0),
-                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
-             FROM inference_logs {where_clause}
-             GROUP BY workspace_id ORDER BY COUNT(*) DESC"
-        );
-        let by_workspace = {
-            let mut stmt = conn.prepare(&ws_sql).unwrap();
-            stmt.query_map(params_refs.as_slice(), |row| {
-                Ok(super::WorkspaceStats {
-                    workspace_id: row.get(0)?,
-                    count: row.get::<_, i64>(1)? as u64,
-                    avg_ms: row.get(2)?,
-                    total_tokens: row.get::<_, i64>(3)? as u64,
-                })
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-        };
-
-        super::InferenceStats {
-            total_requests,
-            avg_total_ms,
-            avg_search_ms,
-            avg_generation_ms,
-            avg_relevance_score,
-            total_prompt_tokens,
-            total_completion_tokens,
-            success_rate,
-            quality_pass_rate,
-            feedback_positive_rate,
-            by_model,
-            by_workspace,
-        }
+        let entries = self.list_inference_logs(&full);
+        super::compute_inference_stats(&entries)
     }
 
     fn update_inference_log_feedback(&self, response_id: &str, score: i8) {
@@ -3188,6 +3070,20 @@ impl KmStoreTrait for SqliteKmStore {
         if let Some(ref session_id) = filter.session_id {
             param_values.push(Box::new(session_id.clone()));
             conditions.push(format!("session_id = ?{}", param_values.len()));
+        }
+        if let Some(ref key) = filter.api_key_id {
+            param_values.push(Box::new(key.clone()));
+            conditions.push(format!("api_key_id = ?{}", param_values.len()));
+        }
+        // Source rule mirrors `super::source_matches`: None => exclude ingest,
+        // "all" => no filter, else exact match.
+        match filter.source.as_deref() {
+            None => conditions.push("source != 'ingest'".to_string()),
+            Some("all") => {}
+            Some(src) => {
+                param_values.push(Box::new(src.to_string()));
+                conditions.push(format!("source = ?{}", param_values.len()));
+            }
         }
 
         let where_clause = if conditions.is_empty() {
@@ -3244,6 +3140,20 @@ impl KmStoreTrait for SqliteKmStore {
         if let Some(ref session_id) = filter.session_id {
             param_values.push(Box::new(session_id.clone()));
             conditions.push(format!("session_id = ?{}", param_values.len()));
+        }
+        if let Some(ref key) = filter.api_key_id {
+            param_values.push(Box::new(key.clone()));
+            conditions.push(format!("api_key_id = ?{}", param_values.len()));
+        }
+        // Source rule mirrors `super::source_matches`: None => exclude ingest,
+        // "all" => no filter, else exact match.
+        match filter.source.as_deref() {
+            None => conditions.push("source != 'ingest'".to_string()),
+            Some("all") => {}
+            Some(src) => {
+                param_values.push(Box::new(src.to_string()));
+                conditions.push(format!("source = ?{}", param_values.len()));
+            }
         }
 
         let where_clause = if conditions.is_empty() {

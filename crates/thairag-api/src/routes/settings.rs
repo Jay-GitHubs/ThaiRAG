@@ -6160,7 +6160,7 @@ pub async fn get_usage_stats(
     let embedding_model = pc.embedding.model.clone();
 
     // Estimate cost based on known model pricing (per 1M tokens)
-    let cost = estimate_cost(&llm_kind, &llm_model, prompt, completion);
+    let cost = crate::pricing::estimate_cost(&llm_kind, &llm_model, prompt, completion);
 
     Ok(Json(UsageStatsResponse {
         prompt_tokens: prompt,
@@ -6172,39 +6172,6 @@ pub async fn get_usage_stats(
         embedding_model,
         estimated_cost_usd: cost,
     }))
-}
-
-/// Rough cost estimation based on known model pricing (USD per 1M tokens).
-fn estimate_cost(kind: &str, model: &str, prompt: u64, completion: u64) -> Option<f64> {
-    let (prompt_per_m, completion_per_m) = match kind {
-        "claude" => match model {
-            m if m.contains("opus") => (15.0, 75.0),
-            m if m.contains("sonnet") => (3.0, 15.0),
-            m if m.contains("haiku") => (0.25, 1.25),
-            _ => (3.0, 15.0), // default sonnet pricing
-        },
-        "openai" | "open_ai" => match model {
-            m if m.contains("gpt-4o-mini") => (0.15, 0.60),
-            m if m.contains("gpt-4o") => (2.50, 10.0),
-            m if m.contains("gpt-4-turbo") => (10.0, 30.0),
-            m if m.contains("gpt-4") => (30.0, 60.0),
-            m if m.contains("gpt-3.5") => (0.50, 1.50),
-            m if m.contains("o1-mini") => (3.0, 12.0),
-            m if m.contains("o1") => (15.0, 60.0),
-            _ => return None,
-        },
-        "gemini" => match model {
-            m if m.contains("pro") => (1.25, 5.0),
-            m if m.contains("flash") => (0.075, 0.30),
-            _ => (1.25, 5.0),
-        },
-        "ollama" | "open_ai_compatible" => return Some(0.0), // local — no cost
-        _ => return None,
-    };
-
-    let cost = (prompt as f64 / 1_000_000.0) * prompt_per_m
-        + (completion as f64 / 1_000_000.0) * completion_per_m;
-    Some((cost * 10000.0).round() / 10000.0) // round to 4 decimals
 }
 
 fn default_audit_limit() -> usize {
@@ -6736,6 +6703,11 @@ pub struct InferenceLogFilterQuery {
     pub intent: Option<String>,
     pub response_id: Option<String>,
     pub session_id: Option<String>,
+    /// Source selector: omit = chat-only (excludes ingest, preserving legacy
+    /// analytics); "all" = everything; or an exact source ("ingest", "chat",
+    /// "test_query").
+    pub source: Option<String>,
+    pub api_key_id: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -6752,6 +6724,8 @@ impl InferenceLogFilterQuery {
             intent: self.intent.clone(),
             response_id: self.response_id.clone(),
             session_id: self.session_id.clone(),
+            source: self.source.clone(),
+            api_key_id: self.api_key_id.clone(),
             limit: self.limit.unwrap_or(default_limit),
             offset: self.offset.unwrap_or(0),
         }
