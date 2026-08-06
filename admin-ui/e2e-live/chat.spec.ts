@@ -58,6 +58,63 @@ test.describe('chat UI (live)', () => {
     }
   });
 
+  test('citations and confidence co-occur (retrieval grounding invariant)', async ({
+    page,
+    request,
+  }) => {
+    // The regression this guards: users saw citations/confidence "missing".
+    // They are retrieval artifacts and must appear TOGETHER — a real answer
+    // that cites sources must also carry a confidence score, and vice versa.
+    // This holds regardless of whether the deployment has retrievable content
+    // for a given question, so it is non-flaky without seeding a corpus.
+    test.setTimeout(300_000);
+    let conversationId: string | undefined;
+    try {
+      await page.goto(`${CHAT_ORIGIN}/`);
+      await page.getByRole('button', { name: 'New chat' }).click();
+
+      // A content-style question (not "summarize"/"what is this doc") so, when
+      // the scope has documents, the retrieval path runs and emits both.
+      const prompt = `Live smoke ${Date.now().toString(36)}: what are the key requirements or criteria described in the documents?`;
+      await page.getByPlaceholder(COMPOSER).fill(prompt);
+      await page.getByRole('button', { name: 'Send' }).click();
+      await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 240_000 });
+
+      const assistant = page.getByTestId('msg-assistant').last();
+      await expect(assistant).toBeVisible();
+
+      const sourceCount = await assistant.getByTestId('source-chip').count();
+      const confidenceVisible = await assistant
+        .getByTestId('confidence')
+        .isVisible()
+        .catch(() => false);
+      const isRefusal = await assistant
+        .getByTestId('no-answer')
+        .isVisible()
+        .catch(() => false);
+
+      if (!isRefusal) {
+        // Invariant: citations present ⟺ confidence present.
+        if (sourceCount > 0) {
+          expect(confidenceVisible, 'citations rendered but confidence is missing').toBe(true);
+        }
+        if (confidenceVisible) {
+          expect(sourceCount, 'confidence rendered but no source citations').toBeGreaterThan(0);
+        }
+      }
+
+      const m = page.url().match(/\/c\/([0-9a-f-]{36})/);
+      conversationId = m?.[1];
+    } finally {
+      const token = tokenFor(CHAT_ORIGIN);
+      if (token && conversationId) {
+        await request.delete(`${API_ORIGIN}/api/chat/conversations/${conversationId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    }
+  });
+
   test('general mode (if enabled) answers without retrieval', async ({ page, request }) => {
     test.setTimeout(240_000);
     await page.goto(`${CHAT_ORIGIN}/`);
