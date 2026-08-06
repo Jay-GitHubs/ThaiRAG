@@ -6,6 +6,7 @@ import { ProcessingTimeline } from './ProcessingTimeline';
 import { DocumentPreviewPanel } from './DocumentPreviewPanel';
 import { HandlingControls } from './HandlingControls';
 import { previewDocument } from '../../api/documents';
+import { apiErrorMessage } from '../../api/client';
 import { getDocumentConfig } from '../../api/settings';
 import type { DocumentPreview, DocumentHandling } from '../../api/types';
 import type { UploadFile } from 'antd/es/upload';
@@ -60,8 +61,8 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
     setPreviewing(true);
     try {
       setPreview(await previewDocument(workspaceId, file));
-    } catch {
-      message.error('Preview failed');
+    } catch (err) {
+      message.error(apiErrorMessage(err, 'Preview failed'));
     } finally {
       setPreviewing(false);
     }
@@ -91,8 +92,8 @@ export function UploadModal({ workspaceId, open, onClose }: Props) {
       });
       // Stay open and track the document live regardless of inline/background.
       setTrackingDocId(res.doc_id);
-    } catch {
-      message.error('Upload failed');
+    } catch (err) {
+      message.error(apiErrorMessage(err, 'Upload failed'));
     }
   }
 

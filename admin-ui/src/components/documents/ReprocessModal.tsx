@@ -4,6 +4,7 @@ import { useReprocessDocument } from '../../hooks/useDocuments';
 import { DocumentPreviewPanel } from './DocumentPreviewPanel';
 import { HandlingControls } from './HandlingControls';
 import { previewDocumentById } from '../../api/documents';
+import { apiErrorMessage } from '../../api/client';
 import type { Document, DocumentPreview, DocumentHandling } from '../../api/types';
 
 interface Props {
@@ -20,6 +21,7 @@ export function ReprocessModal({ workspaceId, doc, open, onClose }: Props) {
   const [preview, setPreview] = useState<DocumentPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState(false);
+  const [previewErrorMsg, setPreviewErrorMsg] = useState<string | null>(null);
   const [handlingMode, setHandlingMode] = useState<DocumentHandling['handling_mode']>('auto');
   const [covThreshold, setCovThreshold] = useState<number | null>(null);
   const [minChars, setMinChars] = useState<number | null>(null);
@@ -32,6 +34,7 @@ export function ReprocessModal({ workspaceId, doc, open, onClose }: Props) {
     let cancelled = false;
     setPreview(null);
     setPreviewError(false);
+    setPreviewErrorMsg(null);
     setHandlingMode('auto');
     setCovThreshold(null);
     setMinChars(null);
@@ -40,8 +43,11 @@ export function ReprocessModal({ workspaceId, doc, open, onClose }: Props) {
       .then((p) => {
         if (!cancelled) setPreview(p);
       })
-      .catch(() => {
-        if (!cancelled) setPreviewError(true);
+      .catch((err) => {
+        if (!cancelled) {
+          setPreviewError(true);
+          setPreviewErrorMsg(apiErrorMessage(err, 'Preview could not be generated.'));
+        }
       })
       .finally(() => {
         if (!cancelled) setPreviewing(false);
@@ -104,10 +110,13 @@ export function ReprocessModal({ workspaceId, doc, open, onClose }: Props) {
         </div>
       ) : previewError ? (
         <Alert
-          type="info"
+          type={previewErrorMsg?.toLowerCase().includes('not stored') ? 'info' : 'warning'}
           showIcon
           message="Preview unavailable"
-          description="The original file isn't stored for this document, so a dry-run preview can't be shown. You can still reprocess with a chosen handling mode."
+          description={
+            previewErrorMsg ??
+            "A dry-run preview couldn't be generated. You can still reprocess with a chosen handling mode."
+          }
           style={{ marginBottom: 12 }}
         />
       ) : (
