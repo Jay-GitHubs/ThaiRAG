@@ -20,6 +20,7 @@
 //! unwrapped. Deploy-time knob: `THAIRAG_INGEST_MAX_CONCURRENT` (default 2 —
 //! leaves gateway slots free for interactive traffic at all times).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -27,7 +28,54 @@ use tokio::sync::Semaphore;
 
 use crate::error::Result;
 use crate::traits::LlmProvider;
-use crate::types::{ChatMessage, LlmResponse, LlmStreamResponse, VisionMessage};
+use crate::types::{ChatMessage, LlmResponse, LlmStreamResponse, LlmUsage, VisionMessage};
+
+/// Accumulates LLM token usage during a single ingestion, so the true
+/// preprocessing cost (analyzer/converter/enricher/vision LLM calls) can be
+/// attributed to the document. Threaded via a task-local rather than every
+/// pipeline return type: ingestion runs in one task and its LLM stages are
+/// awaited inline, so a scope set at the top of the ingest task sees them all.
+#[derive(Debug, Default)]
+pub struct IngestTokenTally {
+    prompt: AtomicU64,
+    completion: AtomicU64,
+}
+
+impl IngestTokenTally {
+    pub fn add(&self, usage: &LlmUsage) {
+        self.prompt
+            .fetch_add(usage.prompt_tokens as u64, Ordering::Relaxed);
+        self.completion
+            .fetch_add(usage.completion_tokens as u64, Ordering::Relaxed);
+    }
+
+    /// (prompt_tokens, completion_tokens) accumulated so far.
+    pub fn totals(&self) -> (u64, u64) {
+        (
+            self.prompt.load(Ordering::Relaxed),
+            self.completion.load(Ordering::Relaxed),
+        )
+    }
+}
+
+tokio::task_local! {
+    static INGEST_TALLY: Arc<IngestTokenTally>;
+}
+
+/// Run `fut` with an ingest token tally in scope. Every [`Throttled`] LLM call
+/// made within (the ingestion chokepoint) accumulates its usage into `tally`.
+/// Chat requests never set this scope, so metering is a no-op for them.
+pub async fn with_ingest_tally<F, T>(tally: Arc<IngestTokenTally>, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    INGEST_TALLY.scope(tally, fut).await
+}
+
+/// Add usage to the active ingest tally if one is in scope; no-op otherwise.
+fn record_ingest_usage(usage: &LlmUsage) {
+    let _ = INGEST_TALLY.try_with(|t| t.add(usage));
+}
 
 fn bulk_semaphore() -> &'static Arc<Semaphore> {
     static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -56,7 +104,9 @@ impl LlmProvider for Throttled {
         max_tokens: Option<u32>,
     ) -> Result<LlmResponse> {
         let _slot = bulk_semaphore().clone().acquire_owned().await;
-        self.0.generate(messages, max_tokens).await
+        let resp = self.0.generate(messages, max_tokens).await?;
+        record_ingest_usage(&resp.usage);
+        Ok(resp)
     }
 
     async fn generate_stream(
@@ -76,9 +126,12 @@ impl LlmProvider for Throttled {
         json_schema: &serde_json::Value,
     ) -> Result<LlmResponse> {
         let _slot = bulk_semaphore().clone().acquire_owned().await;
-        self.0
+        let resp = self
+            .0
             .generate_structured(messages, max_tokens, json_schema)
-            .await
+            .await?;
+        record_ingest_usage(&resp.usage);
+        Ok(resp)
     }
 
     async fn generate_vision(
@@ -87,7 +140,9 @@ impl LlmProvider for Throttled {
         max_tokens: Option<u32>,
     ) -> Result<LlmResponse> {
         let _slot = bulk_semaphore().clone().acquire_owned().await;
-        self.0.generate_vision(messages, max_tokens).await
+        let resp = self.0.generate_vision(messages, max_tokens).await?;
+        record_ingest_usage(&resp.usage);
+        Ok(resp)
     }
 
     fn model_name(&self) -> &str {
@@ -103,6 +158,61 @@ impl LlmProvider for Throttled {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Stub that reports fixed token usage on every call.
+    struct TokenStub {
+        prompt: u32,
+        completion: u32,
+    }
+
+    #[async_trait]
+    impl LlmProvider for TokenStub {
+        async fn generate(&self, _m: &[ChatMessage], _t: Option<u32>) -> Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: "ok".into(),
+                usage: LlmUsage {
+                    prompt_tokens: self.prompt,
+                    completion_tokens: self.completion,
+                },
+            })
+        }
+        fn model_name(&self) -> &str {
+            "token-stub"
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_tally_accumulates_within_scope() {
+        let provider = Throttled(Arc::new(TokenStub {
+            prompt: 100,
+            completion: 20,
+        }));
+        let tally = Arc::new(IngestTokenTally::default());
+        with_ingest_tally(Arc::clone(&tally), async {
+            provider.generate(&[], None).await.unwrap();
+            provider.generate(&[], None).await.unwrap();
+            provider
+                .generate_structured(&[], None, &serde_json::json!({}))
+                .await
+                .unwrap();
+        })
+        .await;
+        // 3 calls x (100 prompt, 20 completion)
+        assert_eq!(tally.totals(), (300, 60));
+    }
+
+    #[tokio::test]
+    async fn no_scope_is_passthrough_no_panic() {
+        // Without a tally scope (the chat path), metering is a silent no-op
+        // and the response is returned unchanged.
+        let provider = Throttled(Arc::new(TokenStub {
+            prompt: 100,
+            completion: 20,
+        }));
+        let resp = provider.generate(&[], None).await.unwrap();
+        assert_eq!(resp.usage.prompt_tokens, 100);
+        assert_eq!(resp.content, "ok");
+    }
 
     struct SlowStub {
         in_flight: Arc<AtomicUsize>,
