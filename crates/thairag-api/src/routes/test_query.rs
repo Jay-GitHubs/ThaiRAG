@@ -447,6 +447,8 @@ pub async fn test_query(
                 .map(|v| v.code.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
+            source: "test_query".into(),
+            api_key_id: None,
         };
         let store = state.km_store.clone();
         tokio::spawn(async move {

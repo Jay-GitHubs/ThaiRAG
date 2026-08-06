@@ -146,6 +146,10 @@ impl PostgresKmStore {
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS output_guardrails_pass BOOLEAN",
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS guardrail_violation_codes TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS estimated_context_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'chat'",
+            "ALTER TABLE inference_logs ADD COLUMN IF NOT EXISTS api_key_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_inference_logs_source ON inference_logs(source)",
+            "CREATE INDEX IF NOT EXISTS idx_inference_logs_api_key_id ON inference_logs(api_key_id)",
         ] {
             let _ = sqlx::query(stmt).execute(&pool).await;
         }
@@ -2717,7 +2721,8 @@ impl KmStoreTrait for PostgresKmStore {
                     pipeline_route, agents_used,
                     status, error_message, response_length,
                     feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes,
+                    source, api_key_id
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8,
                     $9, $10, $11, $12,
@@ -2729,7 +2734,8 @@ impl KmStoreTrait for PostgresKmStore {
                     $30, $31,
                     $32, $33, $34,
                     $35,
-                    $36, $37, $38
+                    $36, $37, $38,
+                    $39, $40
                 )",
             )
             .bind(&entry.id)
@@ -2770,6 +2776,8 @@ impl KmStoreTrait for PostgresKmStore {
             .bind(entry.input_guardrails_pass)
             .bind(entry.output_guardrails_pass)
             .bind(&entry.guardrail_violation_codes)
+            .bind(&entry.source)
+            .bind(&entry.api_key_id)
             .execute(&self.pool),
         );
 
@@ -2808,7 +2816,8 @@ impl KmStoreTrait for PostgresKmStore {
                     pipeline_route, agents_used,
                     status, error_message, response_length,
                     feedback_score,
-                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes
+                    input_guardrails_pass, output_guardrails_pass, guardrail_violation_codes,
+                    source, api_key_id
              FROM inference_logs WHERE 1=1",
         );
         let mut param_idx: usize = 1;
@@ -2821,6 +2830,8 @@ impl KmStoreTrait for PostgresKmStore {
         let mut params_intent = None;
         let mut params_response_id = None;
         let mut params_session_id = None;
+        let mut params_api_key_id: Option<String> = None;
+        let mut params_source: Option<String> = None;
 
         if let Some(ref ws) = filter.workspace_id {
             sql.push_str(&format!(" AND workspace_id = ${param_idx}"));
@@ -2867,6 +2878,20 @@ impl KmStoreTrait for PostgresKmStore {
             params_session_id = Some(sid.clone());
             param_idx += 1;
         }
+        if let Some(ref key) = filter.api_key_id {
+            sql.push_str(&format!(" AND api_key_id = ${param_idx}"));
+            params_api_key_id = Some(key.clone());
+            param_idx += 1;
+        }
+        match filter.source.as_deref() {
+            None => sql.push_str(" AND source != 'ingest'"),
+            Some("all") => {}
+            Some(src) => {
+                sql.push_str(&format!(" AND source = ${param_idx}"));
+                params_source = Some(src.to_string());
+                param_idx += 1;
+            }
+        }
 
         sql.push_str(&format!(
             " ORDER BY timestamp DESC LIMIT ${} OFFSET ${}",
@@ -2901,6 +2926,12 @@ impl KmStoreTrait for PostgresKmStore {
                 q = q.bind(v);
             }
             if let Some(ref v) = params_session_id {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_api_key_id {
+                q = q.bind(v);
+            }
+            if let Some(ref v) = params_source {
                 q = q.bind(v);
             }
             q = q.bind(filter.limit as i64);
@@ -2955,193 +2986,31 @@ impl KmStoreTrait for PostgresKmStore {
                 guardrail_violation_codes: row
                     .try_get("guardrail_violation_codes")
                     .unwrap_or_default(),
+                source: row
+                    .try_get::<Option<String>, _>("source")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "chat".into()),
+                api_key_id: row.try_get("api_key_id").ok().flatten(),
             }
         })
         .collect()
     }
 
     fn get_inference_stats(&self, filter: &super::InferenceLogFilter) -> super::InferenceStats {
-        // Build the WHERE clause shared by all sub-queries
-        let mut where_clause = String::from("WHERE 1=1");
-        let mut param_idx: usize = 1;
-        let mut params: Vec<String> = Vec::new();
-
-        if let Some(ref ws) = filter.workspace_id {
-            where_clause.push_str(&format!(" AND workspace_id = ${param_idx}"));
-            params.push(ws.clone());
-            param_idx += 1;
-        }
-        if let Some(ref u) = filter.user_id {
-            where_clause.push_str(&format!(" AND user_id = ${param_idx}"));
-            params.push(u.clone());
-            param_idx += 1;
-        }
-        if let Some(ref from) = filter.from_timestamp {
-            where_clause.push_str(&format!(" AND timestamp >= ${param_idx}::timestamptz"));
-            params.push(from.clone());
-            param_idx += 1;
-        }
-        if let Some(ref to) = filter.to_timestamp {
-            where_clause.push_str(&format!(" AND timestamp <= ${param_idx}::timestamptz"));
-            params.push(to.clone());
-            param_idx += 1;
-        }
-        if let Some(ref st) = filter.status {
-            where_clause.push_str(&format!(" AND status = ${param_idx}"));
-            params.push(st.clone());
-            param_idx += 1;
-        }
-        if let Some(ref model) = filter.llm_model {
-            where_clause.push_str(&format!(" AND llm_model = ${param_idx}"));
-            params.push(model.clone());
-            param_idx += 1;
-        }
-        if let Some(ref intent) = filter.intent {
-            where_clause.push_str(&format!(" AND intent = ${param_idx}"));
-            params.push(intent.clone());
-            param_idx += 1;
-        }
-        if let Some(ref rid) = filter.response_id {
-            where_clause.push_str(&format!(" AND response_id = ${param_idx}"));
-            params.push(rid.clone());
-            param_idx += 1;
-        }
-        if let Some(ref sid) = filter.session_id {
-            where_clause.push_str(&format!(" AND session_id = ${param_idx}"));
-            params.push(sid.clone());
-            param_idx += 1;
-        }
-        let _ = param_idx; // suppress unused warning
-
-        // Aggregate query
-        let agg_sql = format!(
-            "SELECT
-                COUNT(*)::BIGINT AS total_requests,
-                COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_total_ms,
-                COALESCE(AVG(search_ms), 0)::FLOAT8 AS avg_search_ms,
-                COALESCE(AVG(generation_ms), 0)::FLOAT8 AS avg_generation_ms,
-                COALESCE(AVG(LEAST(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0)::FLOAT8 AS avg_relevance_score,
-                COALESCE(SUM(prompt_tokens), 0)::BIGINT AS total_prompt_tokens,
-                COALESCE(SUM(completion_tokens), 0)::BIGINT AS total_completion_tokens,
-                CASE WHEN COUNT(*) > 0
-                    THEN COUNT(*) FILTER (WHERE status = 'success')::FLOAT8 / COUNT(*)::FLOAT8
-                    ELSE 0 END AS success_rate,
-                CASE WHEN COUNT(*) FILTER (WHERE quality_guard_pass IS NOT NULL) > 0
-                    THEN COUNT(*) FILTER (WHERE quality_guard_pass = TRUE)::FLOAT8
-                         / COUNT(*) FILTER (WHERE quality_guard_pass IS NOT NULL)::FLOAT8
-                    ELSE 0 END AS quality_pass_rate,
-                CASE WHEN COUNT(*) FILTER (WHERE feedback_score IS NOT NULL) > 0
-                    THEN COUNT(*) FILTER (WHERE feedback_score > 0)::FLOAT8
-                         / COUNT(*) FILTER (WHERE feedback_score IS NOT NULL)::FLOAT8
-                    ELSE 0 END AS feedback_positive_rate
-             FROM inference_logs {where_clause}"
-        );
-
-        let agg_row = block_on(async {
-            let mut q = sqlx::query(&agg_sql);
-            for p in &params {
-                q = q.bind(p);
-            }
-            q.fetch_one(&self.pool).await
-        });
-
-        let (
-            total_requests,
-            avg_total_ms,
-            avg_search_ms,
-            avg_generation_ms,
-            avg_relevance_score,
-            total_prompt_tokens,
-            total_completion_tokens,
-            success_rate,
-            quality_pass_rate,
-            feedback_positive_rate,
-        ) = match agg_row {
-            Ok(row) => (
-                row.get::<i64, _>("total_requests") as u64,
-                row.get::<f64, _>("avg_total_ms"),
-                row.get::<f64, _>("avg_search_ms"),
-                row.get::<f64, _>("avg_generation_ms"),
-                row.get::<f64, _>("avg_relevance_score"),
-                row.get::<i64, _>("total_prompt_tokens") as u64,
-                row.get::<i64, _>("total_completion_tokens") as u64,
-                row.get::<f64, _>("success_rate"),
-                row.get::<f64, _>("quality_pass_rate"),
-                row.get::<f64, _>("feedback_positive_rate"),
-            ),
-            Err(_) => (0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0.0, 0.0, 0.0),
+        // Delegate to the shared cross-backend computation over the filtered
+        // rows (source/api_key filters applied in list_inference_logs) so
+        // Postgres/SQLite/Memory can never diverge on aggregation semantics.
+        // The 50k retention cap bounds this scan.
+        // Fetch all matching rows for aggregation. `limit: 0` means "no rows"
+        // in SQL LIMIT, so use a bound above the 50k log-retention cap.
+        let full = super::InferenceLogFilter {
+            limit: 1_000_000,
+            offset: 0,
+            ..filter.clone()
         };
-
-        // By model
-        let model_sql = format!(
-            "SELECT llm_model,
-                    COUNT(*)::BIGINT AS count,
-                    COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_ms,
-                    COALESCE(AVG(LEAST(COALESCE(relevance_score, avg_chunk_score), 1.0)), 0)::FLOAT8 AS avg_quality,
-                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)::BIGINT AS total_tokens
-             FROM inference_logs {where_clause}
-             GROUP BY llm_model ORDER BY count DESC"
-        );
-
-        let by_model = block_on(async {
-            let mut q = sqlx::query(&model_sql);
-            for p in &params {
-                q = q.bind(p);
-            }
-            q.fetch_all(&self.pool).await
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| super::ModelStats {
-            model: row.get("llm_model"),
-            count: row.get::<i64, _>("count") as u64,
-            avg_ms: row.get::<f64, _>("avg_ms"),
-            avg_quality: row.get::<f64, _>("avg_quality"),
-            total_tokens: row.get::<i64, _>("total_tokens") as u64,
-        })
-        .collect();
-
-        // By workspace
-        let ws_sql = format!(
-            "SELECT COALESCE(workspace_id, '') AS workspace_id,
-                    COUNT(*)::BIGINT AS count,
-                    COALESCE(AVG(total_ms), 0)::FLOAT8 AS avg_ms,
-                    COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)::BIGINT AS total_tokens
-             FROM inference_logs {where_clause}
-             GROUP BY workspace_id ORDER BY count DESC"
-        );
-
-        let by_workspace = block_on(async {
-            let mut q = sqlx::query(&ws_sql);
-            for p in &params {
-                q = q.bind(p);
-            }
-            q.fetch_all(&self.pool).await
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| super::WorkspaceStats {
-            workspace_id: row.get("workspace_id"),
-            count: row.get::<i64, _>("count") as u64,
-            avg_ms: row.get::<f64, _>("avg_ms"),
-            total_tokens: row.get::<i64, _>("total_tokens") as u64,
-        })
-        .collect();
-
-        super::InferenceStats {
-            total_requests,
-            avg_total_ms,
-            avg_search_ms,
-            avg_generation_ms,
-            avg_relevance_score,
-            total_prompt_tokens,
-            total_completion_tokens,
-            success_rate,
-            quality_pass_rate,
-            feedback_positive_rate,
-            by_model,
-            by_workspace,
-        }
+        let entries = self.list_inference_logs(&full);
+        super::compute_inference_stats(&entries)
     }
 
     fn update_inference_log_feedback(&self, response_id: &str, score: i8) {

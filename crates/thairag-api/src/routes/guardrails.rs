@@ -278,6 +278,8 @@ mod tests {
             input_guardrails_pass: input,
             output_guardrails_pass: output,
             guardrail_violation_codes: codes.into(),
+            source: "chat".into(),
+            api_key_id: None,
         }
     }
 

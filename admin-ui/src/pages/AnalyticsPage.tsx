@@ -653,8 +653,20 @@ export default function AnalyticsPage() {
               { title: 'Avg Latency', dataIndex: 'avg_ms', render: (v: number) => formatMs(v), sorter: (a, b) => a.avg_ms - b.avg_ms },
               { title: 'Avg Quality', dataIndex: 'avg_quality', render: (v: number) => <span style={{ color: v >= 0.8 ? 'var(--success)' : v >= 0.5 ? 'var(--warning)' : 'var(--danger)' }}>{v.toFixed(3)}</span> },
               { title: 'Total Tokens', dataIndex: 'total_tokens', render: (v: number) => formatTokenCount(v) },
+              {
+                title: 'Est. Cost',
+                dataIndex: 'estimated_cost_usd',
+                render: (v: number | null | undefined) =>
+                  v === null || v === undefined ? '—' : v === 0 ? 'local' : `$${v.toFixed(4)}`,
+                sorter: (a, b) => (a.estimated_cost_usd ?? 0) - (b.estimated_cost_usd ?? 0),
+              },
             ]}
           />
+          {typeof stats.total_estimated_cost_usd === 'number' && (
+            <div style={{ marginTop: 8, textAlign: 'right', color: 'var(--text-secondary)' }}>
+              Total estimated cost (chat models): <strong>${stats.total_estimated_cost_usd.toFixed(4)}</strong>
+            </div>
+          )}
         </Card>
       )}
       </div>

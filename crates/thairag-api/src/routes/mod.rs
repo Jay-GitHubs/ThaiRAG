@@ -82,6 +82,7 @@ impl DynamicApiKeyValidator for StoreApiKeyValidator {
         Some(DynamicApiKeyInfo {
             user_id: api_key.user_id.0.to_string(),
             email: user.email,
+            api_key_id: api_key.id.0.to_string(),
         })
     }
 }

@@ -1426,6 +1426,20 @@ export interface InferenceStats {
   feedback_positive_rate: number;
   by_model: ModelStats[];
   by_workspace: WorkspaceStats[];
+  total_estimated_cost_usd?: number | null;
+  by_user?: EntityStats[];
+  by_dept?: EntityStats[];
+  by_org?: EntityStats[];
+  by_api_key?: EntityStats[];
+}
+
+export interface EntityStats {
+  id: string;
+  count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
 }
 
 export interface ModelStats {
@@ -1434,6 +1448,10 @@ export interface ModelStats {
   avg_ms: number;
   avg_quality: number;
   total_tokens: number;
+  llm_kind?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  estimated_cost_usd?: number | null;
 }
 
 export interface WorkspaceStats {
@@ -1441,6 +1459,9 @@ export interface WorkspaceStats {
   count: number;
   avg_ms: number;
   total_tokens: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  estimated_cost_usd?: number | null;
 }
 
 export interface InferenceLogDeleteResponse {

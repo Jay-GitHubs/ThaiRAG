@@ -14,6 +14,9 @@ pub struct DynamicApiKeyInfo {
     pub user_id: String,
     /// Email of the owning user.
     pub email: String,
+    /// The API key's own id — recorded on claims for per-key usage
+    /// attribution (Gap C).
+    pub api_key_id: String,
 }
 
 /// Trait for looking up database-backed API keys (M2M auth).
@@ -46,6 +49,7 @@ pub async fn auth_layer(
                 email: "anonymous@local".into(),
                 exp: 0,
                 iat: 0,
+                api_key_id: None,
             }
         }
         Some(jwt_service) => {
@@ -60,6 +64,7 @@ pub async fn auth_layer(
                             email: info.email,
                             exp: usize::MAX,
                             iat: 0,
+                            api_key_id: Some(info.api_key_id),
                         }
                     } else {
                         return Err(AuthError(ThaiRagError::Auth(
@@ -99,6 +104,7 @@ pub async fn auth_layer(
                         email: "service@api-key".into(),
                         exp: usize::MAX,
                         iat: 0,
+                        api_key_id: Some("static".into()),
                     }
                 } else {
                     jwt_service.decode(token).map_err(AuthError)?
