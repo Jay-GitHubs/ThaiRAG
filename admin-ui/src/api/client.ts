@@ -45,4 +45,24 @@ client.interceptors.response.use(
   },
 );
 
+
+/**
+ * Extract a human-readable message from an API error. The backend returns
+ * `{ error: { message } }`; fall back to the axios/network message, then a
+ * caller-supplied default. Use this instead of swallowing errors into a
+ * generic string so operators can see what actually failed.
+ */
+export function apiErrorMessage(err: unknown, fallback = 'Request failed'): string {
+  if (axios.isAxiosError(err)) {
+    const serverMsg = (err.response?.data as { error?: { message?: string } } | undefined)?.error
+      ?.message;
+    if (serverMsg) return serverMsg;
+    if (err.code === 'ECONNABORTED') return 'The request timed out.';
+    if (!err.response) return 'Could not reach the server.';
+    if (err.message) return err.message;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 export default client;
