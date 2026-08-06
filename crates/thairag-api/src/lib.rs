@@ -19,6 +19,7 @@ pub mod net_guard;
 pub mod oidc;
 pub mod plugin_hooks;
 pub mod plugin_registry;
+pub mod pricing;
 pub mod rate_limit;
 pub mod routes;
 pub mod session;

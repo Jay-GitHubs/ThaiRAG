@@ -827,6 +827,8 @@ mod feedback_bridge_tests {
             input_guardrails_pass: None,
             output_guardrails_pass: None,
             guardrail_violation_codes: String::new(),
+            source: "chat".into(),
+            api_key_id: None,
         }
     }
 

@@ -303,7 +303,9 @@ CREATE TABLE IF NOT EXISTS inference_logs (
     -- Guardrails (PR1) — codes only, never matched values.
     input_guardrails_pass    BOOLEAN,
     output_guardrails_pass   BOOLEAN,
-    guardrail_violation_codes TEXT NOT NULL DEFAULT ''
+    guardrail_violation_codes TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL DEFAULT 'chat',
+    api_key_id        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inference_logs_timestamp ON inference_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_inference_logs_workspace_id ON inference_logs(workspace_id);
