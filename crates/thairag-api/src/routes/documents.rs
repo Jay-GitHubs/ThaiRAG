@@ -424,9 +424,15 @@ async fn process_document_inner_impl(
     // returns `EmptyExtraction` when no meaningful content was produced —
     // surface its structured reason/hint instead of swallowing it into a
     // generic failure message so the admin UI can act on it.
-    let processed = match pipeline
-        .process_to_document(&bytes, &mime_type, doc_id, workspace_id, on_step, handling)
-        .await
+    // Meter the real preprocessing LLM token usage (analyzer/converter/
+    // enricher/chunker/vision) that runs inside process_to_document — the
+    // Throttled ingestion chokepoint accumulates into this task-local tally.
+    let ingest_tally = std::sync::Arc::new(thairag_core::backpressure::IngestTokenTally::default());
+    let processed = match thairag_core::backpressure::with_ingest_tally(
+        ingest_tally.clone(),
+        pipeline.process_to_document(&bytes, &mime_type, doc_id, workspace_id, on_step, handling),
+    )
+    .await
     {
         Ok(d) => d,
         Err(thairag_core::ThaiRagError::EmptyExtraction { reason, hint }) => {
@@ -651,24 +657,16 @@ async fn process_document_inner_impl(
             .km_store
             .update_document_status(doc_id, DocStatus::Ready, chunk_count as i64, None);
 
-    // ── Ingest usage metering (Gap B) ──
-    // Record one summary row per successful ingest so document-processing
-    // token volume is attributable per workspace/dept/org, segregated from
-    // chat traffic by `source = "ingest"` (excluded from analytics by
-    // default). Tokens are an ESTIMATE of embedding input from the converted
-    // text length (~4 chars/token); estimated_cost stays None because
-    // embedding pricing differs from the chat price table and the dominant
-    // AI-preprocessing LLM token cost is not yet surfaced here (tracked
-    // follow-up). This never blocks or fails ingest.
-    if chunk_count > 0 {
-        let text_len = state
-            .km_store
-            .get_document_content(doc_id)
-            .ok()
-            .flatten()
-            .map(|t| t.chars().count())
-            .unwrap_or(0);
-        let est_embedding_tokens = (text_len / 4) as u32;
+    // ── Ingest usage metering (Gap B — real preprocessing tokens) ──
+    // Record one summary row per ingest that actually invoked preprocessing
+    // LLMs, carrying the REAL token counts measured at the Throttled chokepoint
+    // and the preprocessing model name (so estimate_cost prices it correctly).
+    // Segregated from chat by `source = "ingest"` (excluded from analytics by
+    // default). Embedding tokens are NOT included (a separate, negligible
+    // cost the embedding provider does not report). Skipped when no
+    // preprocessing LLM ran (tally == 0). Never blocks or fails ingest.
+    let (ingest_prompt, ingest_completion) = ingest_tally.totals();
+    if chunk_count > 0 && (ingest_prompt > 0 || ingest_completion > 0) {
         let scope = state.resolve_scope_for_workspace(workspace_id);
         let (org_id, dept_id) = match &scope {
             crate::store::SettingsScope::Org(o) => (Some(o.0.to_string()), None),
@@ -680,7 +678,19 @@ async fn process_document_inner_impl(
             } => (Some(org_id.0.to_string()), Some(dept_id.0.to_string())),
             crate::store::SettingsScope::Global => (None, None),
         };
-        let emb = &state.providers().providers_config.embedding;
+        // Attribute to the shared preprocessing LLM (the model that runs
+        // most ingest stages), falling back to the main LLM. Aggregating
+        // multiple agent models under one price is an approximation; the
+        // TOKEN counts are the real measured totals.
+        let eff_doc = crate::routes::settings::build_effective_document_config(
+            &state.config,
+            &*state.km_store,
+        );
+        let prep_llm = eff_doc
+            .ai_preprocessing
+            .llm
+            .clone()
+            .unwrap_or_else(|| state.providers().providers_config.llm.clone());
         let entry = crate::store::InferenceLogEntry {
             id: Uuid::new_v4().to_string(),
             timestamp: Utc::now().to_rfc3339(),
@@ -694,11 +704,11 @@ async fn process_document_inner_impl(
             detected_language: None,
             intent: Some("ingest".into()),
             complexity: None,
-            llm_kind: format!("{:?}", emb.kind).to_lowercase(),
-            llm_model: emb.model.clone(),
+            llm_kind: format!("{:?}", prep_llm.kind).to_lowercase(),
+            llm_model: prep_llm.model.clone(),
             settings_scope: format!("{scope:?}"),
-            prompt_tokens: est_embedding_tokens,
-            completion_tokens: 0,
+            prompt_tokens: ingest_prompt.min(u32::MAX as u64) as u32,
+            completion_tokens: ingest_completion.min(u32::MAX as u64) as u32,
             estimated_context_tokens: 0,
             total_ms: 0,
             search_ms: None,
