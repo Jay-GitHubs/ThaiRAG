@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual full run (incl. publish when dispatched on main). Recovery lever
+  # for wedged runs: 2026-08-11 a main run hung "in_progress" with all jobs
+  # finished and both cancel APIs returning 500 — with no dispatch trigger,
+  # the only unstick was a dummy PR.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -213,7 +218,7 @@ jobs:
   # ── runner (no QEMU emulation). Digests are then merged into one manifest. ──
   docker-publish-build:
     name: Build ${{ matrix.platform }} on ${{ matrix.runner }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [fmt, clippy, test, build-cli, admin-ui, typescript-sdk, python-sdk]
     strategy:
       fail-fast: false
@@ -313,7 +318,7 @@ jobs:
 
   docker-publish-manifest:
     name: Merge multi-arch manifest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [docker-publish-build]
     runs-on: ubuntu-latest
     permissions:
