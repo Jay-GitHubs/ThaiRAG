@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Card, Tabs, Tour } from 'antd';
 import type { SettingsScopeParam } from '../api/types';
 import { DocumentProcessingTab } from '../components/settings/DocumentProcessingTab';
+import { BrandingTab } from '../components/settings/BrandingTab';
 import { IdpTab } from '../components/settings/IdpTab';
 import { LocalAuthTab } from '../components/settings/LocalAuthTab';
 import { PresetsCard } from '../components/settings/PresetsCard';
@@ -41,6 +42,7 @@ export function SettingsPage() {
             { key: 'documents', label: 'Document Processing', children: <DocumentProcessingTab scope={scope} /> },
             { key: 'vectordb', label: 'Vector Database', children: <VectorDbTab /> },
             { key: 'prompts', label: 'Agent Prompts', children: <PromptsTab /> },
+            { key: 'branding', label: 'Branding', children: <BrandingTab /> },
             { key: 'idp', label: 'Identity Providers', children: <IdpTab /> },
             { key: 'local', label: 'Local Auth', children: <LocalAuthTab /> },
           ]}

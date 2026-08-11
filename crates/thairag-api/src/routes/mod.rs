@@ -3,6 +3,7 @@ pub mod acl;
 pub mod api_keys;
 pub mod auth;
 pub mod backup;
+pub mod branding;
 pub mod chat;
 pub mod collaboration;
 pub mod connectors;
@@ -112,6 +113,7 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/providers", get(settings::list_enabled_providers))
+        .route("/api/branding", get(branding::get_branding))
         .route("/api/auth/ldap", post(auth::ldap_login))
         .route(
             "/api/auth/oauth/{provider_id}/authorize",
@@ -188,6 +190,9 @@ pub fn build_router(state: AppState, rate_limiter: Option<RateLimiter>) -> Route
             "/settings/providers",
             get(settings::get_provider_config).put(settings::update_provider_config),
         )
+        // Settings — white-label branding (super-admin write; read is public
+        // at GET /api/branding for the pre-auth login screens).
+        .route("/settings/branding", put(branding::update_branding))
         .route(
             "/settings/providers/models",
             get(settings::list_available_models),

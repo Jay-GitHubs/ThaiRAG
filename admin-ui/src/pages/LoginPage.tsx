@@ -6,9 +6,11 @@ import { setToken } from '../api/client';
 import { useAuth } from '../auth/useAuth';
 import { useThemeMode } from '../theme/ThemeProvider';
 import { useEnabledProviders } from '../hooks/useEnabledProviders';
+import { useBranding } from '../branding/BrandingProvider';
 
 export function LoginPage() {
   const { login, isAuthenticated, loginWithToken } = useAuth();
+  const { app_name: appName } = useBranding();
   const navigate = useNavigate();
   const { mode, toggle: toggleTheme } = useThemeMode();
   const [loading, setLoading] = useState(false);
@@ -74,7 +76,7 @@ export function LoginPage() {
       }
     >
       <Typography.Title level={3} style={{ textAlign: 'center', marginBottom: 24 }}>
-        ThaiRAG Admin
+        {appName} Admin
       </Typography.Title>
       <Form layout="vertical" onFinish={onFinish}>
         <Form.Item name="email" rules={[{ required: true, message: 'Email required' }]}>
