@@ -61,6 +61,15 @@ import type {
 
 const { RangePicker } = DatePicker;
 
+// Log-source selector shared by every tab. The backend treats an omitted
+// source as chat-only (legacy), so tabs always send their selection.
+const SOURCE_OPTIONS = [
+  { label: 'All sources', value: 'all' },
+  { label: 'Chat', value: 'chat' },
+  { label: 'Ingest', value: 'ingest' },
+  { label: 'Test query', value: 'test_query' },
+];
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 function formatTokenCount(n: number): string {
@@ -170,6 +179,7 @@ export default function InferenceLogsPage() {
 
 function DashboardTab() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [source, setSource] = useState<string>('chat');
   // Workspace id → display name for the activity table. The analytics rows
   // only carry ids; raw UUIDs are unreadable for operators. Falls back to a
   // shortened id for workspaces outside the caller's visibility.
@@ -190,13 +200,13 @@ function DashboardTab() {
   }, []);
 
   const filter = useMemo(() => {
-    const f: Partial<InferenceLogFilter> = {};
+    const f: Partial<InferenceLogFilter> = { source };
     if (dateRange) {
       f.from = dateRange[0].toISOString();
       f.to = dateRange[1].toISOString();
     }
     return f;
-  }, [dateRange]);
+  }, [dateRange, source]);
 
   const { data: stats, isLoading } = useInferenceAnalytics(filter);
 
@@ -217,6 +227,13 @@ function DashboardTab() {
               { label: 'Last 30 Days', value: [dayjs().subtract(30, 'day'), dayjs()] },
               { label: 'Last 90 Days', value: [dayjs().subtract(90, 'day'), dayjs()] },
             ]}
+          />
+                  <Select
+            value={source}
+            onChange={setSource}
+            size="small"
+            style={{ width: 130 }}
+            options={SOURCE_OPTIONS}
           />
         </Space>
       </div>
@@ -344,6 +361,7 @@ function LogBrowserTab() {
   const [model, setModel] = useState<string | undefined>();
   const [status, setStatus] = useState<string | undefined>();
   const [intent, setIntent] = useState<string | undefined>();
+  const [source, setSource] = useState<string>('all');
 
   const filter: InferenceLogFilter = useMemo(() => ({
     workspace_id: workspace,
@@ -351,11 +369,12 @@ function LogBrowserTab() {
     llm_model: model,
     status,
     intent,
+    source,
     from: dateRange?.[0]?.toISOString(),
     to: dateRange?.[1]?.toISOString(),
     limit: pageSize,
     offset: (page - 1) * pageSize,
-  }), [workspace, userId, model, status, intent, dateRange, page, pageSize]);
+  }), [workspace, userId, model, status, intent, source, dateRange, page, pageSize]);
 
   const { data, isLoading } = useInferenceLogs(filter);
 
@@ -365,6 +384,12 @@ function LogBrowserTab() {
       dataIndex: 'timestamp',
       width: 170,
       render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm:ss'),
+    },
+    {
+      title: 'Source',
+      dataIndex: 'source',
+      width: 90,
+      render: (v: string | null) => <Tag>{v || 'chat'}</Tag>,
     },
     {
       title: 'Status',
@@ -510,6 +535,13 @@ function LogBrowserTab() {
               { label: 'Summarization', value: 'Summarization' },
             ]}
           />
+          <Select
+            value={source}
+            onChange={(v) => { setSource(v); setPage(1); }}
+            size="small"
+            style={{ width: 130 }}
+            options={SOURCE_OPTIONS}
+          />
         </Space>
       </Card>
 
@@ -624,14 +656,15 @@ function LogEntryDetail({ entry }: { entry: InferenceLogEntry }) {
 
 function ModelBreakdownTab() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [source, setSource] = useState<string>('chat');
   const filter = useMemo(() => {
-    const f: Partial<InferenceLogFilter> = {};
+    const f: Partial<InferenceLogFilter> = { source };
     if (dateRange) {
       f.from = dateRange[0].toISOString();
       f.to = dateRange[1].toISOString();
     }
     return f;
-  }, [dateRange]);
+  }, [dateRange, source]);
 
   const { data: stats, isLoading } = useInferenceAnalytics(filter);
 
@@ -655,6 +688,13 @@ function ModelBreakdownTab() {
               { label: 'Last 7 Days', value: [dayjs().subtract(7, 'day'), dayjs()] },
               { label: 'Last 30 Days', value: [dayjs().subtract(30, 'day'), dayjs()] },
             ]}
+          />
+                  <Select
+            value={source}
+            onChange={setSource}
+            size="small"
+            style={{ width: 130 }}
+            options={SOURCE_OPTIONS}
           />
         </Space>
       </div>
@@ -813,6 +853,7 @@ function SupportTab() {
 
 function ManagementTab() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [source, setSource] = useState<string>('all');
   const [workspace, setWorkspace] = useState<string | undefined>();
   const [model, setModel] = useState<string | undefined>();
   const [status, setStatus] = useState<string | undefined>();
@@ -831,6 +872,7 @@ function ManagementTab() {
     workspace_id: workspace,
     llm_model: model,
     status,
+    source,
     from: dateRange?.[0]?.toISOString(),
     to: dateRange?.[1]?.toISOString(),
   });
@@ -902,6 +944,7 @@ function ManagementTab() {
       <Input placeholder="Workspace ID" value={workspace} onChange={(e) => { setWorkspace(e.target.value || undefined); setMatchCount(null); }} allowClear size="small" style={{ width: 160 }} />
       <Input placeholder="Model" value={model} onChange={(e) => { setModel(e.target.value || undefined); setMatchCount(null); }} allowClear size="small" style={{ width: 160 }} />
       <Select placeholder="Status" value={status} onChange={(v) => { setStatus(v); setMatchCount(null); }} allowClear size="small" style={{ width: 110 }} options={[{ label: 'Success', value: 'success' }, { label: 'Error', value: 'error' }]} />
+      <Select value={source} onChange={(v) => { setSource(v); setMatchCount(null); }} size="small" style={{ width: 130 }} options={SOURCE_OPTIONS} />
     </Space>
   );
 
