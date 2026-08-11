@@ -50,6 +50,7 @@ import type {
   StreamEvent,
   WorkspaceOption,
 } from '../api/types';
+import { useBranding } from '../branding/BrandingProvider';
 import { ConversationSidebar } from '../components/ConversationSidebar';
 import { MessageBubble, type UiMessage } from '../components/MessageBubble';
 import { MessageComposer } from '../components/MessageComposer';
@@ -78,6 +79,7 @@ function stageLabel(stage: string, t: (k: MessageKey) => string): string {
 const MOD = /mac|iphone|ipad/i.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 export function ChatPage() {
+  const { app_name: appName } = useBranding();
   const { t } = useI18n();
   const navigate = useNavigate();
   // Parsed once at mount: deep-linked conversation id from /c/{id}. After
@@ -824,7 +826,7 @@ export function ChatPage() {
               icon={isMobile ? <MenuOutlined /> : <MenuUnfoldOutlined />}
               onClick={() => (isMobile ? setDrawerOpen(true) : toggleSidebar())}
             />
-            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>ThaiRAG</span>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>{appName}</span>
           </div>
         )}
         {messages.length > 0 && (

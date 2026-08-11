@@ -1,5 +1,7 @@
+import { useBranding } from '../branding/BrandingProvider';
+
 /**
- * The ThaiRAG wordmark. The glyph is a stacked-document mark with a celadon
+ * The product wordmark (white-label aware). The glyph is a stacked-document mark with a celadon
  * "retrieval" line — the product reads a stack of pages and pulls the relevant
  * line out. `tone` picks legible colors for ink vs. paper backgrounds.
  */
@@ -10,7 +12,26 @@ export function BrandMark({
   tone?: 'light' | 'dark';
   size?: number;
 }) {
+  const { app_name: appName, logo_data_url: logo } = useBranding();
   const word = tone === 'light' ? 'var(--ink-bright)' : 'var(--text)';
+  if (logo) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <img src={logo} alt="" style={{ height: size, maxWidth: size * 4 }} />
+        <span
+          style={{
+            fontFamily: "'IBM Plex Sans Thai','IBM Plex Sans',sans-serif",
+            fontWeight: 600,
+            fontSize: size * 0.66,
+            letterSpacing: '-0.01em',
+            color: word,
+          }}
+        >
+          {appName}
+        </span>
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true">
@@ -28,7 +49,7 @@ export function BrandMark({
           color: word,
         }}
       >
-        ThaiRAG
+        {appName}
       </span>
     </div>
   );

@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import { AuthProvider } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeProvider';
+import { BrandingProvider } from './branding/BrandingProvider';
 import { LocaleProvider } from './i18n/LocaleProvider';
 import { App } from './App';
 
@@ -19,11 +20,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <LocaleProvider>
         <ThemeProvider>
-          <BrowserRouter>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </BrowserRouter>
+          <BrandingProvider>
+            <BrowserRouter>
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </BrowserRouter>
+          </BrandingProvider>
         </ThemeProvider>
       </LocaleProvider>
     </QueryClientProvider>

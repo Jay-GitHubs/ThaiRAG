@@ -33,6 +33,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
+import { useBranding } from '../branding/BrandingProvider';
 import { ThemePicker } from '../components/ThemePicker';
 import { useI18n } from '../i18n';
 import type { Locale } from '../i18n';
@@ -149,6 +150,7 @@ export function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { app_name: appName, logo_data_url: logo } = useBranding();
   const { token: themeToken } = theme.useToken();
   const { locale, setLocale, t } = useI18n();
   const tourCtx = useContext(TourContext);
@@ -217,8 +219,15 @@ export function AdminLayout() {
   const sidebarContent = (
     <>
       <div style={{ padding: 16, textAlign: 'center' }}>
+        {logo && (
+          <img
+            src={logo}
+            alt=""
+            style={{ maxHeight: 32, maxWidth: '80%', marginBottom: 8, display: 'block', margin: '0 auto 8px' }}
+          />
+        )}
         <Typography.Text strong style={{ color: 'var(--ink-bright)', fontSize: 18 }}>
-          ThaiRAG Admin
+          {appName} Admin
         </Typography.Text>
       </div>
       <Menu
@@ -245,8 +254,15 @@ export function AdminLayout() {
           style={{ background: 'var(--ink)' }}
         >
           <div style={{ padding: 16, textAlign: 'center' }}>
+            {logo && !collapsed && (
+              <img
+                src={logo}
+                alt=""
+                style={{ maxHeight: 32, maxWidth: '80%', display: 'block', margin: '0 auto 8px' }}
+              />
+            )}
             <Typography.Text strong style={{ color: 'var(--ink-bright)', fontSize: collapsed ? 14 : 18 }}>
-              {collapsed ? 'TR' : 'ThaiRAG Admin'}
+              {collapsed ? appName.slice(0, 2).toUpperCase() : `${appName} Admin`}
             </Typography.Text>
           </div>
           <Menu
