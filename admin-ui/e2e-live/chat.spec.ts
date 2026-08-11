@@ -78,10 +78,21 @@ test.describe('chat UI (live)', () => {
       const prompt = `Live smoke ${Date.now().toString(36)}: what are the key requirements or criteria described in the documents?`;
       await page.getByPlaceholder(COMPOSER).fill(prompt);
       await page.getByRole('button', { name: 'Send' }).click();
+
+      // Anchor on the send actually registering, then on generation having
+      // produced text — the enabled-check alone races (it can pass before the
+      // composer even disables, evaluating the invariant against an empty
+      // bubble, which holds vacuously).
+      await expect(page.getByTestId('msg-user').filter({ hasText: prompt })).toBeVisible({
+        timeout: 20_000,
+      });
       await expect(page.getByPlaceholder(COMPOSER)).toBeEnabled({ timeout: 240_000 });
 
       const assistant = page.getByTestId('msg-assistant').last();
       await expect(assistant).toBeVisible();
+      await expect
+        .poll(async () => (await assistant.innerText()).trim().length, { timeout: 30_000 })
+        .toBeGreaterThan(0);
 
       const sourceCount = await assistant.getByTestId('source-chip').count();
       const confidenceVisible = await assistant
