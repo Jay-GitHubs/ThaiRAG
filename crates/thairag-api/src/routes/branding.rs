@@ -126,8 +126,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_and_overlong_name() {
-        let mut b = BrandingConfig::default();
-        b.app_name = "  ".into();
+        let mut b = BrandingConfig {
+            app_name: "  ".into(),
+            ..Default::default()
+        };
         assert!(b.validate().is_err());
         b.app_name = "x".repeat(MAX_APP_NAME_LEN + 1);
         assert!(b.validate().is_err());
@@ -137,8 +139,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_non_data_and_oversized_logo() {
-        let mut b = BrandingConfig::default();
-        b.logo_data_url = Some("https://evil.example/logo.png".into());
+        let mut b = BrandingConfig {
+            logo_data_url: Some("https://evil.example/logo.png".into()),
+            ..Default::default()
+        };
         assert!(
             b.validate().is_err(),
             "must reject non-data URLs (SSRF/leak)"
