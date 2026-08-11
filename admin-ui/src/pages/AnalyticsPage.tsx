@@ -309,7 +309,11 @@ export default function AnalyticsPage() {
   const { t } = useI18n();
   const tour = useTour('analytics');
   const [range, setRange] = useState<TimeRange>('7d');
-  const filter = useMemo(() => rangeToFilter(range), [range]);
+  // 'chat' preserves the page's historical numbers (latency/quality averages
+  // would be skewed by ingest rows, which have no timings); switching to
+  // Ingest or All folds document-processing costs into the tables.
+  const [source, setSource] = useState<string>('chat');
+  const filter = useMemo(() => ({ ...rangeToFilter(range), source }), [range, source]);
 
   // Fetch aggregate stats from analytics endpoint
   const { data: stats, isLoading: statsLoading } = useInferenceAnalytics(filter);
@@ -387,17 +391,30 @@ export default function AnalyticsPage() {
           </Tooltip>
           <TourGuideButton tourId="analytics" />
         </div>
-        <Select
-          data-tour="analytics-time"
-          value={range}
-          onChange={setRange}
-          style={{ width: 140 }}
-          options={[
-            { label: 'Last 24 Hours', value: '24h' },
-            { label: 'Last 7 Days', value: '7d' },
-            { label: 'Last 30 Days', value: '30d' },
-          ]}
-        />
+        <Space>
+          <Select
+            value={source}
+            onChange={setSource}
+            style={{ width: 130 }}
+            options={[
+              { label: 'All sources', value: 'all' },
+              { label: 'Chat', value: 'chat' },
+              { label: 'Ingest', value: 'ingest' },
+              { label: 'Test query', value: 'test_query' },
+            ]}
+          />
+          <Select
+            data-tour="analytics-time"
+            value={range}
+            onChange={setRange}
+            style={{ width: 140 }}
+            options={[
+              { label: 'Last 24 Hours', value: '24h' },
+              { label: 'Last 7 Days', value: '7d' },
+              { label: 'Last 30 Days', value: '30d' },
+            ]}
+          />
+        </Space>
       </div>
 
       {/* ── Top Stats Row ─────────────────────────────────────────── */}

@@ -1409,6 +1409,8 @@ export interface InferenceLogFilter {
   intent?: string;
   response_id?: string;
   session_id?: string;
+  /** Log source: omit = chat-only (legacy); 'all' | 'chat' | 'ingest' | 'test_query'. */
+  source?: string;
   limit?: number;
   offset?: number;
 }
