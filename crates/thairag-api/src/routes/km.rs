@@ -157,6 +157,35 @@ pub fn is_super_admin_pub(state: &AppState, user_id: UserId) -> bool {
     is_super_admin(state, user_id)
 }
 
+/// Implicit platform-wide permission derived from the user's GLOBAL role
+/// (the `users.role` column), independent of per-scope permission rows:
+/// - `super_admin` → SuperAdmin (everything, incl. system settings elsewhere)
+/// - `admin` → Owner on every org/dept/workspace: full KM content control
+///   (create/upload/preview/delete/grant) WITHOUT super-admin-only surfaces.
+/// - `editor` / `viewer` → None: access comes only from granted rows.
+///
+/// Before this, a global `admin` with no permission rows saw the whole admin
+/// console (menus gate on the global role) but got 403 on every KM write —
+/// the two role systems were disconnected.
+fn implicit_global_perm(is_super_flag: bool, role: &str) -> Option<PermCheck> {
+    if is_super_flag || role == "super_admin" {
+        return Some(PermCheck::SuperAdmin);
+    }
+    if role == "admin" {
+        return Some(PermCheck::Role(Role::Owner));
+    }
+    None
+}
+
+/// State-backed lookup of [`implicit_global_perm`] for a user id.
+fn global_perm(state: &AppState, user_id: UserId) -> Option<PermCheck> {
+    state
+        .km_store
+        .get_user(user_id)
+        .ok()
+        .and_then(|u| implicit_global_perm(u.is_super_admin, &u.role))
+}
+
 /// Check permission at org level (considers all scopes within the org).
 fn resolve_perm(claims: &AuthClaims, state: &AppState, org_id: OrgId) -> PermCheck {
     if claims.sub == "anonymous" {
@@ -165,8 +194,8 @@ fn resolve_perm(claims: &AuthClaims, state: &AppState, org_id: OrgId) -> PermChe
     let Some(user_id) = user_id_from_claims(claims) else {
         return PermCheck::NoPermission;
     };
-    if is_super_admin(state, user_id) {
-        return PermCheck::SuperAdmin;
+    if let Some(perm) = global_perm(state, user_id) {
+        return perm;
     }
     match state.km_store.get_user_role_for_org(user_id, org_id) {
         Some(role) => PermCheck::Role(role),
@@ -187,8 +216,8 @@ fn resolve_perm_dept(
     let Some(user_id) = user_id_from_claims(claims) else {
         return PermCheck::NoPermission;
     };
-    if is_super_admin(state, user_id) {
-        return PermCheck::SuperAdmin;
+    if let Some(perm) = global_perm(state, user_id) {
+        return perm;
     }
     match state
         .km_store
@@ -213,8 +242,8 @@ pub fn resolve_perm_ws(
     let Some(user_id) = user_id_from_claims(claims) else {
         return PermCheck::NoPermission;
     };
-    if is_super_admin(state, user_id) {
-        return PermCheck::SuperAdmin;
+    if let Some(perm) = global_perm(state, user_id) {
+        return perm;
     }
     match state
         .km_store
@@ -273,7 +302,7 @@ pub async fn list_orgs(
     let orgs = if claims.sub == "anonymous" {
         all_orgs
     } else if let Some(user_id) = user_id_from_claims(&claims) {
-        if is_super_admin(&state, user_id) {
+        if global_perm(&state, user_id).is_some() {
             all_orgs
         } else {
             let perms = state.km_store.list_user_permissions(user_id);
@@ -1118,4 +1147,49 @@ pub async fn delete_user(
     );
     tracing::info!(%user_id, "User deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod global_role_tests {
+    use super::*;
+
+    #[test]
+    fn super_admin_flag_or_role_is_superadmin() {
+        assert!(matches!(
+            implicit_global_perm(true, "viewer"),
+            Some(PermCheck::SuperAdmin)
+        ));
+        assert!(matches!(
+            implicit_global_perm(false, "super_admin"),
+            Some(PermCheck::SuperAdmin)
+        ));
+    }
+
+    #[test]
+    fn global_admin_is_owner_everywhere() {
+        // The reported bug: global `admin` users could not upload, preview,
+        // or create depts/workspaces — they had no implicit permission and
+        // no rows. They must resolve to Owner (full KM content control).
+        match implicit_global_perm(false, "admin") {
+            Some(PermCheck::Role(Role::Owner)) => {}
+            _ => panic!("global admin must be implicit Owner"),
+        }
+    }
+
+    #[test]
+    fn owner_role_passes_the_gates_the_bug_hit() {
+        // Owner must satisfy every check the reported 403s came from.
+        let owner = Role::Owner;
+        assert!(Role::can_write(&owner), "create dept/ws + upload + preview");
+        assert!(Role::can_read(&owner));
+        assert!(Role::can_delete(&owner));
+    }
+
+    #[test]
+    fn editor_and_viewer_have_no_implicit_grant() {
+        // Scoped roles keep multi-tenant isolation: rows only.
+        assert!(implicit_global_perm(false, "editor").is_none());
+        assert!(implicit_global_perm(false, "viewer").is_none());
+        assert!(implicit_global_perm(false, "").is_none());
+    }
 }
