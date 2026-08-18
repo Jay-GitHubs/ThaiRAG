@@ -44,6 +44,7 @@ export const th: Record<keyof typeof en, string> = {
   composerPlaceholder: 'ถามอะไรก็ได้เกี่ยวกับเอกสารของคุณ…',
   attach: 'แนบไฟล์',
   attachFiles: 'แนบไฟล์',
+  removeAttachment: 'ลบไฟล์แนบ',
   send: 'ส่ง',
   stop: 'หยุด',
   dropFilesToAttach: 'วางไฟล์ที่นี่เพื่อแนบ',

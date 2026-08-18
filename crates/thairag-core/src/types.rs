@@ -336,6 +336,11 @@ pub struct Attachment {
     pub mime_type: String,
     /// Base64-encoded raw file bytes.
     pub data: String,
+    /// Optional client-generated thumbnail (a small `data:image/…` URL) for
+    /// image uploads. Display-only: persisted with the message so the chat UI
+    /// can render the picture after a reload; never fed to the LLM.
+    #[serde(default)]
+    pub preview: Option<String>,
 }
 
 /// An attachment after text extraction, persisted in the session so follow-up

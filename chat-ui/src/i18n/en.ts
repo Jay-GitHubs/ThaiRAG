@@ -44,6 +44,7 @@ export const en = {
   composerPlaceholder: 'Ask anything about your documents…',
   attach: 'Attach',
   attachFiles: 'Attach files',
+  removeAttachment: 'Remove attachment',
   send: 'Send',
   stop: 'Stop',
   dropFilesToAttach: 'Drop files to attach',
