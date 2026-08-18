@@ -494,6 +494,67 @@ test('file attachment is accepted and answered (file upload)', async ({ page }) 
   await expect(page.getByTestId('msg-user').filter({ hasText: 'What does the attached note say?' })).toBeVisible();
 });
 
+test('dropping a file anywhere on the page attaches it (window drop zone)', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+
+  // Drag over the MESSAGE AREA, far from the composer — the old composer-only
+  // drop zone let the browser navigate to the file here.
+  const dispatch = (type: string) =>
+    page.evaluate((t) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['dropped content'], 'dropped-note.txt', { type: 'text/plain' }));
+      const target = document.elementFromPoint(window.innerWidth / 2, 80) ?? document.body;
+      target.dispatchEvent(
+        new DragEvent(t, { bubbles: true, cancelable: true, dataTransfer: dt }),
+      );
+    }, type);
+
+  await dispatch('dragenter');
+  await expect(page.getByTestId('drop-overlay')).toBeVisible();
+  await dispatch('dragover');
+  await dispatch('drop');
+  await expect(page.getByTestId('drop-overlay')).toBeHidden();
+  await expect(page.getByText('dropped-note.txt')).toBeVisible();
+
+  // Cancelled drag (enter then leave) clears the overlay without attaching.
+  await dispatch('dragenter');
+  await expect(page.getByTestId('drop-overlay')).toBeVisible();
+  await dispatch('dragleave');
+  await expect(page.getByTestId('drop-overlay')).toBeHidden();
+});
+
+test('image attachment renders as a thumbnail, and survives reload', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: 'New chat' }).click();
+
+  // 1x1 red PNG.
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  await page.setInputFiles('input[type=file]', {
+    name: 'pixel.png',
+    mimeType: 'image/png',
+    buffer: png,
+  });
+  // Staged as a picture, not a filename chip.
+  await expect(page.getByTestId('staged-image').locator('img')).toBeVisible();
+
+  await page.getByPlaceholder(COMPOSER).fill('Describe the attached image.');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await waitForAnswer(page);
+
+  // The sent user turn shows the image thumbnail.
+  await expect(page.getByTestId('attachment-image').locator('img').first()).toBeVisible();
+
+  // The thumbnail is persisted with the message — still a picture after reload.
+  await page.reload();
+  await expect(page.getByTestId('attachment-image').locator('img').first()).toBeVisible({
+    timeout: 20_000,
+  });
+});
+
 test('history persists across reload (persistence)', async ({ page }) => {
   await login(page);
   await page.getByRole('button', { name: 'New chat' }).click();

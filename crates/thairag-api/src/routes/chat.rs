@@ -2200,6 +2200,7 @@ pub async fn stream_conversation_message(
             name: a.name.clone(),
             mime: a.mime_type.clone(),
             size: a.data.len() * 3 / 4, // decoded size from base64 length
+            thumb: sanitize_attachment_preview(a.preview.as_deref()),
         })
         .collect();
 
@@ -3392,6 +3393,24 @@ fn general_attachment_context_msgs(
     msgs
 }
 
+/// Maximum accepted length for a client-sent attachment preview. Previews are
+/// client-generated ~320px thumbnails (typically well under 50 KB as base64);
+/// the cap keeps a misbehaving client from bloating the messages table.
+const MAX_ATTACHMENT_PREVIEW_LEN: usize = 120_000;
+
+/// Validate a client-sent attachment `preview` before persisting it: it must
+/// be an inline image data-URL and within the size cap. Anything else (a
+/// non-image URL, an oversized payload) is dropped, never rejected — the
+/// preview is cosmetic and must not fail the chat turn.
+fn sanitize_attachment_preview(preview: Option<&str>) -> Option<String> {
+    let p = preview?;
+    if p.len() <= MAX_ATTACHMENT_PREVIEW_LEN && p.starts_with("data:image/") {
+        Some(p.to_string())
+    } else {
+        None
+    }
+}
+
 /// Raw image attachments as vision inputs, capped at 4 per request (mirrors
 /// the RAG pipeline's per-answer image bound).
 fn general_attachment_images(
@@ -3461,5 +3480,24 @@ mod general_attachment_tests {
     fn non_image_attachments_yield_no_vision_inputs() {
         let imgs = general_attachment_images(&[att("a.md", "text/markdown", "x", None)]);
         assert!(imgs.is_empty());
+    }
+
+    #[test]
+    fn preview_sanitizer_accepts_only_bounded_image_data_urls() {
+        let ok = "data:image/jpeg;base64,abc";
+        assert_eq!(sanitize_attachment_preview(Some(ok)), Some(ok.to_string()));
+        assert_eq!(sanitize_attachment_preview(None), None);
+        // Not an image data-URL — dropped, not persisted.
+        assert_eq!(sanitize_attachment_preview(Some("https://x/y.png")), None);
+        assert_eq!(
+            sanitize_attachment_preview(Some("data:text/html;base64,PGI+")),
+            None
+        );
+        // Oversized payload — dropped.
+        let huge = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(MAX_ATTACHMENT_PREVIEW_LEN)
+        );
+        assert_eq!(sanitize_attachment_preview(Some(&huge)), None);
     }
 }

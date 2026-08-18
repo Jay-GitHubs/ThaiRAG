@@ -110,6 +110,18 @@ export interface Attachment {
   name: string;
   mime_type: string;
   data: string;
+  /** Small thumbnail data-URL for images (display-only; persisted server-side
+   *  so the picture still renders after a reload). */
+  preview?: string;
+}
+
+/** An attachment as displayed on a user message (chips / image thumbnails). */
+export interface UiAttachment {
+  name: string;
+  mime?: string;
+  size?: number;
+  /** Thumbnail data-URL when the attachment is an image with a stored preview. */
+  url?: string;
 }
 
 // ── First-party streaming chat protocol (SSE `data:` JSON objects) ─────
@@ -144,10 +156,17 @@ export function parseImages(json: string): ImageRef[] {
   }
 }
 
-/** Parse a persisted attachments JSON array down to the display names. */
-export function parseAttachmentNames(json: string | undefined): string[] {
+/** Parse a persisted attachments JSON array into displayable attachments
+ *  (name/mime/size chips, plus the stored thumbnail for images). */
+export function parseAttachments(json: string | undefined): UiAttachment[] {
   try {
-    return (JSON.parse(json ?? '[]') as { name: string }[]).map((a) => a.name);
+    const rows = JSON.parse(json ?? '[]') as {
+      name: string;
+      mime?: string;
+      size?: number;
+      thumb?: string;
+    }[];
+    return rows.map((a) => ({ name: a.name, mime: a.mime, size: a.size, url: a.thumb }));
   } catch {
     return [];
   }

@@ -20,7 +20,7 @@ import {
   LikeFilled,
   LikeOutlined,
 } from '@ant-design/icons';
-import type { Citation, ConfidenceFactor, ImageRef } from '../api/types';
+import type { Citation, ConfidenceFactor, ImageRef, UiAttachment } from '../api/types';
 
 /** LLMs commonly emit TeX with \\(..\\) / \\[..\\] delimiters, which remark-math
  *  doesn't parse — normalize them to $ / $$ before rendering. Fenced and inline
@@ -63,8 +63,8 @@ export interface UiMessage {
   content: string;
   citations: Citation[];
   images: ImageRef[];
-  /** Names of files attached to a user turn (display only). */
-  attachments?: string[];
+  /** Files attached to a user turn (display only — image thumbnails + chips). */
+  attachments?: UiAttachment[];
   streaming?: boolean;
   /** The stream failed before completing — the turn was not saved. The page
    *  offers a Retry (re-send) instead of Regenerate for this state. */
@@ -280,12 +280,40 @@ function UserMessage({
         </div>
       </div>
       {message.attachments && message.attachments.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, justifyContent: 'flex-end' }}>
-          {message.attachments.map((name, i) => (
-            <Tag key={`${name}-${i}`} icon={<FileTextOutlined />} style={{ margin: 0 }}>
-              {name}
-            </Tag>
-          ))}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginTop: 6,
+            justifyContent: 'flex-end',
+            alignItems: 'flex-end',
+          }}
+        >
+          <Image.PreviewGroup>
+            {message.attachments.map((a, i) =>
+              a.url ? (
+                <span key={`${a.name}-${i}`} data-testid="attachment-image" title={a.name}>
+                  <Image
+                    src={a.url}
+                    alt={a.name}
+                    height={96}
+                    style={{
+                      maxWidth: 180,
+                      objectFit: 'cover',
+                      borderRadius: 10,
+                      border: '1px solid var(--line)',
+                      display: 'block',
+                    }}
+                  />
+                </span>
+              ) : (
+                <Tag key={`${a.name}-${i}`} icon={<FileTextOutlined />} style={{ margin: 0 }}>
+                  {a.name}
+                </Tag>
+              ),
+            )}
+          </Image.PreviewGroup>
         </div>
       )}
     </div>

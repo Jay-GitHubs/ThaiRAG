@@ -38,7 +38,7 @@ import {
   resumeStream,
   cancelGeneration,
 } from '../api/conversations';
-import { parseAttachmentNames, parseCitations, parseImages } from '../api/types';
+import { parseAttachments, parseCitations, parseImages } from '../api/types';
 import { useI18n } from '../i18n/LocaleProvider';
 import type { MessageKey } from '../i18n/LocaleProvider';
 import type {
@@ -233,7 +233,7 @@ export function ChatPage() {
             content: r.content,
             citations: parseCitations(r.citations),
             images: parseImages(r.images),
-            attachments: parseAttachmentNames(r.attachments),
+            attachments: parseAttachments(r.attachments),
             feedback: r.feedback,
           })),
         );
@@ -519,7 +519,11 @@ export function ChatPage() {
           content: text,
           citations: [],
           images: [],
-          attachments: attachments.map((a) => a.name),
+          attachments: attachments.map((a) => ({
+            name: a.name,
+            mime: a.mime_type,
+            url: a.preview,
+          })),
         },
         { role: 'assistant', content: '', citations: [], images: [], streaming: true },
       ]);
