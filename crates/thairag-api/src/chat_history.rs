@@ -126,6 +126,11 @@ pub struct PersistedAttachment {
     pub name: String,
     pub mime: String,
     pub size: usize,
+    /// Small client-generated thumbnail (a `data:image/…` URL) for image
+    /// uploads, so the chat UI can keep rendering the picture after a reload.
+    /// Bounded at persist time — never the full-resolution upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<String>,
 }
 
 /// Persist one completed turn: the user's prompt and the assistant's reply
@@ -234,6 +239,7 @@ mod tests {
             name: "a.txt".into(),
             mime: "text/plain".into(),
             size: 3,
+            thumb: None,
         }];
         let user_row = persist_user(&store, &conv.id, "q", &att).unwrap();
         assert_eq!(user_row.role, "user");
