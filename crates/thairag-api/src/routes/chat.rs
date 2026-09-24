@@ -2284,6 +2284,16 @@ pub async fn stream_conversation_message(
     // General mode: build a plain LLM (the dedicated general_chat model, or the
     // main chat LLM if none) + system prompt. No retrieval/scope/citations.
     // Read the effective config so admin edits apply without a restart.
+    // Follow-up turns whose documents were replayed from earlier turns: normal
+    // retrieval pipeline (KB context + citations) unless the operator pinned
+    // the documents-only route for this scope.
+    let follow_up_retrieval = crate::routes::settings::get_effective_chat_pipeline_scoped(
+        &state.config,
+        &*state.km_store,
+        &settings_scope,
+    )
+    .attachment_follow_up_retrieval;
+
     let general_chat_cfg =
         crate::routes::settings::build_effective_general_chat(&state.config, &*state.km_store);
     let general_llm = if is_general {
@@ -2371,10 +2381,15 @@ pub async fn stream_conversation_message(
                     m
                 })
                 .collect();
-            // Attachments route whenever a file is in play — this turn's upload
-            // OR one replayed from an earlier turn (the model must keep seeing
-            // the document on follow-ups). Same retrieval semantics as before:
-            // that route answers from the documents, not the KB.
+            // Three cases:
+            //  - nothing in play → normal retrieval pipeline;
+            //  - documents replayed from EARLIER turns, nothing new uploaded →
+            //    normal retrieval pipeline too (KB context + citations for
+            //    follow-ups), told that the documents are supplied context so
+            //    the empty-KB refusal and doc-ops summarize stay out of the way
+            //    and the response prompt gives the documents precedence;
+            //  - a file uploaded on THIS turn (or follow-up retrieval pinned off)
+            //    → documents-only route, no KB retrieval.
             if attachments.is_empty() && !has_history_docs {
                 pipeline
                     .process_stream(
@@ -2386,6 +2401,26 @@ pub async fn stream_conversation_message(
                         Some(metadata_cell_clone),
                         // No client-injected <context>; real attachments go below.
                         false,
+                    )
+                    .await
+            } else if attachments.is_empty() && follow_up_retrieval {
+                let mut msgs = Vec::with_capacity(full_messages.len() + 1);
+                msgs.push(ChatMessage {
+                    role: "system".to_string(),
+                    content: thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE.to_string(),
+                    images: vec![],
+                });
+                msgs.extend(full_messages);
+                pipeline
+                    .process_stream(
+                        &msgs,
+                        &scope,
+                        &memories,
+                        &available_scopes,
+                        Some(progress_tx),
+                        Some(metadata_cell_clone),
+                        // Replayed documents are supplied context.
+                        true,
                     )
                     .await
             } else {

@@ -190,9 +190,15 @@ on another replica, and a week later. No session slot is involved.
   metadata.
 - **Edit** of the turn that carried an upload keeps its files (the UI does not
   re-send them); **regenerate** re-reads history and therefore replays them.
-- Any file in play — this turn's or a replayed one — routes the request down
-  the attachments path (no KB retrieval, as before). Making retrieval a
-  per-turn decision again is tracked separately.
+- Retrieval is a **per-turn** decision. The turn that uploads a file takes the
+  documents-only route (no KB retrieval — the near-clone-sensitive case). A
+  later turn that uploads nothing new runs the **normal retrieval pipeline**
+  with the replayed documents flagged as supplied context: the empty-KB /
+  low-relevance refusal and the doc-ops summarize shortcut stay out of the
+  way, the response prompt tells the model the attached documents take
+  precedence, and KB chunks + citations come back for questions the documents
+  don't cover. `chat_pipeline.attachment_follow_up_retrieval = false` pins
+  follow-ups to documents-only (for near-clone knowledge bases).
 - Replayed image bytes only reach the model on the general-mode vision path
   (capped to the 4 most recent images across the request); the RAG path
   strips `ChatMessage.images` before serialising for text endpoints.
