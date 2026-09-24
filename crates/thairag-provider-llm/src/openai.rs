@@ -66,6 +66,93 @@ impl OpenAiLlmProvider {
     }
 }
 
+/// Move every `system` message to the front, merged into one.
+///
+/// Qwen/vLLM chat templates (and other strict OpenAI-compatible backends)
+/// accept exactly one `system` message and only at index 0 — anything else is
+/// rejected with `400 "System message must be at the beginning."`. The chat
+/// pipeline appends late `system` messages (attachment documents, image
+/// KB context) after the conversation history, which OpenAI proper tolerates
+/// but the gateway does not. Normalising here keeps the pipeline
+/// provider-agnostic and is harmless for OpenAI itself.
+///
+/// The relative order of non-system messages is unchanged; system contents
+/// are joined in their original order with a blank line between them.
+fn hoist_system_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut system_text: Vec<&str> = Vec::new();
+    let mut system_images = Vec::new();
+    for m in messages.iter().filter(|m| m.role == "system") {
+        if !m.content.is_empty() {
+            system_text.push(m.content.as_str());
+        }
+        system_images.extend(m.images.iter().cloned());
+    }
+    let has_system = messages.iter().any(|m| m.role == "system");
+    let mut out = Vec::with_capacity(messages.len());
+    if has_system {
+        out.push(ChatMessage {
+            role: "system".into(),
+            content: system_text.join("\n\n"),
+            images: system_images,
+        });
+    }
+    out.extend(messages.iter().filter(|m| m.role != "system").cloned());
+    out
+}
+
+/// `VisionMessage` sibling of [`hoist_system_messages`].
+fn hoist_system_vision_messages(messages: &[VisionMessage]) -> Vec<VisionMessage> {
+    let mut system_text: Vec<&str> = Vec::new();
+    let mut system_images = Vec::new();
+    for m in messages.iter().filter(|m| m.role == "system") {
+        if !m.text.is_empty() {
+            system_text.push(m.text.as_str());
+        }
+        system_images.extend(m.images.iter().cloned());
+    }
+    let has_system = messages.iter().any(|m| m.role == "system");
+    let mut out = Vec::with_capacity(messages.len());
+    if has_system {
+        out.push(VisionMessage {
+            role: "system".into(),
+            text: system_text.join("\n\n"),
+            images: system_images,
+        });
+    }
+    out.extend(messages.iter().filter(|m| m.role != "system").cloned());
+    out
+}
+
+/// Serialise vision messages into OpenAI `content` arrays (image parts as
+/// base64 data URLs, then the text part), after hoisting system messages.
+fn vision_messages_to_json(messages: &[VisionMessage]) -> Vec<serde_json::Value> {
+    hoist_system_vision_messages(messages)
+        .iter()
+        .map(|m| {
+            let mut content: Vec<serde_json::Value> = Vec::new();
+            // Add images
+            for img in &m.images {
+                let data_url = format!("data:{};base64,{}", img.media_type, img.base64_data);
+                content.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": data_url },
+                }));
+            }
+            // Add text
+            if !m.text.is_empty() {
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": m.text,
+                }));
+            }
+            serde_json::json!({
+                "role": m.role,
+                "content": content,
+            })
+        })
+        .collect()
+}
+
 #[async_trait]
 impl LlmProvider for OpenAiLlmProvider {
     #[instrument(skip(self, messages), fields(model = %self.model, msg_count = messages.len()))]
@@ -76,7 +163,7 @@ impl LlmProvider for OpenAiLlmProvider {
     ) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": messages,
+            "messages": hoist_system_messages(messages),
         });
 
         if let Some(max) = max_tokens {
@@ -140,7 +227,7 @@ impl LlmProvider for OpenAiLlmProvider {
     ) -> Result<LlmResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": messages,
+            "messages": hoist_system_messages(messages),
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -210,7 +297,7 @@ impl LlmProvider for OpenAiLlmProvider {
     ) -> Result<LlmStreamResponse> {
         let mut body = serde_json::json!({
             "model": self.model,
-            "messages": messages,
+            "messages": hoist_system_messages(messages),
             "stream": true,
             "stream_options": { "include_usage": true },
         });
@@ -320,31 +407,7 @@ impl LlmProvider for OpenAiLlmProvider {
         messages: &[VisionMessage],
         max_tokens: Option<u32>,
     ) -> Result<LlmResponse> {
-        let api_messages: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| {
-                let mut content: Vec<serde_json::Value> = Vec::new();
-                // Add images
-                for img in &m.images {
-                    let data_url = format!("data:{};base64,{}", img.media_type, img.base64_data);
-                    content.push(serde_json::json!({
-                        "type": "image_url",
-                        "image_url": { "url": data_url },
-                    }));
-                }
-                // Add text
-                if !m.text.is_empty() {
-                    content.push(serde_json::json!({
-                        "type": "text",
-                        "text": m.text,
-                    }));
-                }
-                serde_json::json!({
-                    "role": m.role,
-                    "content": content,
-                })
-            })
-            .collect();
+        let api_messages = vision_messages_to_json(messages);
 
         let mut body = serde_json::json!({
             "model": self.model,
@@ -422,5 +485,107 @@ mod tests {
         // Empty → default OpenAI host.
         let p = OpenAiLlmProvider::new("k", "m", "");
         assert_eq!(p.base_url, "https://api.openai.com");
+    }
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: content.into(),
+            images: vec![],
+        }
+    }
+
+    fn roles(msgs: &[ChatMessage]) -> Vec<&str> {
+        msgs.iter().map(|m| m.role.as_str()).collect()
+    }
+
+    #[test]
+    fn hoist_moves_mid_conversation_system_to_front() {
+        // Shape produced by the chat pipeline for an attached document: the
+        // main system prompt, history, then a late `[Document: …]` system.
+        let input = vec![
+            msg("system", "You are ThaiRAG."),
+            msg("user", "hi"),
+            msg("assistant", "hello"),
+            msg("system", "[Document: loan.pdf]\nrate 3.5%"),
+            msg("user", "what is the rate?"),
+        ];
+        let out = hoist_system_messages(&input);
+        assert_eq!(roles(&out), ["system", "user", "assistant", "user"]);
+        assert!(out[0].content.contains("[Document: loan.pdf]"));
+        assert_eq!(out[1].content, "hi");
+        assert_eq!(out[2].content, "hello");
+        assert_eq!(out[3].content, "what is the rate?");
+    }
+
+    #[test]
+    fn hoist_merges_multiple_system_messages_in_order() {
+        let input = vec![
+            msg("user", "u1"),
+            msg("system", "first"),
+            msg("user", "u2"),
+            msg("system", "second"),
+        ];
+        let out = hoist_system_messages(&input);
+        assert_eq!(out.iter().filter(|m| m.role == "system").count(), 1);
+        assert_eq!(out[0].content, "first\n\nsecond");
+        assert_eq!(roles(&out), ["system", "user", "user"]);
+    }
+
+    #[test]
+    fn hoist_is_identity_without_system_messages() {
+        let input = vec![msg("user", "u1"), msg("assistant", "a1"), msg("user", "u2")];
+        let out = hoist_system_messages(&input);
+        assert_eq!(roles(&out), roles(&input));
+        for (a, b) in out.iter().zip(&input) {
+            assert_eq!(a.content, b.content);
+        }
+    }
+
+    #[test]
+    fn hoist_keeps_leading_single_system_unchanged() {
+        let input = vec![msg("system", "sys"), msg("user", "u1")];
+        let out = hoist_system_messages(&input);
+        assert_eq!(roles(&out), ["system", "user"]);
+        assert_eq!(out[0].content, "sys");
+    }
+
+    #[test]
+    fn vision_json_hoists_late_system_and_keeps_image_parts() {
+        use thairag_core::types::ImageContent;
+        let input = vec![
+            VisionMessage {
+                role: "system".into(),
+                text: "You are ThaiRAG.".into(),
+                images: vec![],
+            },
+            VisionMessage {
+                role: "user".into(),
+                text: "what is in this picture?".into(),
+                images: vec![ImageContent {
+                    base64_data: "AAAA".into(),
+                    media_type: "image/png".into(),
+                }],
+            },
+            VisionMessage {
+                role: "system".into(),
+                text: "Similar KB images: chart.png".into(),
+                images: vec![],
+            },
+        ];
+        let out = vision_messages_to_json(&input);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["role"], "system");
+        let sys_text = out[0]["content"][0]["text"].as_str().unwrap();
+        assert!(sys_text.contains("You are ThaiRAG."));
+        assert!(sys_text.contains("Similar KB images: chart.png"));
+
+        assert_eq!(out[1]["role"], "user");
+        assert_eq!(out[1]["content"][0]["type"], "image_url");
+        assert_eq!(
+            out[1]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+        assert_eq!(out[1]["content"][1]["text"], "what is in this picture?");
     }
 }
