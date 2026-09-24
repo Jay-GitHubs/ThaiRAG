@@ -561,6 +561,132 @@ pub struct UpdateRerankerConfig {
     pub normalize_scores: Option<bool>,
 }
 
+/// Settings keys that hold a serialised per-agent `LlmConfig` (each with its
+/// own `base_url` / `api_key`, seeded from the primary LLM at save time).
+/// Primary-LLM changes are propagated to these so they don't go stale.
+pub const AGENT_LLM_SETTING_KEYS: &[&str] = &[
+    "chat_pipeline.query_analyzer_llm",
+    "chat_pipeline.query_rewriter_llm",
+    "chat_pipeline.context_curator_llm",
+    "chat_pipeline.response_generator_llm",
+    "chat_pipeline.quality_guard_llm",
+    "chat_pipeline.language_adapter_llm",
+    "chat_pipeline.orchestrator_llm",
+    "chat_pipeline.memory_llm",
+    "chat_pipeline.tool_use_llm",
+    "chat_pipeline.self_rag_llm",
+    "chat_pipeline.graph_rag_llm",
+    "chat_pipeline.map_reduce_llm",
+    "chat_pipeline.ragas_llm",
+    "chat_pipeline.compression_llm",
+    "chat_pipeline.multimodal_llm",
+    "chat_pipeline.chat_vision_llm",
+    "chat_pipeline.raptor_llm",
+    "chat_pipeline.colbert_llm",
+    "chat_pipeline.personal_memory_llm",
+    "chat_pipeline.crag_llm",
+    "ai_preprocessing.llm",
+    "ai_preprocessing.analyzer_llm",
+    "ai_preprocessing.converter_llm",
+    "ai_preprocessing.quality_llm",
+    "ai_preprocessing.chunker_llm",
+    "ai_preprocessing.orchestrator_llm",
+    "ai_preprocessing.enricher_llm",
+];
+
+/// Rewrite the `api_key` of a serialised `LlmConfig` when it equals `old_key`.
+/// Returns `None` when the JSON doesn't parse or the key differs (so a
+/// deliberately distinct per-agent key is never clobbered).
+fn rekey_llm_config_json(json: &str, old_key: &str, new_key: &str) -> Option<String> {
+    let mut cfg: thairag_config::schema::LlmConfig = serde_json::from_str(json).ok()?;
+    if cfg.api_key != old_key {
+        return None;
+    }
+    cfg.api_key = new_key.to_string();
+    serde_json::to_string(&cfg).ok()
+}
+
+/// Propagate a primary-LLM api_key rotation to every per-agent LLM setting
+/// (global plus every org / dept / workspace override) whose key still equals
+/// `old_key`. Returns the number of rows rewritten.
+pub fn propagate_llm_api_key(state: &AppState, old_key: &str, new_key: &str) -> usize {
+    if old_key.is_empty() || old_key == new_key {
+        return 0;
+    }
+    let store = &state.km_store;
+    let mut scopes: Vec<(String, String)> = vec![("global".into(), String::new())];
+    for org in store.list_orgs() {
+        scopes.push(("org".into(), org.id.0.to_string()));
+        for dept in store.list_depts_in_org(org.id) {
+            scopes.push(("dept".into(), dept.id.0.to_string()));
+        }
+    }
+    for ws in store.list_workspaces_all() {
+        scopes.push(("workspace".into(), ws.id.0.to_string()));
+    }
+    let mut updated = 0;
+    for (scope_type, scope_id) in &scopes {
+        for key in AGENT_LLM_SETTING_KEYS {
+            let Some(val) = store.get_scoped_setting(key, scope_type, scope_id) else {
+                continue;
+            };
+            if let Some(new_val) = rekey_llm_config_json(&val, old_key, new_key) {
+                store.set_scoped_setting(key, scope_type, scope_id, &new_val);
+                updated += 1;
+            }
+        }
+    }
+    updated
+}
+
+/// Rebuild the dynamic provider bundle from what is *currently persisted*
+/// (saved `provider_config` layered over the file config, plus effective
+/// search / document / chat settings) and hot-swap it in. Shared by the boot
+/// path and by factory reset, so the in-memory providers never outlive the
+/// settings they were built from. Returns whether a saved provider config
+/// was used (vs. the file/env config).
+pub fn reload_providers_from_store(state: &AppState) -> bool {
+    let config = &state.config;
+    let saved_providers = state
+        .km_store
+        .get_setting("provider_config")
+        .and_then(|s| serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&s).ok())
+        .map(|mut pc| {
+            // api_keys are vault-encrypted at rest; legacy plaintext rows
+            // pass through unchanged.
+            state.vault.decrypt_provider_api_keys(&mut pc);
+            pc
+        });
+    let (pc, used_saved) = match saved_providers {
+        Some(pc) => {
+            let mut validate_cfg = (**config).clone();
+            validate_cfg.providers = pc.clone();
+            // Structural problems reject the saved config; mere incompleteness
+            // (empty keys) only warns — same boot policy as the file config.
+            if let Err(e) = validate_cfg.validate_structural() {
+                tracing::warn!("Saved provider config is invalid, ignoring: {e}");
+                (config.providers.clone(), false)
+            } else {
+                for warning in validate_cfg.readiness_warnings() {
+                    tracing::warn!(%warning, "saved provider config not fully configured");
+                }
+                (pc, true)
+            }
+        }
+        None => (config.providers.clone(), false),
+    };
+    // Use the EFFECTIVE document config (km_store overrides layered over the
+    // file defaults), not the raw `config.document`. Otherwise this rebuild
+    // clobbers persisted settings such as ai_preprocessing.enabled.
+    let effective_chat = get_effective_chat_pipeline(state);
+    let effective_doc = build_effective_document_config(config, &*state.km_store);
+    let effective_search = build_effective_search_config(config, &*state.km_store);
+    let bundle =
+        state.build_provider_bundle(&pc, &effective_search, &effective_doc, &effective_chat);
+    state.reload_providers(bundle);
+    used_saved
+}
+
 pub async fn update_provider_config(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -883,36 +1009,8 @@ pub async fn update_provider_config(
     // Ollama port or host.
     let old_llm_url = &state.providers().providers_config.llm.base_url;
     if !old_llm_url.is_empty() && pc.llm.base_url != *old_llm_url {
-        let agent_llm_keys = [
-            "chat_pipeline.query_analyzer_llm",
-            "chat_pipeline.query_rewriter_llm",
-            "chat_pipeline.context_curator_llm",
-            "chat_pipeline.response_generator_llm",
-            "chat_pipeline.quality_guard_llm",
-            "chat_pipeline.language_adapter_llm",
-            "chat_pipeline.orchestrator_llm",
-            "chat_pipeline.memory_llm",
-            "chat_pipeline.tool_use_llm",
-            "chat_pipeline.self_rag_llm",
-            "chat_pipeline.graph_rag_llm",
-            "chat_pipeline.map_reduce_llm",
-            "chat_pipeline.ragas_llm",
-            "chat_pipeline.compression_llm",
-            "chat_pipeline.multimodal_llm",
-            "chat_pipeline.chat_vision_llm",
-            "chat_pipeline.raptor_llm",
-            "chat_pipeline.colbert_llm",
-            "chat_pipeline.personal_memory_llm",
-            "chat_pipeline.crag_llm",
-            "ai_preprocessing.analyzer_llm",
-            "ai_preprocessing.converter_llm",
-            "ai_preprocessing.quality_llm",
-            "ai_preprocessing.chunker_llm",
-            "ai_preprocessing.orchestrator_llm",
-            "ai_preprocessing.enricher_llm",
-        ];
         let mut updated_count = 0;
-        for key in &agent_llm_keys {
+        for key in AGENT_LLM_SETTING_KEYS {
             if let Some(val) = state.km_store.get_setting(key)
                 && val.contains(old_llm_url.as_str())
             {
@@ -927,6 +1025,29 @@ pub async fn update_provider_config(
                 new_url = %pc.llm.base_url,
                 updated_count,
                 "Propagated LLM base_url change to per-agent configs"
+            );
+        }
+    }
+
+    // If the LLM api_key was rotated, propagate to every per-agent / vision
+    // LLM config that was copied from the primary key. Each of those stores its
+    // own full `LlmConfig` (seeded from the primary at save time), so without
+    // this a key rotation on the Providers tab leaves ingestion agents and the
+    // document vision LLM sending the revoked key → 401 on "Document
+    // processing" while chat works. Configs holding a deliberately different
+    // key are left alone.
+    let old_llm_key = state.providers().providers_config.llm.api_key.clone();
+    if !old_llm_key.is_empty() && pc.llm.api_key != old_llm_key {
+        if let Some(vis) = pc.doc_vision_llm.as_mut()
+            && vis.api_key == old_llm_key
+        {
+            vis.api_key = pc.llm.api_key.clone();
+        }
+        let updated_count = propagate_llm_api_key(&state, &old_llm_key, &pc.llm.api_key);
+        if updated_count > 0 {
+            tracing::info!(
+                updated_count,
+                "Propagated LLM api_key rotation to per-agent configs"
             );
         }
     }
@@ -6303,6 +6424,12 @@ pub async fn factory_reset(
                 .delete_all_indexes()
                 .await
                 .map_err(ApiError)?;
+            // Rebuild the in-memory providers from what survived the wipe.
+            // Without this the process keeps every provider (and API key)
+            // built before the reset, and the next settings save re-persists
+            // that pre-reset config from memory — resurrecting wiped keys.
+            // A full reset drops back to the file/env config.
+            reload_providers_from_store(&state);
             if full {
                 "global full reset (content + users/orgs/settings)".to_string()
             } else {
@@ -6809,6 +6936,42 @@ pub async fn get_audit_analytics(
     require_super_admin(&claims, &state)?;
     let analytics = state.km_store.get_audit_analytics(&filter);
     Ok(Json(analytics))
+}
+
+#[cfg(test)]
+mod api_key_rotation_tests {
+    use super::*;
+
+    fn cfg_json(api_key: &str) -> String {
+        serde_json::json!({
+            "kind": "open_ai_compatible",
+            "model": "chat",
+            "base_url": "https://gw.example/v1",
+            "api_key": api_key,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn rekey_rewrites_matching_key_only() {
+        let out = rekey_llm_config_json(&cfg_json("sk-old"), "sk-old", "sk-new").unwrap();
+        let cfg: thairag_config::schema::LlmConfig = serde_json::from_str(&out).unwrap();
+        assert_eq!(cfg.api_key, "sk-new");
+        assert_eq!(cfg.model, "chat");
+        assert_eq!(cfg.base_url, "https://gw.example/v1");
+    }
+
+    #[test]
+    fn rekey_leaves_distinct_key_untouched() {
+        // A per-agent config pointed at a different key (other tenant /
+        // other gateway) must never be clobbered by a primary rotation.
+        assert!(rekey_llm_config_json(&cfg_json("sk-other"), "sk-old", "sk-new").is_none());
+    }
+
+    #[test]
+    fn rekey_ignores_unparseable_rows() {
+        assert!(rekey_llm_config_json("not json", "sk-old", "sk-new").is_none());
+    }
 }
 
 #[cfg(test)]
