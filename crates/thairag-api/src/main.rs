@@ -93,51 +93,13 @@ async fn main() {
             llm_mode = ?state.km_store.get_setting("chat_pipeline.llm_mode"),
             "Effective chat pipeline config"
         );
-        let saved_providers = state
-            .km_store
-            .get_setting("provider_config")
-            .and_then(|s| serde_json::from_str::<thairag_config::schema::ProvidersConfig>(&s).ok())
-            .map(|mut pc| {
-                // api_keys are vault-encrypted at rest; legacy plaintext rows
-                // pass through unchanged.
-                state.vault.decrypt_provider_api_keys(&mut pc);
-                pc
-            });
-        let pc = if let Some(ref pc) = saved_providers {
-            let mut validate_cfg = config.clone();
-            validate_cfg.providers = pc.clone();
-            // Structural problems reject the saved config; mere incompleteness
-            // (empty keys) only warns — same boot policy as the file config.
-            if let Err(e) = validate_cfg.validate_structural() {
-                tracing::warn!("Saved provider config is invalid, ignoring: {e}");
-                &config.providers
-            } else {
-                for warning in validate_cfg.readiness_warnings() {
-                    tracing::warn!(%warning, "saved provider config not fully configured");
-                }
-                pc
-            }
-        } else {
-            &config.providers
-        };
-        // Use the EFFECTIVE document config (km_store overrides layered over the
-        // file defaults), not the raw `config.document`. Otherwise this rebuild
-        // clobbers the pipeline that AppState::build() correctly constructed with
-        // persisted settings — silently reverting e.g. ai_preprocessing.enabled
-        // to its file default (false), so AI agents never run until the operator
-        // re-toggles the setting (which rebuilds via the effective config).
-        let effective_doc = thairag_api::routes::settings::build_effective_document_config(
-            &config,
-            &*state.km_store,
-        );
-        let effective_search =
-            thairag_api::routes::settings::build_effective_search_config(&config, &*state.km_store);
-        let bundle =
-            state.build_provider_bundle(pc, &effective_search, &effective_doc, &effective_chat);
-        state.reload_providers(bundle);
+        // Saved `provider_config` (vault-decrypted) layered over the file
+        // config, plus EFFECTIVE search / document / chat settings. Shared with
+        // factory reset so both paths rebuild identically.
+        let used_saved = thairag_api::routes::settings::reload_providers_from_store(&state);
         tracing::info!(
-            ai_preprocessing_enabled = effective_doc.ai_preprocessing.enabled,
-            "Loaded saved config from database"
+            used_saved_provider_config = used_saved,
+            "Loaded effective config (database over file) and built providers"
         );
     }
 

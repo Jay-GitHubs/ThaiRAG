@@ -185,7 +185,11 @@ fn build_test_state(auth_enabled: bool) -> AppState {
                 supports_vision: None,
             },
             embedding: EmbeddingConfig {
-                kind: thairag_core::types::EmbeddingKind::Fastembed,
+                // OpenAI kind: constructing the provider is side-effect free.
+                // (Fastembed would download/lock the ONNX model whenever a test
+                // rebuilds the real provider bundle, e.g. via PUT providers or
+                // factory reset.)
+                kind: thairag_core::types::EmbeddingKind::OpenAi,
                 model: "mock".into(),
                 dimension: 4,
                 base_url: "".into(),
@@ -3211,6 +3215,216 @@ async fn factory_reset_global_content_wipes_content_keeps_user() {
         body_json(resp.into_body()).await.as_array().unwrap().len(),
         0
     );
+}
+
+/// Rotating the primary LLM key on the Providers tab must reach every
+/// per-agent / vision LLM config that was seeded from it — at global scope
+/// AND in org/dept/workspace overrides — while leaving a deliberately
+/// different key alone. Regression: ingestion agents kept sending the revoked
+/// key → 401 "Document processing failed" while chat (primary LLM) worked.
+#[tokio::test]
+async fn provider_key_rotation_propagates_to_agent_llm_configs() {
+    use thairag_api::routes::settings::propagate_llm_api_key;
+    let state = build_test_state(true);
+    let store = &state.km_store;
+    let org = store.insert_org("o".into()).unwrap();
+    let dept = store.insert_dept(org.id, "d".into()).unwrap();
+    let ws = store.insert_workspace(dept.id, "w".into()).unwrap();
+
+    let cfg = |key: &str| {
+        serde_json::json!({
+            "kind": "open_ai_compatible",
+            "model": "chat",
+            "base_url": "https://gw.example/v1",
+            "api_key": key,
+        })
+        .to_string()
+    };
+    store.set_setting("ai_preprocessing.llm", &cfg("sk-old"));
+    store.set_setting("ai_preprocessing.enricher_llm", &cfg("sk-old"));
+    store.set_setting("chat_pipeline.response_generator_llm", &cfg("sk-distinct"));
+    store.set_scoped_setting(
+        "ai_preprocessing.chunker_llm",
+        "workspace",
+        &ws.id.0.to_string(),
+        &cfg("sk-old"),
+    );
+    store.set_scoped_setting(
+        "chat_pipeline.query_analyzer_llm",
+        "org",
+        &org.id.0.to_string(),
+        &cfg("sk-old"),
+    );
+
+    let updated = propagate_llm_api_key(&state, "sk-old", "sk-new");
+    assert_eq!(updated, 4);
+
+    let key_of = |json: String| -> String {
+        serde_json::from_str::<serde_json::Value>(&json).unwrap()["api_key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        key_of(store.get_setting("ai_preprocessing.llm").unwrap()),
+        "sk-new"
+    );
+    assert_eq!(
+        key_of(store.get_setting("ai_preprocessing.enricher_llm").unwrap()),
+        "sk-new"
+    );
+    assert_eq!(
+        key_of(
+            store
+                .get_scoped_setting(
+                    "ai_preprocessing.chunker_llm",
+                    "workspace",
+                    &ws.id.0.to_string()
+                )
+                .unwrap()
+        ),
+        "sk-new"
+    );
+    assert_eq!(
+        key_of(
+            store
+                .get_scoped_setting(
+                    "chat_pipeline.query_analyzer_llm",
+                    "org",
+                    &org.id.0.to_string()
+                )
+                .unwrap()
+        ),
+        "sk-new"
+    );
+    // Distinct key untouched.
+    assert_eq!(
+        key_of(
+            store
+                .get_setting("chat_pipeline.response_generator_llm")
+                .unwrap()
+        ),
+        "sk-distinct"
+    );
+    // No-ops: empty old key / same key.
+    assert_eq!(propagate_llm_api_key(&state, "", "sk-new"), 0);
+    assert_eq!(propagate_llm_api_key(&state, "sk-new", "sk-new"), 0);
+}
+
+/// The primary-key rotation must also flow through the HTTP save path: a
+/// PUT with a new `llm.api_key` rewrites the seeded per-agent rows and the
+/// in-memory `doc_vision_llm` key, and the persisted `provider_config` +
+/// live bundle carry the new key.
+#[tokio::test]
+async fn provider_config_put_with_new_key_rotates_agent_and_vision_keys() {
+    let state = build_test_state(true);
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "root@test.com", "Root", "Pass1234").await;
+
+    // Save #1: establish the "old" key + a vision LLM seeded from it.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({
+                "llm": {"api_key": "sk-old"},
+                "doc_vision_llm": {"model": "vl", "api_key": "sk-old"},
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(state.providers().providers_config.llm.api_key, "sk-old");
+
+    let cfg = serde_json::json!({
+        "kind": "ollama", "model": "mock", "base_url": "", "api_key": "sk-old",
+    })
+    .to_string();
+    state
+        .km_store
+        .set_setting("ai_preprocessing.enricher_llm", &cfg);
+
+    // Save #2: rotate the key.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"api_key": "sk-new"}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let pc = state.providers().providers_config;
+    assert_eq!(pc.llm.api_key, "sk-new");
+    assert_eq!(pc.doc_vision_llm.as_ref().unwrap().api_key, "sk-new");
+    let enricher: serde_json::Value = serde_json::from_str(
+        &state
+            .km_store
+            .get_setting("ai_preprocessing.enricher_llm")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(enricher["api_key"], "sk-new");
+}
+
+/// A global factory reset must rebuild the in-memory providers from what
+/// survived the wipe. Regression: the process kept the pre-reset providers
+/// (and API keys) and the next settings save re-persisted that stale config
+/// from memory, resurrecting keys the reset had removed. Full → back to the
+/// file config; content → saved provider_config still applies.
+#[tokio::test]
+async fn factory_reset_reloads_providers_from_store() {
+    use thairag_api::routes::settings::reload_providers_from_store;
+    let state = build_test_state(true);
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "root@test.com", "Root", "Pass1234").await;
+
+    // Persist a provider_config that differs from the file config.
+    let mut saved = state.config.providers.clone();
+    saved.llm.model = "saved-model".into();
+    saved.llm.api_key = "sk-saved".into();
+    state
+        .km_store
+        .set_setting("provider_config", &serde_json::to_string(&saved).unwrap());
+    assert!(reload_providers_from_store(&state));
+    assert_eq!(state.providers().providers_config.llm.model, "saved-model");
+
+    // Content reset keeps settings → saved config still live.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/factory-reset",
+            serde_json::json!({"scope": {"level": "global"}, "mode": "content", "confirm": "RESET"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(state.providers().providers_config.llm.model, "saved-model");
+
+    // Full reset wipes settings → providers drop back to the file config,
+    // not the pre-reset in-memory copy.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/factory-reset",
+            serde_json::json!({"scope": {"level": "global"}, "mode": "full", "confirm": "RESET"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let pc = state.providers().providers_config;
+    assert_eq!(pc.llm.model, "mock");
+    assert_eq!(pc.llm.api_key, "");
+    assert!(state.km_store.get_setting("provider_config").is_none());
 }
 
 #[tokio::test]
