@@ -1025,6 +1025,17 @@ pub struct ChatPipelineConfig {
     /// without this they dead-end in the low-relevance refusal.
     #[serde(default = "default_true_val")]
     pub doc_ops_enabled: bool,
+    /// Follow-up turns in a conversation that carries attachments from
+    /// EARLIER turns (replayed from history) and uploads nothing new run the
+    /// normal retrieval pipeline instead of the documents-only route: KB
+    /// context and citations come back, the empty/low-relevance refusal is
+    /// suppressed (the documents count as context), and the response prompt
+    /// tells the model the attached documents take precedence for questions
+    /// about them. The upload turn itself always stays documents-only. Turn
+    /// off for knowledge bases full of near-clones of what users upload, where
+    /// retrieved siblings can outvote the attached document.
+    #[serde(default = "default_true_val")]
+    pub attachment_follow_up_retrieval: bool,
 
     // ── Feature: Agentic document selection ──
     /// When on, an LLM stage reads the workspace's document catalogue (titles)
@@ -1519,6 +1530,7 @@ impl Default for ChatPipelineConfig {
             adaptive_min_samples: default_adaptive_min_samples(),
             // Document operations (pre-retrieval)
             doc_ops_enabled: true,
+            attachment_follow_up_retrieval: true,
             // Agentic document selection
             doc_selection_enabled: false,
             doc_selection_max_catalog: default_doc_selection_max_catalog(),

@@ -3923,8 +3923,19 @@ async fn attachments_replay_from_durable_history_on_follow_up_turns() {
         assert!(last.content.contains("hello attachment"));
         assert!(last.content.ends_with("summarize the attached file"));
 
+        // Follow-up: nothing new uploaded, so the retrieval pipeline runs
+        // (RAG prompt first, documents-aware); the preamble rides along as a
+        // system message and the document stays in its own turn.
         let t2 = &calls[1];
-        assert_eq!(t2[0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        assert!(
+            t2[0].role == "system" && t2[0].content.starts_with("You are ThaiRAG"),
+            "{}",
+            t2[0].content
+        );
+        assert!(
+            t2.iter()
+                .any(|m| m.role == "system" && m.content == ATTACHMENT_SYSTEM_PREAMBLE)
+        );
         let users = user_turns(t2);
         assert_eq!(users.len(), 2);
         assert!(
@@ -3975,6 +3986,123 @@ async fn attachments_replay_from_durable_history_on_follow_up_turns() {
     let users = user_turns(&calls[2]);
     assert!(users[0].content.contains("hello attachment"));
     assert_eq!(users[1].content, "what was the second word?");
+}
+
+/// A follow-up turn whose document was replayed from history goes through the
+/// normal retrieval pipeline (KB context + citations available) and is NOT
+/// refused when the KB has nothing: the replayed documents count as context.
+/// The upload turn itself stays documents-only, and the operator can pin
+/// follow-ups to documents-only with `chat_pipeline.attachment_follow_up_retrieval`.
+#[tokio::test]
+async fn follow_up_after_upload_runs_retrieval_with_documents_in_history() {
+    use thairag_core::models::PermissionScope;
+    use thairag_core::models::UserPermission;
+    use thairag_core::permission::Role;
+    use thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE;
+    let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let state = build_test_state_full(
+        true,
+        Arc::new(CapturingLlm {
+            calls: Arc::clone(&calls),
+        }),
+        true,
+    );
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "fu@test.com", "FollowUp", "Pass1234").await;
+    // A workspace in scope makes the pipeline take the retrieval route (the
+    // mock KB is empty, so without the replayed documents this would refuse).
+    let store = &state.km_store;
+    let user = store.get_user_by_email("fu@test.com").unwrap();
+    let org = store.insert_org("o".into()).unwrap();
+    let dept = store.insert_dept(org.id, "d".into()).unwrap();
+    let _ws = store.insert_workspace(dept.id, "w".into()).unwrap();
+    store.add_permission(UserPermission {
+        user_id: user.user.id,
+        scope: PermissionScope::Org { org_id: org.id },
+        role: Role::Viewer,
+    });
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({
+            "content": "summarize the attached file",
+            "attachments": [
+                {"name": "note.txt", "mime_type": "text/plain", "data": "aGVsbG8gYXR0YWNobWVudA=="}
+            ]
+        }),
+    )
+    .await;
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "what was the second word?"}),
+    )
+    .await;
+
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "the follow-up must reach the model — no empty-KB refusal"
+        );
+        // Upload turn: documents-only route, no RAG prompt.
+        assert_eq!(calls[0][0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        assert!(
+            calls[0]
+                .iter()
+                .all(|m| !m.content.starts_with("You are ThaiRAG"))
+        );
+        // Follow-up: retrieval pipeline — RAG prompt first and pointing at the
+        // attached documents (empty KB), preamble kept, document in its turn.
+        let t2 = &calls[1];
+        assert!(
+            t2[0].role == "system" && t2[0].content.starts_with("You are ThaiRAG"),
+            "expected the RAG prompt first, got: {}",
+            t2[0].content
+        );
+        assert!(
+            t2[0]
+                .content
+                .contains("attached earlier in this conversation")
+        );
+        assert!(
+            t2.iter()
+                .any(|m| m.role == "system" && m.content == ATTACHMENT_SYSTEM_PREAMBLE)
+        );
+        let users = user_turns(t2);
+        assert!(users[0].content.contains("hello attachment"));
+        assert_eq!(users.last().unwrap().content, "what was the second word?");
+    }
+
+    // Operator pins follow-ups to documents-only → retrieval skipped again.
+    state
+        .km_store
+        .set_setting("chat_pipeline.attachment_follow_up_retrieval", "false");
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "and the first word?"}),
+    )
+    .await;
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[2][0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+    assert!(
+        calls[2]
+            .iter()
+            .all(|m| !m.content.starts_with("You are ThaiRAG"))
+    );
+    assert!(
+        user_turns(&calls[2])[0]
+            .content
+            .contains("hello attachment")
+    );
 }
 
 /// Editing the message that carried the upload keeps the file: the UI does

@@ -299,6 +299,19 @@ ceiling (tables 97.1/97.1, prose 100/100), and it adds a selector LLM call per
 query. Leave it off; it also does not help shared near-clone scopes (measured
 separately — see CLAUDE.md's near-clone deployment guidance).
 
+Related flag: `chat_pipeline.attachment_follow_up_retrieval` (default **on**) —
+how follow-up turns behave in a conversation that carries **chat attachments**
+from earlier turns (replayed from history, see `docs/ATTACHMENTS_DESIGN.md`
+§5.2). The turn that uploads a file is always answered from the documents only
+(no KB retrieval — the near-clone-sensitive case). With the flag on, later
+turns that upload nothing new run the normal retrieval pipeline: KB context and
+citations come back for questions the documents don't cover, the empty/low-
+relevance refusal is suppressed (the documents count as context), and the
+response prompt tells the model the attached documents take precedence. Turn it
+off (globally or per scope) for knowledge bases full of near-clones of what
+users upload, where retrieved siblings could outvote the attached document —
+follow-ups then stay documents-only for the whole conversation.
+
 ## Grounding / hallucination
 
 Across all 9 configurations, ThaiRAG produced **zero hallucinations**, and the

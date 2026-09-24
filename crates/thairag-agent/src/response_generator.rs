@@ -156,8 +156,23 @@ impl ResponseGenerator {
             QueryLanguage::Mixed => "Respond in the same language mix the user used.",
         };
 
+        // The conversation may already carry context the pipeline did not
+        // retrieve: the user's attached documents replayed as `<document>`
+        // blocks (flagged by the attachment preamble system message) or a
+        // client-injected `<context>`. Then an empty or weak retrieval must not
+        // push the model into "I don't have enough information" — the
+        // documents are the context, and they take precedence.
+        let external_context = crate::chat_pipeline::has_client_supplied_context(messages);
+
         let context_text = if context.chunks.is_empty() {
-            "No relevant context was found.".to_string()
+            if external_context {
+                "No relevant knowledge-base context was found for this question. The \
+                 documents the user attached earlier in this conversation (inside \
+                 <document> tags) are the context to answer from."
+                    .to_string()
+            } else {
+                "No relevant context was found.".to_string()
+            }
         } else {
             // LLM01: Wrap each chunk in XML delimiters to separate data from instructions.
             // This defends against indirect prompt injection from document content.
@@ -185,8 +200,14 @@ impl ResponseGenerator {
         };
 
         let citation_instruction = if context.chunks.is_empty() {
-            "If you cannot find relevant information, clearly state that you don't have \
-             enough information to answer. Do NOT make up or guess information."
+            if external_context {
+                "Answer from the user's attached documents when they cover the question. \
+                 If neither the documents nor the knowledge base cover it, clearly state \
+                 that you don't have enough information. Do NOT make up or guess information."
+            } else {
+                "If you cannot find relevant information, clearly state that you don't have \
+                 enough information to answer. Do NOT make up or guess information."
+            }
         } else {
             "Use [1], [2], etc. to cite which context chunks support your statements. \
              Every factual claim MUST have a citation — including each bullet or list \
@@ -215,12 +236,25 @@ impl ResponseGenerator {
             // Scores uncalibrated or absent — let the LLM judge from content.
             ""
         } else if avg_score < 0.3 {
-            "\n\n⚠️ IMPORTANT: The retrieved context has LOW relevance to this query. \
-             You MUST clearly state that you don't have sufficient information. \
-             Do NOT fabricate or infer information beyond what the context explicitly says."
+            if external_context {
+                "\n\nNote: The retrieved knowledge-base context has LOW relevance to this \
+                 query. For questions about the user's attached documents, answer from \
+                 those documents and ignore the retrieved context. Only if neither covers \
+                 the question, clearly state that you don't have sufficient information."
+            } else {
+                "\n\n⚠️ IMPORTANT: The retrieved context has LOW relevance to this query. \
+                 You MUST clearly state that you don't have sufficient information. \
+                 Do NOT fabricate or infer information beyond what the context explicitly says."
+            }
         } else if avg_score < 0.5 {
-            "\n\nNote: The context relevance is moderate. Only state facts that are \
-             directly supported by the provided context. If unsure, say so."
+            if external_context {
+                "\n\nNote: The context relevance is moderate. The user's attached documents \
+                 take precedence over the retrieved context for questions about them; only \
+                 state facts supported by one or the other."
+            } else {
+                "\n\nNote: The context relevance is moderate. Only state facts that are \
+                 directly supported by the provided context. If unsure, say so."
+            }
         } else {
             ""
         };
@@ -341,6 +375,91 @@ mod vision_routing_tests {
             topics: vec![],
             needs_context: true,
         }
+    }
+
+    fn user(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".into(),
+            content: content.into(),
+            images: vec![],
+        }
+    }
+
+    fn with_attached_documents() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage {
+                role: "system".into(),
+                content: thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE.into(),
+                images: vec![],
+            },
+            user("<document name=\"a.txt\" type=\"text/plain\">alpha</document>\n\nfirst?"),
+            ChatMessage {
+                role: "assistant".into(),
+                content: "ok".into(),
+                images: vec![],
+            },
+            user("second?"),
+        ]
+    }
+
+    /// Follow-up turns replay the user's documents into history; an empty KB
+    /// retrieval must then point the model at those documents instead of
+    /// demanding an "I don't have enough information" answer.
+    #[test]
+    fn empty_retrieval_with_attached_documents_points_at_the_documents() {
+        let rg = ResponseGenerator::new(Arc::new(MockLlm::new("m", false)));
+        let empty = CuratedContext {
+            chunks: vec![],
+            total_tokens_est: 0,
+        };
+
+        let out = rg.build_augmented_messages(&analysis(), &empty, &[user("q")]);
+        assert!(out[0].content.contains("No relevant context was found."));
+        assert!(out[0].content.contains("clearly state that you don't have"));
+
+        let out = rg.build_augmented_messages(&analysis(), &empty, &with_attached_documents());
+        assert!(
+            out[0]
+                .content
+                .contains("attached earlier in this conversation")
+        );
+        assert!(
+            out[0]
+                .content
+                .contains("Answer from the user's attached documents")
+        );
+        assert!(!out[0].content.contains("No relevant context was found."));
+        // The conversation (preamble + replayed document) follows the RAG prompt.
+        assert_eq!(
+            out[1].content,
+            thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE
+        );
+        assert!(out[2].content.contains("alpha"));
+        assert_eq!(out.last().unwrap().content, "second?");
+    }
+
+    #[test]
+    fn low_relevance_with_attached_documents_prefers_the_documents() {
+        let rg = ResponseGenerator::new(Arc::new(MockLlm::new("m", false)));
+        let mut weak = ctx_with_image();
+        weak.chunks[0].relevance_score = 0.1;
+        weak.chunks[0].images.clear();
+        weak.chunks[0].image_blob_id = None;
+
+        let out = rg.build_augmented_messages(&analysis(), &weak, &[user("q")]);
+        assert!(
+            out[0]
+                .content
+                .contains("You MUST clearly state that you don't have")
+        );
+
+        let out = rg.build_augmented_messages(&analysis(), &weak, &with_attached_documents());
+        assert!(
+            out[0]
+                .content
+                .contains("answer from those documents and ignore the retrieved context")
+        );
+        assert!(!out[0].content.contains("You MUST clearly state"));
     }
 
     fn ctx_with_image() -> CuratedContext {
