@@ -738,28 +738,37 @@ impl ChatPipeline {
 
     /// Build the system messages that inject attachment text into the LLM
     /// context. Returns an empty vec when there are no attachments.
-    fn build_attachment_messages(attachments: &[SessionAttachment]) -> Vec<ChatMessage> {
-        if attachments.is_empty() {
-            return Vec::new();
-        }
-        let mut msgs = Vec::with_capacity(attachments.len() + 1);
-        msgs.push(ChatMessage {
+    /// Assemble the attachments route request: ONE stable system preamble at
+    /// the front, then the conversation with this request's attachments
+    /// inlined as `<document>` data blocks inside the LAST user turn.
+    ///
+    /// Earlier turns' attachments are already inlined into their own user
+    /// messages by the caller (replayed from durable history), so this route
+    /// may legitimately run with an empty `attachments` slice — the preamble
+    /// is still needed because documents are present further up.
+    ///
+    /// Why not system messages per document (the previous shape): strict chat
+    /// templates (Qwen/vLLM) reject more than one system message, a document's
+    /// text spoke with the operator's authority, and the file was detached
+    /// from the turn it belonged to.
+    fn build_attachment_request(
+        full_messages: Vec<ChatMessage>,
+        attachments: &[SessionAttachment],
+        image_context: Option<ChatMessage>,
+    ) -> Vec<ChatMessage> {
+        let mut convo = full_messages;
+        thairag_core::types::inline_attachments_into_last_user_turn(&mut convo, attachments);
+        let mut out = Vec::with_capacity(convo.len() + 2);
+        out.push(ChatMessage {
             role: "system".into(),
-            content: format!(
-                "You have been given {} document(s) below. Use them as the \
-                 primary source to answer the user's questions.",
-                attachments.len()
-            ),
+            content: thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE.to_string(),
             images: vec![],
         });
-        for a in attachments {
-            msgs.push(ChatMessage {
-                role: "system".into(),
-                content: format!("[Document: {}]\n{}\n", a.name, a.text),
-                images: vec![],
-            });
+        if let Some(ctx) = image_context {
+            out.push(ctx);
         }
-        msgs
+        out.extend(convo);
+        out
     }
 
     /// CLIP image→image retrieval for chat image attachments: when an attachment
@@ -857,17 +866,12 @@ impl ChatPipeline {
             return Ok(refusal);
         }
 
-        // Prepend attachment documents as system context.
-        let mut augmented = Self::build_attachment_messages(attachments);
-        // Augment with visually-similar KB chunks for image attachments (CLIP
-        // image→image retrieval). No-op unless an image upload carries bytes.
-        if let Some(img_ctx) = self
+        // Visually-similar KB chunks for image attachments (CLIP image→image
+        // retrieval). No-op unless an image upload carries bytes.
+        let img_ctx = self
             .image_attachment_context(attachments, &full_messages, scope)
-            .await
-        {
-            augmented.push(img_ctx);
-        }
-        augmented.extend(full_messages);
+            .await;
+        let augmented = Self::build_attachment_request(full_messages, attachments, img_ctx);
 
         self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
         let t = Instant::now();
@@ -909,14 +913,12 @@ impl ChatPipeline {
             return Ok(Self::refusal_stream(refusal.content));
         }
 
-        let mut augmented = Self::build_attachment_messages(attachments);
-        if let Some(img_ctx) = self
+        // Visually-similar KB chunks for image attachments (CLIP image→image
+        // retrieval). No-op unless an image upload carries bytes.
+        let img_ctx = self
             .image_attachment_context(attachments, &full_messages, scope)
-            .await
-        {
-            augmented.push(img_ctx);
-        }
-        augmented.extend(full_messages);
+            .await;
+        let augmented = Self::build_attachment_request(full_messages, attachments, img_ctx);
 
         self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
         Self::update_metadata(&metadata, |m| {
@@ -3514,6 +3516,51 @@ fn deduplicate_results(results: &mut Vec<thairag_core::types::SearchResult>) {
 #[cfg(test)]
 mod tests {
     use super::has_client_supplied_context;
+
+    /// The attachments route request: ONE stable system preamble, the optional
+    /// CLIP context, then the conversation with this turn's documents inlined
+    /// into the last user message — never per-document system messages.
+    #[test]
+    fn attachment_request_has_one_preamble_and_documents_in_the_user_turn() {
+        use thairag_core::types::{ATTACHMENT_SYSTEM_PREAMBLE, ChatMessage, SessionAttachment};
+        let msg = |role: &str, content: &str| ChatMessage {
+            role: role.into(),
+            content: content.into(),
+            images: vec![],
+        };
+        let convo = vec![
+            msg("user", "earlier"),
+            msg("assistant", "ok"),
+            msg("user", "what does it say?"),
+        ];
+        let att = SessionAttachment {
+            name: "a.txt".into(),
+            mime_type: "text/plain".into(),
+            text: "alpha".into(),
+            size_bytes: 5,
+            content_hash: String::new(),
+            image_bytes: None,
+        };
+        let ctx = msg("system", "<context>clip</context>");
+        let out = super::ChatPipeline::build_attachment_request(convo, &[att], Some(ctx));
+        assert_eq!(out[0].role, "system");
+        assert_eq!(out[0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        assert_eq!(out[1].content, "<context>clip</context>");
+        assert_eq!(out[2].content, "earlier");
+        let last = out.last().unwrap();
+        assert_eq!(last.role, "user");
+        assert!(last.content.contains("<document name=\"a.txt\""));
+        assert!(last.content.contains("alpha"));
+        assert!(last.content.ends_with("what does it say?"));
+        assert!(out.iter().all(|m| !m.content.starts_with("[Document:")));
+
+        // Follow-up turn: documents already replayed into history by the
+        // caller, nothing new this turn → preamble only, no extra messages.
+        let out = super::ChatPipeline::build_attachment_request(vec![msg("user", "q")], &[], None);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        assert_eq!(out[1].content, "q");
+    }
     use super::insufficient_context_message;
     use crate::context_curator::{CuratedChunk, CuratedContext};
     use thairag_core::types::{ChunkId, DocId};

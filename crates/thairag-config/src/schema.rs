@@ -1845,9 +1845,16 @@ pub struct AttachmentsConfig {
     /// Longer extractions are truncated.
     #[serde(default = "default_max_text_chars")]
     pub max_text_chars: usize,
-    /// Max attachments retained in a session; oldest are evicted past this.
+    /// Max number of earlier-turn attachments replayed IN FULL from durable
+    /// conversation history (newest first). Older ones are replayed as a
+    /// name-only stub so the model still knows they were sent.
     #[serde(default = "default_max_session_attachments")]
     pub max_session_attachments: usize,
+    /// Total extracted-text budget (chars) for attachments replayed from
+    /// history, newest first. Beyond it, older attachments become stubs. The
+    /// current request's own attachments are never budgeted here.
+    #[serde(default = "default_max_replay_chars")]
+    pub max_replay_chars: usize,
 }
 
 impl Default for AttachmentsConfig {
@@ -1858,6 +1865,7 @@ impl Default for AttachmentsConfig {
             max_total_bytes: default_max_total_bytes(),
             max_text_chars: default_max_text_chars(),
             max_session_attachments: default_max_session_attachments(),
+            max_replay_chars: default_max_replay_chars(),
         }
     }
 }
@@ -1873,6 +1881,9 @@ fn default_max_total_bytes() -> usize {
 }
 fn default_max_text_chars() -> usize {
     200_000
+}
+fn default_max_replay_chars() -> usize {
+    400_000
 }
 fn default_max_session_attachments() -> usize {
     10

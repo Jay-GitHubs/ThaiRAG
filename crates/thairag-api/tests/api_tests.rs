@@ -48,6 +48,30 @@ impl LlmProvider for MockLlm {
     }
 }
 
+/// Records every message list the pipeline sends to the model, so tests can
+/// assert on the exact request shape (roles, order, inlined documents).
+struct CapturingLlm {
+    calls: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+}
+
+#[async_trait]
+impl LlmProvider for CapturingLlm {
+    async fn generate(
+        &self,
+        messages: &[ChatMessage],
+        _max_tokens: Option<u32>,
+    ) -> thairag_core::Result<LlmResponse> {
+        self.calls.lock().unwrap().push(messages.to_vec());
+        Ok(LlmResponse {
+            content: "captured response".into(),
+            usage: LlmUsage::default(),
+        })
+    }
+    fn model_name(&self) -> &str {
+        "capturing-llm"
+    }
+}
+
 struct MockEmbedding;
 
 #[async_trait]
@@ -110,7 +134,21 @@ impl Reranker for MockReranker {
 // ── Test Helpers ────────────────────────────────────────────────────
 
 fn build_test_state(auth_enabled: bool) -> AppState {
-    let llm: Arc<dyn LlmProvider> = Arc::new(MockLlm);
+    build_test_state_with_llm(auth_enabled, Arc::new(MockLlm))
+}
+
+fn build_test_state_with_llm(auth_enabled: bool, llm: Arc<dyn LlmProvider>) -> AppState {
+    build_test_state_full(auth_enabled, llm, false)
+}
+
+/// `with_chat_pipeline` wires a real (lean, agent-free) `ChatPipeline` so a
+/// test exercises the production chat route instead of the legacy
+/// orchestrator fallback used when the bundle has no pipeline.
+fn build_test_state_full(
+    auth_enabled: bool,
+    llm: Arc<dyn LlmProvider>,
+    with_chat_pipeline: bool,
+) -> AppState {
     let embedding: Arc<dyn EmbeddingModel> = Arc::new(MockEmbedding);
     let vector_store: Arc<dyn VectorStore> = Arc::new(MockVectorStore);
     let text_search: Arc<dyn TextSearch> = Arc::new(MockTextSearch);
@@ -269,11 +307,49 @@ fn build_test_state(auth_enabled: bool) -> AppState {
         embedding_finetune: Default::default(),
     };
 
+    let chat_pipeline = if with_chat_pipeline {
+        Some(Arc::new(thairag_agent::ChatPipeline::new(
+            Arc::clone(&llm),
+            Arc::clone(&search_engine),
+            None,
+            None,
+            None,
+            thairag_agent::response_generator::ResponseGenerator::new(Arc::clone(&llm)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            config.chat_pipeline.clone(),
+            Arc::new(thairag_core::prompt_registry::PromptRegistry::new()),
+            None,
+            None,
+        )))
+    } else {
+        None
+    };
+
     let bundle = ProviderBundle {
         providers_config: config.providers.clone(),
         chat_pipeline_config: config.chat_pipeline.clone(),
         orchestrator,
-        chat_pipeline: None,
+        chat_pipeline,
         document_pipeline,
         search_engine,
         embedding,
@@ -3762,6 +3838,212 @@ async fn chat_stream_accepts_attachment() {
     assert!(
         body.contains("data: [DONE]"),
         "stream should complete: {body}"
+    );
+}
+
+async fn send_and_drain(app: &Router, conv_id: &str, token: &str, body: serde_json::Value) {
+    let r = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            &format!("/api/chat/conversations/{conv_id}/messages"),
+            body,
+            token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let _ = r.into_body().collect().await.unwrap();
+}
+
+fn user_turns(call: &[ChatMessage]) -> Vec<&ChatMessage> {
+    call.iter().filter(|m| m.role == "user").collect()
+}
+
+/// Attachments are persisted with the user message and replayed into THAT
+/// turn on every later request, straight from durable history — no session
+/// slot, no one-hour fuse. The request shape is one stable system preamble
+/// plus `<document>` blocks inside the user turn (never per-document system
+/// messages).
+#[tokio::test]
+async fn attachments_replay_from_durable_history_on_follow_up_turns() {
+    use thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE;
+    let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let state = build_test_state_full(
+        true,
+        Arc::new(CapturingLlm {
+            calls: Arc::clone(&calls),
+        }),
+        true,
+    );
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "replay@test.com", "Replay", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    // Turn 1: upload note.txt ("hello attachment").
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({
+            "content": "summarize the attached file",
+            "attachments": [
+                {"name": "note.txt", "mime_type": "text/plain", "data": "aGVsbG8gYXR0YWNobWVudA=="}
+            ]
+        }),
+    )
+    .await;
+    // Turn 2: text only — the document must still be there.
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "what was the second word?"}),
+    )
+    .await;
+
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "one LLM request per turn");
+
+        let t1 = &calls[0];
+        assert_eq!(t1[0].role, "system");
+        assert_eq!(t1[0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        assert_eq!(
+            t1.iter().filter(|m| m.role == "system").count(),
+            1,
+            "exactly one system message; documents are never system messages"
+        );
+        let last = t1.last().unwrap();
+        assert_eq!(last.role, "user");
+        assert!(
+            last.content
+                .starts_with("<document name=\"note.txt\" type=\"text/plain\"")
+        );
+        assert!(last.content.contains("hello attachment"));
+        assert!(last.content.ends_with("summarize the attached file"));
+
+        let t2 = &calls[1];
+        assert_eq!(t2[0].content, ATTACHMENT_SYSTEM_PREAMBLE);
+        let users = user_turns(t2);
+        assert_eq!(users.len(), 2);
+        assert!(
+            users[0].content.contains("hello attachment"),
+            "turn-1 document replayed inside turn 1: {}",
+            users[0].content
+        );
+        assert!(users[0].content.ends_with("summarize the attached file"));
+        assert_eq!(
+            users[1].content, "what was the second word?",
+            "current turn is the plain question"
+        );
+    }
+
+    // Nothing depends on the ephemeral session slot any more.
+    let sid = thairag_core::types::SessionId(conv_id.parse().unwrap());
+    assert!(state.session_store.get_attachments(&sid).await.is_empty());
+
+    // The listing keeps the chip but never leaks the extracted text.
+    let msgs = body_json(
+        app.clone()
+            .oneshot(get_request_auth(
+                &format!("/api/chat/conversations/{conv_id}/messages"),
+                &token,
+            ))
+            .await
+            .unwrap()
+            .into_body(),
+    )
+    .await;
+    let first = &msgs.as_array().unwrap()[0];
+    assert_eq!(first["role"], "user");
+    let chips = first["attachments"].as_str().unwrap();
+    assert!(chips.contains("note.txt"));
+    assert!(!chips.contains("hello attachment"));
+    assert!(!chips.contains("\"text\""));
+
+    // Regenerate re-reads history: the document is still in its turn.
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "", "regenerate": true}),
+    )
+    .await;
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    let users = user_turns(&calls[2]);
+    assert!(users[0].content.contains("hello attachment"));
+    assert_eq!(users[1].content, "what was the second word?");
+}
+
+/// Editing the message that carried the upload keeps the file: the UI does
+/// not re-send it, so the replaced row's attachments carry over to the new
+/// row and reach the model with the edited question.
+#[tokio::test]
+async fn editing_the_upload_turn_keeps_its_attachment() {
+    let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let state = build_test_state_full(
+        true,
+        Arc::new(CapturingLlm {
+            calls: Arc::clone(&calls),
+        }),
+        true,
+    );
+    let app = build_router(state, None);
+    let token = register_and_get_token(&app, "edit-att@test.com", "Edit", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({
+            "content": "first question",
+            "attachments": [
+                {"name": "note.txt", "mime_type": "text/plain", "data": "aGVsbG8gYXR0YWNobWVudA=="}
+            ]
+        }),
+    )
+    .await;
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "different question", "edit": true}),
+    )
+    .await;
+
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let last = calls[1].last().unwrap();
+        assert_eq!(last.role, "user");
+        assert!(last.content.contains("<document name=\"note.txt\""));
+        assert!(last.content.contains("hello attachment"));
+        assert!(last.content.ends_with("different question"));
+    }
+
+    // The new row carries the chip (and, durably, the text for later turns).
+    let msgs = body_json(
+        app.clone()
+            .oneshot(get_request_auth(
+                &format!("/api/chat/conversations/{conv_id}/messages"),
+                &token,
+            ))
+            .await
+            .unwrap()
+            .into_body(),
+    )
+    .await;
+    let rows = msgs.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "edited pair replaced the original pair");
+    assert_eq!(rows[0]["content"], "different question");
+    assert!(
+        rows[0]["attachments"]
+            .as_str()
+            .unwrap()
+            .contains("note.txt")
     );
 }
 

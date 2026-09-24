@@ -40,7 +40,7 @@ Out of scope (future PRs):
 
 These four were resolved before implementation began. The recommended path was chosen in each case.
 
-### 3.1 Multi-turn behavior → **persist in session**
+### 3.1 Multi-turn behavior → **persist in session** *(superseded for first-party conversations by §5.2: persisted with the message, replayed per turn)*
 
 Attachments uploaded on turn 1 of a conversation remain available for follow-up questions on turn 2, 3, etc., without the client re-sending them.
 
@@ -143,12 +143,66 @@ Request arrives with attachments
 
 > **Later addition — CLIP visual augmentation (default-off).** When `providers.image_embedding` is enabled, an **image** attachment is additionally used as a visual query: its bytes are CLIP-embedded and run against the `_clip` image-vector collection (image→image), and visually-similar KB chunks are injected as one extra system context block. The attachment itself stays the primary context; the "SKIP hybrid search" rule above still holds for *text* attachments and when the flag is off. See OPERATOR_GUIDE §3.6.
 
-On **follow-up turns in the same session** without re-sent attachments:
-- The pipeline checks `SessionStore::get_attachments(session_id)` at the start of processing.
-- If non-empty, attachments are injected into the system context the same way, KB / live paths are still skipped.
-- The user can clear attachments by either explicit `DELETE` (future) or session expiry.
+### 5.1 Request shape (revised 2026-09)
 
-If `attachments` is **non-empty on a follow-up turn**, the new set replaces the session's prior attachments — this matches user intent (*"now ask about this new doc"*) and avoids unbounded session growth.
+Documents are **data in the user turn, not system messages**. The request the
+answer model receives is:
+
+```
+system   ATTACHMENT_SYSTEM_PREAMBLE            ← one stable line, only when a file is in play
+system   <CLIP context>                        ← optional, image uploads with CLIP on
+user     <document name="a.pdf" type="application/pdf" source="user-upload">
+         …extracted text…
+         </document>
+
+         the user's question                    ← documents first, question last
+assistant …
+user     follow-up question                    ← plain; earlier docs stay in THEIR turn
+```
+
+Why: strict chat templates (Qwen/vLLM) accept a single system message at
+index 0 and rejected the previous one-system-message-per-document shape with
+`400 System message must be at the beginning`; a document in the system
+channel spoke with the operator's authority (prompt-injection surface); and a
+document appended at the end was detached from the turn it belonged to. A
+`</document` inside extracted text is neutralised so a file cannot close its
+own block. The renderer lives in `thairag_core::types`
+(`render_document_block`, `inline_attachments_into_last_user_turn`).
+
+### 5.2 Follow-up turns
+
+**First-party conversations (`/api/chat/conversations/{id}/messages`) —
+durable per-turn replay.** The processed upload (extracted text, content hash,
+and for images the raw bytes) is persisted **with the user message row**
+(`messages.attachments` JSON, `PersistedAttachment`). On every later turn the
+history builder (`chat_history::inline_history_attachments`) inlines each
+persisted upload into the user turn it was sent with, so the model sees the
+document exactly where the conversation put it — after a restart, a rebuild,
+on another replica, and a week later. No session slot is involved.
+
+- Newest first, uploads are replayed **in full** until the budget is spent
+  (`attachments.max_session_attachments` documents,
+  `attachments.max_replay_chars` characters); older ones become a name-only
+  stub (`<document … omitted="true">`) so the model still knows they exist.
+  The current request's own uploads are never budgeted.
+- The message listing API strips the payload fields
+  (`chat_history::strip_attachment_payload`); the UI only ever sees the chip
+  metadata.
+- **Edit** of the turn that carried an upload keeps its files (the UI does not
+  re-send them); **regenerate** re-reads history and therefore replays them.
+- Any file in play — this turn's or a replayed one — routes the request down
+  the attachments path (no KB retrieval, as before). Making retrieval a
+  per-turn decision again is tracked separately.
+- Replayed image bytes only reach the model on the general-mode vision path
+  (capped to the 4 most recent images across the request); the RAG path
+  strips `ChatMessage.images` before serialising for text endpoints.
+
+**`/v1` and `/v2` (session-id clients, e.g. external Open WebUI) — session
+slot, unchanged.** Without a durable conversation, the processed set is kept
+in `SessionStore` keyed by the session id and replayed until the session
+expires (`session.stale_timeout_secs`, 1 h idle) or a restart; a new upload
+replaces the set. This is the original behaviour and the only place the slot
+is still used.
 
 ## 6. Limits and validation
 
@@ -160,7 +214,8 @@ Reject requests that exceed these:
 | Max bytes per attachment | 5 MB | `attachments.max_bytes_per_attachment` |
 | Max total bytes per request | 15 MB | `attachments.max_total_bytes` |
 | Max extracted text chars (post-conversion) | 200 000 | `attachments.max_text_chars` |
-| Max attachments retained in a session | 10 (oldest evicted) | `attachments.max_session_attachments` |
+| Earlier-turn attachments replayed in full (newest first; rest stubbed) | 10 | `attachments.max_session_attachments` |
+| Total chars of earlier-turn text replayed in full | 400 000 | `attachments.max_replay_chars` |
 | Allowed MIME types | The DocumentPipeline's existing supported list | `document.allowed_mime_types` (reuses existing config) |
 
 Limits are enforced server-side. Validation errors return `400` with the specific reason; this is observable in the audit log and counted in `http_requests_total{status="400"}`.
@@ -214,4 +269,4 @@ None blocking PR-1. These are explicitly future-PR questions:
 
 - Anything related to large-corpus retrieval — that's the existing embedded-KB pathway, untouched.
 - Anything related to streaming-only sources — that's live retrieval, untouched.
-- Document persistence at rest — by design, attachments here are transient session-scoped.
+- Adding attachments to the KB — they are answer context for their conversation only. (Since 2026-09 the extracted text *is* persisted with the message so later turns can replay it; see §5.2. It is still never indexed or searchable.)
