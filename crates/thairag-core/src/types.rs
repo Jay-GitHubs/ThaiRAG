@@ -409,6 +409,76 @@ pub fn inline_attachments_into_last_user_turn(
     }
 }
 
+/// Raw image uploads as vision inputs (base64 data + MIME), in upload order.
+pub fn attachment_images(attachments: &[SessionAttachment]) -> Vec<ImageContent> {
+    use base64::Engine;
+    attachments
+        .iter()
+        .filter_map(|a| {
+            a.image_bytes.as_ref().map(|bytes| ImageContent {
+                base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                media_type: a.mime_type.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Whether any message carries image parts.
+pub fn has_images(messages: &[ChatMessage]) -> bool {
+    messages.iter().any(|m| !m.images.is_empty())
+}
+
+/// Remove every image part. Text endpoints must never receive them.
+pub fn strip_images(messages: &mut [ChatMessage]) {
+    for m in messages {
+        m.images.clear();
+    }
+}
+
+/// Keep only the `max` most recent image parts across a message list; earlier
+/// turns lose theirs first, and within a turn the last-attached survive.
+pub fn cap_vision_images(messages: &mut [ChatMessage], max: usize) {
+    let mut budget = max;
+    for m in messages.iter_mut().rev() {
+        if m.images.is_empty() {
+            continue;
+        }
+        if budget == 0 {
+            m.images.clear();
+            continue;
+        }
+        if m.images.len() > budget {
+            let drop = m.images.len() - budget;
+            m.images.drain(..drop);
+        }
+        budget -= m.images.len();
+    }
+}
+
+/// The vision-endpoint form of a message list (role + text + image parts).
+pub fn to_vision_messages(messages: &[ChatMessage]) -> Vec<VisionMessage> {
+    messages
+        .iter()
+        .map(|m| VisionMessage {
+            role: m.role.clone(),
+            text: m.content.clone(),
+            images: m.images.clone(),
+        })
+        .collect()
+}
+
+impl LlmStreamResponse {
+    /// A stream that emits one already-complete answer. Vision endpoints have
+    /// no streaming variant, so vision answers are buffered and emitted this
+    /// way.
+    pub fn from_response(resp: LlmResponse) -> Self {
+        Self {
+            usage: std::sync::Arc::new(std::sync::Mutex::new(Some(resp.usage))),
+            stream: Box::pin(tokio_stream::once(Ok(resp.content))),
+        }
+    }
+}
+
 /// A per-request document attachment ("drop a doc, ask about it").
 /// Wire format mirrors `ImageContent`: a base64 payload plus a MIME type.
 #[derive(Debug, Clone, Deserialize)]
@@ -1597,6 +1667,58 @@ mod attachment_block_tests {
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].role, "user");
         assert!(msgs[0].content.contains("hello"));
+    }
+
+    #[test]
+    fn attachment_images_encode_only_image_uploads() {
+        let mut img = att("p.png", "image/png", "[Image: image/png, 3 bytes]");
+        img.image_bytes = Some(vec![1, 2, 3]);
+        let doc = att("a.txt", "text/plain", "hello");
+        let imgs = attachment_images(&[doc, img]);
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].media_type, "image/png");
+        assert_eq!(imgs[0].base64_data, "AQID");
+    }
+
+    fn with_images(role: &str, n: usize) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: role.into(),
+            images: (0..n)
+                .map(|i| ImageContent {
+                    base64_data: format!("{role}-{i}"),
+                    media_type: "image/png".into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn cap_keeps_newest_images_across_turns() {
+        let mut msgs = vec![
+            with_images("u1", 3),
+            with_images("a1", 0),
+            with_images("u2", 3),
+        ];
+        cap_vision_images(&mut msgs, 4);
+        assert_eq!(msgs[2].images.len(), 3, "latest turn kept whole");
+        assert_eq!(msgs[0].images.len(), 1, "oldest turn trimmed to the budget");
+        assert_eq!(msgs[0].images[0].base64_data, "u1-2");
+        let mut msgs = vec![with_images("u1", 2), with_images("u2", 6)];
+        cap_vision_images(&mut msgs, 4);
+        assert_eq!(msgs[1].images.len(), 4);
+        assert!(msgs[0].images.is_empty());
+    }
+
+    #[test]
+    fn strip_and_vision_conversion() {
+        let mut msgs = vec![with_images("system", 0), with_images("user", 2)];
+        assert!(has_images(&msgs));
+        let v = to_vision_messages(&msgs);
+        assert_eq!(v[1].images.len(), 2);
+        assert_eq!(v[1].text, "user");
+        strip_images(&mut msgs);
+        assert!(!has_images(&msgs));
     }
 
     #[test]

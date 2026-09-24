@@ -6,7 +6,6 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{Extension, Json};
-use base64::Engine as _;
 use chrono::Utc;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
@@ -2340,13 +2339,13 @@ pub async fn stream_conversation_message(
             // generate_vision has no streaming variant, so vision answers are
             // buffered and then emitted as a single stream chunk (same
             // trade-off as the RAG pipeline's vision path).
-            let image_contents = general_attachment_images(&attachments);
+            let image_contents = thairag_core::types::attachment_images(&attachments);
             if !image_contents.is_empty()
                 && let Some(last_user) = msgs.iter_mut().rev().find(|m| m.role == "user")
             {
                 last_user.images.extend(image_contents);
             }
-            cap_vision_images(&mut msgs, MAX_VISION_IMAGES);
+            thairag_core::types::cap_vision_images(&mut msgs, MAX_VISION_IMAGES);
             let has_images = msgs.iter().any(|m| !m.images.is_empty());
             if has_images && general_llm.supports_vision() {
                 let vision_msgs: Vec<thairag_core::types::VisionMessage> = msgs
@@ -2366,21 +2365,15 @@ pub async fn stream_conversation_message(
                     })
             } else {
                 // Text endpoint: never serialise image parts into it.
-                for m in &mut msgs {
-                    m.images.clear();
-                }
+                thairag_core::types::strip_images(&mut msgs);
                 general_llm.generate_stream(&msgs, None).await
             }
         } else if let Some(ref pipeline) = scoped_pipeline {
-            // `ChatMessage.images` only feeds the general-mode vision path; the
-            // RAG pipeline talks to text endpoints, so drop replayed pixels.
-            let full_messages: Vec<ChatMessage> = full_messages
-                .into_iter()
-                .map(|mut m| {
-                    m.images.clear();
-                    m
-                })
-                .collect();
+            // Replayed image uploads ride on their turns as image parts; the
+            // pipeline sends them to the vision path when the answer LLM can
+            // see and strips them otherwise (text endpoints never get them).
+            let mut full_messages = full_messages;
+            thairag_core::types::cap_vision_images(&mut full_messages, MAX_VISION_IMAGES);
             // Three cases:
             //  - nothing in play → normal retrieval pipeline;
             //  - documents replayed from EARLIER turns, nothing new uploaded →
@@ -2440,13 +2433,8 @@ pub async fn stream_conversation_message(
             // drop attachments on the floor; give it the same shape as the
             // pipeline route: one preamble, documents inside the user turns.
             drop(progress_tx);
-            let mut msgs: Vec<ChatMessage> = full_messages
-                .into_iter()
-                .map(|mut m| {
-                    m.images.clear();
-                    m
-                })
-                .collect();
+            let mut msgs = full_messages;
+            thairag_core::types::strip_images(&mut msgs);
             thairag_core::types::inline_attachments_into_last_user_turn(&mut msgs, &attachments);
             if !attachments.is_empty() || has_history_docs {
                 msgs.insert(
@@ -3479,27 +3467,6 @@ mod citation_tests {
 /// the request, newest kept.
 const MAX_VISION_IMAGES: usize = 4;
 
-/// Keep only the `max` most recent image parts across a message list; earlier
-/// turns lose theirs first.
-fn cap_vision_images(msgs: &mut [ChatMessage], max: usize) {
-    let mut budget = max;
-    for m in msgs.iter_mut().rev() {
-        if m.images.is_empty() {
-            continue;
-        }
-        if budget == 0 {
-            m.images.clear();
-            continue;
-        }
-        if m.images.len() > budget {
-            // Newest within the turn are last.
-            let drop = m.images.len() - budget;
-            m.images.drain(..drop);
-        }
-        budget -= m.images.len();
-    }
-}
-
 /// Maximum accepted length for a client-sent attachment preview. Previews are
 /// client-generated ~320px thumbnails (typically well under 50 KB as base64);
 /// the cap keeps a misbehaving client from bloating the messages table.
@@ -3518,88 +3485,9 @@ fn sanitize_attachment_preview(preview: Option<&str>) -> Option<String> {
     }
 }
 
-/// Raw image attachments as vision inputs, capped at 4 per request (mirrors
-/// the RAG pipeline's per-answer image bound).
-fn general_attachment_images(
-    attachments: &[thairag_core::types::SessionAttachment],
-) -> Vec<thairag_core::types::ImageContent> {
-    attachments
-        .iter()
-        .filter_map(|a| a.image_bytes.as_ref().map(|b| (b, &a.mime_type)))
-        .take(4)
-        .map(|(bytes, mime)| thairag_core::types::ImageContent {
-            base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
-            media_type: mime.clone(),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod general_attachment_tests {
     use super::*;
-    use thairag_core::types::SessionAttachment;
-
-    fn att(name: &str, mime: &str, text: &str, image: Option<Vec<u8>>) -> SessionAttachment {
-        SessionAttachment {
-            name: name.into(),
-            mime_type: mime.into(),
-            text: text.into(),
-            size_bytes: 0,
-            content_hash: String::new(),
-            image_bytes: image,
-        }
-    }
-
-    fn msg(role: &str, n_images: usize) -> ChatMessage {
-        ChatMessage {
-            role: role.into(),
-            content: role.into(),
-            images: (0..n_images)
-                .map(|i| thairag_core::types::ImageContent {
-                    base64_data: format!("{role}-{i}"),
-                    media_type: "image/png".into(),
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn no_attachments_no_vision_inputs() {
-        assert!(general_attachment_images(&[]).is_empty());
-    }
-
-    #[test]
-    fn cap_keeps_newest_images_across_turns() {
-        let mut msgs = vec![msg("u1", 3), msg("a1", 0), msg("u2", 3)];
-        cap_vision_images(&mut msgs, 4);
-        assert_eq!(msgs[2].images.len(), 3, "latest turn kept whole");
-        assert_eq!(msgs[0].images.len(), 1, "oldest turn trimmed to the budget");
-        assert_eq!(
-            msgs[0].images[0].base64_data, "u1-2",
-            "newest within turn survives"
-        );
-        let mut msgs = vec![msg("u1", 2), msg("u2", 6)];
-        cap_vision_images(&mut msgs, 4);
-        assert_eq!(msgs[1].images.len(), 4);
-        assert!(msgs[0].images.is_empty());
-    }
-
-    #[test]
-    fn image_bytes_become_capped_base64_vision_inputs() {
-        let atts: Vec<_> = (0..6)
-            .map(|i| att(&format!("i{i}.png"), "image/png", "", Some(vec![i as u8])))
-            .collect();
-        let imgs = general_attachment_images(&atts);
-        assert_eq!(imgs.len(), 4, "capped at 4 like the RAG vision path");
-        assert_eq!(imgs[0].media_type, "image/png");
-        assert!(!imgs[0].base64_data.is_empty());
-    }
-
-    #[test]
-    fn non_image_attachments_yield_no_vision_inputs() {
-        let imgs = general_attachment_images(&[att("a.md", "text/markdown", "x", None)]);
-        assert!(imgs.is_empty());
-    }
 
     #[test]
     fn preview_sanitizer_accepts_only_bounded_image_data_urls() {

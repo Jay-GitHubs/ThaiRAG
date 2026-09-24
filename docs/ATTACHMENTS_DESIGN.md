@@ -199,9 +199,18 @@ on another replica, and a week later. No session slot is involved.
   precedence, and KB chunks + citations come back for questions the documents
   don't cover. `chat_pipeline.attachment_follow_up_retrieval = false` pins
   follow-ups to documents-only (for near-clone knowledge bases).
-- Replayed image bytes only reach the model on the general-mode vision path
-  (capped to the 4 most recent images across the request); the RAG path
-  strips `ChatMessage.images` before serialising for text endpoints.
+- **Images.** An image upload keeps its placeholder text block
+  (`[Image: image/png, N bytes]`, so the model knows a file was sent) AND its
+  pixels ride on the user turn as image parts — on the upload turn and,
+  replayed from history, on follow-ups (capped to the 4 most recent images per
+  request). When the answer path is vision-capable
+  (`chat_pipeline.chat_vision_llm`, else the response LLM itself) the answer is
+  produced by `generate_vision` (buffered, emitted as one chunk) on both the
+  documents-only route and the retrieval route; otherwise the image parts are
+  stripped and only the placeholder is sent. Text endpoints never receive image
+  parts: the OpenAI-compatible provider drops them on `generate` /
+  `generate_stream` / `generate_structured`. CLIP image→image KB retrieval is a
+  separate, default-off feature.
 
 **`/v1` and `/v2` (session-id clients, e.g. external Open WebUI) — session
 slot, unchanged.** Without a durable conversation, the processed set is kept
