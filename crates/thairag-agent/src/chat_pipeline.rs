@@ -751,6 +751,37 @@ impl ChatPipeline {
     /// templates (Qwen/vLLM) reject more than one system message, a document's
     /// text spoke with the operator's authority, and the file was detached
     /// from the turn it belonged to.
+    /// Stream an answer from the main LLM — or, when the request carries image
+    /// parts and the answer path is vision-capable (`chat_pipeline.chat_vision_llm`,
+    /// else the response LLM itself), a buffered vision answer emitted as one
+    /// chunk. Text endpoints never receive image parts.
+    async fn stream_text_or_vision(
+        &self,
+        mut messages: Vec<ChatMessage>,
+    ) -> Result<LlmStreamResponse> {
+        if thairag_core::types::has_images(&messages) {
+            if let Some(vision_llm) = self.response_generator.vision_provider_if_supported() {
+                let vision_msgs = thairag_core::types::to_vision_messages(&messages);
+                let resp = vision_llm.generate_vision(&vision_msgs, None).await?;
+                return Ok(LlmStreamResponse::from_response(resp));
+            }
+            thairag_core::types::strip_images(&mut messages);
+        }
+        self.main_llm.generate_stream(&messages, None).await
+    }
+
+    /// Non-streaming twin of [`Self::stream_text_or_vision`].
+    async fn generate_text_or_vision(&self, mut messages: Vec<ChatMessage>) -> Result<LlmResponse> {
+        if thairag_core::types::has_images(&messages) {
+            if let Some(vision_llm) = self.response_generator.vision_provider_if_supported() {
+                let vision_msgs = thairag_core::types::to_vision_messages(&messages);
+                return vision_llm.generate_vision(&vision_msgs, None).await;
+            }
+            thairag_core::types::strip_images(&mut messages);
+        }
+        self.main_llm.generate(&messages, None).await
+    }
+
     fn build_attachment_request(
         full_messages: Vec<ChatMessage>,
         attachments: &[SessionAttachment],
@@ -758,6 +789,17 @@ impl ChatPipeline {
     ) -> Vec<ChatMessage> {
         let mut convo = full_messages;
         thairag_core::types::inline_attachments_into_last_user_turn(&mut convo, attachments);
+        // This turn's image uploads ride on the last user turn as image parts
+        // (earlier turns' images were replayed onto theirs by the caller). The
+        // answer step sends them to the vision path when the answer LLM can
+        // see, and strips them otherwise.
+        let images = thairag_core::types::attachment_images(attachments);
+        if !images.is_empty()
+            && let Some(last_user) = convo.iter_mut().rev().find(|m| m.role == "user")
+        {
+            last_user.images.extend(images);
+        }
+        thairag_core::types::cap_vision_images(&mut convo, MAX_VISION_IMAGES_PER_ANSWER);
         let mut out = Vec::with_capacity(convo.len() + 2);
         out.push(ChatMessage {
             role: "system".into(),
@@ -875,7 +917,7 @@ impl ChatPipeline {
 
         self.emit_progress(&progress, "response_generator", StageStatus::Started, None);
         let t = Instant::now();
-        let response = self.main_llm.generate(&augmented, None).await?;
+        let response = self.generate_text_or_vision(augmented).await?;
         let gen_ms = t.elapsed().as_millis() as u64;
         self.emit_progress(
             &progress,
@@ -928,7 +970,7 @@ impl ChatPipeline {
             attachments = attachments.len(),
             "Pipeline(attachments, stream): generating"
         );
-        let stream = self.main_llm.generate_stream(&augmented, None).await?;
+        let stream = self.stream_text_or_vision(augmented).await?;
         Ok(self.wrap_stream_with_output_guardrails(stream, progress.clone(), metadata.clone()))
     }
 
@@ -2204,7 +2246,7 @@ impl ChatPipeline {
                 remaining_budget = budget.remaining(),
                 "Pipeline: complete"
             );
-            let stream = self.main_llm.generate_stream(messages, None).await?;
+            let stream = self.stream_text_or_vision(messages.to_vec()).await?;
             return Ok(self.wrap_stream_with_output_guardrails(
                 stream,
                 progress.clone(),
@@ -2276,7 +2318,7 @@ impl ChatPipeline {
                         remaining_budget = budget.remaining(),
                         "Pipeline: complete"
                     );
-                    self.main_llm.generate_stream(messages, None).await
+                    self.stream_text_or_vision(messages.to_vec()).await
                 }
             },
             PipelineRoute::SimpleRetrieval => {
@@ -3553,6 +3595,29 @@ mod tests {
         assert!(last.content.contains("alpha"));
         assert!(last.content.ends_with("what does it say?"));
         assert!(out.iter().all(|m| !m.content.starts_with("[Document:")));
+
+        // An image upload: placeholder text block AND the pixels as an image
+        // part on the last user turn.
+        let img = SessionAttachment {
+            name: "p.png".into(),
+            mime_type: "image/png".into(),
+            text: "[Image: image/png, 3 bytes]".into(),
+            size_bytes: 3,
+            content_hash: String::new(),
+            image_bytes: Some(vec![1, 2, 3]),
+        };
+        let out = super::ChatPipeline::build_attachment_request(
+            vec![msg("user", "what is this?")],
+            &[img],
+            None,
+        );
+        let last = out.last().unwrap();
+        assert!(
+            last.content
+                .contains("<document name=\"p.png\" type=\"image/png\"")
+        );
+        assert_eq!(last.images.len(), 1);
+        assert_eq!(last.images[0].base64_data, "AQID");
 
         // Follow-up turn: documents already replayed into history by the
         // caller, nothing new this turn → preamble only, no extra messages.

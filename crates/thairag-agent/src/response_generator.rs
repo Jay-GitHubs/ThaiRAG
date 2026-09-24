@@ -67,6 +67,16 @@ impl ResponseGenerator {
         self.vision_provider().supports_vision()
     }
 
+    /// The answer-time vision provider (`chat_pipeline.chat_vision_llm`, else
+    /// the response LLM itself) when it can actually see images.
+    pub fn vision_provider_if_supported(&self) -> Option<Arc<dyn LlmProvider>> {
+        if self.supports_vision() {
+            Some(Arc::clone(self.vision_provider()))
+        } else {
+            None
+        }
+    }
+
     pub async fn generate(
         &self,
         analysis: &QueryAnalysis,
@@ -99,10 +109,21 @@ impl ResponseGenerator {
         messages: &[ChatMessage],
         max_tokens: Option<u32>,
     ) -> Result<LlmStreamResponse> {
-        // Note: generate_vision has no streaming variant, so vision requests
-        // fall through to the normal stream path where the LLM provider's
-        // default generate_vision will handle text-only fallback.
-        let augmented = self.build_augmented_messages(analysis, context, messages);
+        let mut augmented = self.build_augmented_messages(analysis, context, messages);
+        if thairag_core::types::has_images(&augmented) {
+            if self.supports_vision() {
+                // generate_vision has no streaming variant: the answer is
+                // buffered and emitted as a single chunk.
+                let vision_msgs = thairag_core::types::to_vision_messages(&augmented);
+                let resp = self
+                    .vision_provider()
+                    .generate_vision(&vision_msgs, max_tokens)
+                    .await?;
+                return Ok(LlmStreamResponse::from_response(resp));
+            }
+            // Text endpoints must never receive image parts.
+            thairag_core::types::strip_images(&mut augmented);
+        }
         self.llm.generate_stream(&augmented, max_tokens).await
     }
 
@@ -400,6 +421,37 @@ mod vision_routing_tests {
             },
             user("second?"),
         ]
+    }
+
+    #[tokio::test]
+    async fn stream_with_images_uses_vision_when_supported_else_strips() {
+        let empty = CuratedContext {
+            chunks: vec![],
+            total_tokens_est: 0,
+        };
+        let mut msgs = with_attached_documents();
+        msgs[1].images = vec![ImageContent {
+            base64_data: "AQID".into(),
+            media_type: "image/png".into(),
+        }];
+
+        let vision = Arc::new(MockLlm::new("v", true));
+        let rg = ResponseGenerator::new(vision.clone());
+        rg.generate_stream(&analysis(), &empty, &msgs, None)
+            .await
+            .unwrap();
+        assert_eq!(*vision.last_call.lock().unwrap(), Some("vision"));
+
+        let text = Arc::new(MockLlm::new("t", false));
+        let rg = ResponseGenerator::new(text.clone());
+        rg.generate_stream(&analysis(), &empty, &msgs, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            *text.last_call.lock().unwrap(),
+            Some("generate"),
+            "no vision support → text path (images stripped, never a vision call)"
+        );
     }
 
     /// Follow-up turns replay the user's documents into history; an empty KB
