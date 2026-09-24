@@ -52,6 +52,20 @@ impl LlmProvider for MockLlm {
 /// assert on the exact request shape (roles, order, inlined documents).
 struct CapturingLlm {
     calls: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+    /// Whether this mock claims to see images; vision requests land in
+    /// `vision_calls` instead of `calls`.
+    vision: bool,
+    vision_calls: Arc<Mutex<Vec<Vec<thairag_core::types::VisionMessage>>>>,
+}
+
+impl CapturingLlm {
+    fn text(calls: &Arc<Mutex<Vec<Vec<ChatMessage>>>>) -> Self {
+        Self {
+            calls: Arc::clone(calls),
+            vision: false,
+            vision_calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -66,6 +80,20 @@ impl LlmProvider for CapturingLlm {
             content: "captured response".into(),
             usage: LlmUsage::default(),
         })
+    }
+    async fn generate_vision(
+        &self,
+        messages: &[thairag_core::types::VisionMessage],
+        _max_tokens: Option<u32>,
+    ) -> thairag_core::Result<LlmResponse> {
+        self.vision_calls.lock().unwrap().push(messages.to_vec());
+        Ok(LlmResponse {
+            content: "captured vision response".into(),
+            usage: LlmUsage::default(),
+        })
+    }
+    fn supports_vision(&self) -> bool {
+        self.vision
     }
     fn model_name(&self) -> &str {
         "capturing-llm"
@@ -3869,13 +3897,7 @@ fn user_turns(call: &[ChatMessage]) -> Vec<&ChatMessage> {
 async fn attachments_replay_from_durable_history_on_follow_up_turns() {
     use thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE;
     let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-    let state = build_test_state_full(
-        true,
-        Arc::new(CapturingLlm {
-            calls: Arc::clone(&calls),
-        }),
-        true,
-    );
+    let state = build_test_state_full(true, Arc::new(CapturingLlm::text(&calls)), true);
     let app = build_router(state.clone(), None);
     let token = register_and_get_token(&app, "replay@test.com", "Replay", "Pass1234").await;
     let conv_id = create_conversation_id(&app, &token).await;
@@ -4000,13 +4022,7 @@ async fn follow_up_after_upload_runs_retrieval_with_documents_in_history() {
     use thairag_core::permission::Role;
     use thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE;
     let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-    let state = build_test_state_full(
-        true,
-        Arc::new(CapturingLlm {
-            calls: Arc::clone(&calls),
-        }),
-        true,
-    );
+    let state = build_test_state_full(true, Arc::new(CapturingLlm::text(&calls)), true);
     let app = build_router(state.clone(), None);
     let token = register_and_get_token(&app, "fu@test.com", "FollowUp", "Pass1234").await;
     // A workspace in scope makes the pipeline take the retrieval route (the
@@ -4105,19 +4121,122 @@ async fn follow_up_after_upload_runs_retrieval_with_documents_in_history() {
     );
 }
 
+/// An image uploaded in a workspace (RAG) chat reaches a vision-capable answer
+/// model as pixels — on the upload turn and, replayed from history, on the
+/// follow-up — while the placeholder text block still names the file. A
+/// text-only model gets the placeholder and never an image part.
+#[tokio::test]
+async fn image_attachment_reaches_a_vision_capable_model_in_rag_mode() {
+    let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let vision_calls = Arc::new(Mutex::new(Vec::new()));
+    let state = build_test_state_full(
+        true,
+        Arc::new(CapturingLlm {
+            calls: Arc::clone(&calls),
+            vision: true,
+            vision_calls: Arc::clone(&vision_calls),
+        }),
+        true,
+    );
+    let app = build_router(state, None);
+    let token = register_and_get_token(&app, "vision@test.com", "Vision", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({
+            "content": "what is in this picture?",
+            "attachments": [
+                {"name": "p.png", "mime_type": "image/png", "data": "AQID"}
+            ]
+        }),
+    )
+    .await;
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "and what colour is it?"}),
+    )
+    .await;
+
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "no text call — both turns went to vision"
+    );
+    let vc = vision_calls.lock().unwrap();
+    assert_eq!(vc.len(), 2);
+
+    // Upload turn: pixels + placeholder block on the last user turn.
+    let last = vc[0].last().unwrap();
+    assert_eq!(last.role, "user");
+    assert_eq!(last.images.len(), 1);
+    assert_eq!(last.images[0].media_type, "image/png");
+    assert_eq!(last.images[0].base64_data, "AQID");
+    assert!(
+        last.text
+            .contains("<document name=\"p.png\" type=\"image/png\"")
+    );
+    assert!(last.text.ends_with("what is in this picture?"));
+
+    // Follow-up: the image is replayed on ITS turn; the new question carries none.
+    let users: Vec<_> = vc[1].iter().filter(|m| m.role == "user").collect();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].images.len(), 1);
+    assert!(users[0].text.contains("p.png"));
+    assert!(users[1].images.is_empty());
+    assert_eq!(users[1].text, "and what colour is it?");
+}
+
+#[tokio::test]
+async fn image_attachment_with_text_only_model_sends_placeholder_and_no_image_parts() {
+    let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+    let state = build_test_state_full(true, Arc::new(CapturingLlm::text(&calls)), true);
+    let app = build_router(state, None);
+    let token = register_and_get_token(&app, "novision@test.com", "NoVision", "Pass1234").await;
+    let conv_id = create_conversation_id(&app, &token).await;
+
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({
+            "content": "what is in this picture?",
+            "attachments": [
+                {"name": "p.png", "mime_type": "image/png", "data": "AQID"}
+            ]
+        }),
+    )
+    .await;
+    send_and_drain(
+        &app,
+        &conv_id,
+        &token,
+        serde_json::json!({"content": "and what colour is it?"}),
+    )
+    .await;
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2, "text model: both turns are text calls");
+    for call in calls.iter() {
+        assert!(
+            call.iter().all(|m| m.images.is_empty()),
+            "a text endpoint must never receive image parts"
+        );
+    }
+    let last = calls[0].last().unwrap();
+    assert!(last.content.contains("[Image: image/png, 3 bytes]"));
+}
+
 /// Editing the message that carried the upload keeps the file: the UI does
 /// not re-send it, so the replaced row's attachments carry over to the new
 /// row and reach the model with the edited question.
 #[tokio::test]
 async fn editing_the_upload_turn_keeps_its_attachment() {
     let calls: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-    let state = build_test_state_full(
-        true,
-        Arc::new(CapturingLlm {
-            calls: Arc::clone(&calls),
-        }),
-        true,
-    );
+    let state = build_test_state_full(true, Arc::new(CapturingLlm::text(&calls)), true);
     let app = build_router(state, None);
     let token = register_and_get_token(&app, "edit-att@test.com", "Edit", "Pass1234").await;
     let conv_id = create_conversation_id(&app, &token).await;

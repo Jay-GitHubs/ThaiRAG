@@ -79,24 +79,34 @@ impl OpenAiLlmProvider {
 /// The relative order of non-system messages is unchanged; system contents
 /// are joined in their original order with a blank line between them.
 fn hoist_system_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
-    let mut system_text: Vec<&str> = Vec::new();
-    let mut system_images = Vec::new();
-    for m in messages.iter().filter(|m| m.role == "system") {
-        if !m.content.is_empty() {
-            system_text.push(m.content.as_str());
-        }
-        system_images.extend(m.images.iter().cloned());
-    }
+    let system_text: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == "system" && !m.content.is_empty())
+        .map(|m| m.content.as_str())
+        .collect();
     let has_system = messages.iter().any(|m| m.role == "system");
     let mut out = Vec::with_capacity(messages.len());
     if has_system {
         out.push(ChatMessage {
             role: "system".into(),
             content: system_text.join("\n\n"),
-            images: system_images,
+            images: vec![],
         });
     }
-    out.extend(messages.iter().filter(|m| m.role != "system").cloned());
+    // Text endpoints (`generate`, `generate_stream`, `generate_structured`)
+    // never receive image parts: `ChatMessage.images` would otherwise be
+    // serialised as an unknown `images` field the API rejects. Vision goes
+    // through `generate_vision`.
+    out.extend(
+        messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| ChatMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+                images: vec![],
+            }),
+    );
     out
 }
 
@@ -540,6 +550,18 @@ mod tests {
         for (a, b) in out.iter().zip(&input) {
             assert_eq!(a.content, b.content);
         }
+    }
+
+    #[test]
+    fn hoist_drops_image_parts_for_text_endpoints() {
+        let mut m = msg("user", "look");
+        m.images.push(thairag_core::types::ImageContent {
+            base64_data: "AQID".into(),
+            media_type: "image/png".into(),
+        });
+        let out = hoist_system_messages(&[msg("system", "sys"), m]);
+        assert!(out.iter().all(|m| m.images.is_empty()));
+        assert_eq!(out[1].content, "look");
     }
 
     #[test]
