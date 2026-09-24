@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thairag_core::ThaiRagError;
-use thairag_core::types::ChatMessage;
+use thairag_core::types::{ChatMessage, ImageContent, SessionAttachment};
 
 use crate::store::{KmStoreTrait, MessageRow};
 
@@ -97,12 +97,14 @@ pub fn rows_to_chat_messages(rows: &[MessageRow]) -> Vec<ChatMessage> {
 /// order. The ownership check here is the single source of truth the caller
 /// can rely on before persisting a turn — a successful return means the
 /// requester owns the conversation.
-pub fn load_history(
+/// Access-checked, limit-trimmed message rows for a conversation the caller
+/// owns. Rows keep their attachment payloads for per-turn replay.
+pub fn load_history_rows(
     store: &Arc<dyn KmStoreTrait>,
     conversation_id: &str,
     user_id: &str,
     limit: usize,
-) -> std::result::Result<Vec<ChatMessage>, ConversationAccess> {
+) -> std::result::Result<Vec<MessageRow>, ConversationAccess> {
     let conv = store
         .get_conversation(conversation_id)
         .ok_or(ConversationAccess::NotFound)?;
@@ -114,23 +116,192 @@ pub fn load_history(
         // Keep the most-recent `limit` messages (list is chronological ASC).
         rows = rows.split_off(rows.len() - limit);
     }
-    Ok(rows_to_chat_messages(&rows))
+    Ok(rows)
 }
 
-/// Metadata for a user upload persisted with its message. The file content is
-/// session-scoped (used as answer context, never stored in the KB); only this
-/// metadata survives, so the UI can keep showing the attachment chips after a
-/// reload.
+/// Access-checked history as `ChatMessage`s (text only, attachments not
+/// inlined). Prefer [`load_history_rows`] + [`inline_history_attachments`]
+/// on the chat path, which needs the rows' attachment payloads.
+pub fn load_history(
+    store: &Arc<dyn KmStoreTrait>,
+    conversation_id: &str,
+    user_id: &str,
+    limit: usize,
+) -> std::result::Result<Vec<ChatMessage>, ConversationAccess> {
+    load_history_rows(store, conversation_id, user_id, limit)
+        .map(|rows| rows_to_chat_messages(&rows))
+}
+
+/// A user upload persisted with its message: chip metadata for the UI plus
+/// the extracted text (and image bytes) so later turns can replay the file
+/// from durable history without the client re-sending it. API listings strip
+/// the payload fields (`strip_attachment_payload`). The file is never added
+/// to the KB.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedAttachment {
     pub name: String,
     pub mime: String,
     pub size: usize,
     /// Small client-generated thumbnail (a `data:image/…` URL) for image
-    /// uploads, so the chat UI can keep rendering the picture after a reload.
-    /// Bounded at persist time — never the full-resolution upload.
+    /// uploads. Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,
+    /// Extracted (guardrail-processed, length-capped) text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// SHA-256 of the raw upload, for inference-log correlation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// Raw bytes of an `image/*` upload, base64 — so a vision-capable answer
+    /// model can still see the picture on later turns (general mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_b64: Option<String>,
+}
+
+impl PersistedAttachment {
+    /// Durable form of a processed upload, ready for the message row.
+    pub fn from_session(a: &SessionAttachment, thumb: Option<String>) -> Self {
+        use base64::Engine;
+        Self {
+            name: a.name.clone(),
+            mime: a.mime_type.clone(),
+            size: a.size_bytes,
+            thumb,
+            text: Some(a.text.clone()),
+            content_hash: Some(a.content_hash.clone()),
+            image_b64: a
+                .image_bytes
+                .as_ref()
+                .map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
+        }
+    }
+
+    /// Rebuild the pipeline-facing form (e.g. an edit that re-sends the same
+    /// files). Rows written before text persistence yield empty text.
+    pub fn to_session(&self) -> SessionAttachment {
+        use base64::Engine;
+        SessionAttachment {
+            name: self.name.clone(),
+            mime_type: self.mime.clone(),
+            text: self.text.clone().unwrap_or_default(),
+            size_bytes: self.size,
+            content_hash: self.content_hash.clone().unwrap_or_default(),
+            image_bytes: self
+                .image_b64
+                .as_deref()
+                .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok()),
+        }
+    }
+
+    /// Chip metadata only — what API listings expose.
+    pub fn public_view(mut self) -> Self {
+        self.text = None;
+        self.content_hash = None;
+        self.image_b64 = None;
+        self
+    }
+}
+
+/// Parse a message row's attachments JSON; unparseable → empty.
+pub fn parse_attachments(json: &str) -> Vec<PersistedAttachment> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+/// Re-serialise a row's attachments JSON without the text / image payloads.
+/// Unparseable input is returned unchanged.
+pub fn strip_attachment_payload(json: &str) -> String {
+    match serde_json::from_str::<Vec<PersistedAttachment>>(json) {
+        Ok(list) => {
+            let stripped: Vec<PersistedAttachment> = list
+                .into_iter()
+                .map(PersistedAttachment::public_view)
+                .collect();
+            serde_json::to_string(&stripped).unwrap_or_else(|_| json.to_string())
+        }
+        Err(_) => json.to_string(),
+    }
+}
+
+/// How much earlier-turn attachment content to replay in full (newest first).
+#[derive(Debug, Clone, Copy)]
+pub struct ReplayBudget {
+    /// Attachments replayed with their full text.
+    pub max_docs: usize,
+    /// Total chars of full text replayed.
+    pub max_chars: usize,
+}
+
+/// Replay persisted attachments into the user turns they were sent with.
+///
+/// `messages[i]` must correspond to `rows[i]` (the shape `rows_to_chat_messages`
+/// produces; trailing messages without a row — the current turn — are left
+/// alone). For every user row with attachments, the turn's content becomes
+/// `<document>` blocks followed by the original question; image uploads get
+/// their bytes back on `images` for vision-capable general-mode answers.
+///
+/// Newest first, the budget decides which attachments are replayed in full;
+/// the rest become name-only stubs so the model still knows the file exists.
+/// Returns whether any attachment was found in the replayed window.
+pub fn inline_history_attachments(
+    messages: &mut [ChatMessage],
+    rows: &[MessageRow],
+    budget: ReplayBudget,
+) -> bool {
+    let turns: Vec<(usize, Vec<PersistedAttachment>)> = rows
+        .iter()
+        .enumerate()
+        .take(messages.len())
+        .filter(|(i, row)| {
+            row.role == "user"
+                && messages[*i].role == row.role
+                && messages[*i].content == row.content
+                && !matches!(row.attachments.trim(), "" | "[]")
+        })
+        .map(|(i, row)| (i, parse_attachments(&row.attachments)))
+        .filter(|(_, list)| !list.is_empty())
+        .collect();
+    if turns.is_empty() {
+        return false;
+    }
+
+    // Decide full-vs-stub newest first (last turn, last attachment first).
+    let mut docs_left = budget.max_docs;
+    let mut chars_left = budget.max_chars;
+    let mut rendered: Vec<(usize, Vec<String>, Vec<ImageContent>)> = Vec::new();
+    for (i, list) in turns.iter().rev() {
+        let mut blocks: Vec<String> = Vec::with_capacity(list.len());
+        let mut images: Vec<ImageContent> = Vec::new();
+        for a in list.iter().rev() {
+            let text = a.text.as_deref().unwrap_or_default();
+            let len = text.chars().count();
+            if docs_left > 0 && len <= chars_left {
+                docs_left -= 1;
+                chars_left -= len;
+                blocks.push(thairag_core::types::render_document_block(
+                    &a.name, &a.mime, text,
+                ));
+                if let Some(b64) = a.image_b64.as_ref() {
+                    images.push(ImageContent {
+                        base64_data: b64.clone(),
+                        media_type: a.mime.clone(),
+                    });
+                }
+            } else {
+                blocks.push(thairag_core::types::render_omitted_document_block(
+                    &a.name, &a.mime, len,
+                ));
+            }
+        }
+        blocks.reverse();
+        images.reverse();
+        rendered.push((*i, blocks, images));
+    }
+    for (i, blocks, images) in rendered {
+        let m = &mut messages[i];
+        m.content = thairag_core::types::compose_user_content(&blocks, &m.content);
+        m.images = images;
+    }
+    true
 }
 
 /// Persist one completed turn: the user's prompt and the assistant's reply
@@ -240,6 +411,9 @@ mod tests {
             mime: "text/plain".into(),
             size: 3,
             thumb: None,
+            text: Some("abc".into()),
+            content_hash: None,
+            image_b64: None,
         }];
         let user_row = persist_user(&store, &conv.id, "q", &att).unwrap();
         assert_eq!(user_row.role, "user");
@@ -384,5 +558,170 @@ mod tests {
         };
         let json = serde_json::to_string(&c).unwrap();
         assert_eq!(json, r#"{"doc_id":"d","title":"t"}"#);
+    }
+
+    fn att_with_text(name: &str, text: &str) -> PersistedAttachment {
+        PersistedAttachment {
+            name: name.into(),
+            mime: "text/plain".into(),
+            size: text.len(),
+            thumb: None,
+            text: Some(text.into()),
+            content_hash: Some("h".into()),
+            image_b64: None,
+        }
+    }
+
+    fn row(role: &str, content: &str, atts: &[PersistedAttachment]) -> MessageRow {
+        MessageRow {
+            id: format!("id-{content}"),
+            conversation_id: "c".into(),
+            role: role.into(),
+            content: content.into(),
+            citations: "[]".into(),
+            images: "[]".into(),
+            token_stats: "{}".into(),
+            attachments: serde_json::to_string(atts).unwrap(),
+            created_at: String::new(),
+            feedback: 0,
+        }
+    }
+
+    fn big() -> ReplayBudget {
+        ReplayBudget {
+            max_docs: 10,
+            max_chars: 400_000,
+        }
+    }
+
+    #[test]
+    fn replay_inlines_documents_into_their_own_user_turn() {
+        let rows = vec![
+            row(
+                "user",
+                "look at this",
+                &[att_with_text("a.txt", "alpha text")],
+            ),
+            row("assistant", "sure", &[]),
+            row("user", "and this?", &[]),
+        ];
+        let mut msgs = rows_to_chat_messages(&rows);
+        // Current turn appended by the route — no row for it.
+        msgs.push(ChatMessage {
+            role: "user".into(),
+            content: "follow-up".into(),
+            images: vec![],
+        });
+        assert!(inline_history_attachments(&mut msgs, &rows, big()));
+        assert!(msgs[0].content.starts_with("<document name=\"a.txt\""));
+        assert!(msgs[0].content.contains("alpha text"));
+        assert!(msgs[0].content.ends_with("look at this"));
+        assert_eq!(msgs[1].content, "sure");
+        assert_eq!(msgs[2].content, "and this?");
+        assert_eq!(msgs[3].content, "follow-up", "current turn untouched");
+    }
+
+    #[test]
+    fn replay_returns_false_when_history_has_no_attachments() {
+        let rows = vec![row("user", "hi", &[]), row("assistant", "yo", &[])];
+        let mut msgs = rows_to_chat_messages(&rows);
+        assert!(!inline_history_attachments(&mut msgs, &rows, big()));
+        assert_eq!(msgs[0].content, "hi");
+    }
+
+    #[test]
+    fn replay_budget_keeps_newest_in_full_and_stubs_the_rest() {
+        let rows = vec![
+            row("user", "q1", &[att_with_text("old.txt", "OLD CONTENT")]),
+            row("assistant", "a1", &[]),
+            row("user", "q2", &[att_with_text("mid.txt", "MID CONTENT")]),
+            row("assistant", "a2", &[]),
+            row("user", "q3", &[att_with_text("new.txt", "NEW CONTENT")]),
+            row("assistant", "a3", &[]),
+        ];
+        let mut msgs = rows_to_chat_messages(&rows);
+        let budget = ReplayBudget {
+            max_docs: 1,
+            max_chars: 400_000,
+        };
+        assert!(inline_history_attachments(&mut msgs, &rows, budget));
+        assert!(msgs[4].content.contains("NEW CONTENT"));
+        assert!(msgs[2].content.contains("omitted=\"true\""));
+        assert!(!msgs[2].content.contains("MID CONTENT"));
+        assert!(msgs[0].content.contains("omitted=\"true\""));
+        assert!(!msgs[0].content.contains("OLD CONTENT"));
+        // Stubs still name the file so the model knows it was sent.
+        assert!(msgs[0].content.contains("name=\"old.txt\""));
+    }
+
+    #[test]
+    fn replay_char_budget_skips_a_document_that_does_not_fit() {
+        let rows = vec![
+            row("user", "q1", &[att_with_text("small.txt", "tiny")]),
+            row("assistant", "a1", &[]),
+            row(
+                "user",
+                "q2",
+                &[att_with_text("huge.txt", &"x".repeat(1000))],
+            ),
+            row("assistant", "a2", &[]),
+        ];
+        let mut msgs = rows_to_chat_messages(&rows);
+        let budget = ReplayBudget {
+            max_docs: 10,
+            max_chars: 100,
+        };
+        assert!(inline_history_attachments(&mut msgs, &rows, budget));
+        // Newest (huge) does not fit → stub; the older small one still fits.
+        assert!(msgs[2].content.contains("omitted=\"true\""));
+        assert!(msgs[0].content.contains("tiny"));
+    }
+
+    #[test]
+    fn replay_restores_image_bytes_on_the_turn() {
+        let mut img = att_with_text("p.png", "[Image: image/png, 3 bytes]");
+        img.mime = "image/png".into();
+        img.image_b64 = Some("AQID".into());
+        let rows = vec![row("user", "see", &[img])];
+        let mut msgs = rows_to_chat_messages(&rows);
+        assert!(inline_history_attachments(&mut msgs, &rows, big()));
+        assert_eq!(msgs[0].images.len(), 1);
+        assert_eq!(msgs[0].images[0].media_type, "image/png");
+        assert_eq!(msgs[0].images[0].base64_data, "AQID");
+    }
+
+    #[test]
+    fn strip_payload_keeps_chips_drops_text_and_bytes() {
+        let mut a = att_with_text("a.txt", "secret body");
+        a.image_b64 = Some("AQID".into());
+        a.thumb = Some("data:image/png;base64,xx".into());
+        let json = serde_json::to_string(&vec![a]).unwrap();
+        let out = strip_attachment_payload(&json);
+        assert!(out.contains("a.txt"));
+        assert!(out.contains("thumb"));
+        assert!(!out.contains("secret body"));
+        assert!(!out.contains("image_b64"));
+        assert!(!out.contains("content_hash"));
+        // Legacy / garbage rows pass through.
+        assert_eq!(strip_attachment_payload("not json"), "not json");
+        assert_eq!(strip_attachment_payload("[]"), "[]");
+    }
+
+    #[test]
+    fn session_round_trip_preserves_text_and_bytes() {
+        let sa = SessionAttachment {
+            name: "p.png".into(),
+            mime_type: "image/png".into(),
+            text: "[Image]".into(),
+            size_bytes: 3,
+            content_hash: "abc".into(),
+            image_bytes: Some(vec![1, 2, 3]),
+        };
+        let p = PersistedAttachment::from_session(&sa, None);
+        assert_eq!(p.image_b64.as_deref(), Some("AQID"));
+        let back = p.to_session();
+        assert_eq!(back.text, "[Image]");
+        assert_eq!(back.image_bytes, Some(vec![1, 2, 3]));
+        assert_eq!(back.content_hash, "abc");
     }
 }

@@ -2076,7 +2076,7 @@ pub async fn stream_conversation_message(
         })?;
 
     // ── Owner-checked history load (404/403 without leaking existence) ──
-    let history = crate::chat_history::load_history(
+    let history_rows = crate::chat_history::load_history_rows(
         &state.km_store,
         &conversation_id,
         &user_id_str,
@@ -2096,54 +2096,82 @@ pub async fn stream_conversation_message(
     // that drops mid-way (e.g. a gateway flake — mid-stream is not retried)
     // leaves the original turn intact instead of silently losing it on reload.
     let mut defer_delete_ids: Vec<String> = Vec::new();
-    let full_messages = if req.edit {
-        // Edit-and-resend: replace the trailing assistant turn *and* the old user
-        // message, then answer `content` as a fresh last turn. Persisted like a
-        // normal send (is_regenerate stays false) so the edited prompt and its new
-        // answer both land in history, replacing the original pair.
-        let mut rows = state.km_store.list_messages(&conversation_id);
-        if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
-            defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
-        }
-        if rows.last().map(|m| m.role.as_str()) != Some("user") {
-            return Err(ApiError(ThaiRagError::Validation("nothing to edit".into())));
-        }
-        defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
-        if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
-            rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
-        }
-        let mut msgs = crate::chat_history::rows_to_chat_messages(&rows);
-        msgs.push(ChatMessage {
-            role: "user".to_string(),
-            content: content.clone(),
-            images: vec![],
-        });
-        msgs
-    } else if req.regenerate {
-        // Replace the last answer: drop the trailing assistant turn, then re-run
-        // generation for the last user message already in history.
-        let mut rows = state.km_store.list_messages(&conversation_id);
-        if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
-            defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
-        }
-        if rows.last().map(|m| m.role.as_str()) != Some("user") {
-            return Err(ApiError(ThaiRagError::Validation(
-                "nothing to regenerate".into(),
-            )));
-        }
-        if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
-            rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
-        }
-        crate::chat_history::rows_to_chat_messages(&rows)
-    } else {
-        let mut h = history;
-        h.push(ChatMessage {
-            role: "user".to_string(),
-            content: content.clone(),
-            images: vec![],
-        });
-        h
+    // Attachments of the user message an edit replaces: an edit that re-sends
+    // no files keeps the originals (the UI does not re-upload them).
+    let mut edited_attachments: Vec<crate::chat_history::PersistedAttachment> = Vec::new();
+    // `replay_rows[i]` corresponds to `full_messages[i]` — the durable rows
+    // whose attachments are replayed into their own turns below. The current
+    // turn (edit / normal send) has no row yet and is never in `replay_rows`.
+    let (mut full_messages, replay_rows): (Vec<ChatMessage>, Vec<crate::store::MessageRow>) =
+        if req.edit {
+            // Edit-and-resend: replace the trailing assistant turn *and* the old user
+            // message, then answer `content` as a fresh last turn. Persisted like a
+            // normal send (is_regenerate stays false) so the edited prompt and its new
+            // answer both land in history, replacing the original pair.
+            let mut rows = state.km_store.list_messages(&conversation_id);
+            if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
+                defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
+            }
+            if rows.last().map(|m| m.role.as_str()) != Some("user") {
+                return Err(ApiError(ThaiRagError::Validation("nothing to edit".into())));
+            }
+            let edited = rows.pop().expect("checked non-empty");
+            edited_attachments = crate::chat_history::parse_attachments(&edited.attachments);
+            defer_delete_ids.push(edited.id);
+            if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
+                rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
+            }
+            let mut msgs = crate::chat_history::rows_to_chat_messages(&rows);
+            msgs.push(ChatMessage {
+                role: "user".to_string(),
+                content: content.clone(),
+                images: vec![],
+            });
+            (msgs, rows)
+        } else if req.regenerate {
+            // Replace the last answer: drop the trailing assistant turn, then re-run
+            // generation for the last user message already in history.
+            let mut rows = state.km_store.list_messages(&conversation_id);
+            if rows.last().map(|m| m.role.as_str()) == Some("assistant") {
+                defer_delete_ids.push(rows.pop().expect("checked non-empty").id);
+            }
+            if rows.last().map(|m| m.role.as_str()) != Some("user") {
+                return Err(ApiError(ThaiRagError::Validation(
+                    "nothing to regenerate".into(),
+                )));
+            }
+            if rows.len() > crate::chat_history::DEFAULT_HISTORY_LIMIT {
+                rows = rows.split_off(rows.len() - crate::chat_history::DEFAULT_HISTORY_LIMIT);
+            }
+            (crate::chat_history::rows_to_chat_messages(&rows), rows)
+        } else {
+            let mut h = crate::chat_history::rows_to_chat_messages(&history_rows);
+            h.push(ChatMessage {
+                role: "user".to_string(),
+                content: content.clone(),
+                images: vec![],
+            });
+            (h, history_rows)
+        };
+
+    // ── Replay earlier turns' attachments from durable history ──────────
+    // Each persisted upload is inlined as a `<document>` data block into the
+    // user turn it was sent with (newest first within the replay budget; older
+    // ones as name-only stubs). This replaces the old in-memory session slot,
+    // which held only the latest upload set, died an hour after the upload or
+    // on any restart, and left follow-ups silently answering without the file.
+    // Must run before anything prepends to `full_messages` (front-aligned
+    // with `replay_rows`) and before personal-memory retrieval, which reads the
+    // LAST user turn — the plain current question.
+    let replay_budget = crate::chat_history::ReplayBudget {
+        max_docs: state.config.attachments.max_session_attachments,
+        max_chars: state.config.attachments.max_replay_chars,
     };
+    let has_history_docs = crate::chat_history::inline_history_attachments(
+        &mut full_messages,
+        &replay_rows,
+        replay_budget,
+    );
 
     // ── Scope + settings resolution (the user's workspace permissions) ──
     // A conversation can be pinned to a single workspace (scope selector); when
@@ -2171,38 +2199,37 @@ pub async fn stream_conversation_message(
         .map(|ws_id| state.resolve_scope_for_workspace(*ws_id))
         .unwrap_or(crate::store::SettingsScope::Global);
 
-    // ── Per-conversation attachments ────────────────────────────────
-    // New attachments are decoded/converted/guardrail-checked and stashed in the
-    // (ephemeral) session keyed by the conversation id, so follow-up turns reuse
-    // them — mirroring the /v1 attachment behavior. They are context for the
-    // answer, not added to the permanent KB.
-    let attach_sid = SessionId(conversation_id.parse::<Uuid>().unwrap_or_default());
-    let attachments: Vec<SessionAttachment> = match req.attachments.as_deref() {
+    // ── This turn's attachments ─────────────────────────────────────
+    // Freshly uploaded files are decoded/converted/guardrail-checked here and
+    // persisted WITH the user message (text + image bytes), so every later turn
+    // replays them from history — no ephemeral session slot. An edit that does
+    // not re-upload keeps the replaced message's files. Attachments are answer
+    // context only; they are never added to the KB.
+    let (attachments, persisted_attachments): (
+        Vec<SessionAttachment>,
+        Vec<crate::chat_history::PersistedAttachment>,
+    ) = match req.attachments.as_deref() {
         Some(raw) if !raw.is_empty() => {
             let processed = process_request_attachments(&state, raw)?;
-            state
-                .session_store
-                .attach(&attach_sid, processed.clone())
-                .await;
-            processed
+            let persisted = processed
+                .iter()
+                .zip(raw.iter())
+                .map(|(a, r)| {
+                    crate::chat_history::PersistedAttachment::from_session(
+                        a,
+                        sanitize_attachment_preview(r.preview.as_deref()),
+                    )
+                })
+                .collect();
+            (processed, persisted)
         }
-        _ => state.session_store.get_attachments(&attach_sid).await,
+        _ if req.edit && !edited_attachments.is_empty() => {
+            let carried: Vec<SessionAttachment> =
+                edited_attachments.iter().map(|p| p.to_session()).collect();
+            (carried, edited_attachments)
+        }
+        _ => (Vec::new(), Vec::new()),
     };
-    // Metadata for the uploads on THIS turn, persisted with the user message so
-    // the UI keeps showing the chips after a reload. Session-inherited
-    // attachments are context only — their chips belong to the earlier turn.
-    let persisted_attachments: Vec<crate::chat_history::PersistedAttachment> = req
-        .attachments
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .map(|a| crate::chat_history::PersistedAttachment {
-            name: a.name.clone(),
-            mime: a.mime_type.clone(),
-            size: a.data.len() * 3 / 4, // decoded size from base64 length
-            thumb: sanitize_attachment_preview(a.preview.as_deref()),
-        })
-        .collect();
 
     // One generation at a time per conversation: a second send while an
     // answer is still streaming would interleave two writers into the same
@@ -2284,22 +2311,34 @@ pub async fn stream_conversation_message(
                 content: general_system_prompt,
                 images: vec![],
             });
-            // Attachments were previously DROPPED in general mode: the UI
-            // accepted an image/document upload but the LLM never saw it.
-            // Inject the extracted text (parity with RAG-mode attachment
-            // handling) so any model can use it…
-            msgs.extend(general_attachment_context_msgs(&attachments));
+            // Documents: one stable preamble (only when any file is in play),
+            // earlier uploads already inlined into their own turns by the
+            // history replay, this turn's uploads inlined into the last user
+            // turn — same shape as the RAG attachments route.
+            if !attachments.is_empty() || has_history_docs {
+                msgs.push(ChatMessage {
+                    role: "system".to_string(),
+                    content: thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE.to_string(),
+                    images: vec![],
+                });
+            }
             msgs.extend(full_messages.clone());
-            // …and give vision-capable models the actual pixels: attach the
-            // raw image bytes to the latest user message. generate_vision has
-            // no streaming variant, so vision answers are buffered and then
-            // emitted as a single stream chunk (same trade-off as the RAG
-            // pipeline's vision path).
+            thairag_core::types::inline_attachments_into_last_user_turn(&mut msgs, &attachments);
+            // Pixels for vision-capable models: this turn's image bytes go on the
+            // last user turn; replayed history images already sit on theirs.
+            // Keep only the most recent few across the whole request.
+            // generate_vision has no streaming variant, so vision answers are
+            // buffered and then emitted as a single stream chunk (same
+            // trade-off as the RAG pipeline's vision path).
             let image_contents = general_attachment_images(&attachments);
-            if !image_contents.is_empty() && general_llm.supports_vision() {
-                if let Some(last_user) = msgs.iter_mut().rev().find(|m| m.role == "user") {
-                    last_user.images = image_contents;
-                }
+            if !image_contents.is_empty()
+                && let Some(last_user) = msgs.iter_mut().rev().find(|m| m.role == "user")
+            {
+                last_user.images.extend(image_contents);
+            }
+            cap_vision_images(&mut msgs, MAX_VISION_IMAGES);
+            let has_images = msgs.iter().any(|m| !m.images.is_empty());
+            if has_images && general_llm.supports_vision() {
                 let vision_msgs: Vec<thairag_core::types::VisionMessage> = msgs
                     .iter()
                     .map(|m| thairag_core::types::VisionMessage {
@@ -2316,10 +2355,27 @@ pub async fn stream_conversation_message(
                         stream: Box::pin(tokio_stream::once(Ok(resp.content))),
                     })
             } else {
+                // Text endpoint: never serialise image parts into it.
+                for m in &mut msgs {
+                    m.images.clear();
+                }
                 general_llm.generate_stream(&msgs, None).await
             }
         } else if let Some(ref pipeline) = scoped_pipeline {
-            if attachments.is_empty() {
+            // `ChatMessage.images` only feeds the general-mode vision path; the
+            // RAG pipeline talks to text endpoints, so drop replayed pixels.
+            let full_messages: Vec<ChatMessage> = full_messages
+                .into_iter()
+                .map(|mut m| {
+                    m.images.clear();
+                    m
+                })
+                .collect();
+            // Attachments route whenever a file is in play — this turn's upload
+            // OR one replayed from an earlier turn (the model must keep seeing
+            // the document on follow-ups). Same retrieval semantics as before:
+            // that route answers from the documents, not the KB.
+            if attachments.is_empty() && !has_history_docs {
                 pipeline
                     .process_stream(
                         &full_messages,
@@ -2345,8 +2401,29 @@ pub async fn stream_conversation_message(
                     .await
             }
         } else {
+            // Legacy orchestrator path (chat pipeline disabled). It used to
+            // drop attachments on the floor; give it the same shape as the
+            // pipeline route: one preamble, documents inside the user turns.
             drop(progress_tx);
-            p.orchestrator.process_stream(&full_messages, &scope).await
+            let mut msgs: Vec<ChatMessage> = full_messages
+                .into_iter()
+                .map(|mut m| {
+                    m.images.clear();
+                    m
+                })
+                .collect();
+            thairag_core::types::inline_attachments_into_last_user_turn(&mut msgs, &attachments);
+            if !attachments.is_empty() || has_history_docs {
+                msgs.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: thairag_core::types::ATTACHMENT_SYSTEM_PREAMBLE.to_string(),
+                        images: vec![],
+                    },
+                );
+            }
+            p.orchestrator.process_stream(&msgs, &scope).await
         }
     });
 
@@ -3362,35 +3439,30 @@ mod citation_tests {
     }
 }
 
-/// General-mode attachment context: the extracted text of each attachment as
-/// system messages (parity with the RAG pipeline's attachment handling), so
-/// any model — vision-capable or not — can use an upload the UI accepted.
-fn general_attachment_context_msgs(
-    attachments: &[thairag_core::types::SessionAttachment],
-) -> Vec<ChatMessage> {
-    if attachments.is_empty() {
-        return Vec::new();
-    }
-    let mut msgs = Vec::with_capacity(attachments.len() + 1);
-    msgs.push(ChatMessage {
-        role: "system".to_string(),
-        content: format!(
-            "You have been given {} attachment(s) below. Use them as the \
-             primary source to answer the user's questions.",
-            attachments.len()
-        ),
-        images: vec![],
-    });
-    for a in attachments {
-        if !a.text.trim().is_empty() {
-            msgs.push(ChatMessage {
-                role: "system".to_string(),
-                content: format!("[Attachment: {}]\n{}\n", a.name, a.text),
-                images: vec![],
-            });
+/// Most image parts a single request carries (mirrors the RAG pipeline's
+/// per-answer image bound). Older replayed images beyond it are dropped from
+/// the request, newest kept.
+const MAX_VISION_IMAGES: usize = 4;
+
+/// Keep only the `max` most recent image parts across a message list; earlier
+/// turns lose theirs first.
+fn cap_vision_images(msgs: &mut [ChatMessage], max: usize) {
+    let mut budget = max;
+    for m in msgs.iter_mut().rev() {
+        if m.images.is_empty() {
+            continue;
         }
+        if budget == 0 {
+            m.images.clear();
+            continue;
+        }
+        if m.images.len() > budget {
+            // Newest within the turn are last.
+            let drop = m.images.len() - budget;
+            m.images.drain(..drop);
+        }
+        budget -= m.images.len();
     }
-    msgs
 }
 
 /// Maximum accepted length for a client-sent attachment preview. Previews are
@@ -3443,26 +3515,38 @@ mod general_attachment_tests {
         }
     }
 
+    fn msg(role: &str, n_images: usize) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: role.into(),
+            images: (0..n_images)
+                .map(|i| thairag_core::types::ImageContent {
+                    base64_data: format!("{role}-{i}"),
+                    media_type: "image/png".into(),
+                })
+                .collect(),
+        }
+    }
+
     #[test]
-    fn no_attachments_no_messages() {
-        assert!(general_attachment_context_msgs(&[]).is_empty());
+    fn no_attachments_no_vision_inputs() {
         assert!(general_attachment_images(&[]).is_empty());
     }
 
     #[test]
-    fn text_attachment_becomes_context_message() {
-        // The reported bug: general mode dropped attachments entirely.
-        let msgs = general_attachment_context_msgs(&[att("a.md", "text/markdown", "hello", None)]);
-        assert_eq!(msgs.len(), 2, "header + one document message");
-        assert!(msgs[1].content.contains("[Attachment: a.md]"));
-        assert!(msgs[1].content.contains("hello"));
-    }
-
-    #[test]
-    fn empty_extraction_is_skipped_but_header_remains() {
-        let msgs =
-            general_attachment_context_msgs(&[att("i.png", "image/png", "  ", Some(vec![1]))]);
-        assert_eq!(msgs.len(), 1, "header only — no empty document body");
+    fn cap_keeps_newest_images_across_turns() {
+        let mut msgs = vec![msg("u1", 3), msg("a1", 0), msg("u2", 3)];
+        cap_vision_images(&mut msgs, 4);
+        assert_eq!(msgs[2].images.len(), 3, "latest turn kept whole");
+        assert_eq!(msgs[0].images.len(), 1, "oldest turn trimmed to the budget");
+        assert_eq!(
+            msgs[0].images[0].base64_data, "u1-2",
+            "newest within turn survives"
+        );
+        let mut msgs = vec![msg("u1", 2), msg("u2", 6)];
+        cap_vision_images(&mut msgs, 4);
+        assert_eq!(msgs[1].images.len(), 4);
+        assert!(msgs[0].images.is_empty());
     }
 
     #[test]
