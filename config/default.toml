@@ -91,7 +91,8 @@ max_per_request = 5
 max_bytes_per_attachment = 5242880    # 5 MB
 max_total_bytes = 15728640            # 15 MB
 max_text_chars = 200000
-max_session_attachments = 10
+max_session_attachments = 10          # earlier-turn attachments replayed in full (newest first)
+max_replay_chars = 400000             # total chars of earlier-turn attachment text replayed in full
 
 [embedding_cache]
 backend = "memory"          # "memory", "redis", or "none"

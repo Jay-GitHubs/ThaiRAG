@@ -220,7 +220,18 @@ pub async fn list_messages(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<MessageRow>>, ApiError> {
     require_owned(&state, &claims, &id)?;
-    Ok(Json(state.km_store.list_messages(&id)))
+    // Attachment rows carry the extracted text (and image bytes) so later
+    // turns can replay them; the UI only needs the chip metadata.
+    let rows = state
+        .km_store
+        .list_messages(&id)
+        .into_iter()
+        .map(|mut r| {
+            r.attachments = crate::chat_history::strip_attachment_payload(&r.attachments);
+            r
+        })
+        .collect();
+    Ok(Json(rows))
 }
 
 /// POST /api/chat/conversations/{id}/messages/{message_id}/feedback — set a
