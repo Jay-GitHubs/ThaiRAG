@@ -250,6 +250,7 @@ fn build_test_state_full(
                 thinking_enabled: false,
                 supports_vision: None,
                 sampling: Default::default(),
+                reasoning: Default::default(),
             },
             embedding: EmbeddingConfig {
                 // OpenAI kind: constructing the provider is side-effect free.
@@ -1798,6 +1799,7 @@ fn build_streaming_test_app() -> Router {
                 thinking_enabled: false,
                 supports_vision: None,
                 sampling: Default::default(),
+                reasoning: Default::default(),
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
@@ -3562,6 +3564,65 @@ async fn provider_config_put_round_trips_sampling_parameters() {
     assert!(body["llm"].get("top_p").is_none());
     assert!(body["llm"].get("stop").is_none());
     assert_eq!(body["llm"]["temperature"], 0.2);
+}
+
+/// Reasoning controls ride on the same PUT: tri-state thinking, effort as a
+/// validated string, budget; invalid effort → 400; `clear_reasoning` resets.
+#[tokio::test]
+async fn provider_config_put_round_trips_reasoning_controls() {
+    let state = build_test_state(true);
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "reason@test.com", "Reason", "Pass1234").await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"thinking": false, "reasoning_effort": "Low", "thinking_budget_tokens": 2048}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["llm"]["thinking"], false);
+    assert_eq!(body["llm"]["reasoning_effort"], "low");
+    assert_eq!(body["llm"]["thinking_budget_tokens"], 2048);
+    let live = state.providers().providers_config.llm.clone();
+    assert_eq!(live.reasoning.thinking, Some(false));
+    assert_eq!(
+        live.reasoning.reasoning_effort,
+        Some(thairag_core::types::ReasoningEffort::Low)
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"reasoning_effort": "extreme"}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"clear_reasoning": true}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert!(body["llm"].get("thinking").is_none());
+    assert!(body["llm"].get("reasoning_effort").is_none());
+    assert!(state.providers().providers_config.llm.reasoning.is_empty());
 }
 
 /// A global factory reset must rebuild the in-memory providers from what

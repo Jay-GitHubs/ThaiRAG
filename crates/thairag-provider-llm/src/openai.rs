@@ -16,6 +16,7 @@ pub struct OpenAiLlmProvider {
     base_url: String,
     temperature: Option<f32>,
     sampling: thairag_core::types::SamplingParams,
+    reasoning: thairag_core::types::ReasoningParams,
     /// OpenAI proper rejects unknown request arguments; when true the
     /// non-standard knobs (top_k, min_p, repetition_penalty) are not sent.
     strict_openai: bool,
@@ -68,6 +69,7 @@ impl OpenAiLlmProvider {
             base_url,
             temperature: None,
             sampling: Default::default(),
+            reasoning: Default::default(),
             strict_openai: false,
             vision_override,
         }
@@ -85,6 +87,27 @@ impl OpenAiLlmProvider {
         self.sampling = sampling;
         self.strict_openai = strict_openai;
         self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: thairag_core::types::ReasoningParams) -> Self {
+        self.reasoning = reasoning;
+        self
+    }
+
+    /// Reasoning controls: `reasoning_effort` is standard (OpenAI o-series /
+    /// gpt-5, gpt-oss on vLLM); the thinking toggle maps to vLLM's
+    /// `chat_template_kwargs.enable_thinking` (Qwen3) and is withheld for
+    /// OpenAI proper. An operator's `extra_body` still wins (merged after).
+    fn apply_reasoning(&self, body: &mut serde_json::Value) {
+        let r = &self.reasoning;
+        if let Some(effort) = r.reasoning_effort {
+            body["reasoning_effort"] = serde_json::json!(effort.as_str());
+        }
+        if !self.strict_openai
+            && let Some(on) = r.thinking
+        {
+            body["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(on);
+        }
     }
 
     /// Add the configured sampling fields to a chat-completions body. Unset
@@ -121,6 +144,7 @@ impl OpenAiLlmProvider {
                 body["repetition_penalty"] = serde_json::json!(v);
             }
         }
+        self.apply_reasoning(body);
         s.merge_extra_into(body);
     }
 }
@@ -665,6 +689,52 @@ mod tests {
         let mut body = serde_json::json!({"model": "m"});
         p.apply_sampling(&mut body);
         assert_eq!(body, serde_json::json!({"model": "m"}));
+    }
+
+    #[test]
+    fn reasoning_controls_are_mapped_and_gated() {
+        use thairag_core::types::{ReasoningEffort, ReasoningParams};
+        let reasoning = ReasoningParams {
+            thinking: Some(false),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            thinking_budget_tokens: Some(2048),
+        };
+        // Compatible gateway (vLLM): effort + Qwen3 template kwarg.
+        let p = OpenAiLlmProvider::new("k", "m", "https://gw/v1")
+            .with_sampling(None, Default::default(), false)
+            .with_reasoning(reasoning.clone());
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(
+            body.get("thinking_budget_tokens").is_none(),
+            "no OpenAI equivalent"
+        );
+        // An explicit extra_body wins over the mapped kwarg.
+        let p = OpenAiLlmProvider::new("k", "m", "https://gw/v1")
+            .with_sampling(
+                None,
+                thairag_core::types::SamplingParams {
+                    extra_body: Some(
+                        serde_json::json!({"chat_template_kwargs": {"enable_thinking": true}}),
+                    ),
+                    ..Default::default()
+                },
+                false,
+            )
+            .with_reasoning(reasoning.clone());
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        // OpenAI proper: effort only.
+        let p = OpenAiLlmProvider::new("k", "m", "")
+            .with_sampling(None, Default::default(), true)
+            .with_reasoning(reasoning);
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert_eq!(body["reasoning_effort"], "low");
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 
     #[test]

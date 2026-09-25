@@ -89,6 +89,7 @@ fn resolve_profile(
             thinking_enabled: config.thinking_enabled,
             supports_vision: config.supports_vision,
             sampling: config.sampling.clone(),
+            reasoning: config.reasoning.clone(),
         };
     }
     config.clone()
@@ -1944,6 +1945,7 @@ mod llm_config_resolution_tests {
             thinking_enabled: false,
             supports_vision: None,
             sampling: Default::default(),
+            reasoning: Default::default(),
         }
     }
 

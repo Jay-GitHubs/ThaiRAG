@@ -15,6 +15,7 @@ pub struct GeminiProvider {
     model: String,
     temperature: Option<f32>,
     sampling: thairag_core::types::SamplingParams,
+    reasoning: thairag_core::types::ReasoningParams,
 }
 
 impl GeminiProvider {
@@ -37,6 +38,7 @@ impl GeminiProvider {
             model: model.to_string(),
             temperature: None,
             sampling: Default::default(),
+            reasoning: Default::default(),
         }
     }
 
@@ -47,6 +49,11 @@ impl GeminiProvider {
     ) -> Self {
         self.temperature = temperature;
         self.sampling = sampling;
+        self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: thairag_core::types::ReasoningParams) -> Self {
+        self.reasoning = reasoning;
         self
     }
 
@@ -81,6 +88,21 @@ impl GeminiProvider {
         }
         if !s.stop.is_empty() {
             cfg.insert("stopSequences".into(), serde_json::json!(s.stop));
+        }
+        // thinkingConfig: off → budget 0; on without a budget → -1 (dynamic);
+        // a budget alone sets it. `reasoning_effort` has no Gemini mapping.
+        let r = &self.reasoning;
+        let thinking_budget: Option<i64> = match (r.thinking, r.thinking_budget_tokens) {
+            (Some(false), _) => Some(0),
+            (_, Some(b)) => Some(b as i64),
+            (Some(true), None) => Some(-1),
+            (None, None) => None,
+        };
+        if let Some(b) = thinking_budget {
+            cfg.insert(
+                "thinkingConfig".into(),
+                serde_json::json!({ "thinkingBudget": b }),
+            );
         }
         let mut value = serde_json::Value::Object(cfg);
         s.merge_extra_into(&mut value);
@@ -416,6 +438,35 @@ impl LlmProvider for GeminiProvider {
 mod tests {
     use super::*;
     use thairag_core::types::SamplingParams;
+
+    #[test]
+    fn thinking_config_maps_toggle_and_budget() {
+        use thairag_core::types::ReasoningParams;
+        let off = GeminiProvider::new("k", "g").with_reasoning(ReasoningParams {
+            thinking: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(
+            off.generation_config(None).unwrap()["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        let dynamic = GeminiProvider::new("k", "g").with_reasoning(ReasoningParams {
+            thinking: Some(true),
+            ..Default::default()
+        });
+        assert_eq!(
+            dynamic.generation_config(None).unwrap()["thinkingConfig"]["thinkingBudget"],
+            -1
+        );
+        let budget = GeminiProvider::new("k", "g").with_reasoning(ReasoningParams {
+            thinking_budget_tokens: Some(1024),
+            ..Default::default()
+        });
+        assert_eq!(
+            budget.generation_config(None).unwrap()["thinkingConfig"]["thinkingBudget"],
+            1024
+        );
+    }
 
     #[test]
     fn generation_config_uses_gemini_names_and_is_omitted_when_empty() {

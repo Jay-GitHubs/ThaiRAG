@@ -195,6 +195,29 @@ Settings API: the same fields on any LLM update body; `clear_sampling: true`
 resets all of them (temperature keeps its own `clear_temperature`). Values are
 range-checked (HTTP 400 on violation). TOML/env: flat next to `temperature`,
 e.g. `THAIRAG__PROVIDERS__LLM__TOP_P=0.9`.
+
+### Reasoning controls (every LLM config)
+
+Three optional fields next to the sampling block. Unset = provider/model
+default; for Ollama the legacy `thinking_enabled` bool then still applies
+(`false` → `think: false`, the default that avoids blank answers from
+thinking models).
+
+| Field | Ollama | OpenAI-compatible (vLLM) | OpenAI proper | Claude | Gemini |
+|---|---|---|---|---|---|
+| `thinking` (on / off / unset) | `think: true/false` | `chat_template_kwargs.enable_thinking` (Qwen3) | — | `thinking` block on/off | `thinkingBudget` −1 (dynamic) / 0 |
+| `reasoning_effort` (minimal/low/medium/high) | `think: "low"…` (gpt-oss; minimal → low) | `reasoning_effort` | `reasoning_effort` | — | — |
+| `thinking_budget_tokens` | — | — | — | `budget_tokens` (≥ 1024; `max_tokens` raised above it) | `thinkingBudget` |
+
+Claude forbids temperature / top_p / top_k overrides while extended thinking
+is on, so the provider drops them (logged). Thinking blocks in responses are
+never surfaced: Claude and Gemini parsers keep text parts only, Ollama reads
+`message.content`, and `<think>` tags from gateways are stripped as before.
+`chat_template_kwargs` is only sent to `openai_compatible` endpoints; on a
+LiteLLM gateway that rejects unknown params, use its model groups instead
+(e.g. `chat` vs `chat-thinking`) and leave `thinking` unset. Settings API:
+same field names, `clear_reasoning` resets; `reasoning_effort` accepts the
+four words case-insensitively, `""` clears it.
 | `query_analyzer_enabled` | `true` | Classifies/normalizes the query. Core agent. |
 | `query_rewriter_enabled` | `true` | Reformulates the query for better recall. Best single quality lever when wording differs from source. |
 | `context_curator_enabled` | `true` | Trims/orders retrieved context before generation. Core agent. |

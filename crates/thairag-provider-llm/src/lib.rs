@@ -35,11 +35,13 @@ pub fn create_llm_provider_with_options(
                 config.temperature,
                 config.thinking_enabled,
             )
-            .with_sampling(config.sampling.clone()),
+            .with_sampling(config.sampling.clone())
+            .with_reasoning(config.reasoning.clone()),
         ),
         LlmKind::Claude => Box::new(
             claude::ClaudeProvider::with_timeout(&config.api_key, &config.model, timeout_secs)
-                .with_sampling(config.temperature, config.sampling.clone()),
+                .with_sampling(config.temperature, config.sampling.clone())
+                .with_reasoning(config.reasoning.clone()),
         ),
         LlmKind::OpenAi | LlmKind::OpenAiCompatible => Box::new(
             openai::OpenAiLlmProvider::with_options(
@@ -55,11 +57,13 @@ pub fn create_llm_provider_with_options(
                 // OpenAI proper rejects unknown arguments (top_k, min_p, …);
                 // compatible gateways (vLLM, LiteLLM) accept them.
                 config.kind == LlmKind::OpenAi,
-            ),
+            )
+            .with_reasoning(config.reasoning.clone()),
         ),
         LlmKind::Gemini => Box::new(
             gemini::GeminiProvider::with_timeout(&config.api_key, &config.model, timeout_secs)
-                .with_sampling(config.temperature, config.sampling.clone()),
+                .with_sampling(config.temperature, config.sampling.clone())
+                .with_reasoning(config.reasoning.clone()),
         ),
     }
 }
