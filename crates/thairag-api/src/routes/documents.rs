@@ -1968,7 +1968,8 @@ fn reasoning_tree_provider(
     let mut cfg = p
         .chat_pipeline_config
         .reasoning_nav_llm
-        .clone()
+        .as_ref()
+        .map(|c| crate::app_state::resolve_llm_config(c, &p.providers_config.llm, None, None))
         .unwrap_or_else(|| p.providers_config.llm.clone());
     cfg.temperature = Some(0.0);
     // Bulk lane: PageIndex tree building is ingestion-side batch work.
