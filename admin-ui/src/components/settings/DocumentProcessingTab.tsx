@@ -31,6 +31,7 @@ import {
   ClusterOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
+import { AdvancedSamplingFields, emptySampling, isSamplingEmpty, samplingFromInfo, samplingToUpdate, type SamplingFormState } from './sampling';
 import { getDocumentConfig, updateDocumentConfig, syncModels, getProviderConfig, updateProviderConfig } from '../../api/settings';
 import { useLlmProfiles } from '../../hooks/useSettings';
 import type {
@@ -148,6 +149,9 @@ interface LlmFormState {
   base_url: string;
   api_key: string;
   profile_id?: string;
+  /** Sampling temperature; undefined = provider default. */
+  temperature?: number;
+  sampling: SamplingFormState;
 }
 
 const defaultLlmForm: LlmFormState = {
@@ -155,6 +159,7 @@ const defaultLlmForm: LlmFormState = {
   model: '',
   base_url: 'http://localhost:11435',
   api_key: '',
+  sampling: emptySampling(),
 };
 
 function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
@@ -164,7 +169,17 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     base_url: info.base_url || (info.kind === 'Ollama' ? 'http://localhost:11435' : ''),
     api_key: '',
     profile_id: info.profile_id,
+    temperature: info.temperature,
+    sampling: samplingFromInfo(info),
   };
+}
+
+/** Temperature + advanced sampling for an update payload (sent whole). */
+function samplingFields(form: LlmFormState): Partial<LlmConfigUpdate> {
+  const out: Partial<LlmConfigUpdate> = form.temperature != null
+    ? { temperature: form.temperature }
+    : { clear_temperature: true };
+  return { ...out, ...samplingToUpdate(form.sampling) };
 }
 
 const providerOptions = [
@@ -340,6 +355,7 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
                     model: '',
                     base_url: v === 'Ollama' ? 'http://localhost:11435' : '',
                     api_key: '',
+                    sampling: emptySampling(),
                   })
                 }
                 options={providerOptions}
@@ -409,6 +425,48 @@ function LlmConfigForm({ form, onChange, existingKey, compact, taskWeight, requi
               )}
             </div>
           )}
+
+          <Collapse
+            ghost
+            size="small"
+            items={[{
+              key: 'sampling',
+              label: (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Advanced sampling{form.temperature != null || !isSamplingEmpty(form.sampling) ? ' (set)' : ''}
+                </Text>
+              ),
+              children: (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <Space align="center" wrap>
+                    <Tooltip title="Lower (e.g. 0.2) = more deterministic; leave empty for the provider default. Sent to every provider.">
+                      <Text style={{ fontSize: 12, width: 120, display: 'inline-block' }}>
+                        Temperature <QuestionCircleOutlined />
+                      </Text>
+                    </Tooltip>
+                    <InputNumber
+                      size={compact ? 'small' : 'middle'}
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={form.temperature ?? null}
+                      onChange={(v) => onChange({ ...form, temperature: v == null ? undefined : Number(v) })}
+                      placeholder="default"
+                      style={{ width: 130 }}
+                      data-testid="sampling-temperature"
+                    />
+                  </Space>
+                  <AdvancedSamplingFields
+                    inline
+                    compact={compact}
+                    kind={form.kind}
+                    value={form.sampling}
+                    onChange={(sampling) => onChange({ ...form, sampling })}
+                  />
+                </div>
+              ),
+            }]}
+          />
         </>
       )}
     </div>
@@ -788,6 +846,7 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
       model: form.model.trim(),
       base_url: form.base_url.trim() || undefined,
       api_key: form.api_key || undefined,
+      ...samplingFields(form),
     };
     if (hadProfileBefore) {
       update.clear_profile = true;
@@ -1484,7 +1543,7 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                                 onClick={() => {
                                   updateAgentLlm(agent, {
                                     enabled: true,
-                                    form: { kind: 'Ollama', model: m, base_url: 'http://localhost:11435', api_key: '' },
+                                    form: { kind: 'Ollama', model: m, base_url: 'http://localhost:11435', api_key: '', sampling: emptySampling() },
                                   });
                                 }}
                               >
@@ -1504,7 +1563,7 @@ export function DocumentProcessingTab({ scope }: { scope?: SettingsScopeParam })
                                 onClick={() => {
                                   updateAgentLlm(agent, {
                                     enabled: true,
-                                    form: { kind: resolveCloudKind(m), model: m, base_url: '', api_key: '' },
+                                    form: { kind: resolveCloudKind(m), model: m, base_url: '', api_key: '', sampling: emptySampling() },
                                   });
                                 }}
                               >
@@ -2164,6 +2223,7 @@ function DocVisionSection() {
           base_url: form.base_url.trim() || undefined,
           api_key: form.api_key || undefined,
           ollama_num_ctx_max: numCtx,
+          ...samplingFields(form),
           ...(existing?.profile_id ? { clear_profile: true } : {}),
         };
       }

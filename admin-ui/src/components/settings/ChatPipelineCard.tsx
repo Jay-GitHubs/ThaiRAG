@@ -28,6 +28,7 @@ import {
   InfoCircleOutlined,
   ExperimentOutlined,
 } from '@ant-design/icons';
+import { AdvancedSamplingFields, emptySampling, samplingFromInfo, samplingToUpdate, type SamplingFormState } from './sampling';
 import { getChatPipelineConfig, updateChatPipelineConfig, syncModels, getFeedbackStats } from '../../api/settings';
 import { useLlmProfiles } from '../../hooks/useSettings';
 import type {
@@ -188,9 +189,10 @@ interface LlmFormState {
   temperature?: number;
   max_tokens?: number;
   thinking_enabled?: boolean;
+  sampling: SamplingFormState;
 }
 
-const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '', thinking_enabled: false };
+const defaultLlmForm: LlmFormState = { kind: 'Ollama', model: '', base_url: '', api_key: '', thinking_enabled: false, sampling: emptySampling() };
 
 function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
   return {
@@ -202,6 +204,7 @@ function llmInfoToForm(info: LlmProviderInfo): LlmFormState {
     temperature: info.temperature,
     max_tokens: info.max_tokens,
     thinking_enabled: info.thinking_enabled,
+    sampling: samplingFromInfo(info),
   };
 }
 
@@ -235,6 +238,8 @@ function formToUpdate(form: LlmFormState, hasExistingKey: boolean, hadProfileBef
   if (form.max_tokens != null) {
     update.max_tokens = form.max_tokens;
   }
+  // Advanced sampling: sent whole (reset + set fields) like temperature.
+  Object.assign(update, samplingToUpdate(form.sampling));
   return update;
 }
 
@@ -663,6 +668,13 @@ function LlmConfigForm({
                   {form.thinking_enabled ? 'On (model default reasoning)' : 'Off (think:false)'}
                 </Text>
               </Space>
+              <AdvancedSamplingFields
+                inline
+                compact
+                kind={form.kind}
+                value={form.sampling}
+                onChange={(sampling) => onChange({ ...form, sampling })}
+              />
             </Space>
           ),
         }]}
