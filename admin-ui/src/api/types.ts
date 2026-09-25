@@ -349,6 +349,16 @@ export interface LlmProviderInfo {
   temperature?: number;
   /** Allow the model to emit its thinking channel. false (default) sends Ollama `think: false`. Ollama-only. */
   thinking_enabled: boolean;
+  // ── Advanced sampling (flattened by the backend; omitted when unset) ──
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  repeat_penalty?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  seed?: number;
+  stop?: string[];
+  extra_body?: Record<string, unknown>;
 }
 
 export interface EmbeddingProviderInfo {
@@ -444,7 +454,7 @@ export interface ModelDiscoveryConfig {
 }
 
 export interface UpdateProviderConfigRequest {
-  llm?: { kind?: string; model?: string; base_url?: string; api_key?: string };
+  llm?: LlmConfigUpdate;
   embedding?: { kind?: string; model?: string; dimension?: number; api_key?: string };
   vector_store?: { kind?: string; url?: string; collection?: string; isolation?: string };
   reranker?: { kind?: string; model?: string; api_key?: string; base_url?: string; normalize_scores?: boolean };
@@ -501,7 +511,30 @@ export interface DocumentConfigResponse {
   ai_preprocessing: AiPreprocessingConfig;
 }
 
-export type LlmConfigUpdate = { kind?: string; model?: string; base_url?: string; api_key?: string; max_tokens?: number; profile_id?: string; clear_profile?: boolean; ollama_num_ctx_max?: number; temperature?: number; clear_temperature?: boolean; thinking_enabled?: boolean };
+export type LlmConfigUpdate = {
+  kind?: string;
+  model?: string;
+  base_url?: string;
+  api_key?: string;
+  max_tokens?: number;
+  profile_id?: string;
+  clear_profile?: boolean;
+  ollama_num_ctx_max?: number;
+  temperature?: number;
+  clear_temperature?: boolean;
+  thinking_enabled?: boolean;
+  /** Advanced sampling. `clear_sampling` resets every field first; values in the same request then apply. */
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  repeat_penalty?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  seed?: number;
+  stop?: string[];
+  extra_body?: Record<string, unknown>;
+  clear_sampling?: boolean;
+};
 
 // ── Search / Retrieval Config ──────────────────────────────────────
 export interface SearchConfigResponse {

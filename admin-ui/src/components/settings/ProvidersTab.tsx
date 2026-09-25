@@ -29,6 +29,7 @@ import {
   SyncOutlined,
   StarFilled,
 } from '@ant-design/icons';
+import { AdvancedSamplingFields, emptySampling, samplingError, samplingFromInfo, samplingToUpdate, type SamplingFormState } from './sampling';
 import {
   useProviderConfig,
   useAvailableModels,
@@ -295,6 +296,8 @@ function EditForm({
   // Server-resolved capability flags (vision/recommended) for the displayed
   // option sets. Falls back to the local heuristic when the resolve call fails.
   const [llmCaps, setLlmCaps] = useState<Record<string, ModelCapabilities>>({});
+  // Advanced sampling lives outside the antd Form (structured values).
+  const [llmSampling, setLlmSampling] = useState<SamplingFormState>(emptySampling());
 
   useEffect(() => {
     form.setFieldsValue({
@@ -310,6 +313,7 @@ function EditForm({
       rr_base_url: config.reranker.base_url || '',
       rr_normalize_scores: config.reranker.normalize_scores ?? false,
     });
+    setLlmSampling(samplingFromInfo(config.llm));
   }, [config, form]);
 
   const handleFinish = (values: Record<string, unknown>) => {
@@ -324,8 +328,9 @@ function EditForm({
     if (values.llm_api_key) llm.api_key = values.llm_api_key;
     if (values.llm_kind === 'Ollama' && values.llm_num_ctx_max !== config.llm.ollama_num_ctx_max)
       llm.ollama_num_ctx_max = values.llm_num_ctx_max;
-    if (values.llm_kind === 'Ollama') {
-      // null/undefined/'' = inherit model default → clear_temperature.
+    {
+      // Temperature is sent to every provider now. null/undefined/'' =
+      // inherit the provider default → clear_temperature.
       const t = values.llm_temperature;
       const newTemp = t === null || t === undefined || t === '' ? null : Number(t);
       const curTemp = config.llm.temperature ?? null;
@@ -334,6 +339,12 @@ function EditForm({
         else llm.temperature = newTemp;
       }
     }
+    const samplingProblem = samplingError(llmSampling);
+    if (samplingProblem) {
+      message.error(`Advanced sampling: ${samplingProblem}`);
+      return;
+    }
+    Object.assign(llm, samplingToUpdate(llmSampling, samplingFromInfo(config.llm)));
     if (Object.keys(llm).length > 0) req.llm = llm;
 
     const rr: Record<string, unknown> = {};
@@ -581,15 +592,16 @@ function EditForm({
               <InputNumber min={0} max={131072} step={1024} style={{ width: 200 }} />
             </Form.Item>
           )}
-          {llmKind === 'Ollama' && (
-            <Form.Item
-              name="llm_temperature"
-              label="Temperature"
-              extra="Sampling temperature. Lower (e.g. 0.2) = more deterministic, grounded RAG answers. Leave blank to inherit the model default."
-            >
-              <InputNumber min={0} max={2} step={0.1} placeholder="model default" style={{ width: 200 }} />
-            </Form.Item>
-          )}
+          <Form.Item
+            name="llm_temperature"
+            label="Temperature"
+            extra="Sampling temperature, sent to every provider. Lower (e.g. 0.2) = more deterministic, grounded RAG answers. Leave blank to inherit the provider default."
+          >
+            <InputNumber min={0} max={2} step={0.1} placeholder="provider default" style={{ width: 200 }} data-testid="llm-temperature" />
+          </Form.Item>
+          <Form.Item label="Advanced sampling" extra="top-p / top-k / min-p, penalties, seed, stop sequences and a raw extra-body JSON for gateway-specific knobs. Fields the selected provider cannot use are disabled and never sent.">
+            <AdvancedSamplingFields inline kind={llmKind} value={llmSampling} onChange={setLlmSampling} />
+          </Form.Item>
           {llmKind === 'OpenAiCompatible' && (
             <Form.Item name="llm_base_url" label="Base URL" rules={[{ required: true }]} extra="The base URL of your OpenAI-compatible API provider">
               <Input placeholder="e.g. https://api.groq.com/openai, https://api.together.xyz" />
