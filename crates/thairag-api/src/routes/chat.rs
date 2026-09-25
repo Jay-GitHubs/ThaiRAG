@@ -875,9 +875,13 @@ pub(crate) async fn maybe_auto_summarize(
     // Build the LLM provider for summarization: prefer memory_llm > shared llm > global
     let llm: Arc<dyn thairag_core::traits::LlmProvider> =
         if let Some(ref cfg) = chat_config.memory_llm {
-            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &state.effective_llm_config(cfg),
+            ))
         } else if let Some(ref cfg) = chat_config.llm {
-            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &state.effective_llm_config(cfg),
+            ))
         } else {
             Arc::from(thairag_provider_llm::create_llm_provider(
                 &p.providers_config.llm,
@@ -2304,7 +2308,9 @@ pub async fn stream_conversation_message(
             .llm
             .clone()
             .unwrap_or_else(|| state.providers().providers_config.llm.clone());
-        Some(thairag_provider_llm::create_llm_provider(&cfg))
+        Some(thairag_provider_llm::create_llm_provider(
+            &state.effective_llm_config(&cfg),
+        ))
     } else {
         None
     };
@@ -3123,9 +3129,13 @@ pub async fn summarize_session(
     let chat_config = &p.chat_pipeline_config;
     let llm: Arc<dyn thairag_core::traits::LlmProvider> =
         if let Some(ref cfg) = chat_config.memory_llm {
-            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &state.effective_llm_config(cfg),
+            ))
         } else if let Some(ref cfg) = chat_config.llm {
-            Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+            Arc::from(thairag_provider_llm::create_llm_provider(
+                &state.effective_llm_config(cfg),
+            ))
         } else {
             Arc::from(thairag_provider_llm::create_llm_provider(
                 &p.providers_config.llm,

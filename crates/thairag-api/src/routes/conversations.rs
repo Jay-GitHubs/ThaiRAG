@@ -323,7 +323,9 @@ pub async fn summarize_conversation(
     let p = state.providers();
     let llm: std::sync::Arc<dyn thairag_core::traits::LlmProvider> =
         if let Some(ref cfg) = p.chat_pipeline_config.memory_llm {
-            std::sync::Arc::from(thairag_provider_llm::create_llm_provider(cfg))
+            std::sync::Arc::from(thairag_provider_llm::create_llm_provider(
+                &state.effective_llm_config(cfg),
+            ))
         } else {
             p.chat_llm.clone()
         };

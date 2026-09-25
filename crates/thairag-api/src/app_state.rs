@@ -93,6 +93,90 @@ fn resolve_profile(
     config.clone()
 }
 
+/// Normalise a base URL for endpoint comparison: case, trailing slashes and a
+/// trailing `/v1` are insignificant (`https://gw/v1/` == `https://gw`).
+fn normalise_base_url(url: &str) -> String {
+    let t = url.trim().trim_end_matches('/');
+    let t = t.strip_suffix("/v1").unwrap_or(t);
+    t.trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// Whether two LLM configs talk to the same endpoint: same provider kind and
+/// the same normalised base URL. An empty base URL means the kind's default
+/// host, so two empties match.
+pub fn same_llm_endpoint(
+    a: &thairag_config::schema::LlmConfig,
+    b: &thairag_config::schema::LlmConfig,
+) -> bool {
+    a.kind == b.kind && normalise_base_url(&a.base_url) == normalise_base_url(&b.base_url)
+}
+
+fn key_tail(key: &str) -> String {
+    let tail: String = key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{tail}")
+}
+
+/// Resolve a SECONDARY LLM config (per-agent, document vision, memory,
+/// general chat, …) for provider construction.
+///
+/// 1. An explicit, existing `profile_id` wins: that is the operator's own
+///    credential bundle (vault-encrypted key). If it targets the primary LLM's
+///    endpoint with a different key we only warn — it may be stale, or a
+///    deliberate per-agent credential.
+/// 2. Otherwise a config on the SAME endpoint as the primary LLM always uses
+///    the primary LLM's API key. Per-agent rows are seeded by copying the
+///    primary key at save time and were never updated on rotation, which left
+///    ingestion agents sending a revoked key while chat worked (`401
+///    token_not_found_in_db` on "Document processing failed"). One gateway
+///    means one credential here; a different credential for the same gateway
+///    is expressed through an LLM profile.
+/// 3. A config on a different endpoint keeps its own key.
+pub fn resolve_llm_config(
+    cfg: &thairag_config::schema::LlmConfig,
+    primary: &thairag_config::schema::LlmConfig,
+    store: Option<&dyn KmStoreTrait>,
+    vault: Option<&Vault>,
+) -> thairag_config::schema::LlmConfig {
+    if let (Some(pid), Some(v), Some(st)) = (&cfg.profile_id, vault, store)
+        && st.get_llm_profile(pid).is_some()
+    {
+        let resolved = resolve_profile(cfg, Some(st), v);
+        if same_llm_endpoint(&resolved, primary) && resolved.api_key != primary.api_key {
+            tracing::warn!(
+                profile_id = %pid,
+                model = %resolved.model,
+                profile_key = %key_tail(&resolved.api_key),
+                primary_key = %key_tail(&primary.api_key),
+                "LLM profile targets the primary LLM's endpoint with a different API key — \
+                 if the gateway key was rotated, update this profile too"
+            );
+        }
+        return resolved;
+    }
+    let mut resolved = cfg.clone();
+    if same_llm_endpoint(&resolved, primary) && resolved.api_key != primary.api_key {
+        if !resolved.api_key.is_empty() {
+            tracing::warn!(
+                model = %resolved.model,
+                base_url = %resolved.base_url,
+                stored_key = %key_tail(&resolved.api_key),
+                primary_key = %key_tail(&primary.api_key),
+                "Secondary LLM config on the primary LLM's endpoint carries a different \
+                 (probably stale) API key — using the primary LLM's key instead"
+            );
+        }
+        resolved.api_key = primary.api_key.clone();
+    }
+    resolved
+}
+
 /// Dynamic provider state that can be hot-swapped by super admin.
 #[derive(Clone)]
 pub struct ProviderBundle {
@@ -304,11 +388,12 @@ impl ProviderBundle {
         let shared_preprocessing_llm: Arc<dyn LlmProvider> =
             Arc::new(thairag_core::backpressure::Throttled(
                 if let Some(ref cfg) = doc.ai_preprocessing.llm {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, km_store.as_ref().map(|s| s.as_ref()), v)
-                    } else {
-                        cfg.clone()
-                    };
+                    let resolved = resolve_llm_config(
+                        cfg,
+                        &resolved_llm_cfg,
+                        km_store.as_ref().map(|s| s.as_ref()),
+                        vault,
+                    );
                     Arc::from(create_llm_provider(&resolved))
                 } else {
                     Arc::clone(&llm)
@@ -319,11 +404,7 @@ impl ProviderBundle {
         let resolve_agent_llm =
             |agent_cfg: &Option<thairag_config::schema::LlmConfig>| -> Arc<dyn LlmProvider> {
                 if let Some(cfg) = agent_cfg {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, store_ref, v)
-                    } else {
-                        cfg.clone()
-                    };
+                    let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                     Arc::new(thairag_core::backpressure::Throttled(Arc::from(
                         create_llm_provider(&resolved),
                     )))
@@ -399,11 +480,7 @@ impl ProviderBundle {
             // are pure ingestion fan-out.
             let vision_llm: Arc<dyn LlmProvider> = Arc::new(thairag_core::backpressure::Throttled(
                 if let Some(ref cfg) = providers.doc_vision_llm {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, store_ref, v)
-                    } else {
-                        cfg.clone()
-                    };
+                    let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                     if !cfg.model.is_empty() {
                         tracing::info!(
                             kind = ?resolved.kind,
@@ -446,11 +523,7 @@ impl ProviderBundle {
         let chat_pipeline = if chat.enabled {
             let chat_timeout = chat.request_timeout_secs;
             let chat_shared_llm: Arc<dyn LlmProvider> = if let Some(ref cfg) = chat.llm {
-                let resolved = if let Some(v) = vault {
-                    resolve_profile(cfg, store_ref, v)
-                } else {
-                    cfg.clone()
-                };
+                let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                 Arc::from(create_llm_provider_with_options(
                     &resolved,
                     chat_timeout,
@@ -464,11 +537,7 @@ impl ProviderBundle {
                                           agent_cfg: &Option<thairag_config::schema::LlmConfig>|
              -> Arc<dyn LlmProvider> {
                 if let Some(cfg) = agent_cfg {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, store_ref, v)
-                    } else {
-                        cfg.clone()
-                    };
+                    let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                     tracing::info!(
                         agent = agent_name,
                         kind = ?resolved.kind,
@@ -528,11 +597,7 @@ impl ProviderBundle {
             // itself vision-capable) rather than the shared chat LLM.
             let chat_vision_llm: Option<Arc<dyn LlmProvider>> =
                 chat.chat_vision_llm.as_ref().map(|cfg| {
-                    let resolved = if let Some(v) = vault {
-                        resolve_profile(cfg, store_ref, v)
-                    } else {
-                        cfg.clone()
-                    };
+                    let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                     tracing::info!(
                         kind = ?resolved.kind,
                         model = %resolved.model,
@@ -1046,11 +1111,7 @@ impl ProviderBundle {
         // ── Context Compaction ──
         let context_compactor = if chat.context_compaction_enabled {
             let compactor_llm = if let Some(ref cfg) = chat.personal_memory_llm {
-                let resolved = if let Some(v) = vault {
-                    resolve_profile(cfg, store_ref, v)
-                } else {
-                    cfg.clone()
-                };
+                let resolved = resolve_llm_config(cfg, &resolved_llm_cfg, store_ref, vault);
                 Arc::from(create_llm_provider(&resolved))
             } else {
                 Arc::clone(&llm)
@@ -1258,6 +1319,23 @@ impl AppState {
     /// Get a snapshot of the current dynamic providers.
     pub fn providers(&self) -> ProviderBundle {
         self.providers.read().unwrap().clone()
+    }
+
+    /// Route-level twin of [`resolve_llm_config`] against the live primary LLM:
+    /// secondary configs (memory, general chat, reasoning navigation, …) on the
+    /// primary's endpoint use the primary's API key.
+    pub fn effective_llm_config(
+        &self,
+        cfg: &thairag_config::schema::LlmConfig,
+    ) -> thairag_config::schema::LlmConfig {
+        let primary_raw = self.providers().providers_config.llm.clone();
+        let primary = resolve_profile(&primary_raw, Some(self.km_store.as_ref()), &self.vault);
+        resolve_llm_config(
+            cfg,
+            &primary,
+            Some(self.km_store.as_ref()),
+            Some(&self.vault),
+        )
     }
 
     /// Get the shared migration status for vector store migration.
@@ -1843,5 +1921,104 @@ impl AppState {
             )),
             model_catalog: Arc::new(crate::model_catalog::ModelCatalog::new()),
         }
+    }
+}
+
+#[cfg(test)]
+mod llm_config_resolution_tests {
+    use super::*;
+    use thairag_config::schema::LlmConfig;
+    use thairag_core::types::LlmKind;
+
+    fn cfg(kind: LlmKind, base: &str, key: &str) -> LlmConfig {
+        LlmConfig {
+            kind,
+            model: "m".into(),
+            base_url: base.into(),
+            api_key: key.into(),
+            max_tokens: None,
+            profile_id: None,
+            ollama_num_ctx_max: 0,
+            temperature: None,
+            thinking_enabled: false,
+            supports_vision: None,
+        }
+    }
+
+    #[test]
+    fn same_endpoint_ignores_v1_suffix_slashes_and_case() {
+        let a = cfg(LlmKind::OpenAiCompatible, "https://GW.example/v1/", "k");
+        let b = cfg(LlmKind::OpenAiCompatible, "https://gw.example", "k");
+        assert!(same_llm_endpoint(&a, &b));
+        let c = cfg(LlmKind::OpenAiCompatible, "https://other.example/v1", "k");
+        assert!(!same_llm_endpoint(&a, &c));
+        let d = cfg(LlmKind::OpenAi, "https://gw.example/v1", "k");
+        assert!(
+            !same_llm_endpoint(&a, &d),
+            "different kind = different endpoint"
+        );
+        let e = cfg(LlmKind::Claude, "", "k");
+        let f = cfg(LlmKind::Claude, "", "k2");
+        assert!(
+            same_llm_endpoint(&e, &f),
+            "two empties = the kind's default host"
+        );
+    }
+
+    #[test]
+    fn stale_copied_key_on_the_primary_endpoint_is_replaced() {
+        // The reported bug: an enricher row seeded with the old key `…7eca`
+        // after the Providers tab was rotated to `…6c18`.
+        let primary = cfg(
+            LlmKind::OpenAiCompatible,
+            "https://gw.example/v1",
+            "sk-new-6c18",
+        );
+        let agent = cfg(
+            LlmKind::OpenAiCompatible,
+            "https://gw.example/v1/",
+            "sk-old-7eca",
+        );
+        let r = resolve_llm_config(&agent, &primary, None, None);
+        assert_eq!(r.api_key, "sk-new-6c18");
+        assert_eq!(r.model, "m", "only the key changes");
+    }
+
+    #[test]
+    fn empty_key_on_the_primary_endpoint_inherits() {
+        let primary = cfg(LlmKind::OpenAiCompatible, "https://gw.example/v1", "sk-new");
+        let agent = cfg(LlmKind::OpenAiCompatible, "https://gw.example", "");
+        assert_eq!(
+            resolve_llm_config(&agent, &primary, None, None).api_key,
+            "sk-new"
+        );
+    }
+
+    #[test]
+    fn other_endpoint_keeps_its_own_key() {
+        let primary = cfg(LlmKind::OpenAiCompatible, "https://gw.example/v1", "sk-new");
+        let agent = cfg(
+            LlmKind::OpenAiCompatible,
+            "https://vision.example/v1",
+            "sk-vision",
+        );
+        assert_eq!(
+            resolve_llm_config(&agent, &primary, None, None).api_key,
+            "sk-vision"
+        );
+        let claude = cfg(LlmKind::Claude, "", "sk-ant");
+        assert_eq!(
+            resolve_llm_config(&claude, &primary, None, None).api_key,
+            "sk-ant"
+        );
+    }
+
+    #[test]
+    fn ollama_without_keys_is_untouched() {
+        let primary = cfg(LlmKind::Ollama, "http://ollama:11434", "");
+        let agent = cfg(LlmKind::Ollama, "http://ollama:11434/", "");
+        let r = resolve_llm_config(&agent, &primary, None, None);
+        assert_eq!(r.api_key, "");
+        assert_eq!(r.base_url, "http://ollama:11434/");
     }
 }

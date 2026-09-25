@@ -148,6 +148,16 @@ Every chat-pipeline flag, its default, and what it costs. Defaults are the
 | `enabled` | `false` | Master switch for the agentic pipeline. Off = plain retrieve-then-answer. |
 | `orchestrator_enabled` | `false` | **Lean vs Full.** On = full pipeline (analysis + curation + any enabled agents). |
 | `llm_mode` | `chat` | `chat` (agents share the main chat LLM), `shared` (one dedicated agent LLM), or `per-agent`. |
+
+> **API keys of secondary LLM configs.** Every per-agent, shared-preprocessing,
+> document-vision, memory and general-chat LLM config that points at the **same
+> endpoint** (same provider kind and base URL) as the primary `providers.llm`
+> always uses the primary LLM's API key at build time — whatever key the row
+> stores. Rotating the key on the Providers tab therefore applies everywhere
+> at once. A deliberately different credential for the same gateway must go
+> through an LLM profile (`profile_id`); a config on a different endpoint keeps
+> its own key. Startup logs a warning for every row whose stored key was
+> overridden, so stale copies are visible.
 | `query_analyzer_enabled` | `true` | Classifies/normalizes the query. Core agent. |
 | `query_rewriter_enabled` | `true` | Reformulates the query for better recall. Best single quality lever when wording differs from source. |
 | `context_curator_enabled` | `true` | Trims/orders retrieved context before generation. Core agent. |
