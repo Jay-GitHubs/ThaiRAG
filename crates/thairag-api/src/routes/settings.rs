@@ -185,6 +185,9 @@ pub struct LlmProviderInfo {
     /// extra_body), flattened; unset fields are omitted.
     #[serde(flatten)]
     pub sampling: thairag_core::types::SamplingParams,
+    /// Thinking / reasoning controls, flattened; unset fields are omitted.
+    #[serde(flatten)]
+    pub reasoning: thairag_core::types::ReasoningParams,
 }
 
 #[derive(Serialize)]
@@ -423,6 +426,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             temperature: p.llm.temperature,
             thinking_enabled: p.llm.thinking_enabled,
             sampling: p.llm.sampling.clone(),
+            reasoning: p.llm.reasoning.clone(),
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -461,6 +465,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             temperature: v.temperature,
             thinking_enabled: v.thinking_enabled,
             sampling: v.sampling.clone(),
+            reasoning: v.reasoning.clone(),
         }),
         image_embedding: p.image_embedding.as_ref().map(|ie| ImageEmbeddingInfo {
             enabled: ie.enabled,
@@ -551,6 +556,60 @@ pub struct UpdateLlmConfig {
     pub stop: Option<Vec<String>>,
     pub extra_body: Option<serde_json::Value>,
     pub clear_sampling: Option<bool>,
+    // ── Reasoning controls. `clear_reasoning: true` resets all three first.
+    pub thinking: Option<bool>,
+    /// "minimal" | "low" | "medium" | "high"; "" clears.
+    pub reasoning_effort: Option<String>,
+    pub thinking_budget_tokens: Option<u32>,
+    pub clear_reasoning: Option<bool>,
+}
+
+/// The reasoning part of an `UpdateLlmConfig`, detached like `SamplingUpdate`.
+#[derive(Clone, Default)]
+pub struct ReasoningUpdate {
+    clear: bool,
+    thinking: Option<bool>,
+    reasoning_effort: Option<String>,
+    thinking_budget_tokens: Option<u32>,
+}
+
+impl UpdateLlmConfig {
+    pub fn reasoning_update(&self) -> ReasoningUpdate {
+        ReasoningUpdate {
+            clear: self.clear_reasoning.unwrap_or(false),
+            thinking: self.thinking,
+            reasoning_effort: self.reasoning_effort.clone(),
+            thinking_budget_tokens: self.thinking_budget_tokens,
+        }
+    }
+}
+
+/// Apply a reasoning update and validate. `Err` is the user-facing message.
+pub fn apply_reasoning_update(
+    cfg: &mut thairag_config::schema::LlmConfig,
+    u: &ReasoningUpdate,
+) -> Result<(), String> {
+    if u.clear {
+        cfg.reasoning = Default::default();
+    }
+    if let Some(v) = u.thinking {
+        cfg.reasoning.thinking = Some(v);
+    }
+    if let Some(e) = &u.reasoning_effort {
+        cfg.reasoning.reasoning_effort = if e.trim().is_empty() {
+            None
+        } else {
+            Some(
+                thairag_core::types::ReasoningEffort::parse(e).ok_or_else(|| {
+                    format!("reasoning_effort must be minimal|low|medium|high (got {e:?})")
+                })?,
+            )
+        };
+    }
+    if let Some(b) = u.thinking_budget_tokens {
+        cfg.reasoning.thinking_budget_tokens = Some(b);
+    }
+    cfg.reasoning.validate()
 }
 
 /// The sampling part of an `UpdateLlmConfig`, detached so it can be applied
@@ -792,6 +851,7 @@ pub async fn update_provider_config(
     // Apply partial updates
     if let Some(llm) = body.llm {
         let sampling_update = llm.sampling_update();
+        let reasoning_update = llm.reasoning_update();
         let old_kind = pc.llm.kind.clone();
         if let Some(kind) = llm.kind {
             pc.llm.kind =
@@ -816,6 +876,8 @@ pub async fn update_provider_config(
             pc.llm.temperature = Some(t);
         }
         apply_sampling_update(&mut pc.llm, &sampling_update)
+            .map_err(|e| ApiError(ThaiRagError::Validation(format!("llm: {e}"))))?;
+        apply_reasoning_update(&mut pc.llm, &reasoning_update)
             .map_err(|e| ApiError(ThaiRagError::Validation(format!("llm: {e}"))))?;
         if let Some(te) = llm.thinking_enabled {
             pc.llm.thinking_enabled = te;
@@ -965,10 +1027,12 @@ pub async fn update_provider_config(
                 temperature: pc.llm.temperature,
                 thinking_enabled: pc.llm.thinking_enabled,
                 sampling: pc.llm.sampling.clone(),
+                reasoning: pc.llm.reasoning.clone(),
                 supports_vision: None,
             }
         });
         let sampling_update = vis.sampling_update();
+        let reasoning_update = vis.reasoning_update();
         let old_kind = current.kind.clone();
         if let Some(kind) = vis.kind {
             current.kind =
@@ -996,6 +1060,8 @@ pub async fn update_provider_config(
             current.temperature = Some(t);
         }
         apply_sampling_update(&mut current, &sampling_update)
+            .map_err(|e| ApiError(ThaiRagError::Validation(format!("doc_vision_llm: {e}"))))?;
+        apply_reasoning_update(&mut current, &reasoning_update)
             .map_err(|e| ApiError(ThaiRagError::Validation(format!("doc_vision_llm: {e}"))))?;
         if let Some(te) = vis.thinking_enabled {
             current.thinking_enabled = te;
@@ -2282,6 +2348,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         temperature: llm.temperature,
         thinking_enabled: llm.thinking_enabled,
         sampling: llm.sampling.clone(),
+        reasoning: llm.reasoning.clone(),
     }
 }
 
@@ -2853,6 +2920,8 @@ pub async fn update_document_config(
                 llm_config.temperature = Some(t);
             }
             apply_sampling_update(&mut llm_config, &llm_update.sampling_update())
+                .map_err(|e| ApiError(ThaiRagError::Validation(format!("{key}: {e}"))))?;
+            apply_reasoning_update(&mut llm_config, &llm_update.reasoning_update())
                 .map_err(|e| ApiError(ThaiRagError::Validation(format!("{key}: {e}"))))?;
             let json = serde_json::to_string(&llm_config).map_err(|e| {
                 ApiError(ThaiRagError::Internal(format!("Serialize LLM config: {e}")))
@@ -4528,6 +4597,8 @@ pub async fn update_chat_pipeline_config(
             cfg.temperature = Some(t);
         }
         apply_sampling_update(&mut cfg, &update.sampling_update())
+            .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+        apply_reasoning_update(&mut cfg, &update.reasoning_update())
             .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         // Thinking-channel management (Ollama-only)
         if let Some(te) = update.thinking_enabled {

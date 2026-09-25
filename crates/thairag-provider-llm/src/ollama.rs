@@ -58,6 +58,7 @@ pub struct OllamaProvider {
     /// omitted and the model's default thinking behavior is preserved.
     thinking_enabled: bool,
     sampling: thairag_core::types::SamplingParams,
+    reasoning: thairag_core::types::ReasoningParams,
 }
 
 impl OllamaProvider {
@@ -132,6 +133,7 @@ impl OllamaProvider {
             temperature,
             thinking_enabled,
             sampling: Default::default(),
+            reasoning: Default::default(),
         }
     }
 
@@ -140,6 +142,11 @@ impl OllamaProvider {
     /// set, so the request omits `options` entirely (preserves prior behavior).
     pub fn with_sampling(mut self, sampling: thairag_core::types::SamplingParams) -> Self {
         self.sampling = sampling;
+        self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: thairag_core::types::ReasoningParams) -> Self {
+        self.reasoning = reasoning;
         self
     }
 
@@ -200,7 +207,20 @@ impl OllamaProvider {
     /// reasoning channel. A no-op when thinking is enabled (preserves the
     /// model's default behavior).
     fn apply_thinking(&self, body: &mut serde_json::Value) {
-        if !self.thinking_enabled {
+        use thairag_core::types::ReasoningEffort;
+        let r = &self.reasoning;
+        if let Some(effort) = r.reasoning_effort {
+            // gpt-oss-style think levels; Ollama has no "minimal".
+            let level = match effort {
+                ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
+                ReasoningEffort::Medium => "medium",
+                ReasoningEffort::High => "high",
+            };
+            body["think"] = serde_json::json!(level);
+        } else if let Some(on) = r.thinking {
+            // Explicit cross-provider toggle wins over the legacy bool.
+            body["think"] = serde_json::json!(on);
+        } else if !self.thinking_enabled {
             body["think"] = serde_json::json!(false);
         }
     }
@@ -670,6 +690,32 @@ mod tests {
         // When other options exist, temperature key is still absent.
         let opts = p.build_options(Some(256), None).unwrap();
         assert!(opts.get("temperature").is_none());
+    }
+
+    #[test]
+    fn explicit_thinking_and_effort_override_the_legacy_flag() {
+        use thairag_core::types::{ReasoningEffort, ReasoningParams};
+        // Legacy flag off → think:false (unchanged default).
+        let p = provider_with_thinking(false);
+        let mut body = serde_json::json!({});
+        p.apply_thinking(&mut body);
+        assert_eq!(body["think"], false);
+        // Explicit on wins over the legacy off.
+        let p = provider_with_thinking(false).with_reasoning(ReasoningParams {
+            thinking: Some(true),
+            ..Default::default()
+        });
+        let mut body = serde_json::json!({});
+        p.apply_thinking(&mut body);
+        assert_eq!(body["think"], true);
+        // Effort becomes a gpt-oss think level; minimal maps to low.
+        let p = provider_with_thinking(true).with_reasoning(ReasoningParams {
+            reasoning_effort: Some(ReasoningEffort::Minimal),
+            ..Default::default()
+        });
+        let mut body = serde_json::json!({});
+        p.apply_thinking(&mut body);
+        assert_eq!(body["think"], "low");
     }
 
     #[test]

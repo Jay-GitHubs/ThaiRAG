@@ -15,6 +15,7 @@ pub struct ClaudeProvider {
     model: String,
     temperature: Option<f32>,
     sampling: thairag_core::types::SamplingParams,
+    reasoning: thairag_core::types::ReasoningParams,
 }
 
 impl ClaudeProvider {
@@ -37,6 +38,7 @@ impl ClaudeProvider {
             model: model.to_string(),
             temperature: None,
             sampling: Default::default(),
+            reasoning: Default::default(),
         }
     }
 
@@ -48,6 +50,44 @@ impl ClaudeProvider {
         self.temperature = temperature;
         self.sampling = sampling;
         self
+    }
+
+    pub fn with_reasoning(mut self, reasoning: thairag_core::types::ReasoningParams) -> Self {
+        self.reasoning = reasoning;
+        self
+    }
+
+    /// Extended thinking: `thinking: {type: enabled, budget_tokens}` when the
+    /// toggle is on. The API requires `budget_tokens` ≥ 1024 and
+    /// `max_tokens` > budget, and forbids temperature / top_p / top_k
+    /// overrides while thinking — so those are dropped (logged). Thinking
+    /// blocks in the response are already filtered out by the parsers.
+    fn apply_reasoning(&self, body: &mut serde_json::Value) {
+        if self.reasoning.thinking != Some(true) {
+            return;
+        }
+        let budget = self
+            .reasoning
+            .thinking_budget_tokens
+            .unwrap_or(4096)
+            .max(1024);
+        body["thinking"] = serde_json::json!({"type": "enabled", "budget_tokens": budget});
+        let max = body["max_tokens"].as_u64().unwrap_or(4096) as u32;
+        if max <= budget {
+            body["max_tokens"] = serde_json::json!(budget + 4096);
+        }
+        if let Some(obj) = body.as_object_mut() {
+            let dropped: Vec<&str> = ["temperature", "top_p", "top_k"]
+                .into_iter()
+                .filter(|k| obj.remove(*k).is_some())
+                .collect();
+            if !dropped.is_empty() {
+                tracing::warn!(
+                    ?dropped,
+                    "Claude extended thinking forbids sampling overrides — dropped"
+                );
+            }
+        }
     }
 
     /// Messages API sampling: `temperature` and `top_p` are mutually
@@ -67,6 +107,7 @@ impl ClaudeProvider {
         if !s.stop.is_empty() {
             body["stop_sequences"] = serde_json::json!(s.stop);
         }
+        self.apply_reasoning(body);
         s.merge_extra_into(body);
     }
 
@@ -402,6 +443,38 @@ mod tests {
             content: content.into(),
             images: vec![],
         }
+    }
+
+    #[test]
+    fn extended_thinking_sets_budget_bumps_max_tokens_and_drops_sampling() {
+        use thairag_core::types::ReasoningParams;
+        let p = ClaudeProvider::new("k", "claude-x")
+            .with_sampling(
+                Some(0.2),
+                SamplingParams {
+                    top_k: Some(5),
+                    ..Default::default()
+                },
+            )
+            .with_reasoning(ReasoningParams {
+                thinking: Some(true),
+                thinking_budget_tokens: Some(8000),
+                ..Default::default()
+            });
+        let body = p.build_request_body(&[msg("user", "hi")], Some(4096), false);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 8000);
+        assert!(
+            body["max_tokens"].as_u64().unwrap() > 8000,
+            "max_tokens raised above the budget"
+        );
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_k").is_none());
+        // Off / default → no thinking block, sampling untouched.
+        let p = ClaudeProvider::new("k", "claude-x").with_sampling(Some(0.2), Default::default());
+        let body = p.build_request_body(&[msg("user", "hi")], None, false);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("temperature").is_some());
     }
 
     #[test]
