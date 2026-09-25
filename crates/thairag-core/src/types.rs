@@ -397,6 +397,80 @@ impl SamplingParams {
     }
 }
 
+// ── LLM reasoning / thinking controls ────────────────────────────────
+
+/// Reasoning effort for models that expose it (OpenAI o-series / gpt-5
+/// `reasoning_effort`, gpt-oss on Ollama / vLLM). Serialised lowercase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "minimal" => Some(Self::Minimal),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+}
+
+/// Provider-agnostic thinking / reasoning knobs. All optional: unset means
+/// "provider or model default" (for Ollama, the legacy `thinking_enabled`
+/// bool keeps applying). Each provider maps only what its API supports:
+///
+/// | field | Ollama | OpenAI-compatible (vLLM) | OpenAI proper | Claude | Gemini |
+/// |---|---|---|---|---|---|
+/// | `thinking` | `think: bool` | `chat_template_kwargs.enable_thinking` | — | `thinking` block on/off | `thinkingBudget` 0 / dynamic |
+/// | `reasoning_effort` | `think: "low"…` (gpt-oss) | `reasoning_effort` | `reasoning_effort` | — | — |
+/// | `thinking_budget_tokens` | — | — | — | `budget_tokens` | `thinkingBudget` |
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReasoningParams {
+    /// Explicit thinking toggle. `Some(true)` on, `Some(false)` off, `None`
+    /// provider/model default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Thinking token budget (Claude `budget_tokens`, Gemini `thinkingBudget`).
+    /// Claude needs ≥ 1024 and raises `max_tokens` above it when necessary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget_tokens: Option<u32>,
+}
+
+impl ReasoningParams {
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(b) = self.thinking_budget_tokens
+            && b > 200_000
+        {
+            return Err(format!("thinking_budget_tokens must be ≤ 200000 (got {b})"));
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.thinking.is_none()
+            && self.reasoning_effort.is_none()
+            && self.thinking_budget_tokens.is_none()
+    }
+}
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

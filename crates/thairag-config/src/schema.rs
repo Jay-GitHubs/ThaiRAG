@@ -385,6 +385,11 @@ pub struct LlmConfig {
     /// env and the settings API. Unset = provider default.
     #[serde(default, flatten)]
     pub sampling: thairag_core::types::SamplingParams,
+    /// Thinking / reasoning controls (thinking on/off, reasoning_effort,
+    /// thinking_budget_tokens). Flattened like `sampling`. Unset = provider
+    /// default; for Ollama the legacy `thinking_enabled` then applies.
+    #[serde(default, flatten)]
+    pub reasoning: thairag_core::types::ReasoningParams,
 }
 
 impl LlmConfig {
@@ -395,7 +400,8 @@ impl LlmConfig {
         {
             return Err(format!("temperature must be between 0 and 2 (got {t})"));
         }
-        self.sampling.validate()
+        self.sampling.validate()?;
+        self.reasoning.validate()
     }
 }
 
@@ -418,6 +424,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
             .field("temperature", &self.temperature)
             .field("sampling", &self.sampling)
+            .field("reasoning", &self.reasoning)
             .field("thinking_enabled", &self.thinking_enabled)
             .field("supports_vision", &self.supports_vision)
             .finish()
@@ -2256,6 +2263,7 @@ mod tests {
                     thinking_enabled: false,
                     supports_vision: None,
                     sampling: Default::default(),
+                    reasoning: Default::default(),
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,
