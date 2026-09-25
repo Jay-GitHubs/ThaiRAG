@@ -249,6 +249,7 @@ fn build_test_state_full(
                 temperature: None,
                 thinking_enabled: false,
                 supports_vision: None,
+                sampling: Default::default(),
             },
             embedding: EmbeddingConfig {
                 // OpenAI kind: constructing the provider is side-effect free.
@@ -1796,6 +1797,7 @@ fn build_streaming_test_app() -> Router {
                 temperature: None,
                 thinking_enabled: false,
                 supports_vision: None,
+                sampling: Default::default(),
             },
             embedding: EmbeddingConfig {
                 kind: thairag_core::types::EmbeddingKind::Fastembed,
@@ -3474,6 +3476,92 @@ async fn provider_config_put_with_new_key_rotates_agent_and_vision_keys() {
     )
     .unwrap();
     assert_eq!(enricher["api_key"], "sk-new");
+}
+
+/// Advanced sampling rides on the same PUT as temperature: values persist,
+/// come back on the response, reach the live provider config, are
+/// range-checked, and `clear_sampling` resets them.
+#[tokio::test]
+async fn provider_config_put_round_trips_sampling_parameters() {
+    let state = build_test_state(true);
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "sampling@test.com", "Sampling", "Pass1234").await;
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({
+                "llm": {
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "seed": 7,
+                    "stop": ["END"],
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}
+                }
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["llm"]["temperature"], 0.2);
+    assert_eq!(body["llm"]["top_p"], 0.9);
+    assert_eq!(body["llm"]["top_k"], 40);
+    assert_eq!(body["llm"]["seed"], 7);
+    assert_eq!(body["llm"]["stop"], serde_json::json!(["END"]));
+    assert_eq!(
+        body["llm"]["extra_body"]["chat_template_kwargs"]["enable_thinking"],
+        false
+    );
+    // Live bundle + persisted row carry it.
+    let live = state.providers().providers_config.llm.clone();
+    assert_eq!(live.sampling.top_k, Some(40));
+    assert_eq!(live.sampling.stop, vec!["END".to_string()]);
+    assert!(
+        state
+            .km_store
+            .get_setting("provider_config")
+            .unwrap()
+            .contains("\"top_k\":40")
+    );
+
+    // Out of range → 400, nothing changes.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"top_p": 1.5}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        state.providers().providers_config.llm.sampling.top_p,
+        Some(0.9)
+    );
+
+    // Reset all advanced fields; temperature is governed separately.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "PUT",
+            "/api/km/settings/providers",
+            serde_json::json!({"llm": {"clear_sampling": true}}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert!(body["llm"].get("top_p").is_none());
+    assert!(body["llm"].get("stop").is_none());
+    assert_eq!(body["llm"]["temperature"], 0.2);
 }
 
 /// A global factory reset must rebuild the in-memory providers from what

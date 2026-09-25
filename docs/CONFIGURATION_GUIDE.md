@@ -158,6 +158,43 @@ Every chat-pipeline flag, its default, and what it costs. Defaults are the
 > through an LLM profile (`profile_id`); a config on a different endpoint keeps
 > its own key. Startup logs a warning for every row whose stored key was
 > overridden, so stale copies are visible.
+
+### Sampling parameters (every LLM config)
+
+Every LLM config — the primary `providers.llm`, `doc_vision_llm`, each
+per-agent LLM, `chat_vision_llm`, memory / general-chat LLMs and profiles —
+carries the same optional sampling block next to `temperature` and
+`max_tokens`. Unset means "do not send, use the provider default". Each
+provider maps only what its API supports and never sends the rest, so an
+OpenAI-proper endpoint never sees an unknown argument.
+
+| Field | OpenAI-compatible (vLLM / LiteLLM) | OpenAI proper | Claude | Gemini | Ollama |
+|---|---|---|---|---|---|
+| `temperature` (0–2) | `temperature` | `temperature` | `temperature`¹ | `temperature` | `temperature` |
+| `top_p` (0–1) | `top_p` | `top_p` | `top_p`¹ | `topP` | `top_p` |
+| `top_k` (≥ 1) | `top_k` | — | `top_k` | `topK` | `top_k` |
+| `min_p` (0–1) | `min_p` | — | — | — | `min_p` |
+| `repeat_penalty` (≥ 0) | `repetition_penalty` | — | — | — | `repeat_penalty` |
+| `frequency_penalty` (−2..2) | `frequency_penalty` | `frequency_penalty` | — | `frequencyPenalty` | `frequency_penalty` |
+| `presence_penalty` (−2..2) | `presence_penalty` | `presence_penalty` | — | `presencePenalty` | `presence_penalty` |
+| `seed` | `seed` | `seed` (best effort) | — | `seed` | `seed` |
+| `stop` (≤ 8) | `stop` | `stop` | `stop_sequences` | `stopSequences` | `stop` |
+| `extra_body` (JSON object) | merged into the request | merged into the request | merged into the request | merged into `generationConfig` | merged into `options` |
+
+¹ Current Claude models reject `temperature` and `top_p` together; the Claude
+provider sends `temperature` when both are set.
+
+`extra_body` is the escape hatch for gateway-specific knobs without a schema
+change, e.g. `{"chat_template_kwargs": {"enable_thinking": false}}` for Qwen3
+on vLLM. Note that `temperature` was previously only sent by the Ollama
+provider; it now reaches every provider, including the reasoning-tree
+builder's forced `0.0`. For reproducible runs on vLLM/Ollama set `seed`
+together with `temperature = 0`.
+
+Settings API: the same fields on any LLM update body; `clear_sampling: true`
+resets all of them (temperature keeps its own `clear_temperature`). Values are
+range-checked (HTTP 400 on violation). TOML/env: flat next to `temperature`,
+e.g. `THAIRAG__PROVIDERS__LLM__TOP_P=0.9`.
 | `query_analyzer_enabled` | `true` | Classifies/normalizes the query. Core agent. |
 | `query_rewriter_enabled` | `true` | Reformulates the query for better recall. Best single quality lever when wording differs from source. |
 | `context_curator_enabled` | `true` | Trims/orders retrieved context before generation. Core agent. |
