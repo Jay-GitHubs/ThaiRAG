@@ -359,6 +359,12 @@ export interface LlmProviderInfo {
   seed?: number;
   stop?: string[];
   extra_body?: Record<string, unknown>;
+  // ── Reasoning controls (flattened; omitted when unset) ──
+  /** Explicit thinking toggle; absent = provider/model default (Ollama: legacy `thinking_enabled`). */
+  thinking?: boolean;
+  /** minimal | low | medium | high */
+  reasoning_effort?: string;
+  thinking_budget_tokens?: number;
 }
 
 export interface EmbeddingProviderInfo {
@@ -534,6 +540,11 @@ export type LlmConfigUpdate = {
   stop?: string[];
   extra_body?: Record<string, unknown>;
   clear_sampling?: boolean;
+  /** Reasoning controls. `clear_reasoning` resets all three first. */
+  thinking?: boolean;
+  reasoning_effort?: string;
+  thinking_budget_tokens?: number;
+  clear_reasoning?: boolean;
 };
 
 // ── Search / Retrieval Config ──────────────────────────────────────
