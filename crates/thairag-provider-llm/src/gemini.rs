@@ -13,6 +13,8 @@ pub struct GeminiProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
+    sampling: thairag_core::types::SamplingParams,
 }
 
 impl GeminiProvider {
@@ -33,6 +35,59 @@ impl GeminiProvider {
             client,
             api_key: api_key.to_string(),
             model: model.to_string(),
+            temperature: None,
+            sampling: Default::default(),
+        }
+    }
+
+    pub fn with_sampling(
+        mut self,
+        temperature: Option<f32>,
+        sampling: thairag_core::types::SamplingParams,
+    ) -> Self {
+        self.temperature = temperature;
+        self.sampling = sampling;
+        self
+    }
+
+    /// Build `generationConfig` from max_tokens + the configured sampling
+    /// (Gemini names). Omitted entirely when nothing is set.
+    fn generation_config(&self, max_tokens: Option<u32>) -> Option<serde_json::Value> {
+        let s = &self.sampling;
+        let mut cfg = serde_json::Map::new();
+        if let Some(max) = max_tokens {
+            cfg.insert("maxOutputTokens".into(), serde_json::json!(max));
+        }
+        if let Some(t) = self.temperature {
+            cfg.insert(
+                "temperature".into(),
+                serde_json::json!(thairag_core::types::f32_as_json_number(t)),
+            );
+        }
+        if let Some(v) = s.top_p {
+            cfg.insert("topP".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.top_k {
+            cfg.insert("topK".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.seed {
+            cfg.insert("seed".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.presence_penalty {
+            cfg.insert("presencePenalty".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.frequency_penalty {
+            cfg.insert("frequencyPenalty".into(), serde_json::json!(v));
+        }
+        if !s.stop.is_empty() {
+            cfg.insert("stopSequences".into(), serde_json::json!(s.stop));
+        }
+        let mut value = serde_json::Value::Object(cfg);
+        s.merge_extra_into(&mut value);
+        if value.as_object().is_some_and(|o| o.is_empty()) {
+            None
+        } else {
+            Some(value)
         }
     }
 
@@ -79,10 +134,8 @@ impl GeminiProvider {
             });
         }
 
-        if let Some(max) = max_tokens {
-            body["generationConfig"] = serde_json::json!({
-                "maxOutputTokens": max,
-            });
+        if let Some(cfg) = self.generation_config(max_tokens) {
+            body["generationConfig"] = cfg;
         }
 
         body
@@ -303,8 +356,8 @@ impl LlmProvider for GeminiProvider {
             });
         }
 
-        if let Some(max) = max_tokens {
-            body["generationConfig"] = serde_json::json!({ "maxOutputTokens": max });
+        if let Some(cfg) = self.generation_config(max_tokens) {
+            body["generationConfig"] = cfg;
         }
 
         let url = format!(
@@ -356,5 +409,34 @@ impl LlmProvider for GeminiProvider {
         };
 
         Ok(LlmResponse { content, usage })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::types::SamplingParams;
+
+    #[test]
+    fn generation_config_uses_gemini_names_and_is_omitted_when_empty() {
+        let p = GeminiProvider::new("k", "gemini-x");
+        assert!(p.generation_config(None).is_none());
+        let p = p.with_sampling(
+            Some(0.1),
+            SamplingParams {
+                top_p: Some(0.8),
+                top_k: Some(32),
+                seed: Some(3),
+                stop: vec!["END".into()],
+                ..Default::default()
+            },
+        );
+        let cfg = p.generation_config(Some(100)).unwrap();
+        assert_eq!(cfg["maxOutputTokens"], 100);
+        assert!((cfg["temperature"].as_f64().unwrap() - 0.1).abs() < 1e-6);
+        assert!((cfg["topP"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(cfg["topK"], 32);
+        assert_eq!(cfg["seed"], 3);
+        assert_eq!(cfg["stopSequences"], serde_json::json!(["END"]));
     }
 }

@@ -25,33 +25,41 @@ pub fn create_llm_provider_with_options(
     ollama_keep_alive: Option<&str>,
 ) -> Box<dyn LlmProvider> {
     match config.kind {
-        LlmKind::Ollama => Box::new(ollama::OllamaProvider::with_options(
-            &config.base_url,
-            &config.model,
-            timeout_secs,
-            ollama_keep_alive,
-            config.ollama_num_ctx_max,
-            config.temperature,
-            config.thinking_enabled,
-        )),
-        LlmKind::Claude => Box::new(claude::ClaudeProvider::with_timeout(
-            &config.api_key,
-            &config.model,
-            timeout_secs,
-        )),
-        LlmKind::OpenAi | LlmKind::OpenAiCompatible => {
-            Box::new(openai::OpenAiLlmProvider::with_options(
+        LlmKind::Ollama => Box::new(
+            ollama::OllamaProvider::with_options(
+                &config.base_url,
+                &config.model,
+                timeout_secs,
+                ollama_keep_alive,
+                config.ollama_num_ctx_max,
+                config.temperature,
+                config.thinking_enabled,
+            )
+            .with_sampling(config.sampling.clone()),
+        ),
+        LlmKind::Claude => Box::new(
+            claude::ClaudeProvider::with_timeout(&config.api_key, &config.model, timeout_secs)
+                .with_sampling(config.temperature, config.sampling.clone()),
+        ),
+        LlmKind::OpenAi | LlmKind::OpenAiCompatible => Box::new(
+            openai::OpenAiLlmProvider::with_options(
                 &config.api_key,
                 &config.model,
                 &config.base_url,
                 timeout_secs,
                 config.supports_vision,
-            ))
-        }
-        LlmKind::Gemini => Box::new(gemini::GeminiProvider::with_timeout(
-            &config.api_key,
-            &config.model,
-            timeout_secs,
-        )),
+            )
+            .with_sampling(
+                config.temperature,
+                config.sampling.clone(),
+                // OpenAI proper rejects unknown arguments (top_k, min_p, …);
+                // compatible gateways (vLLM, LiteLLM) accept them.
+                config.kind == LlmKind::OpenAi,
+            ),
+        ),
+        LlmKind::Gemini => Box::new(
+            gemini::GeminiProvider::with_timeout(&config.api_key, &config.model, timeout_secs)
+                .with_sampling(config.temperature, config.sampling.clone()),
+        ),
     }
 }

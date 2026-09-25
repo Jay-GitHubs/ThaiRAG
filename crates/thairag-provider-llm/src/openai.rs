@@ -14,6 +14,11 @@ pub struct OpenAiLlmProvider {
     api_key: String,
     model: String,
     base_url: String,
+    temperature: Option<f32>,
+    sampling: thairag_core::types::SamplingParams,
+    /// OpenAI proper rejects unknown request arguments; when true the
+    /// non-standard knobs (top_k, min_p, repetition_penalty) are not sent.
+    strict_openai: bool,
     /// Explicit vision-capability override. `None` falls back to the
     /// model-name heuristic in `supports_vision()`.
     vision_override: Option<bool>,
@@ -61,8 +66,62 @@ impl OpenAiLlmProvider {
             api_key: api_key.to_string(),
             model: model.to_string(),
             base_url,
+            temperature: None,
+            sampling: Default::default(),
+            strict_openai: false,
             vision_override,
         }
+    }
+
+    /// Attach sampling parameters. `strict_openai` = the endpoint is OpenAI
+    /// proper (no non-standard knobs); false for compatible gateways.
+    pub fn with_sampling(
+        mut self,
+        temperature: Option<f32>,
+        sampling: thairag_core::types::SamplingParams,
+        strict_openai: bool,
+    ) -> Self {
+        self.temperature = temperature;
+        self.sampling = sampling;
+        self.strict_openai = strict_openai;
+        self
+    }
+
+    /// Add the configured sampling fields to a chat-completions body. Unset
+    /// fields are never sent. Applied to every text and vision request.
+    fn apply_sampling(&self, body: &mut serde_json::Value) {
+        let s = &self.sampling;
+        if let Some(t) = self.temperature {
+            body["temperature"] = serde_json::json!(thairag_core::types::f32_as_json_number(t));
+        }
+        if let Some(v) = s.top_p {
+            body["top_p"] = serde_json::json!(v);
+        }
+        if let Some(v) = s.frequency_penalty {
+            body["frequency_penalty"] = serde_json::json!(v);
+        }
+        if let Some(v) = s.presence_penalty {
+            body["presence_penalty"] = serde_json::json!(v);
+        }
+        if let Some(v) = s.seed {
+            body["seed"] = serde_json::json!(v);
+        }
+        if !s.stop.is_empty() {
+            body["stop"] = serde_json::json!(s.stop);
+        }
+        if !self.strict_openai {
+            // vLLM / LiteLLM extensions.
+            if let Some(v) = s.top_k {
+                body["top_k"] = serde_json::json!(v);
+            }
+            if let Some(v) = s.min_p {
+                body["min_p"] = serde_json::json!(v);
+            }
+            if let Some(v) = s.repeat_penalty {
+                body["repetition_penalty"] = serde_json::json!(v);
+            }
+        }
+        s.merge_extra_into(body);
     }
 }
 
@@ -179,6 +238,7 @@ impl LlmProvider for OpenAiLlmProvider {
         if let Some(max) = max_tokens {
             body["max_tokens"] = serde_json::json!(max);
         }
+        self.apply_sampling(&mut body);
 
         let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = crate::retry::send_with_retry(
@@ -250,6 +310,7 @@ impl LlmProvider for OpenAiLlmProvider {
         if let Some(max) = max_tokens {
             body["max_tokens"] = serde_json::json!(max);
         }
+        self.apply_sampling(&mut body);
 
         let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = crate::retry::send_with_retry(
@@ -315,6 +376,7 @@ impl LlmProvider for OpenAiLlmProvider {
         if let Some(max) = max_tokens {
             body["max_tokens"] = serde_json::json!(max);
         }
+        self.apply_sampling(&mut body);
 
         // Retry only the initial request/connection — once we start consuming
         // the byte stream a retry would duplicate partial output.
@@ -427,6 +489,7 @@ impl LlmProvider for OpenAiLlmProvider {
         if let Some(max) = max_tokens {
             body["max_tokens"] = serde_json::json!(max);
         }
+        self.apply_sampling(&mut body);
 
         let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = crate::retry::send_with_retry(
@@ -550,6 +613,58 @@ mod tests {
         for (a, b) in out.iter().zip(&input) {
             assert_eq!(a.content, b.content);
         }
+    }
+
+    #[test]
+    fn sampling_fields_are_sent_and_gated_per_endpoint_kind() {
+        use thairag_core::types::SamplingParams;
+        let sampling = SamplingParams {
+            top_p: Some(0.9),
+            top_k: Some(40),
+            min_p: Some(0.05),
+            repeat_penalty: Some(1.1),
+            frequency_penalty: Some(0.5),
+            presence_penalty: Some(-0.5),
+            seed: Some(42),
+            stop: vec!["END".into()],
+            extra_body: Some(
+                serde_json::json!({"chat_template_kwargs": {"enable_thinking": false}}),
+            ),
+        };
+        // Compatible gateway: everything, including the vLLM extensions.
+        let p = OpenAiLlmProvider::new("k", "m", "https://gw/v1").with_sampling(
+            Some(0.0),
+            sampling.clone(),
+            false,
+        );
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert!((body["temperature"].as_f64().unwrap() - 0.0).abs() < 1e-6);
+        assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+        assert_eq!(body["top_k"], 40);
+        assert!((body["min_p"].as_f64().unwrap() - 0.05).abs() < 1e-6);
+        assert!((body["repetition_penalty"].as_f64().unwrap() - 1.1).abs() < 1e-6);
+        assert!((body["frequency_penalty"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+        assert!((body["presence_penalty"].as_f64().unwrap() - -0.5).abs() < 1e-6);
+        assert_eq!(body["seed"], 42);
+        assert_eq!(body["stop"], serde_json::json!(["END"]));
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+
+        // OpenAI proper: the non-standard knobs are withheld.
+        let p = OpenAiLlmProvider::new("k", "m", "").with_sampling(None, sampling, true);
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert!(body.get("temperature").is_none());
+        assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+        assert!(body.get("top_k").is_none());
+        assert!(body.get("min_p").is_none());
+        assert!(body.get("repetition_penalty").is_none());
+
+        // Nothing configured → nothing added.
+        let p = OpenAiLlmProvider::new("k", "m", "");
+        let mut body = serde_json::json!({"model": "m"});
+        p.apply_sampling(&mut body);
+        assert_eq!(body, serde_json::json!({"model": "m"}));
     }
 
     #[test]

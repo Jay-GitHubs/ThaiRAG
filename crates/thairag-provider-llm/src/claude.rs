@@ -13,6 +13,8 @@ pub struct ClaudeProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
+    sampling: thairag_core::types::SamplingParams,
 }
 
 impl ClaudeProvider {
@@ -33,7 +35,39 @@ impl ClaudeProvider {
             client,
             api_key: api_key.to_string(),
             model: model.to_string(),
+            temperature: None,
+            sampling: Default::default(),
         }
+    }
+
+    pub fn with_sampling(
+        mut self,
+        temperature: Option<f32>,
+        sampling: thairag_core::types::SamplingParams,
+    ) -> Self {
+        self.temperature = temperature;
+        self.sampling = sampling;
+        self
+    }
+
+    /// Messages API sampling: `temperature` and `top_p` are mutually
+    /// exclusive on current Claude models, so temperature wins when both are
+    /// set; `top_k` and `stop_sequences` map directly; seed / penalties are
+    /// not supported and never sent.
+    fn apply_sampling(&self, body: &mut serde_json::Value) {
+        let s = &self.sampling;
+        if let Some(t) = self.temperature {
+            body["temperature"] = serde_json::json!(thairag_core::types::f32_as_json_number(t));
+        } else if let Some(v) = s.top_p {
+            body["top_p"] = serde_json::json!(v);
+        }
+        if let Some(v) = s.top_k {
+            body["top_k"] = serde_json::json!(v);
+        }
+        if !s.stop.is_empty() {
+            body["stop_sequences"] = serde_json::json!(s.stop);
+        }
+        s.merge_extra_into(body);
     }
 
     fn build_request_body(
@@ -73,6 +107,7 @@ impl ClaudeProvider {
         if let Some(system) = system_text {
             body["system"] = serde_json::Value::String(system);
         }
+        self.apply_sampling(&mut body);
 
         body
     }
@@ -305,6 +340,7 @@ impl LlmProvider for ClaudeProvider {
         if let Some(system) = system_text {
             body["system"] = serde_json::Value::String(system);
         }
+        self.apply_sampling(&mut body);
 
         let resp = self
             .client
@@ -352,5 +388,45 @@ impl LlmProvider for ClaudeProvider {
         };
 
         Ok(LlmResponse { content, usage })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thairag_core::types::SamplingParams;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: content.into(),
+            images: vec![],
+        }
+    }
+
+    #[test]
+    fn temperature_wins_over_top_p_and_stop_maps_to_stop_sequences() {
+        let sampling = SamplingParams {
+            top_p: Some(0.9),
+            top_k: Some(20),
+            seed: Some(7),
+            stop: vec!["END".into()],
+            ..Default::default()
+        };
+        let p = ClaudeProvider::new("k", "claude-x").with_sampling(Some(0.2), sampling.clone());
+        let body = p.build_request_body(&[msg("user", "hi")], None, false);
+        assert!((body["temperature"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+        assert!(body.get("top_p").is_none(), "never both");
+        assert_eq!(body["top_k"], 20);
+        assert_eq!(body["stop_sequences"], serde_json::json!(["END"]));
+        assert!(
+            body.get("seed").is_none(),
+            "unsupported by the Messages API"
+        );
+
+        let p = ClaudeProvider::new("k", "claude-x").with_sampling(None, sampling);
+        let body = p.build_request_body(&[msg("user", "hi")], None, false);
+        assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+        assert!(body.get("temperature").is_none());
     }
 }

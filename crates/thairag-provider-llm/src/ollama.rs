@@ -57,6 +57,7 @@ pub struct OllamaProvider {
     /// (otherwise the answer can come back empty). When `true`, the field is
     /// omitted and the model's default thinking behavior is preserved.
     thinking_enabled: bool,
+    sampling: thairag_core::types::SamplingParams,
 }
 
 impl OllamaProvider {
@@ -130,12 +131,18 @@ impl OllamaProvider {
             num_ctx_max,
             temperature,
             thinking_enabled,
+            sampling: Default::default(),
         }
     }
 
     /// Build the Ollama `options` object, attaching `num_predict` (output cap)
     /// and an adaptive `num_ctx` when enabled. Returns `None` when neither is
     /// set, so the request omits `options` entirely (preserves prior behavior).
+    pub fn with_sampling(mut self, sampling: thairag_core::types::SamplingParams) -> Self {
+        self.sampling = sampling;
+        self
+    }
+
     fn build_options(
         &self,
         max_tokens: Option<u32>,
@@ -149,12 +156,42 @@ impl OllamaProvider {
             opts.insert("num_ctx".into(), serde_json::json!(ctx));
         }
         if let Some(temp) = self.temperature {
-            opts.insert("temperature".into(), serde_json::json!(temp));
+            opts.insert(
+                "temperature".into(),
+                serde_json::json!(thairag_core::types::f32_as_json_number(temp)),
+            );
         }
-        if opts.is_empty() {
+        let s = &self.sampling;
+        if let Some(v) = s.top_p {
+            opts.insert("top_p".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.top_k {
+            opts.insert("top_k".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.min_p {
+            opts.insert("min_p".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.repeat_penalty {
+            opts.insert("repeat_penalty".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.frequency_penalty {
+            opts.insert("frequency_penalty".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.presence_penalty {
+            opts.insert("presence_penalty".into(), serde_json::json!(v));
+        }
+        if let Some(v) = s.seed {
+            opts.insert("seed".into(), serde_json::json!(v));
+        }
+        if !s.stop.is_empty() {
+            opts.insert("stop".into(), serde_json::json!(s.stop));
+        }
+        let mut value = serde_json::Value::Object(opts);
+        s.merge_extra_into(&mut value);
+        if value.as_object().is_some_and(|o| o.is_empty()) {
             None
         } else {
-            Some(serde_json::Value::Object(opts))
+            Some(value)
         }
     }
 
@@ -633,6 +670,29 @@ mod tests {
         // When other options exist, temperature key is still absent.
         let opts = p.build_options(Some(256), None).unwrap();
         assert!(opts.get("temperature").is_none());
+    }
+
+    #[test]
+    fn sampling_fields_land_in_options() {
+        use thairag_core::types::SamplingParams;
+        let p = provider_with_thinking(true).with_sampling(SamplingParams {
+            top_p: Some(0.9),
+            top_k: Some(40),
+            min_p: Some(0.05),
+            repeat_penalty: Some(1.1),
+            seed: Some(1),
+            stop: vec!["END".into()],
+            extra_body: Some(serde_json::json!({"mirostat": 2})),
+            ..Default::default()
+        });
+        let opts = p.build_options(None, None).unwrap();
+        assert!((opts["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+        assert_eq!(opts["top_k"], 40);
+        assert!((opts["min_p"].as_f64().unwrap() - 0.05).abs() < 1e-6);
+        assert!((opts["repeat_penalty"].as_f64().unwrap() - 1.1).abs() < 1e-6);
+        assert_eq!(opts["seed"], 1);
+        assert_eq!(opts["stop"], serde_json::json!(["END"]));
+        assert_eq!(opts["mirostat"], 2, "extra_body merges into options");
     }
 
     fn provider_with_thinking(thinking_enabled: bool) -> OllamaProvider {

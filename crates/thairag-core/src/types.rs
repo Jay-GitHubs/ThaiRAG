@@ -299,6 +299,104 @@ pub struct Citation {
     pub score: f32,
 }
 
+// ── LLM sampling parameters ──────────────────────────────────────────
+
+/// Provider-agnostic sampling knobs beyond `temperature` and `max_tokens`.
+/// Every field is optional: `None` (or an empty list) means "do not send, let
+/// the provider use its default". Each provider maps only the fields its API
+/// supports and never sends the rest, so an OpenAI-proper endpoint never sees
+/// an unknown argument. `extra_body` is the escape hatch for provider- or
+/// gateway-specific knobs (vLLM `chat_template_kwargs`, LiteLLM tags, …): a
+/// JSON object merged into the request at the provider's option level.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SamplingParams {
+    /// Nucleus sampling (0–1). Claude rejects `temperature` + `top_p`
+    /// together, so the Claude provider sends only one (temperature wins).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    /// Top-k sampling (≥ 1). Not part of the OpenAI API: sent to
+    /// OpenAI-compatible gateways (vLLM), Claude, Gemini and Ollama only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    /// Min-p sampling (0–1). vLLM / Ollama only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f64>,
+    /// Repetition penalty (≥ 0; 1.0 = off). Ollama `repeat_penalty`, vLLM
+    /// `repetition_penalty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+    /// OpenAI-style frequency penalty (−2..2). OpenAI, gateways, Ollama.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    /// OpenAI-style presence penalty (−2..2). OpenAI, gateways, Ollama.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    /// Sampling seed for reproducible output where the backend honours it
+    /// (vLLM, Ollama, Gemini, OpenAI best-effort). Not supported by Claude.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Stop sequences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop: Vec<String>,
+    /// Extra request fields merged verbatim (must be a JSON object).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_body: Option<serde_json::Value>,
+}
+
+/// An `f32` config value as a clean JSON number: `0.2f32` would otherwise
+/// serialise as `0.20000000298023224`. Six decimals is plenty for sampling.
+pub fn f32_as_json_number(v: f32) -> f64 {
+    (v as f64 * 1_000_000.0).round() / 1_000_000.0
+}
+
+impl SamplingParams {
+    /// Range checks. `Err` carries a user-facing message.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        fn range(name: &str, v: Option<f64>, lo: f64, hi: f64) -> std::result::Result<(), String> {
+            match v {
+                Some(x) if !(lo..=hi).contains(&x) || x.is_nan() => {
+                    Err(format!("{name} must be between {lo} and {hi} (got {x})"))
+                }
+                _ => Ok(()),
+            }
+        }
+        range("top_p", self.top_p, 0.0, 1.0)?;
+        range("min_p", self.min_p, 0.0, 1.0)?;
+        range("frequency_penalty", self.frequency_penalty, -2.0, 2.0)?;
+        range("presence_penalty", self.presence_penalty, -2.0, 2.0)?;
+        if let Some(k) = self.top_k
+            && k == 0
+        {
+            return Err("top_k must be at least 1".into());
+        }
+        if let Some(r) = self.repeat_penalty
+            && (r < 0.0 || r.is_nan())
+        {
+            return Err(format!("repeat_penalty must be ≥ 0 (got {r})"));
+        }
+        if self.stop.len() > 8 {
+            return Err("at most 8 stop sequences".into());
+        }
+        if let Some(extra) = &self.extra_body
+            && !extra.is_object()
+        {
+            return Err("extra_body must be a JSON object".into());
+        }
+        Ok(())
+    }
+
+    /// Merge `extra_body` (if any) into `target`, which must be an object.
+    pub fn merge_extra_into(&self, target: &mut serde_json::Value) {
+        if let (Some(serde_json::Value::Object(extra)), Some(obj)) =
+            (&self.extra_body, target.as_object_mut())
+        {
+            for (k, v) in extra {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
 // ── OpenAI-Compatible Chat Types ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

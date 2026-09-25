@@ -181,6 +181,10 @@ pub struct LlmProviderInfo {
     /// Whether the model is allowed to emit its thinking channel. `false`
     /// (default) sends Ollama `think: false`. Ollama-only.
     pub thinking_enabled: bool,
+    /// Advanced sampling (top_p, top_k, min_p, penalties, seed, stop,
+    /// extra_body), flattened; unset fields are omitted.
+    #[serde(flatten)]
+    pub sampling: thairag_core::types::SamplingParams,
 }
 
 #[derive(Serialize)]
@@ -418,6 +422,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             ollama_num_ctx_max: p.llm.ollama_num_ctx_max,
             temperature: p.llm.temperature,
             thinking_enabled: p.llm.thinking_enabled,
+            sampling: p.llm.sampling.clone(),
         },
         embedding: EmbeddingProviderInfo {
             kind: kind_str(&p.embedding.kind),
@@ -455,6 +460,7 @@ fn config_to_response(p: &thairag_config::schema::ProvidersConfig) -> ProviderCo
             ollama_num_ctx_max: v.ollama_num_ctx_max,
             temperature: v.temperature,
             thinking_enabled: v.thinking_enabled,
+            sampling: v.sampling.clone(),
         }),
         image_embedding: p.image_embedding.as_ref().map(|ie| ImageEmbeddingInfo {
             enabled: ie.enabled,
@@ -532,6 +538,92 @@ pub struct UpdateLlmConfig {
     pub supports_vision: Option<bool>,
     /// When true, clear the vision override (fall back to the name heuristic).
     pub clear_supports_vision: Option<bool>,
+    // ── Advanced sampling. Send a value to override; omitted leaves it
+    // unchanged. `clear_sampling: true` resets ALL of them to the provider
+    // default first (then any values in the same request apply).
+    pub top_p: Option<f64>,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f64>,
+    pub repeat_penalty: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
+    pub seed: Option<u64>,
+    pub stop: Option<Vec<String>>,
+    pub extra_body: Option<serde_json::Value>,
+    pub clear_sampling: Option<bool>,
+}
+
+/// The sampling part of an `UpdateLlmConfig`, detached so it can be applied
+/// after the other fields were moved out of the request.
+#[derive(Clone, Default)]
+pub struct SamplingUpdate {
+    clear: bool,
+    top_p: Option<f64>,
+    top_k: Option<u32>,
+    min_p: Option<f64>,
+    repeat_penalty: Option<f64>,
+    frequency_penalty: Option<f64>,
+    presence_penalty: Option<f64>,
+    seed: Option<u64>,
+    stop: Option<Vec<String>>,
+    extra_body: Option<serde_json::Value>,
+}
+
+impl UpdateLlmConfig {
+    pub fn sampling_update(&self) -> SamplingUpdate {
+        SamplingUpdate {
+            clear: self.clear_sampling.unwrap_or(false),
+            top_p: self.top_p,
+            top_k: self.top_k,
+            min_p: self.min_p,
+            repeat_penalty: self.repeat_penalty,
+            frequency_penalty: self.frequency_penalty,
+            presence_penalty: self.presence_penalty,
+            seed: self.seed,
+            stop: self.stop.clone(),
+            extra_body: self.extra_body.clone(),
+        }
+    }
+}
+
+/// Apply a sampling update to an LLM config and range-check the result
+/// (temperature included). `Err` is the user-facing validation message.
+pub fn apply_sampling_update(
+    cfg: &mut thairag_config::schema::LlmConfig,
+    u: &SamplingUpdate,
+) -> Result<(), String> {
+    if u.clear {
+        cfg.sampling = Default::default();
+    }
+    let s = &mut cfg.sampling;
+    if let Some(v) = u.top_p {
+        s.top_p = Some(v);
+    }
+    if let Some(v) = u.top_k {
+        s.top_k = Some(v);
+    }
+    if let Some(v) = u.min_p {
+        s.min_p = Some(v);
+    }
+    if let Some(v) = u.repeat_penalty {
+        s.repeat_penalty = Some(v);
+    }
+    if let Some(v) = u.frequency_penalty {
+        s.frequency_penalty = Some(v);
+    }
+    if let Some(v) = u.presence_penalty {
+        s.presence_penalty = Some(v);
+    }
+    if let Some(v) = u.seed {
+        s.seed = Some(v);
+    }
+    if let Some(v) = &u.stop {
+        s.stop = v.clone();
+    }
+    if let Some(v) = &u.extra_body {
+        s.extra_body = if v.is_null() { None } else { Some(v.clone()) };
+    }
+    cfg.validate_sampling()
 }
 
 #[derive(Deserialize)]
@@ -699,6 +791,7 @@ pub async fn update_provider_config(
 
     // Apply partial updates
     if let Some(llm) = body.llm {
+        let sampling_update = llm.sampling_update();
         let old_kind = pc.llm.kind.clone();
         if let Some(kind) = llm.kind {
             pc.llm.kind =
@@ -722,6 +815,8 @@ pub async fn update_provider_config(
         } else if let Some(t) = llm.temperature {
             pc.llm.temperature = Some(t);
         }
+        apply_sampling_update(&mut pc.llm, &sampling_update)
+            .map_err(|e| ApiError(ThaiRagError::Validation(format!("llm: {e}"))))?;
         if let Some(te) = llm.thinking_enabled {
             pc.llm.thinking_enabled = te;
         }
@@ -869,9 +964,11 @@ pub async fn update_provider_config(
                 ollama_num_ctx_max: pc.llm.ollama_num_ctx_max,
                 temperature: pc.llm.temperature,
                 thinking_enabled: pc.llm.thinking_enabled,
+                sampling: pc.llm.sampling.clone(),
                 supports_vision: None,
             }
         });
+        let sampling_update = vis.sampling_update();
         let old_kind = current.kind.clone();
         if let Some(kind) = vis.kind {
             current.kind =
@@ -898,6 +995,8 @@ pub async fn update_provider_config(
         } else if let Some(t) = vis.temperature {
             current.temperature = Some(t);
         }
+        apply_sampling_update(&mut current, &sampling_update)
+            .map_err(|e| ApiError(ThaiRagError::Validation(format!("doc_vision_llm: {e}"))))?;
         if let Some(te) = vis.thinking_enabled {
             current.thinking_enabled = te;
         }
@@ -2182,6 +2281,7 @@ fn llm_config_to_info(llm: &thairag_config::schema::LlmConfig) -> LlmProviderInf
         ollama_num_ctx_max: llm.ollama_num_ctx_max,
         temperature: llm.temperature,
         thinking_enabled: llm.thinking_enabled,
+        sampling: llm.sampling.clone(),
     }
 }
 
@@ -2747,6 +2847,13 @@ pub async fn update_document_config(
             if let Some(max_tokens) = llm_update.max_tokens {
                 llm_config.max_tokens = Some(max_tokens);
             }
+            if llm_update.clear_temperature == Some(true) {
+                llm_config.temperature = None;
+            } else if let Some(t) = llm_update.temperature {
+                llm_config.temperature = Some(t);
+            }
+            apply_sampling_update(&mut llm_config, &llm_update.sampling_update())
+                .map_err(|e| ApiError(ThaiRagError::Validation(format!("{key}: {e}"))))?;
             let json = serde_json::to_string(&llm_config).map_err(|e| {
                 ApiError(ThaiRagError::Internal(format!("Serialize LLM config: {e}")))
             })?;
@@ -4420,6 +4527,8 @@ pub async fn update_chat_pipeline_config(
         } else if let Some(t) = update.temperature {
             cfg.temperature = Some(t);
         }
+        apply_sampling_update(&mut cfg, &update.sampling_update())
+            .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
         // Thinking-channel management (Ollama-only)
         if let Some(te) = update.thinking_enabled {
             cfg.thinking_enabled = te;
