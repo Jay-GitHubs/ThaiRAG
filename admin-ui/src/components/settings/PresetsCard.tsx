@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react';
 import {
   Card, Button, Tag, Space, Typography, Table, Popconfirm, message,
-  Alert, Spin, Badge, Tooltip, Modal, Input, Divider, Collapse,
+  Alert, Spin, Badge, Tooltip, Modal, Input, Divider, Collapse, Checkbox,
 } from 'antd';
 import {
   RocketOutlined, CheckCircleOutlined, CloseCircleOutlined,
   DownloadOutlined, ThunderboltOutlined, CloudDownloadOutlined,
-  MessageOutlined, FileTextOutlined, CloudOutlined, DesktopOutlined,
+  MessageOutlined, FileTextOutlined, CloudOutlined, DesktopOutlined, GlobalOutlined,
   DollarOutlined, ClockCircleOutlined, ApiOutlined, AppstoreOutlined,
 } from '@ant-design/icons';
 import { listPresets, applyPreset, listOllamaModels, pullOllamaModel } from '../../api/settings';
-import type { PresetInfo, PresetModelInfo, AvailableModel, SettingsSummaryItem } from '../../api/types';
+import type { PresetInfo, PresetInput, PresetModelInfo, AvailableModel, SettingsSummaryItem } from '../../api/types';
 
 const { Text } = Typography;
 
@@ -62,6 +62,13 @@ export function PresetsCard() {
   const [showUrlModal, setShowUrlModal] = useState(false);
   const [showCloudModal, setShowCloudModal] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<string | null>(null);
+  // Gateway presets: the values for the preset's declared inputs, keyed by
+  // input id, plus the explicit "wipe vectors" acknowledgement.
+  const [showGatewayModal, setShowGatewayModal] = useState(false);
+  const [gatewayPreset, setGatewayPreset] = useState<PresetInfo | null>(null);
+  const [gatewayInputs, setGatewayInputs] = useState<Record<string, string>>({});
+  const [confirmEmbedding, setConfirmEmbedding] = useState(false);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
 
   async function loadData() {
     setLoading(true);
@@ -121,20 +128,46 @@ export function PresetsCard() {
     }
   }
 
-  async function handleApply(presetId: string, isCloud: boolean) {
+  async function handleApply(
+    presetId: string,
+    isCloud: boolean,
+    gateway?: { inputs: Record<string, string>; confirm_embedding_change: boolean },
+  ) {
     setApplying(presetId);
+    setGatewayError(null);
     try {
-      await applyPreset(presetId, ollamaUrl, isCloud ? cloudApiKey : undefined);
+      await applyPreset(presetId, ollamaUrl, isCloud ? cloudApiKey : undefined, gateway);
       message.success('Preset applied! Switch to other tabs to see updated settings.');
+      setShowGatewayModal(false);
+      setGatewayPreset(null);
     } catch (err) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to apply preset';
-      message.error(msg);
+      if (gateway) {
+        // Keep the dialog open so the operator can tick the confirmation or fix an input.
+        setGatewayError(msg);
+      } else {
+        message.error(msg);
+      }
     } finally {
       setApplying(null);
     }
   }
 
+  function openGatewayDialog(preset: PresetInfo) {
+    const defaults: Record<string, string> = {};
+    for (const inp of preset.inputs ?? []) defaults[inp.id] = gatewayInputs[inp.id] ?? inp.default_value;
+    setGatewayInputs(defaults);
+    setConfirmEmbedding(false);
+    setGatewayError(null);
+    setGatewayPreset(preset);
+    setShowGatewayModal(true);
+  }
+
   function confirmApply(preset: PresetInfo) {
+    if (preset.provider_type === 'gateway') {
+      openGatewayDialog(preset);
+      return;
+    }
     setPendingPreset(preset.id);
     if (preset.provider_type === 'cloud') {
       setShowCloudModal(true);
@@ -150,11 +183,14 @@ export function PresetsCard() {
 
   const ollamaChatPresets = chatPresets.filter(p => p.provider_type === 'ollama');
   const cloudChatPresets = chatPresets.filter(p => p.provider_type === 'cloud');
+  const gatewayChatPresets = chatPresets.filter(p => p.provider_type === 'gateway');
   const ollamaDocPresets = docPresets.filter(p => p.provider_type === 'ollama');
   const cloudDocPresets = docPresets.filter(p => p.provider_type === 'cloud');
+  const gatewayDocPresets = docPresets.filter(p => p.provider_type === 'gateway');
 
   function renderPresetCard(preset: PresetInfo) {
-    const isCloud = preset.provider_type === 'cloud';
+    // Cloud and gateway presets have nothing to pull locally.
+    const isCloud = preset.provider_type !== 'ollama';
     const { available, total } = getAvailableCount(preset);
     const allReady = isCloud || available === total;
 
@@ -286,9 +322,18 @@ export function PresetsCard() {
     icon: React.ReactNode,
     ollamaPresets: PresetInfo[],
     cloudPresets: PresetInfo[],
+    gatewayPresets: PresetInfo[] = [],
   ) {
     return (
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        {gatewayPresets.length > 0 && (
+          <>
+            <Divider orientation="left" style={{ margin: '4px 0' }}>
+              <Space><GlobalOutlined /> Gateway (OpenAI-compatible) — your vLLM / LiteLLM models</Space>
+            </Divider>
+            {gatewayPresets.map(renderPresetCard)}
+          </>
+        )}
         {ollamaPresets.length > 0 && (
           <>
             <Divider orientation="left" style={{ margin: '4px 0' }}>
@@ -321,7 +366,7 @@ export function PresetsCard() {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Local presets run free on your GPU (Ollama) but are slower with many features. Cloud presets use API keys (OpenAI) for faster responses at a per-query cost."
+        message="Gateway presets target your own OpenAI-compatible endpoint (vLLM / LiteLLM). Local presets run free on your GPU (Ollama) but are slower with many features. Cloud presets use API keys (OpenAI) for faster responses at a per-query cost."
         description="Pick one preset from each section. Chat and Document presets are independent."
       />
 
@@ -331,15 +376,70 @@ export function PresetsCard() {
           {
             key: 'chat-presets',
             label: <Space><MessageOutlined /> Chat & Response Pipeline</Space>,
-            children: renderProviderSection('Chat', <MessageOutlined />, ollamaChatPresets, cloudChatPresets),
+            children: renderProviderSection('Chat', <MessageOutlined />, ollamaChatPresets, cloudChatPresets, gatewayChatPresets),
           },
           {
             key: 'doc-presets',
             label: <Space><FileTextOutlined /> Document Processing</Space>,
-            children: renderProviderSection('Document', <FileTextOutlined />, ollamaDocPresets, cloudDocPresets),
+            children: renderProviderSection('Document', <FileTextOutlined />, ollamaDocPresets, cloudDocPresets, gatewayDocPresets),
           },
         ]}
       />
+
+      {/* Gateway modal (OpenAI-compatible presets): declared inputs + wipe acknowledgement */}
+      <Modal
+        title={gatewayPreset ? `Apply "${gatewayPreset.name}"` : 'Gateway preset'}
+        open={showGatewayModal}
+        onOk={() => {
+          if (!gatewayPreset) return;
+          const missing = (gatewayPreset.inputs ?? []).filter(i => i.required && !(gatewayInputs[i.id] ?? '').trim());
+          if (missing.length > 0) {
+            setGatewayError(`Please fill in: ${missing.map(i => i.label).join(', ')}`);
+            return;
+          }
+          handleApply(gatewayPreset.id, false, { inputs: gatewayInputs, confirm_embedding_change: confirmEmbedding });
+        }}
+        onCancel={() => { setShowGatewayModal(false); setGatewayPreset(null); setGatewayError(null); }}
+        okText="Apply Preset"
+        confirmLoading={applying === gatewayPreset?.id}
+        width={640}
+        data-testid="gateway-preset-modal"
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          {(gatewayPreset?.inputs ?? []).map((inp: PresetInput) => (
+            <div key={inp.id}>
+              <Text style={{ fontSize: 12 }}>
+                {inp.label}{inp.required ? ' *' : ''}
+              </Text>
+              {inp.kind === 'secret' ? (
+                <Input.Password
+                  value={gatewayInputs[inp.id] ?? ''}
+                  onChange={e => setGatewayInputs({ ...gatewayInputs, [inp.id]: e.target.value })}
+                  placeholder="(keep current)"
+                  data-testid={`gateway-input-${inp.id}`}
+                />
+              ) : (
+                <Input
+                  value={gatewayInputs[inp.id] ?? ''}
+                  onChange={e => setGatewayInputs({ ...gatewayInputs, [inp.id]: e.target.value })}
+                  placeholder={inp.default_value || (inp.required ? '' : '(keep current)')}
+                  inputMode={inp.kind === 'number' ? 'numeric' : undefined}
+                  data-testid={`gateway-input-${inp.id}`}
+                />
+              )}
+              <Text type="secondary" style={{ fontSize: 11 }}>{inp.hint}</Text>
+            </div>
+          ))}
+          <Checkbox
+            checked={confirmEmbedding}
+            onChange={e => setConfirmEmbedding(e.target.checked)}
+            data-testid="gateway-confirm-embedding"
+          >
+            I understand that changing the embedding model wipes existing vectors and every document must be re-ingested.
+          </Checkbox>
+          {gatewayError && <Alert type="error" showIcon message={gatewayError} data-testid="gateway-preset-error" />}
+        </Space>
+      </Modal>
 
       {/* Ollama URL modal (for local presets) */}
       <Modal

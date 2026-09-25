@@ -3625,6 +3625,191 @@ async fn provider_config_put_round_trips_reasoning_controls() {
     assert!(state.providers().providers_config.llm.reasoning.is_empty());
 }
 
+/// The Thai gateway presets: listed with operator inputs, refuse to switch
+/// the embedder without confirmation, then configure chat + vision +
+/// embedding on one gateway with the Thai document settings.
+#[tokio::test]
+async fn thai_gateway_presets_list_guard_and_apply() {
+    let state = build_test_state(true);
+    let app = build_router(state.clone(), None);
+    let token = register_and_get_token(&app, "preset@test.com", "Preset", "Pass1234").await;
+
+    // Listed, with inputs the dialog must collect.
+    let list = body_json(
+        app.clone()
+            .oneshot(get_request_auth("/api/km/settings/presets", &token))
+            .await
+            .unwrap()
+            .into_body(),
+    )
+    .await;
+    let presets = list.as_array().unwrap();
+    let chat = presets
+        .iter()
+        .find(|p| p["id"] == "thai-gateway-chat")
+        .expect("chat preset");
+    let doc = presets
+        .iter()
+        .find(|p| p["id"] == "thai-gateway-doc")
+        .expect("doc preset");
+    assert_eq!(chat["provider_type"], "gateway");
+    assert_eq!(chat["category"], "chat");
+    assert_eq!(doc["category"], "document");
+    let chat_inputs: Vec<&str> = chat["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap())
+        .collect();
+    assert!(chat_inputs.contains(&"chat_model") && chat_inputs.contains(&"embedding_model"));
+    assert!(
+        doc["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "ocr_sidecar_url")
+    );
+    // Older presets still deserialise with an empty inputs list.
+    assert!(
+        presets
+            .iter()
+            .any(|p| p["id"] == "thai-basic" && p["inputs"].as_array().unwrap().is_empty())
+    );
+
+    let inputs = serde_json::json!({
+        "base_url": "https://gw.example/v1",
+        "api_key": "sk-gw",
+        "chat_model": "chat",
+        "vision_model": "qwen2.5-vl-7b",
+        "embedding_model": "qwen3-embedding-0.6b",
+        "embedding_dimension": "1024"
+    });
+
+    // Embedding changes (test config: OpenAi "mock" dim 4) → refused until confirmed.
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/presets/apply",
+            serde_json::json!({"preset_id": "thai-gateway-chat", "inputs": inputs}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let err = body_json(resp.into_body()).await;
+    assert!(err.to_string().contains("re-ingested"), "{err}");
+    assert!(
+        state.km_store.get_setting("chat_pipeline.llm").is_none(),
+        "nothing written"
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/presets/apply",
+            serde_json::json!({"preset_id": "thai-gateway-chat", "inputs": inputs, "confirm_embedding_change": true}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let pc = state.providers().providers_config.clone();
+    assert_eq!(pc.llm.kind, thairag_core::types::LlmKind::OpenAiCompatible);
+    assert_eq!(pc.llm.model, "chat");
+    assert_eq!(pc.llm.base_url, "https://gw.example/v1");
+    assert_eq!(pc.llm.api_key, "sk-gw");
+    assert_eq!(pc.llm.temperature, Some(0.2));
+    assert_eq!(pc.llm.sampling.top_k, Some(20));
+    let vision = pc.doc_vision_llm.as_ref().expect("document vision LLM set");
+    assert_eq!(vision.model, "qwen2.5-vl-7b");
+    assert_eq!(vision.supports_vision, Some(true));
+    assert_eq!(vision.temperature, Some(0.0));
+    assert_eq!(vision.sampling.seed, Some(42));
+    assert_eq!(
+        pc.embedding.kind,
+        thairag_core::types::EmbeddingKind::OpenAi
+    );
+    assert_eq!(pc.embedding.model, "qwen3-embedding-0.6b");
+    assert_eq!(pc.embedding.dimension, 1024);
+    let store = &state.km_store;
+    assert_eq!(
+        store.get_setting("chat_pipeline.retrieval_mode").as_deref(),
+        Some("vector")
+    );
+    assert_eq!(
+        store
+            .get_setting("chat_pipeline.orchestrator_enabled")
+            .as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        store
+            .get_setting("chat_pipeline.thai_chars_per_token")
+            .as_deref(),
+        Some("1.5")
+    );
+    assert!(
+        store
+            .get_setting("chat_pipeline.chat_vision_llm")
+            .unwrap()
+            .contains("qwen2.5-vl-7b")
+    );
+
+    // Document preset on the same stack (embedding unchanged now → no confirm needed).
+    let mut doc_inputs = inputs.clone();
+    doc_inputs["ocr_sidecar_url"] = serde_json::json!("http://paddleocr:8086/");
+    let resp = app
+        .clone()
+        .oneshot(json_request_auth(
+            "POST",
+            "/api/km/settings/presets/apply",
+            serde_json::json!({"preset_id": "thai-gateway-doc", "inputs": doc_inputs}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        store.get_setting("ai_preprocessing.enabled").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        store
+            .get_setting("ai_preprocessing.orchestrator_enabled")
+            .as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        store.get_setting("document.max_chunk_size").as_deref(),
+        Some("512")
+    );
+    assert_eq!(
+        store
+            .get_setting("document.image_description_enabled")
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        store
+            .get_setting("document.pdf_vision_fallback_enabled")
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        store.get_setting("document.ocr_sidecar_url").as_deref(),
+        Some("http://paddleocr:8086")
+    );
+    assert!(
+        store
+            .get_setting("ai_preprocessing.llm")
+            .unwrap()
+            .contains("\"top_k\":20")
+    );
+}
+
 /// A global factory reset must rebuild the in-memory providers from what
 /// survived the wipe. Regression: the process kept the pre-reset providers
 /// (and API keys) and the next settings save re-persisted that stale config

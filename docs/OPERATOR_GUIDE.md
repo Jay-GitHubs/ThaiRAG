@@ -824,6 +824,32 @@ Things to decide once, then let the platform run.
   keys encrypted at rest) and take precedence over files/env everywhere —
   pipeline, general chat, presets, health.
 
+### 5.0 Quick Setup presets for an OpenAI-compatible gateway (Thai stack)
+
+Settings → Quick Setup Presets → **Gateway** section. Two presets configure
+the recommended Thai document stack on your own vLLM / LiteLLM endpoint:
+
+| Preset | What it sets |
+|---|---|
+| **Thai Gateway · Qwen3.8-27B (BF16/FP8)** (chat) | Shared lean chat route (core agents on, orchestrator off — the measured fastest and ≥ vectorless configuration), `retrieval_mode = vector`, top_k 10 / rerank 5, context 8 192 tokens, agents 2 048, grounded sampling for the chat model (temperature 0.2, top_p 0.8, top_k 20, repetition 1.05 — Qwen's non-thinking guidance with a low temperature), a Qwen2.5-VL chat-vision LLM with temperature 0 + seed 42, Qwen3-Embedding (dim 1024) via `/v1/embeddings`, passthrough reranker, Thai calibration 1.5 chars/token, doc-ops on, attachment follow-up retrieval on, doc-selection off. |
+| **Thai Gateway · Document pipeline** | AI preprocessing on (shared Qwen3.8, enricher on, orchestrator off, 2 048 tokens / 8 000 input chars / quality 0.6), 512/64 Thai-aware chunks (the measured baseline), Smart-PDF with the Qwen2.5-VL fallback (`< 50` chars/page → OCR, image-heavy `≥ 0.5` → whole page, 150 dpi, ≤ 100 vision pages), optional PaddleOCR Thai sidecar URL, the same embedding / vision LLM / calibration as the chat preset. |
+
+The dialog asks for the gateway base URL and API key (blank keeps the current
+ones — one key serves chat, vision and embeddings), the three model ids
+(defaults: `chat`, `qwen2.5-vl-7b`, `qwen3-embedding-0.6b`, dim 1024) and, for
+the document preset, the PaddleOCR sidecar URL. **Pick the non-thinking model
+group for chat** (e.g. `chat`, not `chat-thinking`): a thinking model that
+spends its output in the reasoning channel returns blank answers, and the
+preset deliberately leaves the thinking toggle unset so gateways that reject
+unknown params are not affected.
+
+Applying either preset with a **different embedding model or dimension** is
+refused until the "wipe vectors" box is ticked — existing vectors stop
+matching and every document must be re-ingested. Apply the chat preset first,
+then the document preset (the second apply no longer changes the embedder).
+The gateway model named `chat` is not vision-capable by name, so the presets
+set `supports_vision = true` on the vision LLM explicitly.
+
 ### 5.1 Guardrails policy
 
 Enable detectors that match your data. For a typical Thai enterprise tenant:
