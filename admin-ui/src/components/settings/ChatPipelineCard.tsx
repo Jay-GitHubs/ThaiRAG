@@ -653,21 +653,23 @@ function LlmConfigForm({
                   style={{ width: 120 }}
                 />
               </Space>
-              <Space align="center" wrap>
-                <Tooltip title="Let a thinking-capable model (e.g. gemma4:e4b-it-bf16, qwen3) emit its reasoning channel. OFF (recommended) sends Ollama think:false so the answer lands in the reply — thinking models otherwise sometimes return a blank answer. Ollama-only.">
-                  <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
-                    Thinking <QuestionCircleOutlined />
+              {form.kind === 'Ollama' && form.sampling.reasoning.thinking == null && (
+                <Space align="center" wrap>
+                  <Tooltip title="Legacy Ollama fallback used while Reasoning → Thinking below is 'Provider default'. OFF (recommended) sends think:false so the answer lands in the reply — thinking models otherwise sometimes return a blank answer.">
+                    <Text style={{ fontSize: 12, width: 90, display: 'inline-block' }}>
+                      Thinking (legacy) <QuestionCircleOutlined />
+                    </Text>
+                  </Tooltip>
+                  <Switch
+                    size="small"
+                    checked={form.thinking_enabled ?? false}
+                    onChange={(checked) => onChange({ ...form, thinking_enabled: checked })}
+                  />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {form.thinking_enabled ? 'On (model default reasoning)' : 'Off (think:false)'}
                   </Text>
-                </Tooltip>
-                <Switch
-                  size="small"
-                  checked={form.thinking_enabled ?? false}
-                  onChange={(checked) => onChange({ ...form, thinking_enabled: checked })}
-                />
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {form.thinking_enabled ? 'On (model default reasoning)' : 'Off (think:false)'}
-                </Text>
-              </Space>
+                </Space>
+              )}
               <AdvancedSamplingFields
                 inline
                 compact
