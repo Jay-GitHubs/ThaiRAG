@@ -380,6 +380,23 @@ pub struct LlmConfig {
     /// OpenAI/OpenAI-compatible provider.
     #[serde(default)]
     pub supports_vision: Option<bool>,
+    /// Advanced sampling (top_p, top_k, min_p, penalties, seed, stop,
+    /// extra_body). Flattened: the fields sit next to `temperature` in TOML,
+    /// env and the settings API. Unset = provider default.
+    #[serde(default, flatten)]
+    pub sampling: thairag_core::types::SamplingParams,
+}
+
+impl LlmConfig {
+    /// Range-check `temperature` and the advanced sampling fields.
+    pub fn validate_sampling(&self) -> Result<(), String> {
+        if let Some(t) = self.temperature
+            && (!(0.0..=2.0).contains(&t) || t.is_nan())
+        {
+            return Err(format!("temperature must be between 0 and 2 (got {t})"));
+        }
+        self.sampling.validate()
+    }
 }
 
 impl std::fmt::Debug for LlmConfig {
@@ -400,6 +417,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("profile_id", &self.profile_id)
             .field("ollama_num_ctx_max", &self.ollama_num_ctx_max)
             .field("temperature", &self.temperature)
+            .field("sampling", &self.sampling)
             .field("thinking_enabled", &self.thinking_enabled)
             .field("supports_vision", &self.supports_vision)
             .finish()
@@ -2237,6 +2255,7 @@ mod tests {
                     temperature: None,
                     thinking_enabled: false,
                     supports_vision: None,
+                    sampling: Default::default(),
                 },
                 embedding: EmbeddingConfig {
                     kind: EmbeddingKind::Fastembed,
