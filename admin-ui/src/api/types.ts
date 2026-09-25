@@ -162,8 +162,19 @@ export interface PresetInfo {
   estimated_latency: string;
   llm_calls_per_query: string;
   feature_count: number;
-  provider_type: 'ollama' | 'cloud';
+  provider_type: 'ollama' | 'cloud' | 'gateway';
   features: string[];
+  /** Operator inputs the apply dialog must collect (gateway presets). */
+  inputs?: PresetInput[];
+}
+
+export interface PresetInput {
+  id: string;
+  label: string;
+  kind: 'url' | 'secret' | 'text' | 'number';
+  default_value: string;
+  hint: string;
+  required: boolean;
 }
 
 export interface OllamaPullResponse {

@@ -4979,6 +4979,21 @@ pub struct PresetInfo {
     pub provider_type: String,
     /// List of enabled feature names (e.g. "Conversation Memory", "Graph RAG")
     pub features: Vec<String>,
+    /// Operator-supplied values the apply dialog must collect (gateway
+    /// presets): endpoint, key, model ids. Empty for Ollama / cloud presets.
+    #[serde(default)]
+    pub inputs: Vec<PresetInput>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PresetInput {
+    pub id: String,
+    pub label: String,
+    /// "url" | "secret" | "text" | "number"
+    pub kind: String,
+    pub default_value: String,
+    pub hint: String,
+    pub required: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -5007,7 +5022,77 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
         }
     }
 
+    fn gateway_inputs(with_ocr: bool) -> Vec<PresetInput> {
+        let mut v = vec![
+            PresetInput { id: "base_url".into(), label: "Gateway base URL".into(), kind: "url".into(), default_value: "".into(), hint: "OpenAI-compatible endpoint (LiteLLM / vLLM), e.g. https://kms-llm.example.com/v1. Blank = keep the current LLM base URL.".into(), required: false },
+            PresetInput { id: "api_key".into(), label: "Gateway API key".into(), kind: "secret".into(), default_value: "".into(), hint: "Blank = keep the current key. One key is used for chat, vision and embeddings (same gateway).".into(), required: false },
+            PresetInput { id: "chat_model".into(), label: "Chat model id".into(), kind: "text".into(), default_value: "chat".into(), hint: "Qwen3.8-27B (BF16 or FP8) model group with thinking OFF — e.g. `chat` on a LiteLLM gateway, or the raw vLLM id.".into(), required: true },
+            PresetInput { id: "vision_model".into(), label: "Vision model id".into(), kind: "text".into(), default_value: "qwen2.5-vl-7b".into(), hint: "Qwen2.5-VL (7B/8B) for PDF OCR, image description and image attachments.".into(), required: true },
+            PresetInput { id: "embedding_model".into(), label: "Embedding model id".into(), kind: "text".into(), default_value: "qwen3-embedding-0.6b".into(), hint: "Qwen3-Embedding-0.6B via the gateway's /v1/embeddings. Changing the embedder wipes existing vectors — documents must be re-ingested.".into(), required: true },
+            PresetInput { id: "embedding_dimension".into(), label: "Embedding dimension".into(), kind: "number".into(), default_value: "1024".into(), hint: "Qwen3-Embedding-0.6B = 1024.".into(), required: true },
+        ];
+        if with_ocr {
+            v.push(PresetInput { id: "ocr_sidecar_url".into(), label: "PaddleOCR sidecar URL".into(), kind: "url".into(), default_value: "http://paddleocr:8086".into(), hint: "Deterministic Thai OCR tier (th_PP-OCRv5) that runs alongside the vision LLM. Blank = vision-only OCR.".into(), required: false });
+        }
+        v
+    }
+
     vec![
+        // ── Thai gateway presets (OpenAI-compatible: LiteLLM / vLLM) ──
+        PresetInfo {
+            id: "thai-gateway-chat".into(),
+            name: "Thai Gateway · Qwen3.8-27B (BF16/FP8)".into(),
+            description: "Chat pipeline for Thai documents on an OpenAI-compatible gateway (LiteLLM / vLLM): Qwen3.8-27B answers, Qwen2.5-VL sees image attachments, Qwen3-Embedding retrieves. Lean shared route (measured fastest, ≥ vectorless on every corpus), Thai token calibration, grounded low-temperature sampling with Qwen's recommended top-p/top-k, deterministic vision (temperature 0 + seed). Thinking stays OFF via the model group.".into(),
+            category: "chat".into(),
+            required_models: vec![
+                PresetModelInfo { model: "Qwen3.8-27B (BF16 / FP8)".into(), role: "Main LLM".into(), task_weight: "heavy".into(), description: "Answer generation + all core agents (shared). Use the non-thinking model group.".into() },
+                PresetModelInfo { model: "Qwen2.5-VL-7B/8B".into(), role: "Chat vision LLM".into(), task_weight: "medium".into(), description: "Image attachments in chat (pixels), temperature 0 + seed for stable reads.".into() },
+                PresetModelInfo { model: "Qwen3-Embedding-0.6B".into(), role: "Embedding".into(), task_weight: "light".into(), description: "Multilingual, Thai-capable, dim 1024 — via /v1/embeddings.".into() },
+            ],
+            settings_summary: vec![
+                s("LLM Mode", "Shared (lean route, no orchestrator)"),
+                s("Retrieval", "vector (hybrid dense + BM25), top_k 10 / rerank 5, passthrough reranker"),
+                s("Context Window", "8,192 tokens"),
+                s("Agent Max Tokens", "2,048"),
+                s("Sampling (chat)", "temperature 0.2 · top_p 0.8 · top_k 20 · repetition 1.05"),
+                s("Sampling (vision)", "temperature 0 · seed 42"),
+                s("Thai calibration", "1.5 chars/token (measured)"),
+                s("Doc ops / follow-ups", "summarize route on · attachment follow-up retrieval on · doc-selection off"),
+            ],
+            estimated_cost_per_query: "Gateway".into(),
+            estimated_latency: "5-20s".into(),
+            llm_calls_per_query: "1-2 calls".into(),
+            feature_count: 0,
+            provider_type: "gateway".into(),
+            features: vec![],
+            inputs: gateway_inputs(false),
+        },
+        PresetInfo {
+            id: "thai-gateway-doc".into(),
+            name: "Thai Gateway · Document pipeline (Qwen3.8 + Qwen2.5-VL + Qwen3-Embedding)".into(),
+            description: "Ingestion for Thai documents on the same gateway: AI preprocessing on (shared Qwen3.8 for analysis/chunking/enrichment, orchestrator off), 512/64 Thai-aware chunks (the measured baseline), Smart-PDF with Qwen2.5-VL fallback for scanned pages and broken CMaps, optional PaddleOCR Thai sidecar as the deterministic OCR tier, Qwen3-Embedding vectors.".into(),
+            category: "document".into(),
+            required_models: vec![
+                PresetModelInfo { model: "Qwen3.8-27B (BF16 / FP8)".into(), role: "Document AI + Enricher".into(), task_weight: "heavy".into(), description: "Analyzer, converter, quality, chunker, enricher (shared).".into() },
+                PresetModelInfo { model: "Qwen2.5-VL-7B/8B".into(), role: "Document vision LLM".into(), task_weight: "medium".into(), description: "PDF page OCR fallback, table rescue, image description. Needs ≥ 256px renders (150 dpi default).".into() },
+                PresetModelInfo { model: "Qwen3-Embedding-0.6B".into(), role: "Embedding".into(), task_weight: "light".into(), description: "dim 1024 — switching embedder wipes vectors; re-ingest.".into() },
+            ],
+            settings_summary: vec![
+                s("AI Preprocessing", "On (auto params, enricher on, orchestrator off)"),
+                s("Agent Max Tokens", "2,048 · max input 8,000 chars · quality 0.6"),
+                s("Chunking", "512 chars / 64 overlap, Thai-aware"),
+                s("PDF", "vision fallback on · < 50 chars/page → OCR · image-heavy ≥ 0.5 → whole page · 150 dpi · ≤ 100 vision pages"),
+                s("OCR tier", "PaddleOCR Thai sidecar when URL given"),
+                s("Thai calibration", "1.5 chars/token (measured)"),
+            ],
+            estimated_cost_per_query: "Gateway".into(),
+            estimated_latency: "per document".into(),
+            llm_calls_per_query: "4-6 per document".into(),
+            feature_count: 0,
+            provider_type: "gateway".into(),
+            features: vec![],
+            inputs: gateway_inputs(true),
+        },
         // ── Chat & Response Pipeline presets ──
         PresetInfo {
             id: "thai-basic".into(),
@@ -5033,6 +5118,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             feature_count: 0,
             provider_type: "ollama".into(),
             features: vec![],
+            inputs: vec![],
         },
         PresetInfo {
             id: "thai-recommended".into(),
@@ -5063,6 +5149,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "ColBERT Reranking".into(),
                 "Active Learning".into(),
             ],
+            inputs: vec![],
         },
         PresetInfo {
             id: "thai-max".into(),
@@ -5109,6 +5196,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "Personal Memory".into(),
                 "Live Source Retrieval".into(),
             ],
+            inputs: vec![],
         },
         // ── Cloud Chat presets (OpenAI API) ──
         PresetInfo {
@@ -5134,6 +5222,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             feature_count: 0,
             provider_type: "cloud".into(),
             features: vec![],
+            inputs: vec![],
         },
         PresetInfo {
             id: "cloud-recommended".into(),
@@ -5164,6 +5253,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "Active Learning".into(),
                 "Adaptive Threshold".into(),
             ],
+            inputs: vec![],
         },
         PresetInfo {
             id: "cloud-max".into(),
@@ -5208,6 +5298,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "Personal Memory".into(),
                 "Live Source Retrieval".into(),
             ],
+            inputs: vec![],
         },
         // ── Document Processing presets ──
         PresetInfo {
@@ -5236,6 +5327,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             features: vec![
                 "AI Enrichment".into(),
             ],
+            inputs: vec![],
         },
         PresetInfo {
             id: "thai-doc-recommended".into(),
@@ -5265,6 +5357,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "AI Enrichment".into(),
                 "Orchestrator".into(),
             ],
+            inputs: vec![],
         },
         // ── Cloud Document Processing presets ──
         PresetInfo {
@@ -5292,6 +5385,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
             features: vec![
                 "AI Enrichment".into(),
             ],
+            inputs: vec![],
         },
         PresetInfo {
             id: "cloud-doc-recommended".into(),
@@ -5320,6 +5414,7 @@ fn get_preset_definitions() -> Vec<PresetInfo> {
                 "AI Enrichment".into(),
                 "Orchestrator".into(),
             ],
+            inputs: vec![],
         },
     ]
 }
@@ -5333,6 +5428,157 @@ pub struct ApplyPresetRequest {
     /// API key for cloud presets (OpenAI, etc.)
     #[serde(default)]
     pub api_key: String,
+    /// Values for the preset's declared `inputs` (gateway presets).
+    #[serde(default)]
+    pub inputs: std::collections::HashMap<String, String>,
+    /// Required when the preset changes the embedding model/dimension:
+    /// existing vectors are wiped and every document must be re-ingested.
+    #[serde(default)]
+    pub confirm_embedding_change: bool,
+}
+
+/// Resolved operator inputs for the Thai gateway presets.
+struct GatewayStack {
+    base_url: String,
+    api_key: String,
+    chat_model: String,
+    vision_model: String,
+    embedding_model: String,
+    embedding_dimension: usize,
+    ocr_sidecar_url: String,
+}
+
+impl GatewayStack {
+    fn from_request(
+        req: &ApplyPresetRequest,
+        current: &thairag_config::schema::ProvidersConfig,
+    ) -> Result<Self, String> {
+        let get = |k: &str| {
+            req.inputs
+                .get(k)
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default()
+        };
+        let or_default = |k: &str, d: &str| {
+            let v = get(k);
+            if v.is_empty() { d.to_string() } else { v }
+        };
+        let base_url = {
+            let v = get("base_url");
+            if v.is_empty() {
+                current.llm.base_url.clone()
+            } else {
+                v
+            }
+        };
+        if base_url.is_empty() {
+            return Err("base_url is required (no gateway URL configured yet)".into());
+        }
+        let api_key = {
+            let v = get("api_key");
+            let v = if v.is_empty() {
+                req.api_key.trim().to_string()
+            } else {
+                v
+            };
+            if v.is_empty() {
+                current.llm.api_key.clone()
+            } else {
+                v
+            }
+        };
+        let embedding_dimension = or_default("embedding_dimension", "1024")
+            .parse::<usize>()
+            .map_err(|_| "embedding_dimension must be a positive integer".to_string())?;
+        if embedding_dimension == 0 {
+            return Err("embedding_dimension must be a positive integer".into());
+        }
+        Ok(Self {
+            base_url,
+            api_key,
+            chat_model: or_default("chat_model", "chat"),
+            vision_model: or_default("vision_model", "qwen2.5-vl-7b"),
+            embedding_model: or_default("embedding_model", "qwen3-embedding-0.6b"),
+            embedding_dimension,
+            ocr_sidecar_url: get("ocr_sidecar_url"),
+        })
+    }
+
+    fn llm_config(
+        &self,
+        model: &str,
+        temperature: f32,
+        sampling: thairag_core::types::SamplingParams,
+        supports_vision: Option<bool>,
+    ) -> thairag_config::schema::LlmConfig {
+        thairag_config::schema::LlmConfig {
+            kind: thairag_core::types::LlmKind::OpenAiCompatible,
+            model: model.to_string(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            max_tokens: None,
+            profile_id: None,
+            ollama_num_ctx_max: 0,
+            temperature: Some(temperature),
+            thinking_enabled: false,
+            supports_vision,
+            sampling,
+            reasoning: Default::default(),
+        }
+    }
+
+    /// Qwen3 non-thinking guidance (top_p 0.8, top_k 20, mild repetition
+    /// penalty) with a low temperature for grounded RAG answers.
+    fn chat_llm(&self) -> thairag_config::schema::LlmConfig {
+        self.llm_config(
+            &self.chat_model,
+            0.2,
+            thairag_core::types::SamplingParams {
+                top_p: Some(0.8),
+                top_k: Some(20),
+                repeat_penalty: Some(1.05),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// Deterministic vision reads: temperature 0 + fixed seed so an OCR or
+    /// image description re-run reproduces the same text.
+    fn vision_llm(&self) -> thairag_config::schema::LlmConfig {
+        self.llm_config(
+            &self.vision_model,
+            0.0,
+            thairag_core::types::SamplingParams {
+                seed: Some(42),
+                ..Default::default()
+            },
+            Some(true),
+        )
+    }
+
+    fn embedding_changes(&self, current: &thairag_config::schema::ProvidersConfig) -> bool {
+        current.embedding.kind != thairag_core::types::EmbeddingKind::OpenAi
+            || current.embedding.model != self.embedding_model
+            || current.embedding.dimension != self.embedding_dimension
+    }
+
+    /// Settings shared by both gateway presets: embedding, reranker, vision
+    /// LLMs (chat + document), Thai token calibration.
+    fn write_common(&self, store: &dyn crate::store::KmStoreTrait) {
+        let vision = serde_json::to_string(&self.vision_llm()).unwrap_or_default();
+        store.set_setting("providers.embedding.kind", "open_ai");
+        store.set_setting("providers.embedding.model", &self.embedding_model);
+        store.set_setting("providers.embedding.base_url", &self.base_url);
+        store.set_setting(
+            "providers.embedding.dimensions",
+            &self.embedding_dimension.to_string(),
+        );
+        store.set_setting("providers.reranker.kind", "passthrough");
+        store.set_setting("providers.doc_vision_llm", &vision);
+        store.set_setting("chat_pipeline.chat_vision_llm", &vision);
+        store.set_setting("chat_pipeline.thai_chars_per_token", "1.5");
+    }
 }
 
 fn default_ollama_url() -> String {
@@ -5500,7 +5746,88 @@ pub async fn apply_preset(
         .to_string()
     };
 
+    // Gateway presets: resolve operator inputs and refuse to silently switch
+    // the embedder — that wipes every vector and forces a full re-ingest.
+    let gateway = if req.preset_id.starts_with("thai-gateway-") {
+        let stack = GatewayStack::from_request(&req, &eff)
+            .map_err(|e| ApiError(ThaiRagError::Validation(e)))?;
+        if stack.embedding_changes(&eff) && !req.confirm_embedding_change {
+            return Err(ApiError(ThaiRagError::Validation(format!(
+                "This preset switches the embedding model to '{}' (dim {}) — existing vectors \
+                 will no longer match and every document must be re-ingested. Re-send with \
+                 confirm_embedding_change=true to proceed.",
+                stack.embedding_model, stack.embedding_dimension
+            ))));
+        }
+        Some(stack)
+    } else {
+        None
+    };
+
     match req.preset_id.as_str() {
+        "thai-gateway-chat" => {
+            let stack = gateway.as_ref().expect("resolved above");
+            let chat = serde_json::to_string(&stack.chat_llm()).unwrap_or_default();
+            store.set_setting("chat_pipeline.enabled", "true");
+            store.set_setting("chat_pipeline.llm_mode", "shared");
+            store.set_setting("chat_pipeline.llm", &chat);
+            // Core agents on, orchestrator off: the lean shared route measured
+            // fastest and ≥ vectorless on every corpus (BENCHMARK_RESULTS.md).
+            store.set_setting("chat_pipeline.query_analyzer_enabled", "true");
+            store.set_setting("chat_pipeline.query_rewriter_enabled", "true");
+            store.set_setting("chat_pipeline.context_curator_enabled", "true");
+            store.set_setting("chat_pipeline.quality_guard_enabled", "true");
+            store.set_setting("chat_pipeline.language_adapter_enabled", "true");
+            store.set_setting("chat_pipeline.orchestrator_enabled", "false");
+            store.set_setting("chat_pipeline.max_context_tokens", "8192");
+            store.set_setting("chat_pipeline.agent_max_tokens", "2048");
+            store.set_setting("chat_pipeline.quality_guard_threshold", "0.6");
+            store.set_setting("chat_pipeline.quality_guard_max_retries", "1");
+            store.set_setting("chat_pipeline.retrieval_mode", "vector");
+            store.set_setting("chat_pipeline.doc_ops_enabled", "true");
+            store.set_setting("chat_pipeline.doc_selection_enabled", "false");
+            store.set_setting("chat_pipeline.attachment_follow_up_retrieval", "true");
+            store.set_setting("chat_pipeline.conversation_memory_enabled", "false");
+            store.set_setting("chat_pipeline.colbert_enabled", "false");
+            store.set_setting("chat_pipeline.active_learning_enabled", "false");
+            store.set_setting("search.top_k", "10");
+            store.set_setting("search.rerank_top_k", "5");
+            stack.write_common(store.as_ref());
+        }
+        "thai-gateway-doc" => {
+            let stack = gateway.as_ref().expect("resolved above");
+            let chat = serde_json::to_string(&stack.chat_llm()).unwrap_or_default();
+            store.set_setting("ai_preprocessing.enabled", "true");
+            store.set_setting("ai_preprocessing.auto_params", "true");
+            store.set_setting("ai_preprocessing.llm", &chat);
+            store.set_setting("ai_preprocessing.enricher_enabled", "true");
+            store.set_setting("ai_preprocessing.orchestrator_enabled", "false");
+            store.set_setting("ai_preprocessing.agent_max_tokens", "2048");
+            store.set_setting("ai_preprocessing.max_llm_input_chars", "8000");
+            store.set_setting("ai_preprocessing.quality_threshold", "0.6");
+            // The measured baseline (97–100% on tables/prose after the
+            // char-vs-byte chunker fix): 512/64 Thai-aware chunks.
+            store.set_setting("document.max_chunk_size", "512");
+            store.set_setting("document.chunk_overlap", "64");
+            // Smart-PDF: scanned pages and broken CMaps go to the vision LLM;
+            // image description needs the vision LLM too.
+            store.set_setting("document.image_description_enabled", "true");
+            store.set_setting("document.pdf_vision_fallback_enabled", "true");
+            store.set_setting("document.pdf_min_chars_per_page", "50");
+            store.set_setting("document.pdf_page_as_image_threshold", "0.5");
+            store.set_setting("document.pdf_image_dpi", "150");
+            store.set_setting("document.pdf_max_vision_pages", "100");
+            store.set_setting("document.pdf_high_quality", "false");
+            if stack.ocr_sidecar_url.is_empty() {
+                store.delete_setting("document.ocr_sidecar_url");
+            } else {
+                store.set_setting(
+                    "document.ocr_sidecar_url",
+                    stack.ocr_sidecar_url.trim_end_matches('/'),
+                );
+            }
+            stack.write_common(store.as_ref());
+        }
         "thai-basic" => {
             // ── LLM: shared mode with Chinda (Thai-optimized 4B) ──
             store.set_setting("chat_pipeline.enabled", "true");
@@ -6092,7 +6419,7 @@ pub async fn apply_preset(
         }
         _ => {
             return Err(ApiError(ThaiRagError::Validation(format!(
-                "Unknown preset: {}. Available: thai-basic, thai-recommended, thai-max, cloud-basic, cloud-recommended, cloud-max, thai-doc-basic, thai-doc-recommended, cloud-doc-basic, cloud-doc-recommended",
+                "Unknown preset: {}. Available: thai-gateway-chat, thai-gateway-doc, thai-basic, thai-recommended, thai-max, cloud-basic, cloud-recommended, cloud-max, thai-doc-basic, thai-doc-recommended, cloud-doc-basic, cloud-doc-recommended",
                 req.preset_id
             ))));
         }
@@ -6161,6 +6488,27 @@ pub async fn apply_preset(
                 }
             }
         }
+    }
+
+    // A preset that writes a full `LlmConfig` (gateway presets) also carries
+    // sampling / reasoning / vision flags — copy those over the field-by-field
+    // bridge above.
+    if let Some(llm_json) = store.get_setting("chat_pipeline.llm")
+        && let Ok(cfg) = serde_json::from_str::<thairag_config::schema::LlmConfig>(&llm_json)
+    {
+        pc.llm.temperature = cfg.temperature;
+        pc.llm.sampling = cfg.sampling;
+        pc.llm.reasoning = cfg.reasoning;
+        pc.llm.supports_vision = cfg.supports_vision;
+        if cfg.max_tokens.is_some() {
+            pc.llm.max_tokens = cfg.max_tokens;
+        }
+    }
+    // Document vision LLM written by a preset (`providers.doc_vision_llm`).
+    if let Some(vision_json) = store.get_setting("providers.doc_vision_llm")
+        && let Ok(cfg) = serde_json::from_str::<thairag_config::schema::LlmConfig>(&vision_json)
+    {
+        pc.doc_vision_llm = Some(cfg);
     }
 
     // Persist the full provider_config blob so GET /providers returns updated
