@@ -271,11 +271,17 @@ export async function listPresets() {
   return res.data;
 }
 
-export async function applyPreset(presetId: string, ollamaUrl?: string, apiKey?: string) {
+export async function applyPreset(
+  presetId: string,
+  ollamaUrl?: string,
+  apiKey?: string,
+  gateway?: { inputs: Record<string, string>; confirm_embedding_change: boolean },
+) {
   const res = await client.post('/api/km/settings/presets/apply', {
     preset_id: presetId,
     ollama_url: ollamaUrl || 'http://host.docker.internal:11435',
     ...(apiKey ? { api_key: apiKey } : {}),
+    ...(gateway ? { inputs: gateway.inputs, confirm_embedding_change: gateway.confirm_embedding_change } : {}),
   });
   return res.data;
 }
