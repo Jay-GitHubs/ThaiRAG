@@ -415,8 +415,8 @@ cd admin-ui && npx playwright test
 | `search.top_k` | `THAIRAG__SEARCH__TOP_K` | `10` | Results per search source |
 | `search.rerank_top_k` | `THAIRAG__SEARCH__RERANK_TOP_K` | `5` | Final results after reranking |
 | `search.rrf_k` | `THAIRAG__SEARCH__RRF_K` | `60` | RRF fusion parameter |
-| `search.vector_weight` | `THAIRAG__SEARCH__VECTOR_WEIGHT` | `0.6` | Vector search weight |
-| `search.text_weight` | `THAIRAG__SEARCH__TEXT_WEIGHT` | `0.4` | BM25 search weight |
+| `search.vector_weight` | `THAIRAG__SEARCH__VECTOR_WEIGHT` | `0.5` | Vector search weight |
+| `search.text_weight` | `THAIRAG__SEARCH__TEXT_WEIGHT` | `0.5` | BM25 search weight (balanced with the vector weight so a keyword-only hit can reach the rerank window) |
 
 ### Chat Pipeline — Context Compaction & Personal Memory
 

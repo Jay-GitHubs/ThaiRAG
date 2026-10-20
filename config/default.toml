@@ -50,8 +50,12 @@ api_key = ""
 top_k = 10
 rerank_top_k = 5
 rrf_k = 60
-vector_weight = 0.6
-text_weight = 0.4
+# Balanced fusion. RRF scores a hit weight / (rrf_k + rank + 1) and only the
+# top rerank_top_k fused hits survive; equal weights let a rank-1 keyword-only
+# (BM25) hit outscore the last dense hit in that window. The former 0.6 / 0.4
+# split made BM25 unable to add anything dense search had missed.
+vector_weight = 0.5
+text_weight = 0.5
 
 [document]
 max_chunk_size = 512

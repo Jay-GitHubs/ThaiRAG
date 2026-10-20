@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
 };
@@ -173,6 +174,51 @@ impl TantivySearch {
         let searcher = self.reader.searcher();
         searcher.num_docs()
     }
+
+    /// Build the lexical query as an OR of the terms the content field's own
+    /// analyzer produces for `text`.
+    ///
+    /// This deliberately bypasses Tantivy's `QueryParser`, which turns every
+    /// whitespace-delimited word that tokenizes into more than one term into
+    /// a slop-0 `PhraseQuery`. Thai writes no spaces between words, so a
+    /// natural Thai question is ONE such word and could only match a chunk
+    /// holding the identical token sequence: "วงเงินสูงสุด" (วงเงิน|สูงสุด)
+    /// found nothing in a chunk that contained both words a few tokens
+    /// apart, and a trailing question word ("…เท่าไหร่") made a match
+    /// impossible. Running the query through the same registered analyzer
+    /// the index uses (segmentation, stopwords, SARA AM normalization) and
+    /// OR-ing the distinct terms gives BM25 its per-term scoring for Thai and
+    /// English alike, and makes query punctuation (`?`, `:`, parentheses)
+    /// inert instead of parser syntax.
+    ///
+    /// Returns `None` when the text yields no indexable term (empty, or
+    /// stopwords/punctuation only): nothing can match, so the caller returns
+    /// no results instead of running an empty query.
+    fn build_text_query(&self, text: &str) -> Result<Option<Box<dyn Query>>> {
+        let mut analyzer = self
+            .index
+            .tokenizer_for_field(self.fields.content)
+            .map_err(|e| ThaiRagError::Internal(format!("Tantivy tokenizer lookup error: {e}")))?;
+        let mut stream = analyzer.token_stream(text);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        while stream.advance() {
+            let token = &stream.token().text;
+            if token.is_empty() || !seen.insert(token.clone()) {
+                continue;
+            }
+            let term = tantivy::Term::from_field_text(self.fields.content, token);
+            clauses.push((
+                Occur::Should,
+                Box::new(TermQuery::new(term, IndexRecordOption::WithFreqs)),
+            ));
+        }
+        Ok(match clauses.len() {
+            0 => None,
+            1 => Some(clauses.swap_remove(0).1),
+            _ => Some(Box::new(BooleanQuery::new(clauses))),
+        })
+    }
 }
 
 #[async_trait]
@@ -270,9 +316,11 @@ impl TextSearch for TantivySearch {
 
         let searcher = self.reader.searcher();
 
-        let query_parser = QueryParser::for_index(&self.index, vec![self.fields.content]);
-
-        let (text_query, _parse_errors) = query_parser.parse_query_lenient(&query.text);
+        let Some(text_query) = self.build_text_query(&query.text)? else {
+            // No indexable term (empty, or stopwords/punctuation only):
+            // nothing can match.
+            return Ok(vec![]);
+        };
 
         // Build final query: text MUST, with optional workspace and document
         // filters ANDed on. doc_ids restricts to specific documents (agentic
@@ -429,6 +477,106 @@ mod tests {
             "English search should still work with Thai tokenizer"
         );
     }
+
+    fn query(text: &str) -> SearchQuery {
+        SearchQuery {
+            text: text.to_string(),
+            workspace_ids: vec![],
+            top_k: 10,
+            unrestricted: true,
+            query_images: Vec::new(),
+            doc_ids: Vec::new(),
+        }
+    }
+
+    /// Regression: `QueryParser` turned an unspaced Thai query that segments
+    /// into several words into a slop-0 phrase, so "วงเงินสูงสุด"
+    /// (วงเงิน|สูงสุด) returned nothing against a chunk holding both words a
+    /// few tokens apart. The query is now an OR of the analyzer's terms, and
+    /// BM25 ranks the chunk matching both terms first.
+    #[tokio::test]
+    async fn thai_unspaced_query_matches_non_adjacent_terms() {
+        let search = TantivySearch::new("test");
+        let both_terms = make_chunk("ระยะเวลากู้สูงสุด 10 ปี โดยวงเงินขึ้นกับหลักประกัน");
+        let one_term = make_chunk("วงเงินกู้สูงสุดไม่เกิน 5 ล้านบาทต่อราย");
+        let both_id = both_terms.chunk_id.0;
+        search.index(&[one_term, both_terms]).await.unwrap();
+
+        let results = search.search(&query("วงเงินสูงสุด")).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "OR-of-terms must match words that are not adjacent"
+        );
+        assert_eq!(
+            results[0].chunk.chunk_id.0,
+            both_id,
+            "the chunk matching both terms must rank first: {:?}",
+            results.iter().map(|r| &r.chunk.content).collect::<Vec<_>>()
+        );
+    }
+
+    /// A question word after the content words ("…เท่าไหร่") used to make a
+    /// phrase match impossible; as an OR it is just one more optional term.
+    #[tokio::test]
+    async fn thai_question_word_does_not_block_match() {
+        let search = TantivySearch::new("test");
+        search
+            .index(&[make_chunk("ค่าธรรมเนียมการจัดการวงเงิน 1,000 บาท")])
+            .await
+            .unwrap();
+        let results = search.search(&query("ค่าธรรมเนียมเท่าไหร่")).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "a trailing question word must not block the match"
+        );
+    }
+
+    /// Query punctuation is inert text, not parser syntax: no parse errors,
+    /// no field prefixes, no boolean operators.
+    #[tokio::test]
+    async fn query_punctuation_is_inert() {
+        let search = TantivySearch::new("test");
+        search
+            .index(&[make_chunk("hello world from Rust")])
+            .await
+            .unwrap();
+        for q in ["rust?", "rust: (hello)", "\"rust", "hello AND NOT world"] {
+            let results = search.search(&query(q)).await.unwrap();
+            assert!(!results.is_empty(), "query {q:?} must match");
+        }
+    }
+
+    /// Multi-word queries have OR semantics: a term absent from the index
+    /// does not veto the match.
+    #[tokio::test]
+    async fn multiword_query_is_or_of_terms() {
+        let search = TantivySearch::new("test");
+        search
+            .index(&[make_chunk("hello world from Rust")])
+            .await
+            .unwrap();
+        let results = search.search(&query("rust tokio")).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "an unknown term must not veto the match"
+        );
+    }
+
+    /// A query that yields no indexable term (empty, stopwords or punctuation
+    /// only) returns nothing instead of erroring or matching everything.
+    #[tokio::test]
+    async fn stopword_only_query_returns_empty() {
+        let search = TantivySearch::new("test");
+        search
+            .index(&[make_chunk("ห้องสมุดเปิดให้บริการทุกวัน")])
+            .await
+            .unwrap();
+        for q in ["ของ ที่ และ", "", "?!..."] {
+            let results = search.search(&query(q)).await.unwrap();
+            assert!(results.is_empty(), "query {q:?} must match nothing");
+        }
+    }
+
     /// A hard kill mid-commit leaves meta.json referencing segment files that
     /// were never written. Startup must recover to an empty index (BM25 is
     /// derived data) instead of panicking into a crash-loop — the exact live
