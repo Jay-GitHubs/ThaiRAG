@@ -428,10 +428,26 @@ impl HybridSearchEngine {
             })
             .collect();
 
+        // Exact ties are common with balanced weights: a dense hit and a
+        // keyword hit at the same rank score identically. Resolve them by the
+        // absolute dense cosine (a dense hit outranks a keyword-only hit),
+        // then by chunk id, so the order never depends on HashMap iteration.
+        let cosine_of = |r: &SearchResult| {
+            vector_cosine
+                .get(&r.chunk.chunk_id.to_string())
+                .copied()
+                .unwrap_or(f32::NEG_INFINITY)
+        };
         merged.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    cosine_of(b)
+                        .partial_cmp(&cosine_of(a))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.chunk.chunk_id.0.cmp(&b.chunk.chunk_id.0))
         });
 
         // Normalize RRF scores to 0–1 range so downstream confidence
@@ -729,6 +745,52 @@ mod tests {
                 "score {} out of 0–1",
                 r.score
             );
+        }
+    }
+
+    /// With the shipped defaults (`config/default.toml`: k=60, balanced
+    /// weights, rerank window 5) a keyword-only hit must be able to enter the
+    /// rerank window. Under the former 0.6/0.4 split the best keyword-only
+    /// hit (0.4/61) scored below the worst dense hit (0.6/70), so BM25 could
+    /// reorder the dense top-k but never add a chunk dense search missed.
+    #[test]
+    fn rrf_keyword_only_hits_reach_rerank_window_with_balanced_weights() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let vec_results: Vec<SearchResult> = (1..=10)
+            .map(|i| make_result(&format!("00000000-0000-0000-0000-0000000000{i:02}"), 0.9))
+            .collect();
+        let text_results: Vec<SearchResult> = (1..=10)
+            .map(|i| make_result(&format!("00000000-0000-0000-0000-0000000001{i:02}"), 0.8))
+            .collect();
+
+        let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
+        let window = &merged[..5];
+        let keyword_only = window.iter().filter(|r| r.vector_score.is_none()).count();
+        assert!(
+            keyword_only >= 2,
+            "expected keyword-only hits inside the rerank window, got {keyword_only}: {:?}",
+            window
+                .iter()
+                .map(|r| r.chunk.chunk_id.0.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Balanced weights make exact ties common (a dense hit and a keyword hit
+    /// at the same rank score identically). Ties resolve deterministically:
+    /// by absolute dense cosine, then chunk id, never by HashMap order.
+    #[test]
+    fn rrf_ties_resolve_deterministically() {
+        let engine = build_engine(60, 0.5, 0.5);
+        let dense = "00000000-0000-0000-0000-0000000000aa";
+        let keyword = "00000000-0000-0000-0000-0000000000bb";
+        let vec_results = vec![make_result(dense, 0.9)];
+        let text_results = vec![make_result(keyword, 0.8)];
+
+        for _ in 0..50 {
+            let merged = engine.rrf_merge(&vec_results, &text_results, &[]);
+            assert_eq!(merged[0].chunk.chunk_id.0.to_string(), dense);
+            assert_eq!(merged[1].chunk.chunk_id.0.to_string(), keyword);
         }
     }
 }

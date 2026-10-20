@@ -211,8 +211,8 @@ many pages each tier handled.
 ### thairag-search
 Hybrid search engine:
 1. **Vector search** — Embedding query → top-K from VectorDB
-2. **BM25 search** — Tokenized query → top-K from Tantivy (disk-persisted, auto-rebuilt from `document_chunks` table on startup if empty)
-3. **RRF Fusion** — Reciprocal Rank Fusion merges results with configurable weights (`vector_weight`, `text_weight`) and RRF parameter `k` (default 60)
+2. **BM25 search** — Query tokenized by the same Thai analyzer as the index, OR of its terms → top-K from Tantivy (disk-persisted, auto-rebuilt from `document_chunks` table on startup if empty). The query bypasses Tantivy's `QueryParser`, which would turn an unspaced Thai question into an exact-phrase match.
+3. **RRF Fusion** — Reciprocal Rank Fusion merges results with configurable weights (`vector_weight`, `text_weight`, default balanced 0.5/0.5 so a keyword-only hit can enter the rerank window) and RRF parameter `k` (default 60); exact ties resolve by dense cosine, then chunk id
 4. **Reranking** — Optional cross-encoder reranking (Cohere or passthrough)
 
 ### thairag-agent
