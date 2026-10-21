@@ -196,18 +196,33 @@ UNANSWERABLE_PROMPT = """ด้านล่างคือข้อความ 
 {text}"""
 
 
+# The Studio's llama-server slot has an 8192-token context; Thai runs at
+# roughly 1 token per 1.3 chars, so prompts are capped well below that.
+DRAFT_CHARS, UNANSWERABLE_CHARS = 3500, 3000
+
+
 def draft_page(llm, ocr_text, n):
     if len(norm(ocr_text)) < 80:
         return []
-    out = llm.chat([{"role": "user", "content": DRAFT_PROMPT.format(n=n, text=ocr_text[:6000])}], max_tokens=1200, json_mode=True)
+    out = llm.chat([{"role": "user", "content": DRAFT_PROMPT.format(n=n, text=ocr_text[:DRAFT_CHARS])}], max_tokens=1200, json_mode=True)
     items = parse_json(out).get("items", [])
     return [i for i in items if isinstance(i, dict) and i.get("question") and i.get("answer") and i.get("evidence")]
 
 
 def draft_unanswerable(llm, doc_text):
-    out = llm.chat([{"role": "user", "content": UNANSWERABLE_PROMPT.format(text=doc_text[:8000])}], max_tokens=600, json_mode=True)
+    out = llm.chat([{"role": "user", "content": UNANSWERABLE_PROMPT.format(text=doc_text[:UNANSWERABLE_CHARS])}], max_tokens=600, json_mode=True)
     items = parse_json(out).get("items", [])
     return [i for i in items if isinstance(i, dict) and i.get("question") and i.get("key_term")]
+
+
+def cached_or_skip(path, producer, label):
+    """Like `cached`, but a failing producer logs, returns [] and caches
+    nothing, so a rerun retries it instead of the whole run dying."""
+    try:
+        return json.loads(cached(path, lambda: json.dumps(producer(), ensure_ascii=False)))
+    except Exception as e:  # noqa: BLE001 - any model/parse failure is skippable
+        print(f"    skipped {label}: {str(e)[:100]}", flush=True)
+        return []
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -245,13 +260,11 @@ def main():
             stem = os.path.join(out_dir, f"page-{pn}")
             ocr = cached(stem + ".ocr.txt", lambda: ocr_page(args.ocr, png))
             vlm = "" if args.skip_vlm else cached(stem + ".vlm.txt", lambda: vlm_page(llm, png))
-            cands = json.loads(cached(stem + ".cands.json", lambda: json.dumps(draft_page(llm, ocr, args.per_page), ensure_ascii=False)))
+            cands = cached_or_skip(stem + ".cands.json", lambda: draft_page(llm, ocr, args.per_page), f"{slug} p{pn} drafting")
             doc["pages"].append({"n": pn, "png": os.path.relpath(png, args.work), "ocr": ocr, "vlm": vlm, "cands": cands})
             print(f"  {slug} p{pn}: ocr={len(ocr)}c vlm={len(vlm)}c drafted={len(cands)}", flush=True)
         doc_text = "\n".join(p["ocr"] for p in doc["pages"])
-        doc["unanswerable"] = json.loads(
-            cached(os.path.join(out_dir, "unanswerable.json"), lambda: json.dumps(draft_unanswerable(llm, doc_text), ensure_ascii=False))
-        )
+        doc["unanswerable"] = cached_or_skip(os.path.join(out_dir, "unanswerable.json"), lambda: draft_unanswerable(llm, doc_text), f"{slug} unanswerable")
         docs[slug] = doc
         print(f"{slug} done in {time.time() - t0:.0f}s ({len(pages)} pages)", flush=True)
 
