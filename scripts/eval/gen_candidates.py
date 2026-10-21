@@ -237,6 +237,7 @@ def main():
     ap.add_argument("--limit-docs", type=int, default=0)
     ap.add_argument("--limit-pages", type=int, default=0)
     ap.add_argument("--skip-vlm", action="store_true")
+    ap.add_argument("--prepare-only", action="store_true", help="render + OCR every page, no LLM calls (fill the cache while the model server is down)")
     args = ap.parse_args()
 
     llm = Llm(args.llm)
@@ -259,14 +260,23 @@ def main():
             pn = page_no(png)
             stem = os.path.join(out_dir, f"page-{pn}")
             ocr = cached(stem + ".ocr.txt", lambda: ocr_page(args.ocr, png))
+            if args.prepare_only:
+                print(f"  {slug} p{pn}: ocr={len(ocr)}c (prepared)", flush=True)
+                continue
             vlm = "" if args.skip_vlm else cached(stem + ".vlm.txt", lambda: vlm_page(llm, png))
             cands = cached_or_skip(stem + ".cands.json", lambda: draft_page(llm, ocr, args.per_page), f"{slug} p{pn} drafting")
             doc["pages"].append({"n": pn, "png": os.path.relpath(png, args.work), "ocr": ocr, "vlm": vlm, "cands": cands})
             print(f"  {slug} p{pn}: ocr={len(ocr)}c vlm={len(vlm)}c drafted={len(cands)}", flush=True)
+        if args.prepare_only:
+            print(f"{slug} prepared in {time.time() - t0:.0f}s ({len(pages)} pages)", flush=True)
+            continue
         doc_text = "\n".join(p["ocr"] for p in doc["pages"])
         doc["unanswerable"] = cached_or_skip(os.path.join(out_dir, "unanswerable.json"), lambda: draft_unanswerable(llm, doc_text), f"{slug} unanswerable")
         docs[slug] = doc
         print(f"{slug} done in {time.time() - t0:.0f}s ({len(pages)} pages)", flush=True)
+    if args.prepare_only:
+        print("prepare-only done: pages rendered and OCR'd; rerun without --prepare-only when the model server is back")
+        return 0
 
     # ── verification across the corpus ──
     corpus_text = {s: norm("\n".join(p["ocr"] for p in d["pages"])) for s, d in docs.items()}
