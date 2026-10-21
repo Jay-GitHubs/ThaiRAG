@@ -209,6 +209,89 @@ def layer_retrieval(c, ws, items, doc_ids, top_k, named):
         it["answer_in_context"] = any(fuzzy_in(it["answer"], r["text"], 0.8) for r in rows) if it["answerable"] else None
 
 
+# ── naive baseline arm ───────────────────────────────────────────────────────
+# A deliberately plain RAG over the same documents: fixed-size character
+# windows of the stored document text, one dense embedding per window (the
+# same embedder the stack uses), cosine top-k, and a minimal answer prompt.
+# No reranker, no plugins, no curator. If the full pipeline cannot beat this,
+# that is the finding.
+EMBED_URL = os.environ.get("EMBED_URL", "http://localhost:8932/v1")
+NAIVE_WINDOW, NAIVE_OVERLAP = 500, 100
+
+
+def embed_texts(texts):
+    out = []
+    for i in range(0, len(texts), 16):
+        req = urllib.request.Request(EMBED_URL.rstrip("/") + "/embeddings", data=json.dumps({"model": "embed-qwen3", "input": texts[i : i + 16]}).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as r:
+            out.extend(d["embedding"] for d in json.loads(r.read())["data"])
+    return out
+
+
+def dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+class NaiveIndex:
+    def __init__(self, c, ws, docs):
+        self.rows = []  # (doc_id, text)
+        for d in docs:
+            raw = c._req("GET", f"/api/km/workspaces/{ws}/documents/{d['id']}/content", None, {}, 120)
+            text = raw.get("content") if isinstance(raw, dict) else raw
+            text = text if isinstance(text, str) else json.dumps(raw, ensure_ascii=False)
+            step = NAIVE_WINDOW - NAIVE_OVERLAP
+            for i in range(0, max(1, len(text)), step):
+                w = text[i : i + NAIVE_WINDOW]
+                if len(w.strip()) > 40:
+                    self.rows.append((d["id"], w))
+        self.vecs = embed_texts([t for _, t in self.rows]) if self.rows else []
+
+    def search(self, query, k):
+        qv = embed_texts([query])[0]
+        scored = sorted(((dot(qv, v), i) for i, v in enumerate(self.vecs)), reverse=True)[:k]
+        return [{"doc_id": self.rows[i][0], "pages": [], "score": s, "text": self.rows[i][1]} for s, i in scored]
+
+
+def layer_retrieval_naive(index, items, doc_ids, top_k, named):
+    for it in items:
+        q = it["question_named"] if named else it["question"]
+        rows = index.search(q, top_k)
+        want = doc_ids.get(norm(it["doc"]))
+        it["hits"] = [{k: v for k, v in r.items() if k != "text"} for r in rows]
+        it["doc_hit"] = any(r["doc_id"] == want for r in rows)
+        ev_rank = next((i + 1 for i, r in enumerate(rows) if r["doc_id"] == want and fuzzy_in(it["evidence"], r["text"], 0.8)), 0)
+        it["evidence_hit"] = ev_rank > 0
+        it["evidence_rank"] = ev_rank
+        it["answer_in_context"] = any(fuzzy_in(it["answer"], r["text"], 0.8) for r in rows) if it["answerable"] else None
+        it["_naive_context"] = "\n---\n".join(r["text"] for r in rows)
+
+
+NAIVE_ANSWER_PROMPT = "ตอบคำถามโดยใช้เฉพาะข้อมูลจากบริบทด้านล่าง ตอบสั้นและตรงประเด็น ถ้าบริบทไม่มีข้อมูล ให้ตอบว่า \"ไม่พบข้อมูลในเอกสาร\"\n\nบริบท:\n{context}\n\nคำถาม: {question}"
+
+
+def layer_answers_naive(llm_base, items, runs, judge_base, named):
+    for it in items:
+        q = it["question_named"] if named else it["question"]
+        it["runs"] = []
+        for _ in range(runs):
+            body = {"model": "qwen", "temperature": 0, "seed": 42, "max_tokens": 400, "messages": [{"role": "user", "content": NAIVE_ANSWER_PROMPT.format(context=it["_naive_context"][:6000], question=q)}]}
+            req = urllib.request.Request(llm_base.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(req, timeout=900) as r:
+                    answer = json.loads(r.read())["choices"][0]["message"]["content"]
+            except Exception as e:
+                it["runs"].append({"error": str(e)[:160]})
+                continue
+            run = {"answer": answer, "ms": int((time.time() - t0) * 1000)}
+            if it["answerable"]:
+                run["value_match"] = value_match(it["answer"], answer)
+            if judge_base:
+                run["judge"] = judge(judge_base, it, answer, it["_naive_context"])
+            it["runs"].append(run)
+        _finish_answer_item(it)
+
+
 JUDGE_PROMPT = """You grade a question-answering system on Thai documents. Compare the system answer with the gold answer and evidence.
 Reply with ONE JSON object only:
 {{"verdict":"correct|partial|incorrect","refusal":true|false,"supported":true|false,"reason":"<short Thai or English>"}}
@@ -262,21 +345,25 @@ def layer_answers(c, ws, items, runs, judge_base, named):
             if judge_base:
                 run["judge"] = judge(judge_base, it, answer, ctx)
             it["runs"].append(run)
-        ok = []
-        for run in it["runs"]:
-            if "error" in run:
-                ok.append(False)
-                continue
-            jv = (run.get("judge") or {}).get("verdict")
-            refusal = bool((run.get("judge") or {}).get("refusal"))
-            if not it["answerable"]:
-                ok.append(refusal)
-            elif jv in ("correct", "partial", "incorrect"):
-                ok.append(jv == "correct" or (jv == "partial" and run.get("value_match", False)))
-            else:
-                ok.append(bool(run.get("value_match")))
-        it["answer_correct_rate"] = sum(ok) / len(ok) if ok else None
-        print(("✓" if it["answer_correct_rate"] == 1 else "~" if it["answer_correct_rate"] else "✗"), it["question"][:70], flush=True)
+        _finish_answer_item(it)
+
+
+def _finish_answer_item(it):
+    ok = []
+    for run in it["runs"]:
+        if "error" in run:
+            ok.append(False)
+            continue
+        jv = (run.get("judge") or {}).get("verdict")
+        refusal = bool((run.get("judge") or {}).get("refusal"))
+        if not it["answerable"]:
+            ok.append(refusal)
+        elif jv in ("correct", "partial", "incorrect"):
+            ok.append(jv == "correct" or (jv == "partial" and run.get("value_match", False)))
+        else:
+            ok.append(bool(run.get("value_match")))
+    it["answer_correct_rate"] = sum(ok) / len(ok) if ok else None
+    print(("✓" if it["answer_correct_rate"] == 1 else "~" if it["answer_correct_rate"] else "✗"), it["question"][:70], flush=True)
 
 
 def triage(it, have_answers):
@@ -414,16 +501,26 @@ def cmd_run(args):
             doc_ids[norm(os.path.splitext(doc_title(d))[0])] = d["id"]
         print(f"workspace {ws[:8]}: gold items {len(group)} | docs {len(docs)}", flush=True)
         layer_fidelity(c, ws, group, doc_ids)
-        layer_retrieval(c, ws, group, doc_ids, args.top_k, args.named)
-        if args.answers > 0:
-            layer_answers(c, ws, group, args.answers, args.judge, args.named)
+        if args.naive:
+            index = NaiveIndex(c, ws, docs)
+            print(f"  naive index: {len(index.rows)} windows", flush=True)
+            layer_retrieval_naive(index, group, doc_ids, args.top_k, args.named)
+            if args.answers > 0:
+                layer_answers_naive(args.judge, group, args.answers, args.judge, args.named)
+            for it in group:
+                it.pop("_naive_context", None)
+        else:
+            layer_retrieval(c, ws, group, doc_ids, args.top_k, args.named)
+            if args.answers > 0:
+                layer_answers(c, ws, group, args.answers, args.judge, args.named)
     print(f"fidelity: {sum(bool(i.get('fidelity_ok')) for i in items)}/{len(items)}", flush=True)
     print(f"evidence_hit@{args.top_k}: {sum(bool(i.get('evidence_hit')) for i in items if i['answerable'])}/{sum(i['answerable'] for i in items)}", flush=True)
     for it in items:
         it["bucket"] = triage(it, args.answers > 0)
     summary = summarize(items, args.label, args.answers > 0)
     summary.update({"gold": os.path.basename(args.gold), "gold_version": gold.get("version"), "split": args.split, "named": args.named,
-                    "layout": "per-document" if ws_map else "shared", "top_k": args.top_k, "answer_runs": args.answers, "api": API, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                    "layout": "per-document" if ws_map else "shared", "arm": "naive-baseline" if args.naive else "pipeline",
+                    "top_k": args.top_k, "answer_runs": args.answers, "api": API, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({"summary": summary, "items": items}, fh, ensure_ascii=False, indent=1)
@@ -445,6 +542,7 @@ def main():
     r.add_argument("--named", action="store_true", help="use the program-named question variant (shared scope)")
     r.add_argument("--top-k", type=int, default=5)
     r.add_argument("--answers", type=int, default=0, help="answer runs per question (0 = retrieval only)")
+    r.add_argument("--naive", action="store_true", help="naive baseline arm: fixed windows + dense top-k + minimal prompt, bypassing the pipeline")
     r.add_argument("--judge", default="http://192.168.0.200:8931/v1")
     p = sub.add_parser("report")
     p.add_argument("json")
