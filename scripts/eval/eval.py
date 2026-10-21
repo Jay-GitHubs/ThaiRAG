@@ -390,24 +390,40 @@ def cmd_run(args):
         sys.exit("no gold items for that split")
     c = Client()
     c.login()
-    if args.ingest:
-        ensure_ingested(c, args.ws, args.ingest, {i["doc"] for i in items})
-    docs = list_docs(c, args.ws)
-    doc_ids = {}
-    for d in docs:
-        doc_ids[norm(doc_title(d))] = d["id"]
-        doc_ids[norm(os.path.splitext(doc_title(d))[0])] = d["id"]
-    print(f"gold items: {len(items)} | workspace docs: {len(docs)}", flush=True)
-    layer_fidelity(c, args.ws, items, doc_ids)
+
+    # Layout: one shared workspace (--ws) or one workspace per document
+    # (--ws-map JSON {document filename: workspace id}, the deployment layout).
+    ws_map = {}
+    if args.ws_map:
+        with open(args.ws_map, encoding="utf-8") as fh:
+            ws_map = {norm(k): v for k, v in json.load(fh).items()}
+    groups = {}
+    for it in items:
+        ws = ws_map.get(norm(it["doc"])) or args.ws
+        if not ws:
+            sys.exit(f"no workspace for {it['doc']}")
+        groups.setdefault(ws, []).append(it)
+
+    for ws, group in groups.items():
+        if args.ingest:
+            ensure_ingested(c, ws, args.ingest, {i["doc"] for i in group})
+        docs = list_docs(c, ws)
+        doc_ids = {}
+        for d in docs:
+            doc_ids[norm(doc_title(d))] = d["id"]
+            doc_ids[norm(os.path.splitext(doc_title(d))[0])] = d["id"]
+        print(f"workspace {ws[:8]}: gold items {len(group)} | docs {len(docs)}", flush=True)
+        layer_fidelity(c, ws, group, doc_ids)
+        layer_retrieval(c, ws, group, doc_ids, args.top_k, args.named)
+        if args.answers > 0:
+            layer_answers(c, ws, group, args.answers, args.judge, args.named)
     print(f"fidelity: {sum(bool(i.get('fidelity_ok')) for i in items)}/{len(items)}", flush=True)
-    layer_retrieval(c, args.ws, items, doc_ids, args.top_k, args.named)
     print(f"evidence_hit@{args.top_k}: {sum(bool(i.get('evidence_hit')) for i in items if i['answerable'])}/{sum(i['answerable'] for i in items)}", flush=True)
-    if args.answers > 0:
-        layer_answers(c, args.ws, items, args.answers, args.judge, args.named)
     for it in items:
         it["bucket"] = triage(it, args.answers > 0)
     summary = summarize(items, args.label, args.answers > 0)
-    summary.update({"gold": os.path.basename(args.gold), "gold_version": gold.get("version"), "split": args.split, "named": args.named, "top_k": args.top_k, "answer_runs": args.answers, "api": API, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    summary.update({"gold": os.path.basename(args.gold), "gold_version": gold.get("version"), "split": args.split, "named": args.named,
+                    "layout": "per-document" if ws_map else "shared", "top_k": args.top_k, "answer_runs": args.answers, "api": API, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({"summary": summary, "items": items}, fh, ensure_ascii=False, indent=1)
@@ -420,7 +436,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--gold", required=True)
-    r.add_argument("--ws", required=True)
+    r.add_argument("--ws", help="shared workspace id")
+    r.add_argument("--ws-map", help="JSON {document filename: workspace id} for the per-document layout")
     r.add_argument("--label", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--ingest", metavar="PDF_DIR")
