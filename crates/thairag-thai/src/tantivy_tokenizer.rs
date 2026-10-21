@@ -146,9 +146,13 @@ fn tokenize_mixed(text: &str, segmenter: &NewmmTokenizer) -> Vec<Token> {
         let run = &text[byte_start..byte_end];
 
         if thai_run {
-            // Segment Thai run using nlpo3.
+            // Segment Thai run using nlpo3. `safe = false`: safe mode garbles
+            // runs of 140+ chars (repeats early words, drops the tail) — see
+            // `DictionarySegmenter::tokenize`. A Thai run here is everything
+            // between two non-Thai characters, so an unspaced paragraph is one
+            // run and must segment losslessly for the index to hold its words.
             let words = segmenter
-                .segment(run, true, false)
+                .segment(run, false, false)
                 .unwrap_or_else(|_| vec![run.to_string()]);
 
             let mut offset = byte_start;
@@ -310,6 +314,44 @@ mod tests {
         let precomposed = collect("น\u{0E33}");
         assert_eq!(decomposed, precomposed, "SARA AM forms must unify");
         assert_eq!(precomposed, vec!["น\u{0E33}".to_string()]);
+    }
+
+    /// Regression: a long unspaced Thai run (one script run, 400+ chars) used
+    /// to come back from safe-mode segmentation as the wrong words, so the
+    /// indexed terms were not the text's words and the byte offsets no longer
+    /// pointed at the token text. Every token must slice out of the text
+    /// exactly, in order, and the run's last word must be indexed.
+    #[test]
+    fn long_unspaced_run_tokens_match_their_offsets() {
+        let text: String = crate::segmenter::LONG_OCR_LINE
+            .chars()
+            .filter(|c| ('\u{0E00}'..='\u{0E7F}').contains(c))
+            .collect();
+        assert!(text.chars().count() > 400, "fixture sanity");
+        let mut tok = make_tokenizer();
+        let mut stream = tok.token_stream(&text);
+        let mut last_end = 0;
+        let mut words = Vec::new();
+        while stream.advance() {
+            let t = stream.token();
+            assert!(t.offset_from >= last_end, "offsets must be monotonic");
+            assert_eq!(
+                &text[t.offset_from..t.offset_to],
+                t.text,
+                "token must slice its text"
+            );
+            last_end = t.offset_to;
+            words.push(t.text.clone());
+        }
+        assert!(
+            words.len() > 50,
+            "a 400+ char run segments into many words: {}",
+            words.len()
+        );
+        assert!(
+            words.contains(&"กู้".to_string()),
+            "the tail of the run must be indexed: {words:?}"
+        );
     }
 
     #[test]
