@@ -52,3 +52,4 @@ Thumbs.db
 *.tmp
 admin-ui/e2e-live/.auth/
 admin-ui/e2e-live/.env.live
+scripts/eval/work/
