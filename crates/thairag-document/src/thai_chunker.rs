@@ -500,6 +500,35 @@ mod tests {
         assert!(!chunks.is_empty());
     }
 
+    /// Regression: the clause splitter rebuilds text from dictionary tokens,
+    /// so nlpo3 safe-mode garbling on a 140+ char line turned one OCR'd page
+    /// line into 18 copies of its head with the tail lost. Splitting must
+    /// keep every character once and in order.
+    #[test]
+    fn long_ocr_line_is_split_losslessly() {
+        let line = "7.การป้องกันความเสี่ยง ความเสี่ยงทางด้านเครดิต ผู้กู้ต้องมีวัตถุประสงค์ในการกู้ยืมที่ชัดเจนตามที่ Product Program กำหนด และเพื่อใช้ในการคำเนินธุรกิจเท่านั้น ผู้กู้ต้องมีประสบการณ์ในการบริหารธุรกิจที่ขอกู้ หรือธุรกิจที่เกี่ยวเนื่องกับธุรกิจที่ขอกู้มาไม่ต่ำกว่า 2 - 3 ปี สินเชื่อทุกรายจะต้องมีแหล่งที่มาในการชำระหนี้คืน ได้แก่กระแสเงินสดของกิจการ ความเสี่ยงด้านกฎหมาย ผู้กูต้องกรอกแบบฟอร์ม และส่งมอบเอกสารหลักฐานต่างๆ ตามที่ธนาคารกำหนดให้ครบถ้วน 8. อำนาจในการอนุมัติสินเชื่อ อ้างอิงจากประกาศธนาคาร 9.อำนาจอนุมัติลดอัตราดอกเบีย อ้างอิงจากประกาศธนาคาร 10. อำนาจอนุมัติลดค่าธรรมเนียม อ้างอิงจากประกาศธนาคาร ณ วันยื่นกู้";
+        assert!(line.chars().count() > 300, "fixture sanity");
+        let chunker = ThaiAwareChunker::new();
+        let segments = chunker.segment_sentences(line);
+        let joined = segments.join(" ");
+        let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(
+            squash(&joined),
+            squash(line),
+            "segments must be the input split, not rewritten: {segments:?}"
+        );
+        assert_eq!(joined.matches("7.การป้องกัน").count(), 1);
+        assert!(joined.ends_with("วันยื่นกู้"), "the tail must survive: {joined}");
+        let chunks = chunker.chunk(line, 512, 64);
+        for c in &chunks {
+            assert!(
+                c.chars().count() <= 512 + 64,
+                "chunk oversize: {}",
+                c.chars().count()
+            );
+        }
+    }
+
     #[test]
     fn chunk_thai_newline_separated() {
         let chunker = ThaiAwareChunker::new();
