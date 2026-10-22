@@ -12,9 +12,15 @@ points at one stage, keep the test set frozen, and tune only on the dev split.
 | `gen_candidates.py` | Drafts gold-set candidates from a folder of PDFs. Each page is read twice independently (PaddleOCR sidecar + the vision LLM); a candidate survives only if its evidence quote is verbatim in the OCR text, and it is flagged when the vision reading disagrees. Also drafts unanswerable questions whose key term appears nowhere in the corpus. Output: `work/candidates.json` plus page images. Resumable. |
 | `build_review.py` | Builds `work/review.html`, a local page for the human reviewer: page image, question, proposed answer, evidence, flags; approve / reject / correct with keyboard shortcuts; decisions persist in the browser and export as `decisions.json`. |
 | `promote_gold.py` | Turns reviewed decisions into `gold/<name>.json`: approved items only, corrected answers applied, program-named question variant, dev/test split by document. |
-| `eval.py` | `run` the three layers against a workspace, `report` an HTML page, `compare` two runs. Results go under `results/` with git commit, config and timestamp. |
+| `eval.py` | `run` the three layers against a workspace, `report` an HTML page, `compare` two runs. Results go under `results/`, stamped with git commit, config and timestamp. |
 
-`work/` is gitignored on purpose: it holds page images of the source documents.
+## Data handling
+
+Nothing derived from a real document is tracked in git. `work/` (page images, OCR text,
+candidates), `gold/` (questions, answers and evidence quotes) and `results/` (questions and
+the system's answers) are all gitignored. Keep the gold set in private storage if it must
+outlive this machine; the tools read it from any path. Only the scripts are committed, and
+unit-test fixtures elsewhere in the repository use synthetic text.
 
 ## Layers and metrics
 
@@ -45,4 +51,4 @@ python3 -I scripts/eval/eval.py run --gold scripts/eval/gold/sme_v1.json --ws <w
 python3 -I scripts/eval/eval.py compare scripts/eval/results/main.json scripts/eval/results/candidate.json
 ```
 
-Exit criteria are agreed before the first run and written next to the results. One change per cycle, measured on dev, confirmed on test, at most four cycles; what remains is documented as the ceiling.
+Exit criteria are agreed before the first run and recorded with the run label. One change per cycle, measured on dev, confirmed on test, at most four cycles; what remains is documented as the ceiling. Summary numbers may be quoted in docs or PRs; question text and answers never are.

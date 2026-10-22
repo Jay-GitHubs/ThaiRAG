@@ -60,7 +60,7 @@ def fuzzy_in(needle, hay, threshold=0.8):
 
 
 def program_name(filename):
-    """'ปี <year>_<n>. <name>_.pdf' -> '<name>'"""
+    """Strip a leading 'ปี <year>_<n>.' index and trailing '_' from a file name."""
     name = os.path.splitext(filename)[0]
     name = re.sub(r"^ปี\s*\d+_\d+\.\s*", "", name)
     return name.rstrip("_ ").strip()
