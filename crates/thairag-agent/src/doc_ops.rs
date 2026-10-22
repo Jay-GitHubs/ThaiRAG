@@ -473,12 +473,12 @@ mod tests {
 
     #[test]
     fn named_document_is_summarized_even_when_not_bare() {
-        // Facet value tokens make "กล้าสู้" distinguishing for doc 2.
+        // Facet value tokens make "มั่นคง" distinguishing for doc 2.
         let cat = [
-            entry("สินเชื่อ SME โตไว", &["program: โตไว"]),
-            entry("สินเชื่อ SME กล้าสู้", &["program: กล้าสู้"]),
+            entry("สินเชื่อ SME เติบโต", &["program: เติบโต"]),
+            entry("สินเชื่อ SME มั่นคง", &["program: มั่นคง"]),
         ];
-        match resolve("สรุปเอกสารสินเชื่อ SME กล้าสู้ ให้หน่อย", &cat, 30)
+        match resolve("สรุปเอกสารสินเชื่อ SME มั่นคง ให้หน่อย", &cat, 30)
         {
             Some(DocOpOutcome::Summarize { doc_id, .. }) => assert_eq!(doc_id, cat[1].doc_id),
             _ => panic!("expected named-doc Summarize"),

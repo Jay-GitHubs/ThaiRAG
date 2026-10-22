@@ -10,7 +10,7 @@
 //!
 //! What works (93 % correct in the same test, lifting end-to-end accuracy from
 //! 0.44 to 0.79) is *exact matching*, not judgement: extract each document's
-//! distinguishing facets once at ingest ("program: กล้าสู้", "collateral:
+//! distinguishing facets once at ingest ("program: มั่นคง", "collateral:
 //! เงินฝาก", "limit: 10 ล้านบาท"), then at query time score each document by how
 //! many of its facet *values* appear verbatim in the query, weighting rare
 //! tokens higher. "เงินฝาก" is either in the query or it is not — no variance.
@@ -162,17 +162,17 @@ mod tests {
         // Two near-identical loan docs differing only in collateral + limit.
         let cat = vec![
             entry(
-                "SME กล้าสู้ loan",
-                &["program: กล้าสู้", "collateral: เต็มจำนวน", "limit: 20"],
+                "SME มั่นคง loan",
+                &["program: มั่นคง", "collateral: เต็มจำนวน", "limit: 20"],
             ),
             entry(
-                "SME กล้าสู้ loan",
-                &["program: กล้าสู้", "collateral: เงินฝาก", "limit: 10"],
+                "SME มั่นคง loan",
+                &["program: มั่นคง", "collateral: เงินฝาก", "limit: 10"],
             ),
         ];
         let want = cat[1].doc_id;
-        // "กล้าสู้" is shared (df=2 → low weight); "เงินฝาก" is unique (df=1).
-        let got = select_docs("โครงการ กล้าสู้ หลักประกัน เงินฝาก วงเงินเท่าไร", &cat, 60);
+        // "มั่นคง" is shared (df=2 → low weight); "เงินฝาก" is unique (df=1).
+        let got = select_docs("โครงการ มั่นคง หลักประกัน เงินฝาก วงเงินเท่าไร", &cat, 60);
         assert_eq!(got, vec![want]);
     }
 

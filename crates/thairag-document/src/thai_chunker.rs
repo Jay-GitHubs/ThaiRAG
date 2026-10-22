@@ -502,11 +502,12 @@ mod tests {
 
     /// Regression: the clause splitter rebuilds text from dictionary tokens,
     /// so nlpo3 safe-mode garbling on a 140+ char line turned one OCR'd page
-    /// line into 18 copies of its head with the tail lost. Splitting must
-    /// keep every character once and in order.
+    /// line into many copies of its head with the tail lost. Splitting must
+    /// keep every character once and in order. The fixture is a synthetic
+    /// page of library lending rules shaped like OCR output.
     #[test]
     fn long_ocr_line_is_split_losslessly() {
-        let line = "7.การป้องกันความเสี่ยง ความเสี่ยงทางด้านเครดิต ผู้กู้ต้องมีวัตถุประสงค์ในการกู้ยืมที่ชัดเจนตามที่ Product Program กำหนด และเพื่อใช้ในการคำเนินธุรกิจเท่านั้น ผู้กู้ต้องมีประสบการณ์ในการบริหารธุรกิจที่ขอกู้ หรือธุรกิจที่เกี่ยวเนื่องกับธุรกิจที่ขอกู้มาไม่ต่ำกว่า 2 - 3 ปี สินเชื่อทุกรายจะต้องมีแหล่งที่มาในการชำระหนี้คืน ได้แก่กระแสเงินสดของกิจการ ความเสี่ยงด้านกฎหมาย ผู้กูต้องกรอกแบบฟอร์ม และส่งมอบเอกสารหลักฐานต่างๆ ตามที่ธนาคารกำหนดให้ครบถ้วน 8. อำนาจในการอนุมัติสินเชื่อ อ้างอิงจากประกาศธนาคาร 9.อำนาจอนุมัติลดอัตราดอกเบีย อ้างอิงจากประกาศธนาคาร 10. อำนาจอนุมัติลดค่าธรรมเนียม อ้างอิงจากประกาศธนาคาร ณ วันยื่นกู้";
+        let line = "7.ระเบียบการยืมหนังสือ สมาชิกต้องแสดงบัตรสมาชิกทุกครั้งที่ยืมหนังสือ และยืมได้ครั้งละไม่เกิน 5 เล่ม เป็นเวลา 14 วัน หากคืนล่าช้าจะมีค่าปรับวันละ 5 บาทต่อเล่ม สมาชิกที่ค้างค่าปรับเกิน 100 บาทจะถูกระงับสิทธิ์การยืมจนกว่าจะชำระครบถ้วน หนังสืออ้างอิง วารสารฉบับล่าสุด และวิทยานิพนธ์ไม่อนุญาตให้ยืมออกนอกห้องสมุด แต่สามารถถ่ายสำเนาได้ตามระเบียบว่าด้วยลิขสิทธิ์ 8. การจองหนังสือ สมาชิกสามารถจองหนังสือที่ถูกยืมอยู่ได้ผ่านระบบออนไลน์ เมื่อหนังสือถูกส่งคืน ระบบจะแจ้งเตือนทางอีเมล และเก็บหนังสือไว้ให้ 3 วัน 9. การต่ออายุการยืม ต่ออายุได้ไม่เกิน 2 ครั้ง หากไม่มีผู้จองคิวถัดไป ณ วันสมัคร";
         assert!(line.chars().count() > 300, "fixture sanity");
         let chunker = ThaiAwareChunker::new();
         let segments = chunker.segment_sentences(line);
@@ -517,8 +518,11 @@ mod tests {
             squash(line),
             "segments must be the input split, not rewritten: {segments:?}"
         );
-        assert_eq!(joined.matches("7.การป้องกัน").count(), 1);
-        assert!(joined.ends_with("วันยื่นกู้"), "the tail must survive: {joined}");
+        assert_eq!(joined.matches("7.ระเบียบ").count(), 1);
+        assert!(
+            joined.ends_with("วันสมัคร"),
+            "the tail must survive: {joined}"
+        );
         let chunks = chunker.chunk(line, 512, 64);
         for c in &chunks {
             assert!(

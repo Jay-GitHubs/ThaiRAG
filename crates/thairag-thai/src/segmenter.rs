@@ -55,10 +55,12 @@ impl ThaiTokenizer for DictionarySegmenter {
     }
 }
 
-/// A real OCR'd line from a scanned Thai loan-program page (795 chars). Long
-/// enough to trip nlpo3's safe-mode windowing (threshold 140 chars).
+/// A synthetic Thai page of library lending rules, shaped like OCR output
+/// (numbered clauses, digits, long spans with no sentence marker; ~720
+/// chars). Long enough to trip nlpo3's safe-mode windowing (threshold 140
+/// chars), which garbles any input of that length regardless of content.
 #[cfg(test)]
-pub(crate) const LONG_OCR_LINE: &str = "7.การป้องกันความเสี่ยง ความเสี่ยงทางด้านเครดิต ผู้กู้ต้องมีวัตถุประสงค์ในการกู้ยืมที่ชัดเจนตามที่ Product Program กำหนด และเพื่อใช้ในการคำเนินธุรกิจเท่านั้น ผู้กู้ต้องมีประสบการณ์ในการบริหารธุรกิจที่ขอกู้ หรือธุรกิจที่เกี่ยวเนื่องกับธุรกิจที่ขอกู้มาไม่ต่ำกว่า 2 - 3 ปี สินเชื่อทุกรายจะต้องมีแหล่งที่มาในการชำระหนี้คืน ได้แก่กระแสเงินสดของกิจการ ความเสี่ยงด้านกฎหมาย ผู้กูต้องกรอกแบบฟอร์ม และส่งมอบเอกสารหลักฐานต่างๆ ตามที่ธนาคารกำหนดให้ครบถ้วน 8. อำนาจในการอนุมัติสินเชื่อ ซ อ้างอิงจากประกาศธนาคาร a 9.อำนาจอนุมัติลดอัตราดอกเบีย อ้างอิงจากประกาศธนาคาร 10. อำนาจอนุมัติลดค่าธรรมเนียม อ้างอิงจากประกาศธนาคาร เกณฑ์่ขันตำสำหรับการพิจารณาลูกค้าสินเชือ 1. คุณสมบัติของลูกค้ากลุ่มเป้าหมาย เป็นบุคคลธรรมดา หรือนิติบุคคล ที่ประกอบธุรกิจ SME มีสัญชาติไทย อายุไม่ต่ำกว่า 20 ปี และไม่เกิน 65 ปี ณ วันยื่นกู้";
+pub(crate) const LONG_OCR_LINE: &str = "7.ระเบียบการยืมหนังสือ สมาชิกต้องแสดงบัตรสมาชิกทุกครั้งที่ยืมหนังสือ และยืมได้ครั้งละไม่เกิน 5 เล่ม เป็นเวลา 14 วัน หากคืนล่าช้าจะมีค่าปรับวันละ 5 บาทต่อเล่ม สมาชิกที่ค้างค่าปรับเกิน 100 บาทจะถูกระงับสิทธิ์การยืมจนกว่าจะชำระครบถ้วน หนังสืออ้างอิง วารสารฉบับล่าสุด และวิทยานิพนธ์ไม่อนุญาตให้ยืมออกนอกห้องสมุด แต่สามารถถ่ายสำเนาได้ตามระเบียบว่าด้วยลิขสิทธิ์ 8. การจองหนังสือ สมาชิกสามารถจองหนังสือที่ถูกยืมอยู่ได้ผ่านระบบออนไลน์ เมื่อหนังสือถูกส่งคืน ระบบจะแจ้งเตือนทางอีเมล และเก็บหนังสือไว้ให้ 3 วัน 9. การต่ออายุการยืม ต่ออายุได้ไม่เกิน 2 ครั้ง หากไม่มีผู้จองคิวถัดไป 10. ห้องค้นคว้ากลุ่ม จองล่วงหน้าได้ไม่เกิน 7 วัน ใช้ได้ครั้งละ 3 ชั่วโมง สำหรับกลุ่มตั้งแต่ 4 ถึง 10 คน เกณฑ์การสมัครสมาชิก ผู้สมัครต้องเป็นนักศึกษาหรือบุคลากรของมหาวิทยาลัย มีอายุไม่ต่ำกว่า 18 ปี และยื่นเอกสารประกอบให้ครบถ้วน ณ วันสมัคร";
 
 #[cfg(test)]
 mod tests {
@@ -105,8 +107,8 @@ mod tests {
         assert!(tokens.is_empty() || tokens == vec![""]);
     }
 
-    /// Regression: with nlpo3 safe mode the tokens of this 795-char line
-    /// concatenated to 795 chars of the WRONG text (18 copies of the first
+    /// Regression: with nlpo3 safe mode the tokens of this 700+ char line
+    /// concatenated to the same length of the WRONG text (copies of the first
     /// 20–120 chars, the tail gone). Segmentation must be lossless.
     #[test]
     fn long_line_tokens_reconstruct_input_exactly() {
@@ -114,12 +116,12 @@ mod tests {
         let tokens = seg.tokenize(LONG_OCR_LINE);
         assert_eq!(tokens.concat(), LONG_OCR_LINE);
         assert_eq!(
-            LONG_OCR_LINE.matches("7.การป้องกัน").count(),
+            LONG_OCR_LINE.matches("7.ระเบียบ").count(),
             1,
             "fixture sanity: the line head occurs once"
         );
         assert!(
-            tokens.iter().any(|t| t == "กู้"),
+            tokens.iter().any(|t| t == "สมัคร"),
             "the tail of the line must still be segmented: {tokens:?}"
         );
     }

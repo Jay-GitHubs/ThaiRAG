@@ -3143,7 +3143,7 @@ impl ChatPipeline {
     /// Re-rank results by how strongly the QUERY names each result's source
     /// document. In corpora of near-identical documents (e.g. 14 variants of
     /// one loan program) chunk text cannot disambiguate the variant, but the
-    /// user's question usually names it ("โครงการ SME กล้าสู้ …หลักประกันเงินฝาก") —
+    /// user's question usually names it ("โครงการ SME มั่นคง …หลักประกันเงินฝาก") —
     /// character-trigram recall of the title inside the query promotes the
     /// named document's chunks above its siblings. Queries that name no
     /// document boost all docs near-uniformly (shared-prefix trigrams), so

@@ -180,7 +180,7 @@ pub struct ProcessingProvenance {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tables_kept_as_text: i64,
     /// Distinguishing facets extracted at ingest ("key: value" strings, e.g.
-    /// "program: SME กล้าสู้", "collateral: เงินฝาก", "limit: 10 ล้านบาท"). Used by
+    /// "program: SME มั่นคง", "collateral: เงินฝาก", "limit: 10 ล้านบาท"). Used by
     /// deterministic document selection to pick the right document among
     /// near-identical siblings. Empty unless facet extraction was enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
