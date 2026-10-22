@@ -35,6 +35,25 @@ jobs:
   # can edit .github/workflows/*.yml in a PR, and that code runs as the
   # runner user).
 
+  # ── Data guard: no document-derived test data in git (CLAUDE.md,
+  # "Test data policy"). Scans the PR's added/modified files for document
+  # and data file types, images outside asset dirs, data directories,
+  # Thai-named files, oversized files, Thai-heavy data dumps, and the
+  # customer terms held in the FORBIDDEN_TERMS secret (reported by index,
+  # never echoed). Exceptions live in .data-guard-allow.
+  data-guard:
+    name: Data guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan changed files
+        env:
+          FORBIDDEN_TERMS: ${{ secrets.FORBIDDEN_TERMS }}
+        run: python3 scripts/data_guard.py --changed-since "origin/${{ github.base_ref }}"
+
   fmt:
     name: Rust fmt
     runs-on: ubuntu-latest

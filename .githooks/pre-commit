@@ -1,0 +1,5 @@
+#!/bin/sh
+# Pre-commit: refuse commits that add document-derived test data.
+# Install once per clone: ./scripts/install-hooks.sh
+# Bypass only for a reviewed exception: git commit --no-verify (CI re-checks).
+exec python3 "$(git rev-parse --show-toplevel)/scripts/data_guard.py" --staged

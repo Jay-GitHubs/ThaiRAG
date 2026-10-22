@@ -432,6 +432,27 @@ cd chat-ui && npx playwright test
 cd tests/load && k6 run k6-smoke.js
 ```
 
+### Test data policy (enforced)
+
+This repository is public. **Nothing derived from a real document is tracked in
+git**: no PDFs or office files, no page images, no OCR text, no question or gold
+sets, no evaluation results, no chunk dumps. Only tooling is committed; unit-test
+fixtures use synthetic or public-domain text, and names of real products,
+programs or customers never appear in code, comments, tests, commit messages or
+PR text.
+
+`scripts/data_guard.py` enforces this as a pre-commit hook (run
+`./scripts/install-hooks.sh` once per clone) and as the `data-guard` CI job on
+every pull request. It blocks document and data file types, images outside UI
+asset and docs locations, JSON under `scripts/` and `tests/`, data directories,
+files with Thai characters in their names, files over 2 MB, Thai-heavy data
+dumps, and any term in the `FORBIDDEN_TERMS` repository secret (CI) or
+`~/.config/thairag/forbidden-terms.txt` (local; never commit it). Synthetic or
+public-domain exceptions are listed by exact path in `.data-guard-allow`;
+adding one is a reviewed change. Local evaluation data lives in the gitignored
+`scripts/eval/{work,gold,results}` and `scripts/bench/` data files; keep a
+private backup if it must outlive a machine.
+
 ## Known Limitations
 
 ### Thai answer quality lags English
