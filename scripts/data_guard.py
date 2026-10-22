@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Data guard: block document-derived test data from entering git.
 
-Policy (CLAUDE.md "Test data policy"): nothing derived from a real document is
+Policy (README, "Test data policy"): nothing derived from a real document is
 tracked — no PDFs or office files, no page images, no OCR text, no question or
 gold sets, no evaluation results, no chunk dumps. Tooling is fine; unit-test
 fixtures are synthetic or public-domain and listed explicitly.
@@ -175,7 +175,7 @@ def main():
             for p in probs:
                 print(f"      - {p}")
     if bad:
-        print(f"\ndata-guard: {bad} file(s) blocked. Document-derived test data stays local (see CLAUDE.md, Test data policy).")
+        print(f"\ndata-guard: {bad} file(s) blocked. Document-derived test data stays local (README, Test data policy).")
         print("If a file is genuinely synthetic or public-domain, add its exact path to .data-guard-allow in a reviewed PR.")
         return 1
     print(f"data-guard: ok ({len(files)} file(s) checked, {len(terms)} forbidden term(s) loaded)")
