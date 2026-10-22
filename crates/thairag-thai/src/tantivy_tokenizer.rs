@@ -349,7 +349,7 @@ mod tests {
             words.len()
         );
         assert!(
-            words.contains(&"กู้".to_string()),
+            words.contains(&"สมัคร".to_string()),
             "the tail of the run must be indexed: {words:?}"
         );
     }
